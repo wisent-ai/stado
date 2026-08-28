@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T21:03:47Z
+Last updated: 2026-08-28T21:39:49Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -47,8 +47,10 @@ previously failed at the public immutable baseline read with `error decoding res
 but the merged fix now qualifies cleanly on main.
 
 The owner resolver remains quiesced (stopped at 2026-08-28T17:30:03Z) with mini SSH
-pressure stable at 17 processes. No release tag or production deployment has yet been
-triggered by this merge. Backend pinning and production acceptance remain downstream.
+pressure stable at 17 processes. **Release pipeline now active:** Stado 0.9.2 release
+triggered at 2026-08-28T21:02:02Z (run 33210783452, version-check succeeded); PR #133
+merged at 21:11:46Z; tag stado-v0.9.2 created (sha 41456b1f); secondary deployment run
+33212229611 in_progress (started 21:21:55Z). Production acceptance downstream.
 
 **Temporary diagnostic forward (not recovery):** A sanctioned temporary port
 forward `release-gate-bootstrap` was declared to route local `127.0.0.1:18776`
@@ -105,7 +107,11 @@ and production acceptance are the next boundaries.
 | 2026-08-28T20:45:11Z | PR #132 merged to main | Merge commit `28a5ddfb62a74cfb6524368d846f3af3737ea20f` merged; resolver SSH multiplexing fix now on main branch. |
 | 2026-08-28T20:59:26Z | run 33209574217 on main, merge commit `28a5ddfb` | Version-check succeeded on main branch; SSH multiplexing fix qualified cleanly; no release tag triggered. Production remains unavailable (port 8000 absent, bobloo 502, chat 502). |
 | 2026-08-28T21:03:47Z | production evidence refresh | Mini port 8000 remains absent; bobloo.com and chat endpoint return 502; no new release publication detected. PR #132 merged with passing main qualification. |
-
+| 2026-08-28T21:02:02Z–21:11:21Z | run 33210783452: Release Stado 0.9.2 | Release pipeline triggered after main qualification; version-check job succeeded. Tag stado-v0.9.2 (sha: 41456b1f) created. |
+| 2026-08-28T21:11:46Z | PR #133 merged: Release Stado 0.9.2 | Release branch merged to main; deployment pipeline activated. |
+| 2026-08-28T21:11:49Z–21:21:15Z | run 33211496795: Merge PR #133 | Release merge run completed with success conclusion. |
+| 2026-08-28T21:21:55Z–in_progress | run 33212229611: Release deployment retry | Secondary release deployment run in progress; no final status yet. Production unchanged (port 8000 absent, bobloo 502, chat 502). |
+| 2026-08-28T21:39:49Z | production evidence refresh | Mini port 8000 remains absent; bobloo.com and chat endpoint return 502. Release Stado 0.9.2 pipeline in flight; run 33212229611 in_progress. |
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
 
@@ -136,8 +142,8 @@ evidence; it does not publish artifacts outside the repository workflow.
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
 | Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T21:03:47Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T21:03:47Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-28T21:39:49Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T21:39:49Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
 | Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| Resolver SSH multiplexing fix (PR #132) | 2026-08-28T20:59:26Z | PR #132 merged at 20:45:11Z; run 33209574217 on main succeeded with version-check COMPLETE/SUCCESS; fix qualified cleanly. No release tag or production deployment triggered. | **PASS** |
-| Loopback stat via temporary diagnostic forward | 2026-08-28T19:15:00Z | Forward `release-gate-bootstrap` (18776→8765) enabled; Stado object API at 127.0.0.1:8765 responded to stat requests successfully. | **PASS** |
+| Resolver SSH multiplexing fix (PR #132) | 2026-08-28T20:59:26Z | PR #132 merged at 20:45:11Z; run 33209574217 on main succeeded with version-check COMPLETE/SUCCESS; fix qualified cleanly and triggered release pipeline. | **PASS** |
+| Stado 0.9.2 release pipeline | 2026-08-28T21:39:49Z | Release run 33210783452 completed SUCCESS (21:02:02Z-21:11:21Z); PR #133 merged 21:11:46Z; tag stado-v0.9.2 created (sha 41456b1f); run 33211496795 completed SUCCESS; secondary deployment run 33212229611 in_progress (started 21:21:55Z). | **IN PROGRESS** |
