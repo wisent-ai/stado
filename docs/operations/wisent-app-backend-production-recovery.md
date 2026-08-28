@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T17:37:25Z
+Last updated: 2026-08-28T18:03:02Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -29,6 +29,7 @@ HTTP 502. The mini reported Stado `0.7.29` while its declaration was `0.7.45`;
 Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 `127.0.0.1:8765` and canonical Skarbiec listener on `127.0.0.1:8895` were present.
 
+
 ### Current single blocker
 
 The managed owner-host Stado resolver still runs the pre-fix transport. Its
@@ -46,11 +47,12 @@ Its documentation-only successor is
 `9855235f167d8725ef9c417646e6c15d66941a29`. Hosted qualification run
 [33193485453](https://github.com/wisent-ai/stado/actions/runs/33193485453)
 failed at 2026-08-28T17:23:37Z while reading the immutable public baseline,
-before the fixed binary could be canonically released and reconciled. The
-owner resolver has since been stopped through `stado service stop` so stale
-connections can drain; it will be restored through the same managed unit at
-the next exact hosted proof boundary. No later Stado tag or deployment contains
-this fix.
+and subsequent run [33195644902](https://github.com/wisent-ai/stado/actions/runs/33195644902)
+failed at 2026-08-28T17:53:14Z with the same transport-level truncation fault.
+The owner resolver has been quiesced so stale connections can drain; it will
+be restored through the same managed unit at the next exact hosted proof boundary
+when SSH pressure releases. No later Stado tag or deployment contains this fix;
+PR #132 remains in draft review awaiting gate clearance.
 
 This transport/qualification boundary is the only active blocker. Backend pinning,
 activation, and production acceptance remain downstream of it.
@@ -90,6 +92,8 @@ activation, and production acceptance remain downstream of it.
 | 2026-08-28T17:22:34Z–17:23:37Z | run 33193485453, head `9855235f167d8725ef9c417646e6c15d66941a29` | Public immutable baseline transfer again truncated with `error decoding response body`. |
 | 2026-08-28T17:27:30Z | mini SSH pressure measurement | Sanctioned host process report contained 78 SSH-related processes. |
 | 2026-08-28T17:30:03Z–17:37:25Z | managed resolver quiesce | `stado service stop` removed the owner resolver unit process; mini SSH-related process count drained to a stable baseline of 17. |
+| 2026-08-28T17:53:14Z | run 33195644902, head `654e1163b932217cd759e927bfceee027229d1f6` | Public immutable baseline transfer truncated with the same `error decoding response body` fault. Mini SSH pressure remains stable at low baseline. |
+| 2026-08-28T18:03:02Z | production evidence refresh | Mini port 8000 remains absent; bobloo root and chat route return 502; managed resolver remains quiesced. |
 
 ## Operator surfaces used
 
@@ -123,8 +127,8 @@ evidence; it does not publish artifacts outside the repository workflow.
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
 | Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T17:09:54Z | Public request returned HTTP 502 in 0.242 s. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T17:09:54Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-28T18:03:02Z | Public request returned HTTP 502 in 0.340 s; Cloudflare upstream unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T18:03:02Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
 | Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| Public immutable Stado release read | 2026-08-28T17:23:37Z | Hosted run 33193485453 failed at `cli.storage.get`: `error decoding response body`; three small public stats had succeeded before the full transfer. | **FAIL** |
+| Public immutable Stado release read | 2026-08-28T17:53:14Z | Hosted run 33195644902 failed at `cli.storage.get`: `error decoding response body`; three small public stats had succeeded before the full transfer. | **FAIL** |
 | Canonical Stado/Skarbiec mini listeners | 2026-08-28T17:09:54Z | Inventory reported `127.0.0.1:8765` and `127.0.0.1:8895`; Skarbiec version matched 0.2.8. | **PASS (listener only)** |
