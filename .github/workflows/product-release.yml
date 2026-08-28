@@ -67,9 +67,10 @@ jobs:
           # grant expires. Repair both declared verifier grants before probing the
           # channel, so a Skarbiec release does not depend on an already-healthy
           # Skarbiec authorization path.
-          "$HOME/.stado/bin/stado" host reconcile-object-verifier \
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          "$stado_bin" host reconcile-object-verifier \
             charless-mac-mini --json
-          "$HOME/.stado/bin/stado" host reconcile-release-verifier \
+          "$stado_bin" host reconcile-release-verifier \
             charless-mac-mini --json
           ready=false
           for attempt in $(seq 1 24); do
