@@ -196,8 +196,10 @@ jobs:
             .[0].environment.HOME == "/Users/charles" and
             .[0].environment.STADO_CONFIG == "/Users/charles/.config/stado/config.json" and
             .[0].environment.SKARBIEC_VAULT_FILE == "/Users/charles/.stado/skarbiec.vault.json" and
-            .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "/Users/charles/.stado/stado-object-api-verifier-skarbiec-token" and
-            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "/Users/charles/.stado/stado-release-api-verifier-skarbiec-token"
+            # service env deliberately redacts token-file variables. Recovery
+            # already proved their exact checked-in values before persisting the plist.
+            .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
+            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]"
           ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
           retry_command() {
             for attempt in 1 2 3 4 5 6; do
