@@ -51,10 +51,10 @@ staged=$(/usr/bin/mktemp "$work/$label.plist.XXXXXX")
 trap '/bin/rm -f "$staged"' EXIT HUP INT TERM
 account=$(/usr/bin/id -un)
 
-/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$account" "$log" <<'PY'
+/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$account" "$log" "$HOME" "$config" <<'PY'
 import plistlib, sys
 
-path, label, program, store, account, log = sys.argv[1:]
+path, label, program, store, account, log, home, config = sys.argv[1:]
 document = {
     "Label": label,
     "ProgramArguments": [
@@ -66,7 +66,13 @@ document = {
         "8765",
     ],
     "EnvironmentVariables": {
+        "HOME": home,
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "STADO_CONFIG": config,
+        "GNUPGHOME": f"{home}/.gnupg",
+        "SKARBIEC_VAULT_FILE": f"{home}/.stado/skarbiec.vault.json",
+        "WC_OBJECT_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-object-api-verifier-skarbiec-token",
+        "WC_RELEASE_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-release-api-verifier-skarbiec-token",
         "WC_STORAGE_BACKEND": "local",
         "WC_LOCAL_STORAGE_PATH": store,
     },
@@ -82,7 +88,8 @@ PY
 /usr/bin/plutil -lint "$staged" >/dev/null
 
 healthy=0
-if /usr/bin/curl -fsS --max-time 3 "$health" >/dev/null 2>&1; then healthy=1; fi
+if /usr/bin/curl -fsS --max-time 3 "$health" 2>/dev/null |
+  /usr/bin/grep -Eq '"object"[[:space:]]*:[[:space:]]*true'; then healthy=1; fi
 same=0
 if /usr/bin/python3 - "$staged" "$plist" <<'PY'
 import plistlib, sys

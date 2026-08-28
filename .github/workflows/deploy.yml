@@ -176,6 +176,23 @@ jobs:
               .listening == true
             )
           ' "$RUNNER_TEMP/release-resolver.json" >/dev/null
+          # The object API is a system LaunchDaemon. It does not inherit HOME
+          # or the runner's Stado config, so reconcile its checked-in unit
+          # contract before touching verifier grants.
+          "$stado_bin" host recover-object-api charless-mac-mini --json \
+            > "$RUNNER_TEMP/object-api-recovery.json"
+          "$stado_bin" service env \
+            com.wisent.always-on.stado-object-api \
+            --host charless-mac-mini --json \
+            > "$RUNNER_TEMP/object-api-environment.json"
+          jq -e '
+            length == 1 and
+            .[0].environment.HOME == "/Users/charles" and
+            .[0].environment.STADO_CONFIG == "/Users/charles/.config/stado/config.json" and
+            .[0].environment.SKARBIEC_VAULT_FILE == "/Users/charles/.stado/skarbiec.vault.json" and
+            .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "/Users/charles/.stado/stado-object-api-verifier-skarbiec-token" and
+            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "/Users/charles/.stado/stado-release-api-verifier-skarbiec-token"
+          ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
           retry_command() {
             for attempt in 1 2 3 4 5 6; do
               if "$@"; then
