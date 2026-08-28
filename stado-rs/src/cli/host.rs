@@ -3825,6 +3825,52 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
     .await
 }
 
+/// Read one nonsecret Skarbiec metadata report on a managed host.
+///
+/// Verifier reconciliation needs grant expiry, vault ownership and item lifecycle,
+/// not the encrypted vault envelope. Reading those through Skarbiec keeps the
+/// operator boundary intact and avoids transporting the whole vault over the host
+/// channel.
+async fn remote_skarbiec_metadata(
+    target: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+    skarbiec: &str,
+    vault: &str,
+    gnupg_home: &str,
+    command: &str,
+) -> Result<Value, CmdError> {
+    let path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let output = crate::deploy::host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            path,
+            gnupg_environment.as_str(),
+            vault_environment.as_str(),
+            skarbiec,
+            command,
+        ],
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec {command} metadata unavailable: {}",
+            target.name,
+            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+        )));
+    }
+    serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "{}: Skarbiec {command} returned unreadable metadata: {error}",
+            target.name
+        ))
+    })
+}
+
 /// Preserve an isolated verifier bearer while making its capabilities match config.
 #[allow(clippy::too_many_arguments)]
 async fn reconcile_verifier(
@@ -3905,15 +3951,16 @@ async fn reconcile_verifier(
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
 
-    let vault_text = crate::deploy::host_channel::remote_read_file(&resolved, &vault, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .ok_or_else(|| CmdError::click(format!("{}: vault could not be read", resolved.name)))?;
-    let document: Value = serde_json::from_str(&vault_text)?;
-    let grant = document
-        .get("tokens")
-        .and_then(Value::as_object)
-        .and_then(|tokens| tokens.get(consumer))
+    let token_metadata =
+        remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "tokens")
+            .await?;
+    let grant = token_metadata
+        .as_array()
+        .and_then(|tokens| {
+            tokens.iter().find(|entry| {
+                entry.get("consumer").and_then(Value::as_str) == Some(consumer)
+            })
+        })
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{}: {consumer} has no existing grant",
@@ -3942,10 +3989,29 @@ async fn reconcile_verifier(
             .map_err(|error| CmdError::click(error.to_string()))?;
         let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
         let authoritative: Value = serde_json::from_str(&authoritative_text)?;
-        let target_owner = document
-            .get("owner")
+        let target_vaults = remote_skarbiec_metadata(
+            &resolved,
+            &runner,
+            &skarbiec,
+            &vault,
+            &gnupg_home,
+            "vaults",
+        )
+        .await?;
+        let target_owner = target_vaults
+            .get("vaults")
+            .and_then(Value::as_array)
+            .and_then(|vaults| {
+                vaults.iter().find(|entry| {
+                    entry.get("path").and_then(Value::as_str) == Some(vault.as_str())
+                })
+            })
+            .and_then(|entry| entry.get("owner"))
             .and_then(Value::as_str)
             .ok_or_else(|| CmdError::click("target vault has no owner identity"))?;
+        let target_items =
+            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
+                .await?;
         for item in &items {
             let source_entry = authoritative
                 .get("items")
@@ -3988,10 +4054,11 @@ async fn reconcile_verifier(
                         "cannot read authoritative release publisher item {item}: {error}"
                     ))
                 })?;
-            let target_entry = document
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|entries| entries.get(item));
+            let target_entry = target_items.as_array().and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.get("id").and_then(Value::as_str) == Some(item))
+            });
             let shadow_owned = target_entry
                 .and_then(|entry| entry.get("management"))
                 .and_then(Value::as_object)
