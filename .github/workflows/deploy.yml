@@ -84,10 +84,11 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      # Release writes and authenticated read-back use the control-plane
-      # object's Tailscale Funnel. stado.wisent.com is the public product site
-      # and release-download facade; it does not expose the private write API.
-      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
+      # The writer uses one declared resolver adapter for both mutation and
+      # authenticated read-back. Fleet delivery verifies the public read-only
+      # Funnel separately after publication.
+      STADO_WRITER_API_URL: http://127.0.0.1:18776
+      STADO_PUBLIC_RELEASE_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -158,6 +159,23 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          case "$STADO_WRITER_API_URL" in
+            http://127.0.0.1:18776) ;;
+            *) echo "::error::release writer must use the declared loopback resolver"; false ;;
+          esac
+          export STADO_API_URL="$STADO_WRITER_API_URL"
+          "$stado_bin" resolver status --target lukasz-macbook --json \
+            > "$RUNNER_TEMP/release-resolver.json"
+          jq -e '
+            .verdict == "ready" and
+            any(
+              .adapters[];
+              .service == "stado-object-api" and
+              .consumer == "stado-local-agent" and
+              .bind == "127.0.0.1:18776" and
+              .listening == true
+            )
+          ' "$RUNNER_TEMP/release-resolver.json" >/dev/null
           retry_command() {
             for attempt in 1 2 3 4 5 6; do
               if "$@"; then
@@ -243,15 +261,19 @@ jobs:
           jq -e '.objects | type == "array"' \
             "$RUNNER_TEMP/release-preflight.json" >/dev/null
           # A read grant cannot prove that this runner presents the publisher
-          # token expected by the target. The content-addressed canary exercises
-          # create-if-absent; `storage put` performs exact authenticated
-          # read-back before the public download facade is expected to see it.
+          # token expected by the target. Retain one content-addressed canary:
+          # create-if-absent plus exact authenticated read-back must both pass
+          # through the validated writer resolver before publication starts.
           canary="$RUNNER_TEMP/release-write-preflight.json"
           printf '{"schema":"stado.release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://releases/stado/__release_preflight__/$canary_sha.json"
           "$stado_bin" storage put "$canary_uri" "$canary" --if-absent
+          "$stado_bin" storage get \
+            "$canary_uri" "$RUNNER_TEMP/release-write-preflight.stored.json"
+          cmp --silent \
+            "$canary" "$RUNNER_TEMP/release-write-preflight.stored.json"
 
       - name: Create Linux release manifest
         run: |
@@ -298,6 +320,7 @@ jobs:
       - name: Create immutable Linux release through Stado
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          export STADO_API_URL="$STADO_WRITER_API_URL"
           test -x "$stado_bin"
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
@@ -332,6 +355,30 @@ jobs:
             fi
           done
 
+      - name: Validate public Linux release delivery
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          for source in "$RUNNER_TEMP"/stado-release/*; do
+            name="${source##*/}"
+            uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
+            delivered="$RUNNER_TEMP/public-$name"
+            visible=false
+            for attempt in $(seq 1 12); do
+              rm -f "$delivered"
+              if "$stado_bin" storage get "$uri" "$delivered" &&
+                 cmp --silent "$source" "$delivered"; then
+                visible=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$visible" != true ]; then
+              echo "::error::Public release delivery did not serve immutable $uri"
+              false
+            fi
+          done
+
   deploy-control-plane:
     needs: release
     if: needs.release.outputs.channel == 'stable'
@@ -339,10 +386,11 @@ jobs:
     permissions:
       contents: read
     env:
+      STADO_WRITER_API_URL: http://127.0.0.1:18776
+      STADO_PUBLIC_RELEASE_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
-      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -441,8 +489,9 @@ jobs:
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
           mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
-          # Publish through the same release channel the verification job and
-          # installers read.
+          # Publish and read back through the authoritative service's declared
+          # resolver adapter; public delivery is verified in the next step.
+          export STADO_API_URL="$STADO_WRITER_API_URL"
           for source in "$release_dir"/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$version/$platform/$name"
@@ -456,8 +505,39 @@ jobs:
               false
             fi
           done
-          STADO_RELEASE_PLATFORM="$platform" \
-          STADO_RELEASE_DIR="$release_dir" \
+          echo "STADO_NATIVE_RELEASE_PLATFORM=$platform" >> "$GITHUB_ENV"
+          echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
+          echo "STADO_NATIVE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Validate public native release delivery
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          for source in "$STADO_NATIVE_RELEASE_DIR"/*; do
+            name="${source##*/}"
+            uri="stado://releases/stado/$STADO_NATIVE_RELEASE_VERSION/$STADO_NATIVE_RELEASE_PLATFORM/$name"
+            delivered="$RUNNER_TEMP/public-native-$name"
+            visible=false
+            for attempt in $(seq 1 12); do
+              rm -f "$delivered"
+              if "$stado_bin" storage get "$uri" "$delivered" &&
+                 cmp --silent "$source" "$delivered"; then
+                visible=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$visible" != true ]; then
+              echo "::error::Public release delivery did not serve immutable $uri"
+              false
+            fi
+          done
+
+      - name: Deliver verified native release
+        run: |
+          STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL" \
+          STADO_RELEASE_PLATFORM="$STADO_NATIVE_RELEASE_PLATFORM" \
+          STADO_RELEASE_DIR="$STADO_NATIVE_RELEASE_DIR" \
             bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
       - name: Reconcile public release ingress
