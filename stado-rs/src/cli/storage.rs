@@ -1981,16 +1981,16 @@ impl RemoteObjectApi {
 /// request" -- which reads like the host is down rather than like this
 /// process was never told whom to trust.
 pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
-    // Unbounded clients hang forever on a DNS query that never returns: a
-    // release submit sat 20 minutes inside `publish` with zero output and zero
-    // sockets, parked on a getaddrinfo for the tokenless reader's host that had
-    // been issued under a network state that no longer existed. The store this
-    // client talks to is on the tailnet or the same machine; if it does not
-    // answer within a minute it is not going to.
+    // Bound DNS/TCP establishment and an actually stalled body, not the total
+    // lifetime of an active immutable transfer. The former total 60-second
+    // timeout cut healthy 70 MB writer read-backs off at 42–56 MB; retries
+    // restarted from byte zero and could therefore never satisfy publication.
+    // A 60-second read timeout retains the fail-fast control-plane contract
+    // while allowing a body that keeps making progress to finish.
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(60));
+        .read_timeout(Duration::from_secs(60));
     let ca_file = crate::config::wc_stado_storage_ca_file().trim().to_string();
     if !ca_file.is_empty() {
         let path = crate::config_file::expand_tilde(&ca_file);
