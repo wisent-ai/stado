@@ -4037,16 +4037,18 @@ async fn reconcile_verifier(
                     .await
                     {
                         Ok(converged) if converged.ok() => None,
-                        Ok(converged) => {
-                            return Err(CmdError::click(format!(
-                                "{}: release verifier shadow for {item} could not be reconciled: {}",
-                                resolved.name,
-                                crate::deploy::host_channel::last_error_line(
-                                    &converged,
-                                    "verifier shadow lifecycle failed"
-                                ),
-                            )));
-                        }
+                        // A vault replacement can close the host channel after
+                        // the atomic move but before the shell reports success.
+                        // A nonzero transport-shaped result is therefore as
+                        // ambiguous as an I/O error: reconnect and prove the
+                        // target item before deciding whether the write failed.
+                        Ok(converged) => Some(
+                            crate::deploy::host_channel::last_error_line(
+                                &converged,
+                                "verifier shadow command ended before acknowledgement",
+                            )
+                            .to_string(),
+                        ),
                         // Replacing the vault may invalidate the transport whose
                         // credential came from that vault. Reconnect and judge the
                         // item by its postcondition instead of repeating the write.
