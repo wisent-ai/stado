@@ -30,10 +30,10 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      # Publication and public read-back must reach the same object API host.
-      # Writing through the control-plane laptop and reading through
-      # stado.wisent.com split one immutable release across two local stores.
-      STADO_API_URL: https://stado.wisent.com
+      # Release writes and authenticated read-back use the control-plane
+      # object's Tailscale Funnel. stado.wisent.com is the public product site
+      # and release-download facade; it does not expose the private write API.
+      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -406,7 +406,7 @@ jobs:
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
-      STADO_API_URL: https://stado.wisent.com
+      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
