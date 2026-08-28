@@ -162,7 +162,7 @@ async fn immutable(
     kind: &str,
     meta: &BTreeMap<String, String>,
 ) -> Result<(), CmdError> {
-    match super::storage::fetch_object(uri).await {
+    match super::storage::fetch_object_from_writer(uri).await {
         Ok(v) if v == bytes => return Ok(()),
         Ok(_) => return Err(CmdError::click(format!("immutable object differs: {uri}"))),
         Err(_) => {}

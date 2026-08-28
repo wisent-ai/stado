@@ -1903,9 +1903,16 @@ pub(crate) async fn store_object_with_metadata(
     }
     if let Some(remote) = RemoteObjectApi::configured()? {
         let bytes = read_object_source(source)?;
+        let expected_sha = Sha256::digest(&bytes);
         remote
             .put_with_metadata(&uri, content_type, create_only, bytes, extra_metadata)
             .await?;
+        let stored = remote.get(&uri).await?;
+        if Sha256::digest(&stored) != expected_sha {
+            return Err(CmdError::click(format!(
+                "object writer read-back differs immediately after PUT: {uri}"
+            )));
+        }
         return Ok(uri);
     }
     let path = object.storage_path();
@@ -1952,6 +1959,21 @@ async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
         println!("{uri}");
     }
     Ok(())
+}
+
+/// Fetch through the authenticated object writer route, including release
+/// objects that are not yet visible through the public download facade.
+pub(crate) async fn fetch_object_from_writer(uri: &str) -> Result<Vec<u8>, CmdError> {
+    let object = crate::object_store::ObjectRef::parse(uri)?;
+    let uri = object.to_string();
+    if let Some(remote) = RemoteObjectApi::configured()? {
+        return remote.get(&uri).await;
+    }
+    let store = JobStorage::new().await?;
+    let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
+        return Err(CmdError::click(format!("{object}: absent")));
+    };
+    Ok(bytes)
 }
 
 /// Fetch one object's bytes through whichever route its namespace requires.
