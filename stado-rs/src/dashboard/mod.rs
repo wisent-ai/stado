@@ -312,6 +312,12 @@ pub struct Dashboard {
     /// and made the whole object plane answer 503. One async lock also folds a
     /// cold-start burst into one vault read.
     object_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
+    /// Release publisher bearers remain usable through a transient Skarbiec
+    /// read failure after the release verifier has already proved them. Unlike
+    /// object traffic, release traffic refreshes on every request so a token
+    /// rotation takes effect immediately; this map is only the bounded
+    /// last-known-good fallback.
+    release_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
     enrollment_only: bool,
@@ -324,6 +330,7 @@ impl Dashboard {
             rate_limiter: RateLimiter::new(store.clone()),
             boundaries: Arc::new(RwLock::new(BoundaryAvailability::default())),
             object_tokens: Arc::new(AsyncMutex::new(BTreeMap::new())),
+            release_tokens: Arc::new(AsyncMutex::new(BTreeMap::new())),
             store,
             enrollment_only: false,
         }
@@ -387,6 +394,41 @@ impl Dashboard {
                         loaded_at: now,
                     },
                 );
+                Err(())
+            }
+        }
+    }
+    async fn release_token(&self, item: &str) -> Result<String, ()> {
+        let mut tokens = self.release_tokens.lock().await;
+        let now = Instant::now();
+        match crate::skarbiec::read_release_token(item, "token").await {
+            Ok(Some(value)) if !value.is_empty() => {
+                tokens.insert(
+                    item.to_string(),
+                    CachedObjectToken {
+                        value: Some(value.clone()),
+                        loaded_at: now,
+                    },
+                );
+                Ok(value)
+            }
+            Ok(_) => {
+                eprintln!("[dashboard] release verifier item unavailable: {item}");
+                Err(())
+            }
+            Err(error) => {
+                if let Some(cached) = tokens.get(item) {
+                    if let Some(value) = &cached.value {
+                        if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
+                            eprintln!(
+                                "[dashboard] release verifier refresh failed for {item}; using the last token loaded {}s ago: {error}",
+                                now.duration_since(cached.loaded_at).as_secs()
+                            );
+                            return Ok(value.clone());
+                        }
+                    }
+                }
+                eprintln!("[dashboard] release verifier failed for {item}: {error}");
                 Err(())
             }
         }
@@ -753,7 +795,7 @@ impl Dashboard {
             if object.namespace() == "releases" && !immutable {
                 Ok(false)
             } else {
-                authorize_release(request, &policy_key, false).await
+                authorize_release(self, request, &policy_key, false).await
             }
         } else {
             authorize_object(
@@ -869,7 +911,7 @@ impl Dashboard {
             {
                 // A catalog object is addressed exactly, never listed as a prefix.
                 let listing = list && namespace != "system";
-                authorize_release(request, &policy_key, listing).await
+                authorize_release(self, request, &policy_key, listing).await
             } else {
                 authorize_object(self, request, &namespace, &key_or_prefix, list, action).await
             };
@@ -1702,7 +1744,7 @@ impl Dashboard {
             if object.namespace() == "releases" && !immutable {
                 Ok(false)
             } else {
-                authorize_release(request, &policy_key, false).await
+                authorize_release(self, request, &policy_key, false).await
             }
         } else {
             authorize_object(
@@ -2545,7 +2587,12 @@ async fn authorize_object(
 /// Authenticate one immutable release publisher after resolving the exact
 /// product prefix inside `stado://releases`. The former global object token is
 /// never consulted.
-async fn authorize_release(request: &Request, key_or_prefix: &str, list: bool) -> Result<bool, ()> {
+async fn authorize_release(
+    dashboard: &Dashboard,
+    request: &Request,
+    key_or_prefix: &str,
+    list: bool,
+) -> Result<bool, ()> {
     config::release_api_publishers().map_err(|_| ())?;
     let policy = if list {
         config::release_publisher_for_list(key_or_prefix).map(|(policy, _)| policy)
@@ -2555,11 +2602,7 @@ async fn authorize_release(request: &Request, key_or_prefix: &str, list: bool) -
     let Some(policy) = policy else {
         return Ok(false);
     };
-    let expected = crate::skarbiec::read_release_token(policy.item(), "token")
-        .await
-        .map_err(|_| ())?
-        .filter(|value| !value.is_empty())
-        .ok_or(())?;
+    let expected = dashboard.release_token(policy.item()).await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
