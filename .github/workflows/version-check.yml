@@ -45,9 +45,10 @@ jobs:
   version-check:
     runs-on: ubuntu-latest
     env:
-      # Query the mini's bearer-free HTTPS release ingress. The same host owns
-      # the canonical object service and its physical release store.
-      STADO_API_URL: https://charless-mac-mini.tail6443b3.ts.net:8443
+      # Qualification uses the temporary resolver bootstrap origin so the
+      # candidate that repairs the mini's declared Funnel can itself qualify.
+      # Deployment proves the mini origin before accepting any release bytes.
+      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
     steps:
       # v5 targets Node 24 directly rather than relying on GitHub's forced
       # replacement for the deprecated Node 20 runtime in v4.
