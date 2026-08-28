@@ -214,13 +214,9 @@ jobs:
             .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]"
           ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
           preflight() {
-            # The private namespace proves the object verifier. Listing the
-            # product's release prefix separately proves the release verifier:
-            # unlike a public stat/get, list is authenticated but read-only.
-            "$stado_bin" storage stat \
-              stado://probierz/__release_preflight__ --json \
-              > "$RUNNER_TEMP/object-preflight.json" \
-              2> "$RUNNER_TEMP/object-preflight.err" &&
+            # This release owns only the Stado product prefix. Its authenticated
+            # listing proves the exact stado-release-publisher/token dependency;
+            # unrelated private namespaces and publishers are not prerequisites.
             "$stado_bin" storage ls \
               stado://releases/stado/__release_preflight__ --json \
               > "$RUNNER_TEMP/release-preflight.json" \
@@ -239,19 +235,18 @@ jobs:
               fi
               sleep 5
             done
-            cat "$RUNNER_TEMP/object-preflight.err" >&2
             cat "$RUNNER_TEMP/release-preflight.err" >&2
-            echo "::error::object and release preflight did not remain healthy for three consecutive checks" >&2
+            echo "::error::Stado release preflight did not remain healthy for three consecutive checks" >&2
             return 1
           }
           reconcile_release_lifecycles() {
             retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --json \
+              charless-mac-mini --product stado --json \
               > "$RUNNER_TEMP/release-lifecycles.json"
             jq -e '
-              (.items | type == "array" and length > 0) and
+              .items == ["stado-release-publisher"] and
               (.publisher_lifecycles | type == "array") and
-              (.publisher_lifecycles | length) == (.items | length) and
+              (.publisher_lifecycles | length) == 1 and
               all(
                 .publisher_lifecycles[];
                 (.item | type == "string" and length > 0) and
@@ -261,21 +256,13 @@ jobs:
               )
             ' "$RUNNER_TEMP/release-lifecycles.json" >/dev/null
           }
-          # Publisher items belong to their recorded controllers. Prove every
-          # declared lifecycle and exact token read before the object verifier
-          # is refreshed. Existing read grants can stay valid after a publisher
-          # item changes, so read-only preflight is not a reason to skip this.
+          # Reconcile only the controller-declared Stado publisher item and
+          # add only its read capability to the preserved release verifier.
+          # The release route resolves this exact item again for every request.
           reconcile_release_lifecycles
-          retry_command "$stado_bin" host reconcile-object-verifier \
-            charless-mac-mini --json
 
           verify_read_proof() {
             wait_for_preflight
-            state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
-            case "$state" in
-              present|absent) ;;
-              *) echo "::error::object preflight is ${state:-unanswered}"; return 1 ;;
-            esac
             jq -e '.objects | type == "array"' \
               "$RUNNER_TEMP/release-preflight.json" >/dev/null
           }
@@ -292,9 +279,9 @@ jobs:
 
           verify_read_proof
           if ! "$stado_bin" storage put "$canary_uri" "$canary" --if-absent; then
-            # An old object runtime can keep the previous writer boundary after
-            # both verifier files are reconciled. Before its sole in-place
-            # restart, prove the exact managed unit and declared dependency
+            # An old object runtime can retain a closed release boundary after
+            # the exact Stado publisher dependency is reconciled. Before its
+            # sole in-place restart, prove the managed unit and dependency
             # route this job is about to disturb.
             "$stado_bin" service show \
               com.wisent.always-on.stado-object-api \
@@ -326,7 +313,7 @@ jobs:
               echo "::notice::restart transport closed; the full postcondition decides"
             fi
 
-            # No credential is removed and no lifecycle command is repeated.
+            # No credential is removed and reconciliation is not repeated.
             # The post-restart verdict is the complete three-read plus writer
             # proof, not the restart command's possibly interrupted response.
             verify_read_proof
