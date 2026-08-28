@@ -236,17 +236,14 @@ fn boundary_recheck_cooldown() -> Duration {
     )
 }
 
-/// Which boundary authorizes one object address: a software release travels on
-/// the release publication grant, every private product namespace on the
-/// object grant. The object routes all decide it this way, and they must
-/// decide it identically — reading one boundary and then authorizing against
-/// the other is how a shut boundary would refuse the wrong half of the plane.
-fn object_boundary(namespace: &str, key: &str) -> Boundary {
-    if crate::object_store::release_policy_key(namespace, key).is_some() {
-        Boundary::Release
-    } else {
-        Boundary::Object
-    }
+/// Release objects authorize against their exact product item at request time.
+/// Only private product objects use the global object-verifier readiness gate.
+///
+/// A single release boundary cannot represent per-product readiness: making a
+/// Stado request wait for every configured publisher coupled unrelated
+/// products and returned 503 before the exact Stado item was even read.
+fn requires_object_boundary(namespace: &str, key: &str) -> bool {
+    crate::object_store::release_policy_key(namespace, key).is_none()
 }
 
 /// The exact (method, path) pairs `--enrollment-only` serves.
@@ -777,9 +774,8 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return Some(response),
         };
-        if !self
-            .boundaries_available(&[object_boundary(object.namespace(), object.key())])
-            .await
+        if requires_object_boundary(object.namespace(), object.key())
+            && !self.boundaries_available(&[Boundary::Object]).await
         {
             return Some(send_json(
                 http_status("503"),
@@ -890,9 +886,8 @@ impl Dashboard {
                 Ok(scope) => scope,
                 Err(response) => return response,
             };
-            if !self
-                .boundaries_available(&[object_boundary(&namespace, &key_or_prefix)])
-                .await
+            if requires_object_boundary(&namespace, &key_or_prefix)
+                && !self.boundaries_available(&[Boundary::Object]).await
             {
                 return send_json(
                     http_status("503"),
@@ -1726,9 +1721,8 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return response,
         };
-        if !self
-            .boundaries_available(&[object_boundary(object.namespace(), object.key())])
-            .await
+        if requires_object_boundary(object.namespace(), object.key())
+            && !self.boundaries_available(&[Boundary::Object]).await
         {
             return send_json(
                 http_status("503"),

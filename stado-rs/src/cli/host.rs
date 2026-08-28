@@ -3762,31 +3762,39 @@ pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Resul
         "WC_OBJECT_SKARBIEC_TOKEN_FILE",
         "stado-object-api-verifier-skarbiec-token",
         items,
+        true,
     )
     .await
 }
 
-/// Reconcile the release verifier on TARGET to the exact configured publisher set.
-pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Reconcile one product's release verifier dependency on TARGET.
+pub async fn reconcile_release_verifier(
+    target: &str,
+    product: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         CmdError::click(format!(
             "invalid release_api.publishers: {}",
             problems.join("; ")
         ))
     })?;
-    let items = publishers
-        .values()
-        .map(|policy| policy.item().to_string())
-        .collect::<std::collections::BTreeSet<_>>();
+    let publisher = publishers.get(product).ok_or_else(|| {
+        CmdError::click(format!(
+            "release_api.publishers declares no publisher for {product:?}"
+        ))
+    })?;
+    let items = std::collections::BTreeSet::from([publisher.item().to_string()]);
     reconcile_verifier(
         target,
         json_output,
         "release",
-        "release_api.publishers",
+        &format!("release_api.publishers.{product}"),
         crate::config::RELEASE_API_VERIFIER_CONSUMER,
         "WC_RELEASE_SKARBIEC_TOKEN_FILE",
         "stado-release-api-verifier-skarbiec-token",
         items,
+        false,
     )
     .await
 }
@@ -3812,6 +3820,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         "WC_SERVICE_SKARBIEC_TOKEN_FILE",
         "stado-service-api-verifier-skarbiec-token",
         items,
+        true,
     )
     .await
 }
@@ -3827,6 +3836,7 @@ async fn reconcile_verifier(
     token_file_env: &str,
     token_file_default: &str,
     items: std::collections::BTreeSet<String>,
+    replace_capabilities: bool,
 ) -> Result<(), CmdError> {
     if items.is_empty() {
         return Err(CmdError::click(format!(
@@ -4090,31 +4100,60 @@ async fn reconcile_verifier(
         .map(|item| format!("read:{item}#token"))
         .collect::<Vec<_>>()
         .join(",");
-    let command = format!(
+    let common = format!(
         "set -eu; \
          PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; export PATH; \
          GNUPGHOME={}; export GNUPGHOME; \
          SKARBIEC_VAULT_FILE={}; export SKARBIEC_VAULT_FILE; \
          token_file={}; staged=''; \
-         if [ -L \"$token_file\" ]; then exit 40; fi; \
-         if [ -f \"$token_file\" ]; then source_file=\"$token_file\"; \
-         else \
-           staged=\"$token_file.stado-new.$$\"; \
-           trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
-           umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
-           source_file=\"$staged\"; \
-         fi; \
-         {} token-mint {} --capabilities {} --replace-capabilities \
-           --token-file \"$source_file\" --ttl-seconds {} > /dev/null; \
-         if [ -n \"$staged\" ]; then /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; fi",
+         if [ -L \"$token_file\" ]; then exit 40; fi",
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
         crate::deploy::shlex_quote(&token_file),
-        crate::deploy::shlex_quote(&skarbiec),
-        crate::deploy::shlex_quote(consumer),
-        crate::deploy::shlex_quote(&capabilities),
-        ttl,
     );
+    let command = if replace_capabilities {
+        format!(
+            "{common}; \
+             if [ -f \"$token_file\" ]; then source_file=\"$token_file\"; \
+             else \
+               staged=\"$token_file.stado-new.$$\"; \
+               trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
+               umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
+               source_file=\"$staged\"; \
+             fi; \
+             {} token-mint {} --capabilities {} --replace-capabilities \
+               --token-file \"$source_file\" --ttl-seconds {} > /dev/null; \
+             if [ -n \"$staged\" ]; then /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; fi",
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(consumer),
+            crate::deploy::shlex_quote(&capabilities),
+            ttl,
+        )
+    } else {
+        let item = items
+            .first()
+            .expect("product-scoped release verifier has one item");
+        format!(
+            "{common}; \
+             if [ -f \"$token_file\" ]; then \
+               {} token-ensure-read {} {} --field token --token-file \"$token_file\" > /dev/null; \
+             else \
+               staged=\"$token_file.stado-new.$$\"; \
+               trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
+               umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
+               {} token-mint {} --capabilities {} --replace-capabilities \
+                 --token-file \"$staged\" --ttl-seconds {} > /dev/null; \
+               /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; \
+             fi",
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(consumer),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(consumer),
+            crate::deploy::shlex_quote(&capabilities),
+            ttl,
+        )
+    };
     let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -4140,11 +4179,12 @@ async fn reconcile_verifier(
             }))?
         );
     } else {
-        println!(
-            "{}: {consumer} now reads exactly {}",
-            resolved.name,
-            item_list.join(",")
-        );
+        let verb = if replace_capabilities {
+            "reads exactly"
+        } else {
+            "can read"
+        };
+        println!("{}: {consumer} {verb} {}", resolved.name, item_list.join(","));
     }
     Ok(())
 }
