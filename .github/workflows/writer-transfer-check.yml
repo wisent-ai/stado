@@ -1,0 +1,54 @@
+name: Writer transfer check
+
+on:
+  pull_request:
+    paths:
+      - "stado-rs/src/cli/storage.rs"
+      - ".github/workflows/writer-transfer-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: writer-transfer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  release-sized-read-back:
+    runs-on: [self-hosted, stado-control-plane]
+    timeout-minutes: 30
+    env:
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_API_URL: http://127.0.0.1:18776
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build exact-head writer client
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
+      - name: Verify full immutable release object read-back
+        run: |
+          set -euo pipefail
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+          version="${version_line#*\"}"
+          version="${version%%\"*}"
+          test -n "$version"
+
+          sums="$RUNNER_TEMP/stado-$version-SHA256SUMS"
+          delivered="$RUNNER_TEMP/stado-$version-read-back"
+          "$stado_bin" storage get \
+            "stado://releases/stado/$version/linux-amd64/SHA256SUMS" "$sums"
+          expected="$(sed -n 's/  stado$//p' "$sums")"
+          test -n "$expected"
+
+          "$stado_bin" storage get \
+            "stado://releases/stado/$version/linux-amd64/stado" "$delivered"
+          actual="$(openssl dgst -sha256 "$delivered")"
+          actual="${actual##* }"
+          bytes="$(wc -c < "$delivered" | tr -d ' ')"
+          test "$bytes" -ge 50000000
+          test "$actual" = "$expected"
+          printf 'Verified %s bytes for immutable Stado %s writer read-back at %s\n' \
+            "$bytes" "$version" "$GITHUB_SHA"
