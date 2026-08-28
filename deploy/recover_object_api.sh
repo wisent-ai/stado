@@ -117,27 +117,32 @@ import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
 declared = any(
-    key.endswith(":8443") and value is True
+    key.endswith(":443") and value is True
     for key, value in (document.get("AllowFunnel") or {}).items()
 )
 if not declared:
     print("undeclared")
     raise SystemExit
-desired = "http://127.0.0.1:8765"
+desired = "http://127.0.0.1:8765/api/release/object"
 matched = any(
-    key.endswith(":8443")
-    and ((value.get("Handlers") or {}).get("/") or {}).get("Proxy") == desired
+    key.endswith(":443")
+    and (
+        ((value.get("Handlers") or {}).get("/api/release/object") or {}).get("Proxy")
+        == desired
+    )
     for key, value in (document.get("Web") or {}).items()
 )
 print("matched" if matched else "drifted")
 PY
 )
   if [ "$route_state" = undeclared ]; then
-    printf 'ingress_unmanaged https=8443\n'
+    printf 'ingress_unmanaged https=443 path=/api/release/object\n'
     return 0
   fi
   if [ "$route_state" = drifted ]; then
-    "$tailscale_bin" funnel --bg --yes --https=8443 http://127.0.0.1:8765
+    "$tailscale_bin" funnel --bg --yes --https=443 \
+      --set-path /api/release/object \
+      http://127.0.0.1:8765/api/release/object
     "$tailscale_bin" serve status --json > "$status"
   fi
   /usr/bin/python3 - "$status" <<'PY'
@@ -145,19 +150,22 @@ import json, sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
-desired = "http://127.0.0.1:8765"
+desired = "http://127.0.0.1:8765/api/release/object"
 assert any(
-    key.endswith(":8443") and value is True
+    key.endswith(":443") and value is True
     for key, value in (document.get("AllowFunnel") or {}).items()
 )
 assert any(
-    key.endswith(":8443")
-    and ((value.get("Handlers") or {}).get("/") or {}).get("Proxy") == desired
+    key.endswith(":443")
+    and (
+        ((value.get("Handlers") or {}).get("/api/release/object") or {}).get("Proxy")
+        == desired
+    )
     for key, value in (document.get("Web") or {}).items()
 )
 PY
-  printf 'ingress_reconciled https=8443 proxy=http://127.0.0.1:8765 prior=%s\n' \
-    "$route_state"
+  printf 'ingress_reconciled https=443 path=/api/release/object proxy=%s prior=%s\n' \
+    http://127.0.0.1:8765/api/release/object "$route_state"
 }
 healthy=0
 if /usr/bin/curl -fsS --max-time 3 "$health" 2>/dev/null |

@@ -94,7 +94,7 @@ jobs:
       # authenticated read-back. Fleet delivery verifies the public read-only
       # Funnel separately after publication.
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net:8443
+      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -420,7 +420,7 @@ jobs:
       contents: read
     env:
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net:8443
+      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
@@ -574,8 +574,9 @@ jobs:
             tailscale serve status --json |
             jq -e '
               .Web | to_entries[] |
-              (.key | endswith(":8443")) and
-              .value.Handlers["/"].Proxy == "http://127.0.0.1:8765"
+              (.key | endswith(":443")) and
+              .value.Handlers["/api/release/object"].Proxy ==
+                "http://127.0.0.1:8765/api/release/object"
             '
 
       - name: Reload TLS reverse proxy

@@ -20,7 +20,7 @@ jobs:
     runs-on: [self-hosted, stado-control-plane]
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      STADO_API_URL: https://charless-mac-mini.tail6443b3.ts.net:8443
+      STADO_API_URL: https://charless-mac-mini.tail6443b3.ts.net
       WC_SKARBIEC_CONSUMER: stado-release-api-verifier
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
     steps:
@@ -34,8 +34,9 @@ jobs:
             tailscale serve status --json |
             jq -e '
               .Web | to_entries[] |
-              (.key | endswith(":8443")) and
-              .value.Handlers["/"].Proxy == "http://127.0.0.1:8765"
+              (.key | endswith(":443")) and
+              .value.Handlers["/api/release/object"].Proxy ==
+                "http://127.0.0.1:8765/api/release/object"
             '
       - name: Acquire release channel bearer
         run: |
