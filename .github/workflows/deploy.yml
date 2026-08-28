@@ -182,10 +182,22 @@ jobs:
               .listening == true
             )
           ' "$RUNNER_TEMP/release-resolver.json" >/dev/null
+          retry_command() {
+            for attempt in 1 2 3 4 5 6; do
+              if "$@"; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
           # The object API is a system LaunchDaemon. It does not inherit HOME
           # or the runner's Stado config, so reconcile its checked-in unit
           # contract before touching verifier grants.
-          "$stado_bin" host recover-object-api charless-mac-mini --json \
+          # Recovery is idempotent: after a lost transport acknowledgement its
+          # own healthy-and-identical postcondition makes the retry read-only.
+          retry_command "$stado_bin" host recover-object-api \
+            charless-mac-mini --json \
             > "$RUNNER_TEMP/object-api-recovery.json"
           "$stado_bin" service env \
             com.wisent.always-on.stado-object-api \
@@ -201,15 +213,6 @@ jobs:
             .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
             .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]"
           ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
-          retry_command() {
-            for attempt in 1 2 3 4 5 6; do
-              if "$@"; then
-                return 0
-              fi
-              sleep 5
-            done
-            return 1
-          }
           preflight() {
             # The private namespace proves the object verifier. Listing the
             # product's release prefix separately proves the release verifier:
