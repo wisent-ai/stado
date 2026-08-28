@@ -57,11 +57,14 @@ jobs:
           set -euo pipefail
           unset STADO_API_URL STADO_API_TOKEN
           internal_url=http://127.0.0.1:18779
-          "$HOME/.stado/bin/stado" host forward-remote \
-            charless-mac-mini product-release-object-api \
-            --remote-port 8765 --local-port 18779 \
-            > "$RUNNER_TEMP/product-release-channel.log" 2>&1 &
-          channel_pid=$!
+          start_channel() {
+            "$HOME/.stado/bin/stado" host forward-remote \
+              charless-mac-mini product-release-object-api \
+              --remote-port 8765 --local-port 18779 \
+              > "$RUNNER_TEMP/product-release-channel.log" 2>&1 &
+            channel_pid=$!
+          }
+          start_channel
           trap 'kill "$channel_pid" 2>/dev/null || true' EXIT
           export WC_STORAGE_BACKEND=stado
           export WC_STADO_STORAGE_URL="$internal_url"
@@ -115,6 +118,10 @@ jobs:
             "$stado_bin" service restart \
               com.wisent.always-on.stado-object-api \
               --host charless-mac-mini --json
+            # Restarting the remote endpoint closes the forwarding transport by
+            # design; reconnect before asking the endpoint for its postcondition.
+            kill "$channel_pid" 2>/dev/null || true
+            start_channel
             if ! wait_for_channel; then
               cat "$RUNNER_TEMP/product-release-channel.log" >&2
               false
