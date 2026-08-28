@@ -263,13 +263,26 @@ jobs:
           # A read grant cannot prove that this runner presents the publisher
           # token expected by the target. This content-addressed canary makes
           # `storage put` exercise create-if-absent and exact authenticated
-          # writer read-back before publication starts.
+          # writer read-back before publication starts. The object service
+          # reloads publisher authorization independently, so retry the same
+          # immutable canary until that declared token is active.
           canary="$RUNNER_TEMP/release-write-preflight.json"
           printf '{"schema":"stado.release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://releases/stado/__release_preflight__/$canary_sha.json"
-          "$stado_bin" storage put "$canary_uri" "$canary" --if-absent
+          canary_written=false
+          for attempt in $(seq 1 12); do
+            if "$stado_bin" storage put "$canary_uri" "$canary" --if-absent; then
+              canary_written=true
+              break
+            fi
+            sleep "$((attempt * 2))"
+          done
+          if [ "$canary_written" != true ]; then
+            echo "::error::release publisher authorization did not stabilize"
+            false
+          fi
 
       - name: Create Linux release manifest
         run: |
