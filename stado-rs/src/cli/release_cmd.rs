@@ -265,7 +265,7 @@ async fn keygen(args: &ReleaseKeygenArgs) -> Result<(), CmdError> {
 }
 
 async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<(), CmdError> {
-    match crate::cli::storage::fetch_object(uri).await {
+    match crate::cli::storage::fetch_object_from_writer(uri).await {
         Ok(existing) if existing == bytes => return Ok(()),
         Ok(_) => {
             return Err(CmdError::click(format!(

@@ -242,18 +242,16 @@ jobs:
           esac
           jq -e '.objects | type == "array"' \
             "$RUNNER_TEMP/release-preflight.json" >/dev/null
-          # A read grant cannot prove that the release publisher presented by
-          # this runner matches the target's publisher item. Retain one
-          # content-addressed canary per source revision so the same
-          # create-if-absent and read-back contract guards every real publish.
+          # A read grant cannot prove that this runner presents the publisher
+          # token expected by the target. The content-addressed canary exercises
+          # create-if-absent; `storage put` performs exact authenticated
+          # read-back before the public download facade is expected to see it.
           canary="$RUNNER_TEMP/release-write-preflight.json"
           printf '{"schema":"stado.release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://releases/stado/__release_preflight__/$canary_sha.json"
           "$stado_bin" storage put "$canary_uri" "$canary" --if-absent
-          "$stado_bin" storage get "$canary_uri" "$RUNNER_TEMP/release-write-preflight.stored.json"
-          cmp --silent "$canary" "$RUNNER_TEMP/release-write-preflight.stored.json"
 
       - name: Create Linux release manifest
         run: |
