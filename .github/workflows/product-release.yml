@@ -117,7 +117,10 @@ jobs:
             # for the real authenticated channel below before publication.
             "$stado_bin" service restart \
               com.wisent.always-on.stado-object-api \
-              --host charless-mac-mini --json
+              --host charless-mac-mini --json || true
+            # The restart can close its own host transport before returning a
+            # receipt. Only the authenticated write/read postcondition below
+            # decides whether it succeeded.
             # Restarting the remote endpoint closes the forwarding transport by
             # design; reconnect before asking the endpoint for its postcondition.
             kill "$channel_pid" 2>/dev/null || true
