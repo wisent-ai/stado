@@ -552,6 +552,16 @@ pub async fn run_bootstrap(
         let Some(target) = target else {
             return Err("--local requires --target NAME".into());
         };
+        // `--local` installs on THIS machine, so this machine's own
+        // declaration decides the domain — for the agent, for a coordinator
+        // tick, and for the two internal daemons alike. An always-on host has
+        // no per-login domain, and every unit this path wrote into
+        // `~/Library/LaunchAgents` there is a unit launchd never loaded.
+        let daemon_domain = registry
+            .lookup_self(&crate::providers::vast::system_hostname())
+            .ok()
+            .flatten()
+            .is_some_and(crate::deploy::service::requires_daemon_domain);
         // Special target: failure-fixer is a wisent-compute-internal
         // daemon, not a registry coordinator entry. Treated like the
         // local install path but with kind=failure-fixer so the
@@ -562,6 +572,7 @@ pub async fn run_bootstrap(
                 "failure-fixer",
                 "failure-fixer",
                 dry_run,
+                daemon_domain,
                 runner,
                 hf_fetch,
                 echo,
@@ -570,14 +581,26 @@ pub async fn run_bootstrap(
         }
         if target == "watchdog" {
             return local_install::install_local(
-                "watchdog", "watchdog", dry_run, runner, hf_fetch, echo,
+                "watchdog",
+                "watchdog",
+                dry_run,
+                daemon_domain,
+                runner,
+                hf_fetch,
+                echo,
             )
             .await;
         }
         if let Some(t) = registry.lookup(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 return local_install::install_local(
-                    &t.name, "agent", dry_run, runner, hf_fetch, echo,
+                    &t.name,
+                    "agent",
+                    dry_run,
+                    daemon_domain,
+                    runner,
+                    hf_fetch,
+                    echo,
                 )
                 .await;
             }
@@ -588,6 +611,7 @@ pub async fn run_bootstrap(
                     &c.name,
                     "coordinator",
                     dry_run,
+                    daemon_domain,
                     runner,
                     hf_fetch,
                     echo,

@@ -156,13 +156,14 @@ fn resolved_plan(
         .or_else(|| crate::cli::service::declared_label(declared))
     {
         Some(label) => service::plan_deploy_labelled(
+            target,
             &declared.name,
             label,
             &unit.program,
             &unit.args,
             &unit_env,
         ),
-        None => service::plan_deploy(&declared.name, &unit.program, &unit.args),
+        None => service::plan_deploy(target, &declared.name, &unit.program, &unit.args),
     }
     .map_err(|error| error.to_string())?;
     Ok((plan, unit.program, unit.args))

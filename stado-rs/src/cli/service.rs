@@ -613,11 +613,12 @@ pub enum ServiceCommands {
         reason: String,
         /// Install the unit as a system LaunchDaemon
         /// (`/Library/LaunchDaemons/<label>.plist`) instead of following the
-        /// declaration or the per-login fallback. For an always-on host with
-        /// no graphical session this is the only domain that keeps a service
-        /// alive; the privileged install and bootstrap steps run under
-        /// passwordless sudo, and a host without that grant is told exactly
-        /// which step was refused.
+        /// declaration or the per-login fallback. Implied for a registry host
+        /// declared always-on on Darwin, where that is the only domain a
+        /// service stays alive in; pass it for a host whose declaration does
+        /// not say so yet. The privileged install and bootstrap steps run
+        /// under passwordless sudo, and a host without that grant is told
+        /// exactly which step was refused.
         #[arg(long)]
         as_daemon: bool,
         #[arg(long)]
@@ -3337,7 +3338,7 @@ async fn deploy(
     } else {
         args
     };
-    let plan = service::plan_deploy(name, from, args).map_err(click)?;
+    let plan = service::plan_deploy(&target, name, from, args).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
     // unit that then cannot be recorded would leave an unmanaged unit
@@ -3699,14 +3700,22 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .as_deref()
         .or_else(|| existing.and_then(declared_label))
     {
-        Some(label) => {
-            service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args, &unit_env)
-        }
-        None => service::plan_deploy(options.name, &unit.program, &unit.args),
+        Some(label) => service::plan_deploy_labelled(
+            &target,
+            options.name,
+            label,
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
+        None => service::plan_deploy(&target, options.name, &unit.program, &unit.args),
     }
     .map_err(click)?;
     let mut plan = plan;
-    plan.force_daemon = options.as_daemon;
+    // The plan already carries the host's own answer ([`requires_daemon_domain`]).
+    // `--as-daemon` stays the operator's override for a host whose declaration
+    // does not say always-on yet, so it can only turn the daemon domain on.
+    plan.force_daemon = plan.force_daemon || options.as_daemon;
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and

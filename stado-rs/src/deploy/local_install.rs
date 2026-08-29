@@ -573,6 +573,20 @@ pub struct InstallPlan {
     pub label: String,
     pub exec_args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// The account a system LaunchDaemon runs as, for a host with no
+    /// per-login launchd domain to load an agent into. `None` is the ordinary
+    /// per-login agent, and it is the only value on Linux.
+    ///
+    /// An always-on mac is the whole reason. `launchctl bootstrap gui/<uid>`
+    /// cannot work where nobody logs in graphically, and the ladder this
+    /// module walks instead — `user/<uid>`, `asuser gui/<uid>`, then a crontab
+    /// entry — ends in a process with no unit behind it. Four units on the
+    /// always-on mini sat in `/Users/charles/Library/LaunchAgents` and never
+    /// loaded once, the active coordinator among them, which is why nothing
+    /// reaped an expired worker lease for two days.
+    /// [`crate::deploy::service::requires_daemon_domain`] answers it from the
+    /// registry declaration.
+    pub daemon: Option<String>,
 }
 
 impl InstallPlan {
@@ -583,7 +597,14 @@ impl InstallPlan {
     }
 
     /// The plist (Darwin) or unit (Linux) destination path under `home`.
+    ///
+    /// A daemon is the machine's job, not the home's: it lives in
+    /// `/Library/LaunchDaemons` and `home` names only the account it runs as.
     pub fn unit_path(&self, home: &Path) -> PathBuf {
+        if self.daemon.is_some() {
+            return PathBuf::from("/Library/LaunchDaemons")
+                .join(format!("{}.plist", self.label));
+        }
         match self.os {
             LocalOs::Darwin => home
                 .join("Library")
@@ -599,16 +620,15 @@ impl InstallPlan {
 
     /// The plist (Darwin) or unit (Linux) content for an account home.
     pub fn content(&self, home: &Path) -> String {
+        let log = home
+            .join(".stado")
+            .join("logs")
+            .join(format!("{}.log", self.label));
+        if let Some(account) = self.daemon.as_deref() {
+            return daemon_plist_text(&self.label, &self.exec_args, &self.env, &log, account);
+        }
         match self.os {
-            LocalOs::Darwin => plist_text(
-                &self.label,
-                &self.exec_args,
-                &self.env,
-                &home
-                    .join(".stado")
-                    .join("logs")
-                    .join(format!("{}.log", self.label)),
-            ),
+            LocalOs::Darwin => plist_text(&self.label, &self.exec_args, &self.env, &log),
             LocalOs::Linux => systemd_user_unit(&self.description(), &self.exec_args, &self.env),
         }
     }
@@ -637,6 +657,7 @@ pub fn plan(
     bins: &Bins,
     hf_token: &str,
     wc_python: &str,
+    daemon: Option<String>,
 ) -> Result<InstallPlan, DeployError> {
     Ok(InstallPlan {
         name: name.to_string(),
@@ -645,6 +666,7 @@ pub fn plan(
         label: label(kind, name),
         exec_args: exec_args_for(bins, kind, name)?,
         env: install_env(home, kind, hf_token, wc_python),
+        daemon,
     })
 }
 
@@ -813,6 +835,119 @@ async fn install_cron_fallback(
     Ok(())
 }
 
+/// The account a daemon spelling of a unit must name, read from the home
+/// directory the plan already renders its logs and binaries under. macOS puts
+/// an account's home at `/Users/<account>`, the same derivation
+/// [`crate::deploy::service::MisdeclaredDomain`] reads out of a declared
+/// LaunchAgent path — one convention, not two.
+///
+/// `$USER` is deliberately not consulted: under `sudo` it names root, and a
+/// daemon that ran the fleet's control binary as uid 0 against an
+/// account-owned `~/.stado` is exactly the trade [`daemon_plist_text`] exists
+/// to refuse.
+fn account_of(home: &Path) -> Result<String, DeployError> {
+    home.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            DeployError(format!(
+                "cannot read the account name out of home {}",
+                home.display()
+            ))
+        })
+}
+
+/// Install and load the daemon spelling: stage the rendered plist in the
+/// account's own Stado directory, then let root place it in
+/// `/Library/LaunchDaemons` and load it in the one domain this host has.
+///
+/// `sudo -n`, never a prompt: this runs unattended from `stado bootstrap` and
+/// from the coordinator migration, so a step that blocks on a tty is a step
+/// that hangs. A host without the grant is told which command was refused —
+/// the same contract [`crate::deploy::service`]'s remote `ENSURE_BODY` holds
+/// over the host channel.
+///
+/// `bootout` before `bootstrap` because launchd holds the definition it loaded
+/// and a rewritten file under a live job changes nothing; an absent label
+/// makes it fail, which is not an error here. This is the one place that
+/// sequence is safe: a unit in a domain that never existed has no live job to
+/// take down.
+async fn install_darwin_daemon(
+    plan: &InstallPlan,
+    home: &Path,
+    runner: &Runner,
+    echo: &mut dyn FnMut(&str),
+) -> Result<(), DeployError> {
+    let path = plan.unit_path(home);
+    let staged = home
+        .join(".stado")
+        .join(format!("{}.plist.staged", plan.label));
+    if let Some(directory) = staged.parent() {
+        fs::create_dir_all(directory).map_err(|exc| DeployError(exc.to_string()))?;
+    }
+    write_if_changed(&staged, &plan.content(home)).map_err(|exc| DeployError(exc.to_string()))?;
+    let sudo = |argv: Vec<&str>| {
+        let mut spec = vec!["/usr/bin/sudo".to_string(), "-n".to_string()];
+        spec.extend(argv.into_iter().map(str::to_string));
+        CommandSpec::new(spec)
+    };
+    let unit_path = path.to_string_lossy().into_owned();
+    let install = runner(sudo(vec![
+        "/usr/bin/install",
+        "-m",
+        "644",
+        "-o",
+        "root",
+        "-g",
+        "wheel",
+        &staged.to_string_lossy(),
+        &unit_path,
+    ]))
+    .await
+    .map_err(DeployError)?;
+    let _ = fs::remove_file(&staged);
+    if !install.ok() {
+        return Err(DeployError(format!(
+            "sudo -n install {unit_path} was refused: {}",
+            install.detail()
+        )));
+    }
+    echo(&format!("[plist] installed {unit_path}"));
+    let service = format!("system/{}", plan.label);
+    let _ = runner(sudo(vec!["/bin/launchctl", "bootout", &service]))
+        .await
+        .map_err(DeployError)?;
+    let bootstrap = runner(sudo(vec![
+        "/bin/launchctl",
+        "bootstrap",
+        "system",
+        &unit_path,
+    ]))
+    .await
+    .map_err(DeployError)?;
+    if !bootstrap.ok() {
+        return Err(DeployError(format!(
+            "sudo -n launchctl bootstrap system {unit_path} failed: {}",
+            bootstrap.detail()
+        )));
+    }
+    let _ = runner(sudo(vec!["/bin/launchctl", "enable", &service]))
+        .await
+        .map_err(DeployError)?;
+    let _ = runner(sudo(vec!["/bin/launchctl", "kickstart", "-k", &service]))
+        .await
+        .map_err(DeployError)?;
+    echo(&format!(
+        "[ok]   loaded system LaunchDaemon {} (logs: {})",
+        plan.label,
+        home.join(".stado")
+            .join("logs")
+            .join(format!("{}.log", plan.label))
+            .display()
+    ));
+    Ok(())
+}
+
 /// Execute an [`InstallPlan`] (Python `_install_darwin` / `_install_linux`):
 /// write the file (skipping a byte-identical rewrite), then boot the job.
 pub async fn execute_plan(
@@ -822,6 +957,13 @@ pub async fn execute_plan(
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
+    // A host with no per-login domain gets the daemon spelling and none of the
+    // ladder below: every rung of it addresses a domain that does not exist
+    // there, and the last one installs a crontab entry instead of a unit.
+    if plan.daemon.is_some() {
+        prepare_owner_log(home, &plan.label)?;
+        return install_darwin_daemon(plan, home, runner, echo).await;
+    }
     let path = plan.unit_path(home);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|exc| DeployError(exc.to_string()))?;
@@ -948,6 +1090,26 @@ pub async fn execute_plan(
     Ok(())
 }
 
+/// [`crate::deploy::service::requires_daemon_domain`] for THIS machine, for a
+/// caller that holds no registry of its own. `run_bootstrap` does hold one and
+/// answers from it; loading a second document there would let two passes over
+/// the same host disagree.
+///
+/// A registry that cannot be read falls back to the per-login domain: an
+/// unreadable document is not a statement that this host is always-on, and
+/// guessing `system` would put a plist where an unprivileged install cannot
+/// remove it.
+pub async fn this_host_requires_daemon_domain() -> bool {
+    let Ok(registry) = crate::targets::load_registry_auto().await else {
+        return false;
+    };
+    registry
+        .lookup_self(&crate::providers::vast::system_hostname())
+        .ok()
+        .flatten()
+        .is_some_and(crate::deploy::service::requires_daemon_domain)
+}
+
 /// Install a persistent local service. Credentials remain in Skarbiec; the
 /// service unit receives only Skarbiec connection metadata and non-secret
 /// runtime configuration.
@@ -955,15 +1117,21 @@ pub async fn install_local(
     name: &str,
     kind: &str,
     dry_run: bool,
+    daemon_domain: bool,
     runner: &Runner,
     _hf_fetch: &TokenFetcher,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
     let os = LocalOs::detect()?;
     let home = crate::config_file::expand_tilde("~");
+    let daemon = if daemon_domain && os == LocalOs::Darwin {
+        Some(account_of(&home)?)
+    } else {
+        None
+    };
     let bins = Bins::resolve(&home);
     let wc_python = default_wc_python();
-    let install_plan = plan(name, kind, os, &home, &bins, "", &wc_python)?;
+    let install_plan = plan(name, kind, os, &home, &bins, "", &wc_python, daemon)?;
     if dry_run {
         for line in install_plan.dry_run_lines() {
             echo(&line);
