@@ -143,6 +143,98 @@ jobs:
             "$stado_bin" storage get "$prefix/$name" "$delivered"
             cmp --silent "$source" "$delivered"
           done
+      - name: Publish the exact tag native release
+        env:
+          STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+        run: |
+          set -euo pipefail
+          version='${{ inputs.version }}'
+          platform=darwin-arm64
+          tag="stado-v$version"
+          tag_commit="$(git rev-list -n 1 "$tag")"
+          tag_source="$RUNNER_TEMP/stado-$version-tag-source"
+          git worktree add --detach "$tag_source" "$tag_commit"
+          cargo build --manifest-path "$tag_source/stado-rs/Cargo.toml" \
+            --locked --release --bins
+
+          release_dir="$RUNNER_TEMP/stado-$version-$platform"
+          mkdir -p "$release_dir"
+          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+            cp "$tag_source/stado-rs/target/release/$name" "$release_dir/$name"
+          done
+          cp "$release_dir/stado" "$release_dir/wc"
+          (
+            cd "$release_dir"
+            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+              digest="$(openssl dgst -sha256 "$name")"
+              printf '%s  %s\n' "${digest##* }" "$name"
+            done > SHA256SUMS
+          )
+
+          archive="$RUNNER_TEMP/stado-v$version-$platform.tar.gz"
+          tag_stado="$tag_source/stado-rs/target/release/stado"
+          "$tag_stado" storage archive "$release_dir" "$archive"
+          machine_schema="$(
+            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              "$tag_source/stado-rs/src/machine.rs"
+          )"
+          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
+          config_schema="$(
+            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              "$tag_source/stado-rs/src/config_file.rs"
+          )"
+          storage_schema="$(
+            sed -n '/pub const STORAGE_LAYOUT_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              "$tag_source/stado-rs/src/queue/mod.rs"
+          )"
+          test "$config_schema" != "true as u16" || config_schema="$schema_unit"
+          test "$storage_schema" != "true as u16" || storage_schema="$schema_unit"
+          test -n "$machine_schema"
+          test -n "$config_schema"
+          test -n "$storage_schema"
+          STADO_RELEASE_DIR="$release_dir" \
+          STADO_RELEASE_ARCHIVE="$archive" \
+          STADO_RELEASE_VERSION="$version" \
+          STADO_RELEASE_CHANNEL=stable \
+          STADO_RELEASE_PLATFORM="$platform" \
+          STADO_RELEASE_SOURCE_COMMIT="$tag_commit" \
+          STADO_RELEASE_SOURCE_REPOSITORY="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+          STADO_RELEASE_BUILT_AT="$(git -C "$tag_source" show -s --format=%cI "$tag_commit")" \
+          STADO_MACHINE_SCHEMA_VERSION="$machine_schema" \
+          STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
+          STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
+          STADO_LICENSE_FILE="$tag_source/LICENSE" \
+          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
+          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
+            "$tag_source/scripts/release_manifest.sh"
+          mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
+
+          recovery_stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          prefix="stado://releases/stado/$version/$platform"
+          for source in "$release_dir"/*; do
+            name="${source##*/}"
+            "$recovery_stado" storage put "$prefix/$name" "$source" --if-absent
+          done
+          echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
+      - name: Verify public native immutable bytes
+        env:
+          STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
+          WC_SKARBIEC_CONSUMER: stado-release-api-verifier
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+        run: |
+          set -euo pipefail
+          version='${{ inputs.version }}'
+          platform=darwin-arm64
+          prefix="stado://releases/stado/$version/$platform"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          for source in "$STADO_NATIVE_RELEASE_DIR"/*; do
+            name="${source##*/}"
+            delivered="$RUNNER_TEMP/public-native-$name"
+            "$stado_bin" storage get "$prefix/$name" "$delivered"
+            cmp --silent "$source" "$delivered"
+          done
       - name: Acquire release channel bearer
         env:
           WC_SKARBIEC_CONSUMER: stado-release-publisher
