@@ -89,8 +89,21 @@ jobs:
             --host "$host" \
             --as-daemon \
             --reason "product release submission requires the canonical object store"
+          # `stado://sources/<product>/...` routes by product: the first
+          # segment selects the `release_api.publishers` entry whose credential
+          # reads it. `stado://sources/__release_preflight__` names a product
+          # nobody publishes, so this probe answered
+          # "release_api.publishers declares no publisher for
+          # __release_preflight__" and the step failed after the object service
+          # it had just ensured was healthy. The sentinel belongs UNDER a
+          # declared product, and `stado` is the one every deployment of this
+          # workflow has a publisher for.
+          #
+          # `absent` is the expected answer and a passing one: the question is
+          # whether the object service states anything at all, not whether this
+          # key exists.
           state="$("$stado_bin" storage stat \
-            stado://sources/__release_preflight__ --json | jq -r '.state // ""')"
+            stado://sources/stado/__release_preflight__ --json | jq -r '.state // ""')"
           case "$state" in
             present|absent) ;;
             *)
