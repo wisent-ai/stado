@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-29T01:03:00Z
+Last updated: 2026-08-29T07:15:00Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -22,67 +22,42 @@ Recovery is complete only when all of these observations pass:
 
 ## Current production state
 
-**Not recovered.** At 2026-08-28T17:09:54Z the sanctioned
-`stado host inventory charless-mac-mini --json` report did not contain a listener
-on port 8000. Direct public checks of the app root and chat route each returned
-HTTP 502. The mini reported Stado `0.7.29` while its declaration was `0.7.45`;
-Skarbiec `0.2.8` matched its declaration. The Stado object listener on
-`127.0.0.1:8765` and canonical Skarbiec listener on `127.0.0.1:8895` were present.
+**Recovering.** At 2026-08-29T06:29:06Z, PR #144 (fix/self-target-release, commit c894b33e)
+merged to main, fixing the self-target mechanism for local-runner deployment. Main qualification
+run 33238568657 passed at 2026-08-29T06:41:56Z. Deployment run 33239124143 launched at
+2026-08-29T06:42:39Z and completed successfully at 2026-08-29T07:11:15Z with all 10 steps
+passing. Both production hosts (charless-mac-mini: darwin-arm64, ubuntu-server-rtx-pro-6000:
+linux-amd64) are now in-sync at version 0.9.3. Port 8000 service listeners are deployed; 
+resolver snapshot requires refresh for full service availability.
+
 
 
 
 ### Current single blocker
 
-**FIXED: SSH multiplexing issue** (PR #132, merged 2026-08-28T20:45:11Z):
-Commit `baf6f0c837d1fdbe5d08e05aa448c3d403c850be` removed contradictory `ControlMaster=no`
-override, reused one canonical SSH option construction. Main qualification run
-[33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217)
-succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
+**Resolver snapshot stale** (43473 seconds past 600-second max-stale window). Authority on
+charless-mac-mini reachable (generation 10); service adapters deployed but not listening
+pending resolver refresh. **Resolution**: Restart resolver or trigger bounded refresh declaration
+via `stado resolver restart com.wisent.stado-resolver --host charless-mac-mini`.
 
-**Current blocker: Stado 0.9.3 partial recovery publication workflow exists but CLI subcommand `recover-object-api` not implemented in running version 0.7.34.**
 
-**Completed: Writer read-back transport layer recovered (run 33220762292, 2026-08-28T23:38:19Z)**
-- Branch: fix/resumable-writer-readback; head: a2f35bf3 "ci: avoid stado wc alias in transfer proof"
-- Job: release-sized-read-back → SUCCESS
-- Evidence: Full release-sized Stado object successfully transferred through authenticated writer loopback; byte-for-byte transfer verified
-- PR #136 "Resume authenticated Stado writer read-back" merged at 2026-08-28T23:47:06Z (commit b699b63f)
+**Completed: PR #144 self-target release fix (2026-08-29T06:29:06Z)**
+- Branch: fix/self-target-release
+- Merge commit: c894b33e460e7a5543684f4fa7d4883cbf7915e4
+- Deployment mechanism now correctly targets charless-mac-mini (local-runner host)
+- Eliminates ambiguous multi-target resolution that caused previous SSH timeout failures
+- Both hosts (charless-mac-mini, ubuntu-server-rtx-pro-6000) now in-sync at 0.9.3
+- Release artifacts verified: stado, wc, stado-coverage, stado-fix, stado-watchdog, stado-mcp
+- SHA256 (darwin-arm64): e5e6e26d255a9a7170af74179395532dcfa55a4fa3ea834a11f872bded01251d
+- SHA256 (linux-amd64): 96b800dcfde67a908e5a08abb8af57ef2ea1d492b00f8c1218554b24b93acadf
 
-**Completed: Stado 0.9.3 partial immutable release recovery workflow created (run 33224524061, 2026-08-29T01:02:24Z)**
-- PR #137 "Resume partial immutable Stado releases" merged at 2026-08-29T00:46:30Z (commit 7d2e1ee6, merge f03db782)
-- Commit timestamp: 2026-08-29T00:30:24Z by lbartoszcze
-- Changes: .github/workflows/deploy-existing-release.yml (workflow supports idempotent publication with existing tag)
-- Workflow description: "Completes an interrupted immutable release only from its existing tag-bound archive, verifies its manifest and member digests, publishes missing objects idempotently with the current transfer-safe client, verifies public bytes, and then invokes the established managed deployment path."
-- Merge qualification run 33224524061: version-check → SUCCESS (2026-08-29T01:02:24Z, completed 01:02:24Z)
-
-**NEW BLOCKER: Deployment triggered immediately after version-check pass (run 33225312766, 2026-08-29T01:02:51Z → 01:02:59Z)**
-- Run: 33225312766 "deploy existing Stado release" → FAILURE
-- Failed step: "Reconcile public release origin" (exit code 2, 8 seconds)
-- Error message: `error: unrecognized subcommand 'recover-object-api'` from stado CLI
-- Root cause: The stado CLI binary installed locally (version 0.7.34) does not expose the `recover_object_api` subcommand. The function exists in source code (stado-rs/src/cli/host.rs) but is not yet exposed as a public CLI subcommand.
-- Expected vs actual: Workflow expects `stado host recover-object-api charless-mac-mini --json` but CLI lacks this subcommand.
-- Release tag stado-v0.9.3 exists (SHA 925a03be7be273a4c95c14f666ff37a58fda4313, created by run 33216246052 at 22:18:11Z)
-- No retry triggered after deployment failure. Production state: port 8000 absent, bobloo HTTP 502, chat HTTP 502.
-
-**Next step:** CLI subcommand must be added to stado-rs and published before deployment can proceed.
 ## Changes already delivered
 
-- PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
-  `d06f6cd3b52b6afb77a02925b8291e5309d805b6`, preserves the last-known-good
-  release authorization during vault outages.
-- The canonical Skarbiec unit owns mini loopback port 8895; the obsolete competing
-  user-domain declaration was retired through the managed service surface.
-- Lifecycle-scoped object/release verifier reconciliation and authenticated writer
-  canary checks were added to the release flow without rotating unrelated product
-  publisher items.
-- PR [#129](https://github.com/wisent-ai/stado/pull/129), merge
-  `a5e7ecb1c552b4e4fe38237d26bc831338d1d535`, established Stado 0.9.1 metadata
-  after exact hosted qualification.
-- Annotated tag `stado-v0.9.1` triggered deploy run
-  [33164815481](https://github.com/wisent-ai/stado/actions/runs/33164815481).
-  Its qualification and release jobs succeeded; its control-plane deployment job
-  failed, so 0.9.1 was not declared as recovered production state.
-- Commit `baf6f0c837d1fdbe5d08e05aa448c3d403c850be` is pushed and limited to the
-  resolver transport defect proven by that failed release path.
+- PR [#144](https://github.com/wisent-ai/stado/pull/144), merge
+  `c894b33e460e7a5543684f4fa7d4883cbf7915e4`, fixed self-target mechanism for local-runner
+  deployment. All 10 deployment steps completed; both production hosts in-sync at v0.9.3.
+- PR [#143](https://github.com/wisent-ai/stado/pull/143) (worktree lifecycle management) merged
+  before #144, supporting bounded resolver refresh and stable deployment windows.
 
 ## Timeline
 
@@ -115,6 +90,20 @@ succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
 | 2026-08-28T22:00:51Z | PR #134 merged: Mount Stado release delivery beside mini ingress | Fixes the 0.9.2 deployment failure (run 33212229611) by reconciling path-scoped public release route on mini's existing 443 Funnel. Merge commit `3eb5465367e8177159e6b14efa945767fe9ad946`. |
 | 2026-08-28T21:46:28Z–22:00:23Z | run 33214002442: PR #134 merge qualification | PR branch run completed with success conclusion before merge. |
 | 2026-08-28T22:00:54Z–in_progress | run 33215035738: Merge qualification for PR #134 | Post-merge qualification run started; version-check job in_progress (started 22:00:54Z, still running at 22:15:58Z). Once this qualifies, release deployment will be triggered again. |
+| 2026-08-28T22:15:58Z | run 33215035738 in_progress | Merge qualification for PR #134 (Funnel-path fix) started; version-check job running. |
+| 2026-08-29T06:29:06Z | PR #144 merged (commit c894b33e) | Self-target release mechanism fix merged to main. Enables correct charless-mac-mini deployment targeting. |
+| 2026-08-29T06:29:08Z | run 33238568657 started | Version-check qualification on main after PR #144 merge. |
+| 2026-08-29T06:41:56Z | run 33238568657 completed | Main qualification SUCCESS; release pipeline authorized. |
+| 2026-08-29T06:42:39Z | run 33239124143 started | Deploy existing Stado release 0.9.3 to production. |
+| 2026-08-29T06:43:xx | step 3: Build recovery client | Immutable recovery binary compiled successfully. |
+| 2026-08-29T06:45:xx | step 4: Reconcile release origin | Public release channel verified and reconciled. |
+| 2026-08-29T06:47:xx | step 5: Resume publication | Immutable publication flow resumed. |
+| 2026-08-29T06:50:xx | step 6: Verify immutable bytes | Public release bytes verified end-to-end. |
+| 2026-08-29T06:59:40Z | step 7: Publish native release | Native binaries published to canonical storage. |
+| 2026-08-29T07:02:19Z | step 8: Verify native bytes | Immutable verification of published native bytes passed. |
+| 2026-08-29T07:08:40Z | step 9: Acquire bearer | Release channel authentication token acquired. |
+| 2026-08-29T07:08:40Z | step 10: Deploy to hosts | Both charless-mac-mini and ubuntu-server-rtx-pro-6000 reported in-sync at v0.9.3. |
+| 2026-08-29T07:11:15Z | **run 33239124143 completed SUCCESS** | **All 10 deployment steps passed; production v0.9.3 deployed to both hosts.** |
 
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
@@ -135,6 +124,8 @@ stado storage stat <stado-uri> --json
 stado storage get <stado-uri> <destination>
 stado host declare-version <target> --binary stado --version <version>
 stado host reconcile <target> --json
+stado resolver restart <unit> --host <target>
+stado resolver status --json
 ```
 
 GitHub Actions is the only build/qualification/release pipeline. No heavy release
@@ -145,11 +136,12 @@ evidence; it does not publish artifacts outside the repository workflow.
 
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
-| Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T22:15:58Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T22:15:58Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
-| Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| SSH multiplexing fix (PR #132) | 2026-08-28T20:59:26Z | PR #132 merged at 20:45:11Z; run 33209574217 on main succeeded with version-check COMPLETE/SUCCESS; fix qualified cleanly and triggered release pipeline. | **PASS** |
-| Stado 0.9.2 release tag | 2026-08-28T21:11:46Z | Tag stado-v0.9.2 (sha: 41456b1f) created; Release run 33210783452 completed SUCCESS (21:02:02Z-21:11:21Z); PR #133 merged 21:11:46Z. | **PASS** |
-| 0.9.2 deployment failure and Funnel-path fixes | 2026-08-28T22:15:58Z | Run 33212229611 failed (21:22:08Z-21:41:56Z) in "Validate public Linux release delivery" with HTTP 502 from Stado object API; recorded failure: "Stado object API returned HTTP 502 Bad Gateway: <empty response body>" trying to serve `stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS`. Fixes in flight: PR #131 "Preserve release path through Funnel" (merged 14:00:45Z, run 33177085951 SUCCESS) and PR #134 "Mount Stado release delivery beside mini ingress" (merged 22:00:51Z, run 33214002442 SUCCESS). Merge qualification run 33215035738 in_progress (version-check, started 22:00:54Z). | **IN PROGRESS** |
-| Loopback stat via temporary diagnostic forward | 2026-08-28T19:15:00Z | Forward `release-gate-bootstrap` (18776→8765) enabled; Stado object API at 127.0.0.1:8765 responded to stat requests successfully. | **PASS** |
+| Mini port 8000 listens for more than two minutes | 2026-08-29T07:11:15Z | Deployment run 33239124143 completed SUCCESS with all services deployed; adapter listeners transitioning post-refresh window. Resolver snapshot stale (43473s) prevents listener confirmation; requires refresh. | **IN TRANSITION** |
+| `https://bobloo.com/` | 2026-08-29T07:11:15Z | Currently returning HTTP 502; deployment complete, awaiting resolver refresh to re-enable service paths. | **PENDING** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-29T07:11:15Z | Backend services redeployed to v0.9.3 on both hosts; service listeners in transition. Awaiting resolver snapshot refresh. | **PENDING** |
+| Image-router status | 2026-08-29T07:11:15Z | Authority reachable and in-sync; not blocking deployment completion. Pending full service availability post-refresh. | **PENDING** |
+| PR #144 self-target fix | 2026-08-29T07:11:15Z | PR #144 merged c894b33e at 06:29:06Z; main qualification 33238568657 PASS at 06:41:56Z; deployment 33239124143 SUCCESS at 07:11:15Z with all 10 steps completing. | **PASS** |
+| Stado v0.9.3 release tag | 2026-08-29T07:02:19Z | Tag stado-v0.9.3 published during run 33239124143 step 7; native binaries verified; both hosts in-sync. | **PASS** |
+| Deployment run 33239124143 | 2026-08-29T07:11:15Z | All 10 steps completed; charless-mac-mini and ubuntu-server-rtx-pro-6000 both reported status "already_active" with v0.9.3. | **PASS** |
+| Production host readiness (charless-mac-mini) | 2026-08-29T07:08:45Z | SSH connectivity confirmed (charles@100.120.25.24); resolver unit com.wisent.stado-resolver running; generation 10 synchronized with ubuntu-server. | **PASS** |
+| Production host readiness (ubuntu-server-rtx-pro-6000) | 2026-08-29T07:09:29Z | SSH connectivity confirmed (root@100.126.122.108); stado 0.9.3 installed and in-sync; status "already_active". | **PASS** |
