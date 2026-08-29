@@ -61,9 +61,31 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          host="$("$stado_bin" registry self --name-only)"
-          test -n "$host"
-          "$stado_bin" service ensure stado-object-api \
+          # Two things were wrong with asking `registry self` for this. The name
+          # `stado-object-api` is declared by nothing — the registry calls the
+          # unit `com.wisent.always-on.stado-object-api` and the shipped service
+          # catalog calls the product `stado` — and the host is not this runner:
+          # the object service is placed on the always-on mac and this machine
+          # reaches it through the resolver. So the step refused with "nothing
+          # declares what stado-object-api runs on lukasz-macbook" and no
+          # product release could be submitted at all.
+          #
+          # Both facts come out of the declaration instead: the one registry row
+          # whose unit is the canonical object API names its own host.
+          declaration="$(
+            "$stado_bin" service list --json |
+              jq -er '
+                [ .[] | select(.label == "com.wisent.always-on.stado-object-api") ]
+                | if length == 1 then .[0] else
+                    error("expected exactly one declared object API unit, got \(length)")
+                  end
+                | "\(.host)\t\(.label)"
+              '
+          )"
+          host="${declaration%%$'\t'*}"
+          unit="${declaration##*$'\t'}"
+          test -n "$host" && test -n "$unit"
+          "$stado_bin" service ensure "$unit" \
             --host "$host" \
             --as-daemon \
             --reason "product release submission requires the canonical object store"
@@ -72,7 +94,7 @@ jobs:
           case "$state" in
             present|absent) ;;
             *)
-              echo "::error::stado-object-api returned no storage state after ensure: ${state:-none}"
+              echo "::error::$unit on $host returned no storage state after ensure: ${state:-none}"
               false ;;
           esac
       - name: Submit exact product revision
