@@ -233,7 +233,7 @@ jobs:
             done > SHA256SUMS
           )
 
-          archive="$RUNNER_TEMP/$archive_name.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+          archive="$RUNNER_TEMP/stado-v$version-$platform.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT.tar.gz"
           tag_stado="$tag_source/stado-rs/target/release/stado"
           "$tag_stado" storage archive "$release_dir" "$archive"
           machine_schema="$(
