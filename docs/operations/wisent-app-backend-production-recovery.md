@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T23:12:08Z
+Last updated: 2026-08-29T00:25:17Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -39,26 +39,25 @@ override, reused one canonical SSH option construction. Main qualification run
 [33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217)
 succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
 
-**Current blocker: Stado 0.9.3 release object transfer failures. Recovery in flight.**
+**Current blocker: Stado 0.9.3 release object not published to object API. Writer read-back recovered; release object missing.**
 
-**Recorded 0.9.3 deployment failure (run 33217803690):** "Create immutable Linux release
-through Stado" step failed at 23:07:14Z after 12 retry attempts (22:51:48Z-23:07:14Z).
-Failure sequence:
-- Initial HTTP error at 22:52:53Z: "error sending request for url
-  (http://127.0.0.1:18776/api/object?uri=stado%3A%2F%2Freleases%2Fstado%2F0.9.3%2Flinux-amd64%2Fstado&if_absent=true)"
-- Large-file transfer failures 22:54:38Z–23:04:07Z: Multiple "Stado object API object GET
-  response body connection closed before completion" errors; byte counts at failure:
-  42546242 (22:54:38Z), 56M+ (23:00:11Z, 23:04:07Z). Error code=infra_down.
-- Final verdict at 23:07:14Z: "Could not create and verify stado://releases/stado/0.9.3/linux-amd64/stado
-  after 12 attempts".
-- Deployment job skipped; production unchanged (port 8000 absent, bobloo/chat 502).
+**0.9.3 deployment failure (run 33217803690, 22:42:15Z–23:07:18Z):** "Create immutable Linux release through Stado" step failed at 23:07:14Z after 12 retry attempts. Recorded failures: [1] HTTP error at 22:52:53Z "error sending request for url (http://127.0.0.1:18776/api/object?uri=...)"; [2] Multiple "Stado object API object GET response body connection closed before completion" errors with byte counts 42M–56M (22:54:38Z–23:04:07Z); error code=infra_down. **Result:** Deployment blocked; production unchanged (port 8000 absent, bobloo/chat 502).
 
-**Recovery in flight:**
-- **Run 33219504511 "Resume authenticated Stado writer read-back"** (created 2026-08-28T23:10:29Z,
-  version-check job in_progress at 23:12:08Z). Objective: repair writer read-back loopback
-  path and re-qualify release delivery mechanism before re-deploying 0.9.3. Scheduled after
-  0.9.3 deployment failure. Once this version-check qualifies, release pipeline will be
-  re-triggered to re-attempt 0.9.3 deployment with recovered transport layer.
+**Writer read-back recovery: SUCCESS (run 33220762292, 2026-08-28T23:38:19Z).**
+- Branch: fix/resumable-writer-readback; head: a2f35bf3 "ci: avoid stado wc alias in transfer proof"
+- Job: release-sized-read-back (completed SUCCESS)
+- **Concrete code change:** PR #136 "Resume authenticated Stado writer read-back" (commit a2f35bf3)
+  * stado-rs/src/cli/storage.rs: 180 insertions (+) in storage layer
+  * .github/workflows/writer-transfer-check.yml: 54 lines added (new qualification workflow)
+- **Observable result:** Full release-sized Stado object successfully transferred through authenticated writer read-back loopback path. Byte-for-byte transfer verified. **Loopback transport layer confirmed working.**
+- **PR #136 merged at 2026-08-28T23:47:06Z** (merge commit b699b63f).
+
+**Post-merge version-check FAILURE (run 33221542875, 2026-08-28T23:58:52Z):**
+- Merge qualification job failed at 23:58:49Z with error: HTTP 404 Not Found for `stado://releases/stado/0.9.3/linux-amd64/stado-v0.9.3-linux-amd64.tar.gz`.
+- **Root cause:** 0.9.3 release object was never published to the object API storage backend. Release tag stado-v0.9.3 created (run 33216246052, 2026-08-28T22:18:11Z), but immutable file not available in release channel. Without publication, version-check cannot verify existence and deployment cannot proceed.
+- **Current blocker:** Release object publication missing. Writer transport layer recovered and proven; release publication pipeline incomplete.
+
+**Production state:** Port 8000 absent; bobloo HTTP 502; authenticated chat HTTP 502. No deployment runs triggered after merge failure (23:58:52Z). No new activity as of 2026-08-29T00:25:17Z.
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
