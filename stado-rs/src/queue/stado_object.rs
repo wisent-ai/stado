@@ -69,8 +69,7 @@ impl StadoObjectBackend {
                     segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
                 }
             });
-        if (base_url.scheme() != "https"
-            && !(base_url.scheme() == "http" && (loopback || tailnet)))
+        if (base_url.scheme() != "https" && !(base_url.scheme() == "http" && (loopback || tailnet)))
             || !base_url.username().is_empty()
             || base_url.password().is_some()
             || base_url.query().is_some()
@@ -215,6 +214,66 @@ impl StadoObjectBackend {
             .header(reqwest::header::ACCEPT, "application/json")
     }
 
+    /// The body the object gateway answers with while its authorization
+    /// boundary is closed. Matched on the body and not on the status alone:
+    /// `503` is also how an ingress in front of the gateway says it has no
+    /// upstream, and that is not a window anything should wait out.
+    const BOUNDARY_UNAVAILABLE_BODY: &'static str = "object authorization unavailable";
+
+    /// Attempts, including the first, before a closed boundary is reported.
+    const BOUNDARY_ATTEMPTS: usize = 6;
+
+    /// Send a request the gateway may refuse while it revalidates its grants.
+    ///
+    /// The object gateway reads its verifier grants from Skarbiec and answers
+    /// `503 {"error":"object authorization unavailable"}` for as long as that
+    /// read is in flight — the same mechanism the dashboard logs as
+    /// "integration authorization boundary is closed; revalidating inline". It
+    /// is a window, not a verdict. `deploy.yml`'s Linux publisher has ridden it
+    /// out with twelve tries for as long as it has existed ("The writer may
+    /// briefly reload authorization"), and every other caller in the fleet died
+    /// on the first refusal: the `weles-worker 0.5.26` submission ended at
+    /// 2026-08-29T23:02:53Z on exactly this body, three seconds after the same
+    /// client had read a storage state successfully through the same gateway.
+    ///
+    /// Only that one status-and-body pair is retried, and only
+    /// [`Self::BOUNDARY_ATTEMPTS`] times with a linear backoff. Any other body
+    /// under `503`, and every other status, reaches the caller unchanged — a
+    /// gateway that is genuinely unauthorized must still say so on the first
+    /// answer.
+    async fn send_through_boundary(
+        builder: reqwest::RequestBuilder,
+    ) -> Result<Response, StorageError> {
+        let Some(mut candidate) = builder.try_clone() else {
+            // A streaming body cannot be replayed, so there is nothing to retry
+            // with; the caller gets the gateway's first answer.
+            return Ok(builder.send().await?);
+        };
+        for attempt in 1..=Self::BOUNDARY_ATTEMPTS {
+            let response = candidate.send().await?;
+            if response.status() != StatusCode::SERVICE_UNAVAILABLE
+                || attempt == Self::BOUNDARY_ATTEMPTS
+            {
+                return Ok(response);
+            }
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            if !body.contains(Self::BOUNDARY_UNAVAILABLE_BODY) {
+                return Err(StorageError::Stado { status, body });
+            }
+            let Some(next) = builder.try_clone() else {
+                return Err(StorageError::Stado { status, body });
+            };
+            candidate = next;
+            tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
+        }
+        // The loop returns on its last attempt, so this is unreachable while
+        // BOUNDARY_ATTEMPTS is non-zero; stated rather than left to a panic.
+        Err(StorageError::Other(
+            "Stado object API boundary retry made no attempt".to_string(),
+        ))
+    }
+
     async fn response_error(response: Response) -> StorageError {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
@@ -232,16 +291,16 @@ impl StadoObjectBackend {
         } else {
             Vec::new()
         };
-        let response = self
-            .request(Method::PUT, self.object_url(path, &options)?)
-            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-            // Reqwest omits Content-Length for an empty Vec body. The object
-            // endpoint requires the header even when the payload is zero bytes,
-            // so empty logs and artifacts must declare their length explicitly.
-            .header(reqwest::header::CONTENT_LENGTH, content.len())
-            .body(content)
-            .send()
-            .await?;
+        let response = Self::send_through_boundary(
+            self.request(Method::PUT, self.object_url(path, &options)?)
+                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                // Reqwest omits Content-Length for an empty Vec body. The object
+                // endpoint requires the header even when the payload is zero bytes,
+                // so empty logs and artifacts must declare their length explicitly.
+                .header(reqwest::header::CONTENT_LENGTH, content.len())
+                .body(content),
+        )
+        .await?;
         if matches!(
             response.status(),
             StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
@@ -259,7 +318,7 @@ impl StadoObjectBackend {
         let mut url = self.url("/api/object/stat");
         url.query_pairs_mut()
             .append_pair("uri", &object.to_string());
-        let response = self.request(Method::GET, url).send().await?;
+        let response = Self::send_through_boundary(self.request(Method::GET, url)).await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -323,10 +382,9 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let response = self
-            .request(Method::GET, self.object_url(path, &[])?)
-            .send()
-            .await?;
+        let response =
+            Self::send_through_boundary(self.request(Method::GET, self.object_url(path, &[])?))
+                .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -348,7 +406,7 @@ impl BlobBackend for StadoObjectBackend {
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
         let mut url = self.url("/api/release/object");
         url.query_pairs_mut().append_pair("uri", uri);
-        let response = self.request(Method::GET, url).send().await?;
+        let response = Self::send_through_boundary(self.request(Method::GET, url)).await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -383,13 +441,11 @@ impl BlobBackend for StadoObjectBackend {
         &self,
         path: &str,
     ) -> Result<Option<VersionedText>, StorageError> {
-        let response = self
-            .request(
-                Method::GET,
-                self.object_url(path, &[("versioned", "true")])?,
-            )
-            .send()
-            .await?;
+        let response = Self::send_through_boundary(self.request(
+            Method::GET,
+            self.object_url(path, &[("versioned", "true")])?,
+        ))
+        .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -419,15 +475,15 @@ impl BlobBackend for StadoObjectBackend {
         expected_version: &str,
         content: &str,
     ) -> Result<String, StorageError> {
-        let response = self
-            .request(
+        let response = Self::send_through_boundary(
+            self.request(
                 Method::PUT,
                 self.object_url(path, &[("if_version", expected_version)])?,
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(content.to_string())
-            .send()
-            .await?;
+            .body(content.to_string()),
+        )
+        .await?;
         if response.status() == StatusCode::CONFLICT {
             return Err(StorageError::StorageConflict(format!(
                 "Stado storage version changed for {path}"
@@ -453,10 +509,9 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn delete(&self, path: &str) -> Result<(), StorageError> {
-        let response = self
-            .request(Method::DELETE, self.object_url(path, &[])?)
-            .send()
-            .await?;
+        let response =
+            Self::send_through_boundary(self.request(Method::DELETE, self.object_url(path, &[])?))
+                .await?;
         if response.status() == StatusCode::NOT_FOUND || response.status().is_success() {
             return Ok(());
         }
@@ -498,15 +553,15 @@ impl BlobBackend for StadoObjectBackend {
         path: &str,
         kv: &BTreeMap<String, String>,
     ) -> Result<(), StorageError> {
-        let response = self
-            .request(
+        let response = Self::send_through_boundary(
+            self.request(
                 Method::PUT,
                 self.object_url(path, &[("metadata_only", "true")])?,
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(kv)
-            .send()
-            .await?;
+            .json(kv),
+        )
+        .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(());
         }
@@ -522,7 +577,7 @@ impl BlobBackend for StadoObjectBackend {
         url.query_pairs_mut()
             .append_pair("namespace", &self.namespace)
             .append_pair("prefix", prefix);
-        let response = self.request(Method::GET, url).send().await?;
+        let response = Self::send_through_boundary(self.request(Method::GET, url)).await?;
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }

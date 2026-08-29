@@ -602,8 +602,7 @@ impl InstallPlan {
     /// `/Library/LaunchDaemons` and `home` names only the account it runs as.
     pub fn unit_path(&self, home: &Path) -> PathBuf {
         if self.daemon.is_some() {
-            return PathBuf::from("/Library/LaunchDaemons")
-                .join(format!("{}.plist", self.label));
+            return PathBuf::from("/Library/LaunchDaemons").join(format!("{}.plist", self.label));
         }
         match self.os {
             LocalOs::Darwin => home
@@ -649,6 +648,12 @@ impl InstallPlan {
 }
 
 /// Build the [`InstallPlan`] for one (name, kind) pair.
+///
+/// Eight arguments, one over the lint's threshold, because `daemon` is the
+/// eighth and the seven before it are each a separate fact about the host this
+/// unit is being rendered for. Collapsing them into a struct would move the
+/// same list one indirection away without removing a single caller decision.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
     name: &str,
     kind: &str,
