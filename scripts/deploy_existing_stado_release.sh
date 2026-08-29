@@ -50,8 +50,8 @@ ensure_host_archive() {
   fi
 }
 
-
 self_target="$($stado_bin registry self --name-only)"
+tag_commit="$(git rev-parse "stado-v$version^{commit}")"
 while IFS=$'\t' read -r target platform; do
   manifest="stado://releases/stado/$version/$platform/release-manifest-$platform.json"
   state="$($stado_bin storage stat "$manifest" --json | jq -r '.state // ""')"
@@ -59,15 +59,41 @@ while IFS=$'\t' read -r target platform; do
     echo "FATAL: $target needs $manifest, release channel state is ${state:-unknown}" >&2
     exit 1
   fi
-  ensure_host_archive "$platform" no
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
   if [ "$target" = "$self_target" ]; then
-    env -u STADO_API_TOKEN \
-      "$stado_bin" host release "$target" --binary stado --version "$version" \
-        --reinstall --json
+    ensure_host_archive "$platform" yes
+    manifest_file="$work_root/release-manifest-$platform.json"
+    /usr/bin/curl -fsSLG --data-urlencode "uri=$manifest" \
+      "$STADO_API_URL/api/release/object" -o "$manifest_file"
+    expected_sha256="$(jq -er \
+      --arg version "$version" \
+      --arg platform "$platform" \
+      --arg source_commit "$tag_commit" \
+      'if (keys | sort) == ["platform", "product", "sha256", "source_commit", "version"]
+          and .product == "stado"
+          and .version == $version
+          and .platform == $platform
+          and .source_commit == $source_commit
+          and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+       then .sha256
+       else error("release manifest identity mismatch")
+       end' "$manifest_file")"
+    installed="$("$HOME/.stado/bin/stado" --version 2>/dev/null || true)"
+    if [ "$installed" != "stado $version" ]; then
+      WISENT_RELEASE_ARCHIVE="$work_root/$platform.tar.gz" \
+        WISENT_RELEASE_SHA256="$expected_sha256" \
+        env -u STADO_API_TOKEN "$stado_bin" release install-local \
+          --member stado --name stado
+    fi
+    installed="$("$HOME/.stado/bin/stado" --version)"
+    [ "$installed" = "stado $version" ] || {
+      echo "FATAL: $target reports $installed after local Stado release" >&2
+      exit 1
+    }
   else
+    ensure_host_archive "$platform" no
     "$stado_bin" host release "$target" --binary stado --version "$version" --json
+    "$stado_bin" service converge "$target" stado --json
   fi
-  "$stado_bin" service converge "$target" stado --json
   echo "$target: stado $version installed and in-sync"
 done <<< "$targets"
