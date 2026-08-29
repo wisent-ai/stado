@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-29T07:15:00Z
+Last updated: 2026-08-29T07:20:00Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -22,23 +22,19 @@ Recovery is complete only when all of these observations pass:
 
 ## Current production state
 
-**Recovering.** At 2026-08-29T06:29:06Z, PR #144 (fix/self-target-release, commit c894b33e)
-merged to main, fixing the self-target mechanism for local-runner deployment. Main qualification
-run 33238568657 passed at 2026-08-29T06:41:56Z. Deployment run 33239124143 launched at
-2026-08-29T06:42:39Z and completed successfully at 2026-08-29T07:11:15Z with all 10 steps
-passing. Both production hosts (charless-mac-mini: darwin-arm64, ubuntu-server-rtx-pro-6000:
-linux-amd64) are now in-sync at version 0.9.3. Port 8000 service listeners are deployed; 
-resolver snapshot requires refresh for full service availability.
+**Not recovered.** Stado 0.9.3 release and deployment completed successfully (run 33239124143,
+all 10 steps passed, 2026-08-29T07:11:15Z). Both production hosts report v0.9.3 in-sync.
+However, port 8000 backend listener remains unreachable and backend is crash-looping.
+Acceptance criteria still failing. Backend startup stderr is being diagnosed through Stado.
 
 
 
 
-### Current single blocker
+### Current blocker
 
-**Resolver snapshot stale** (43473 seconds past 600-second max-stale window). Authority on
-charless-mac-mini reachable (generation 10); service adapters deployed but not listening
-pending resolver refresh. **Resolution**: Restart resolver or trigger bounded refresh declaration
-via `stado resolver restart com.wisent.stado-resolver --host charless-mac-mini`.
+**Backend service crash-loop**: Port 8000 unreachable; `wisent-backend-api` startup failing.
+Exact stderr being diagnosed through Stado recovery client. Stado release/deployment passed
+with verified digests; application-level failure is under investigation.
 
 
 **Completed: PR #144 self-target release fix (2026-08-29T06:29:06Z)**
@@ -124,7 +120,6 @@ stado storage stat <stado-uri> --json
 stado storage get <stado-uri> <destination>
 stado host declare-version <target> --binary stado --version <version>
 stado host reconcile <target> --json
-stado resolver restart <unit> --host <target>
 stado resolver status --json
 ```
 
@@ -136,12 +131,10 @@ evidence; it does not publish artifacts outside the repository workflow.
 
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
-| Mini port 8000 listens for more than two minutes | 2026-08-29T07:11:15Z | Deployment run 33239124143 completed SUCCESS with all services deployed; adapter listeners transitioning post-refresh window. Resolver snapshot stale (43473s) prevents listener confirmation; requires refresh. | **IN TRANSITION** |
-| `https://bobloo.com/` | 2026-08-29T07:11:15Z | Currently returning HTTP 502; deployment complete, awaiting resolver refresh to re-enable service paths. | **PENDING** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-29T07:11:15Z | Backend services redeployed to v0.9.3 on both hosts; service listeners in transition. Awaiting resolver snapshot refresh. | **PENDING** |
-| Image-router status | 2026-08-29T07:11:15Z | Authority reachable and in-sync; not blocking deployment completion. Pending full service availability post-refresh. | **PENDING** |
+| Mini port 8000 listens for more than two minutes | 2026-08-29T07:11:15Z | Port 8000 unreachable; backend crash-looping despite successful Stado release and deployment. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-29T07:11:15Z | Returns HTTP 502; backend unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-29T07:11:15Z | Backend unavailable due to startup failure. | **FAIL** |
+| Image-router status | 2026-08-29T07:11:15Z | Not observable while backend is unavailable. | **BLOCKED** |
 | PR #144 self-target fix | 2026-08-29T07:11:15Z | PR #144 merged c894b33e at 06:29:06Z; main qualification 33238568657 PASS at 06:41:56Z; deployment 33239124143 SUCCESS at 07:11:15Z with all 10 steps completing. | **PASS** |
 | Stado v0.9.3 release tag | 2026-08-29T07:02:19Z | Tag stado-v0.9.3 published during run 33239124143 step 7; native binaries verified; both hosts in-sync. | **PASS** |
-| Deployment run 33239124143 | 2026-08-29T07:11:15Z | All 10 steps completed; charless-mac-mini and ubuntu-server-rtx-pro-6000 both reported status "already_active" with v0.9.3. | **PASS** |
-| Production host readiness (charless-mac-mini) | 2026-08-29T07:08:45Z | SSH connectivity confirmed (charles@100.120.25.24); resolver unit com.wisent.stado-resolver running; generation 10 synchronized with ubuntu-server. | **PASS** |
-| Production host readiness (ubuntu-server-rtx-pro-6000) | 2026-08-29T07:09:29Z | SSH connectivity confirmed (root@100.126.122.108); stado 0.9.3 installed and in-sync; status "already_active". | **PASS** |
+| Stado v0.9.3 deployment to hosts | 2026-08-29T07:11:15Z | All 10 steps completed successfully; both hosts report in-sync at v0.9.3. Release SHA256 verified (darwin: e5e6e26d255a9a7170af74179395532dcfa55a4fa3ea834a11f872bded01251d; linux: 96b800dcfde67a908e5a08abb8af57ef2ea1d492b00f8c1218554b24b93acadf). | **PASS** |
