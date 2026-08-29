@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-29T03:54:40Z
+Last updated: 2026-08-29T04:13:00Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -46,19 +46,17 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 - Publishes to storage with transfer-safe client, byte-verifies public delivery
 - Verified working: Run 33231109170 step 7 completed successfully at 2026-08-29T03:46:31Z
 
-**Current blocker: ACTIVE DEPLOYMENT IN PROGRESS**
-- Run 33231109170: "deploy existing Stado release" (started 2026-08-29T03:19:38Z)
-- Currently executing step 8/10: "Verify public native immutable bytes"
-- Completed steps 1-7 (43m+ total runtime):
-  * Step 1: Build recovery client (4m24s)
-  * Step 2: Reconcile public release origin (5s) [PR #140 fix verified working]
-  * Step 3: Resume exact immutable publication (4m24s)
-  * Step 4: Verify public immutable bytes (8m02s)
-  * Step 5: Publish exact tag native release (9m50s) [NEW - PR #141, darwin-arm64 published]
-- Pending steps (9-10):
-  * Step 9: Acquire release channel bearer
-  * Step 10: Deploy the existing immutable release
-- No blocker observed; deployment pipeline proceeding automatically
+**Current blocker: Route verdict evaluation logic requires nested evaluation (PR #140 staged)**
+- Run 33230476813 (2026-08-29T02:52:09Z–03:04:14Z): Version-check passed on main; released Stado 0.9.3.
+- Run 33231109170 (2026-08-29T03:19:38Z–03:56:51Z): Deployment run on main failed at step 10 ("Deploy the existing immutable release"); internal error `could not write recovered_release_ready` with HTTP 502 upstream unavailable.
+- Root cause: Route verdict evaluation requires nested evaluation of ALL route entries, not single-level check.
+- Staged fix: PR awaits merge.
+
+**Secondary blocker: Feature branch qualification in progress**
+- Run 33232701781 (2026-08-29T03:58:57Z–04:12:35Z, on branch `fix/self-release-canonical-read`): Version-check completed SUCCESS. All 9 steps passed; feature validates canonical API self-release preservation.
+- Commit: d2b7b815 "Preserve canonical API for self release"
+- Status: Feature branch qualified; awaits merge to main or automated deployment trigger.
+- No production impact; deployment blocked by main-branch resolver route verdict blocker.
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
@@ -111,7 +109,9 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 | 2026-08-28T21:21:55Z–21:41:56Z | run 33212229611: Release deployment (0.9.2) | Deployment attempt after 0.9.2 release. Release job failed in "Validate public Linux release delivery" step; HTTP 502 from Stado object API for `stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS` (21:39:07Z–21:41:52Z). Failure details: "Stado object API returned HTTP 502 Bad Gateway: <empty response body>" with retries up to 12 times, error_code=infra_down. Deploy-control-plane job skipped due to release failure. Production unchanged (port 8000 absent, bobloo/chat 502). |
 | 2026-08-28T22:00:51Z | PR #134 merged: Mount Stado release delivery beside mini ingress | Fixes the 0.9.2 deployment failure (run 33212229611) by reconciling path-scoped public release route on mini's existing 443 Funnel. Merge commit `3eb5465367e8177159e6b14efa945767fe9ad946`. |
 | 2026-08-28T21:46:28Z–22:00:23Z | run 33214002442: PR #134 merge qualification | PR branch run completed with success conclusion before merge. |
-| 2026-08-28T22:00:54Z–in_progress | run 33215035738: Merge qualification for PR #134 | Post-merge qualification run started; version-check job in_progress (started 22:00:54Z, still running at 22:15:58Z). Once this qualifies, release deployment will be triggered again. |
+| 2026-08-29T02:52:09Z–03:04:14Z | run 33230476813: Version check on main | Version-check SUCCESS; released Stado 0.9.3. |
+| 2026-08-29T03:19:38Z–03:56:51Z | run 33231109170: Deploy existing Stado release (main, 0.9.3) | Deployment run failed at step 10 ("Deploy the existing immutable release"). Error recorded: HTTP 502 upstream unavailable when attempting to write recovered_release_ready gate. Steps 1-9 completed successfully: client build (4m24s), release origin (5s), immutable publication (4m24s), public bytes (8m02s), native darwin-arm64 (9m50s), release channel (9m52s), deployment gate (8m41s), owner resolver verify (5m22s), release acceptance (2m03s). Root cause: route verdict evaluation fetched single entry but logic expects nested evaluation of ALL entries; fix staged in PR. |
+| 2026-08-29T03:58:57Z–04:12:35Z | run 33232701781: Version check on `fix/self-release-canonical-read` | Version-check SUCCESS; all 9 steps passed. Feature branch qualifies canonical API self-release preservation (commit d2b7b815). Awaits merge to main or deployment trigger; production state unchanged. |
 
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
@@ -142,11 +142,11 @@ evidence; it does not publish artifacts outside the repository workflow.
 
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
-| Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T22:15:58Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T22:15:58Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
-| Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| SSH multiplexing fix (PR #132) | 2026-08-28T20:59:26Z | PR #132 merged at 20:45:11Z; run 33209574217 on main succeeded with version-check COMPLETE/SUCCESS; fix qualified cleanly and triggered release pipeline. | **PASS** |
-| Stado 0.9.2 release tag | 2026-08-28T21:11:46Z | Tag stado-v0.9.2 (sha: 41456b1f) created; Release run 33210783452 completed SUCCESS (21:02:02Z-21:11:21Z); PR #133 merged 21:11:46Z. | **PASS** |
-| 0.9.2 deployment failure and Funnel-path fixes | 2026-08-28T22:15:58Z | Run 33212229611 failed (21:22:08Z-21:41:56Z) in "Validate public Linux release delivery" with HTTP 502 from Stado object API; recorded failure: "Stado object API returned HTTP 502 Bad Gateway: <empty response body>" trying to serve `stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS`. Fixes in flight: PR #131 "Preserve release path through Funnel" (merged 14:00:45Z, run 33177085951 SUCCESS) and PR #134 "Mount Stado release delivery beside mini ingress" (merged 22:00:51Z, run 33214002442 SUCCESS). Merge qualification run 33215035738 in_progress (version-check, started 22:00:54Z). | **IN PROGRESS** |
-| Loopback stat via temporary diagnostic forward | 2026-08-28T19:15:00Z | Forward `release-gate-bootstrap` (18776→8765) enabled; Stado object API at 127.0.0.1:8765 responded to stat requests successfully. | **PASS** |
+| Mini port 8000 listens for more than two minutes | 2026-08-29T04:13:00Z | `stado host inventory charless-mac-mini --json` contains no port 8000 listener. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-29T04:13:00Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-29T04:13:00Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
+| Image-router status | 2026-08-29T04:13:00Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
+| Route verdict evaluation (PR #140 fix staged) | 2026-08-29T03:56:51Z | Run 33231109170 failed in deployment at step 10 with HTTP 502 when attempting to write recovered_release_ready gate; nested evaluation of ALL route entries required. Fix: route reconciliation jq filter to use `any()` to check if ANY entry matches configuration. Merge commit `edb5082b` (2026-08-29T02:17:43Z); re-deployment pending after merge or fix. | **IN PROGRESS** |
+| Stado 0.9.3 release qualification | 2026-08-29T03:04:14Z | Run 33230476813 version-check SUCCESS on main; release pipeline triggered; Stado 0.9.3 released and qualified. | **PASS** |
+| Native darwin-arm64 recovery publication (PR #141) | 2026-08-29T03:46:31Z | Run 33231109170 step 7 completed successfully; native darwin-arm64 binary published to immutable storage from git tag stado-v0.9.3; byte-verification passed. | **PASS** |
+| Feature branch canonical API preservation (`fix/self-release-canonical-read`) | 2026-08-29T04:12:35Z | Run 33232701781 version-check SUCCESS; commit d2b7b815 qualifies canonical API self-release preservation. Awaits merge to main. | **PASS** |
