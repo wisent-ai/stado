@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-29T04:13:45Z
+Last updated: 2026-08-29T04:15:30Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -52,18 +52,8 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 - Fix: Change line 65 to only unset STADO_API_TOKEN while preserving STADO_API_URL in environment
 - Feature branch run 33232701781 validated fix: version-check SUCCESS, all 9 steps passed (2026-08-29T03:58:57Z–04:12:35Z)
 - Merged to main at 2026-08-29T04:13:12Z by lbartoszcze
-- Main gate run 900 (version-check) started 2026-08-29T04:13:14Z after merge, currently in_progress
+- Main gate run [33233288807](https://github.com/wisent-ai/stado/actions/runs/33233288807) (version-check) started 2026-08-29T04:13:14Z after merge, status: in_progress
 
-**Current blocker (Separate from run 33231109170): Route verdict evaluation logic requires nested evaluation (PR #140 incomplete)**
-- PR #140 merged 2026-08-29T02:17:43Z; run 33231109170 passed step 4 (route reconciliation) but failed at step 10 due to STADO_API_URL unset (fixed by PR #142)
-- Route verdict logic still requires nested evaluation of ALL route entries per comments; jq `any()` change in PR #140 is necessary but may require additional refinement
-- Deployment operations can proceed once PR #142 fix qualifies on main
-
-**Secondary blocker: Feature branch qualification in progress**
-- Run 33232701781 (2026-08-29T03:58:57Z–04:12:35Z, on branch `fix/self-release-canonical-read`): Version-check completed SUCCESS. All 9 steps passed; feature validates canonical API self-release preservation.
-- Commit: d2b7b815 "Preserve canonical API for self release"
-- Status: Feature branch qualified; awaits merge to main or automated deployment trigger.
-- No production impact; deployment blocked by main-branch resolver route verdict blocker.
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
@@ -118,7 +108,7 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 | 2026-08-28T21:46:28Z–22:00:23Z | run 33214002442: PR #134 merge qualification | PR branch run completed with success conclusion before merge. |
 | 2026-08-29T02:52:09Z–03:04:14Z | run 33230476813: Version check on main | Version-check SUCCESS; released Stado 0.9.3. |
 | 2026-08-29T03:19:38Z–03:56:51Z | run 33231109170: Deploy existing Stado release (main, 0.9.3) | Deployment run failed at step 10 ("Deploy the existing immutable release"). **Actual root cause (corrected):** deployment script `scripts/deploy_existing_stado_release.sh` line 65 executed `env -u STADO_API_URL -u STADO_API_TOKEN` for self_target, unsetting STADO_API_URL required for canonical release reads. CLI error: "STADO_API_URL is required for canonical release reads" (error_code: config, non-retryable, critical). Steps 1–9 completed successfully: client build (4m24s), release origin (5s), immutable publication (4m24s), public bytes (8m02s), native darwin-arm64 (9m50s), release channel (9m52s), deployment gate (8m41s), owner resolver verify (5m22s), release acceptance (2m03s). **Fix:** PR #142 preserves STADO_API_URL instead of unsetting it (see run 33232701781 below). |
-| 2026-08-29T03:58:57Z–04:12:35Z | run 33232701781: Version check on `fix/self-release-canonical-read` | Version-check SUCCESS; all 9 steps passed. Feature branch qualifies canonical API self-release preservation (commit d2b7b815). **Merged to main as PR #142 with merge commit d1358e64 at 2026-08-29T04:13:12Z.** Main gate run 900 started 2026-08-29T04:13:14Z, currently in_progress (version-check). Production state awaits main-gate completion to validate step 10 deployment. |
+| 2026-08-29T03:58:57Z–04:12:35Z | run 33232701781: Version check on `fix/self-release-canonical-read` | Version-check SUCCESS; all 9 steps passed. Feature branch qualifies canonical API self-release preservation (commit d2b7b815). **Merged to main as PR #142 with merge commit d1358e64 at 2026-08-29T04:13:12Z.** Main gate run [33233288807](https://github.com/wisent-ai/stado/actions/runs/33233288807) started 2026-08-29T04:13:14Z, status: in_progress (version-check). Production state awaits main-gate completion to validate step 10 deployment. |
 
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
@@ -153,7 +143,7 @@ evidence; it does not publish artifacts outside the repository workflow.
 | `https://bobloo.com/` | 2026-08-29T04:13:00Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
 | Authenticated `/api/chat/send` returns assistant text | 2026-08-29T04:13:00Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
 | Image-router status | 2026-08-29T04:13:00Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| Deployment self-target canonical API preservation (PR #142) | 2026-08-29T04:13:12Z | Run 33231109170 step 10 failed with "STADO_API_URL is required for canonical release reads" because script unsetting both URL and token. PR #142 fix preserves STADO_API_URL while unsetting only STADO_API_TOKEN. Merge commit `d1358e64`. Feature run 33232701781 validated all 9 steps. Main gate run 900 in_progress. | **IN PROGRESS (main qualification)** |
+| Deployment self-target canonical API preservation (PR #142) | 2026-08-29T04:13:12Z | Run 33231109170 step 10 failed with "STADO_API_URL is required for canonical release reads" because script unsetting both URL and token. PR #142 fix preserves STADO_API_URL while unsetting only STADO_API_TOKEN. Merge commit `d1358e64`. Feature run 33232701781 validated all 9 steps. Main gate run [33233288807](https://github.com/wisent-ai/stado/actions/runs/33233288807) in_progress. | **IN PROGRESS (main qualification)** |
 | Stado 0.9.3 release qualification | 2026-08-29T03:04:14Z | Run 33230476813 version-check SUCCESS on main; release pipeline triggered; Stado 0.9.3 released and qualified. | **PASS** |
 | Native darwin-arm64 recovery publication (PR #141) | 2026-08-29T03:46:31Z | Run 33231109170 step 7 completed successfully; native darwin-arm64 binary published to immutable storage from git tag stado-v0.9.3; byte-verification passed. | **PASS** |
-| Feature branch canonical API preservation (`fix/self-release-canonical-read` / PR #142) | 2026-08-29T04:12:35Z | Run 33232701781 version-check SUCCESS; all 9 steps passed; commit d2b7b815 qualifies canonical API self-release preservation. Merged to main as PR #142 at 2026-08-29T04:13:12Z; merge commit `d1358e64`. Main gate run 900 started immediately after merge, currently in_progress. | **MERGED, MAIN QUALIFYING** |
+| Feature branch canonical API preservation (`fix/self-release-canonical-read` / PR #142) | 2026-08-29T04:12:35Z | Run 33232701781 version-check SUCCESS; all 9 steps passed; commit d2b7b815 qualifies canonical API self-release preservation. Merged to main as PR #142 at 2026-08-29T04:13:12Z; merge commit `d1358e64`. Main gate run [33233288807](https://github.com/wisent-ai/stado/actions/runs/33233288807) started immediately after merge, status: in_progress. | **MERGED, MAIN QUALIFYING** |
