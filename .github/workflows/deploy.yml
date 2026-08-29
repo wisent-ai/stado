@@ -607,13 +607,26 @@ jobs:
           "$HOME/.stado/bin/stado" host recover-object-api \
             charless-mac-mini --json \
             > "$RUNNER_TEMP/public-release-ingress.json"
+          # `jq -e` judges only the LAST value of a stream, and this host serves
+          # four `.Web` entries — `:443`, `:8443`, `:9443`, `:10000`. The
+          # release route belongs to `:443` alone, so the stream read
+          # `false true false false` and the exit status came from `:10000`
+          # having no such handler. 0.9.5 published both platforms, delivered
+          # them, and then reported failure on that last `false` while the
+          # condition the step means to assert was true.
+          #
+          # The question is "does some `:443` entry proxy the release route",
+          # so it is asked of the whole set at once. `any` over an empty array
+          # is false, so a host serving the route nowhere still refuses.
           "$HOME/.stado/bin/stado" host exec charless-mac-mini -- \
             tailscale serve status --json |
             jq -e '
-              .Web | to_entries[] |
-              (.key | endswith(":443")) and
-              .value.Handlers["/api/release/object"].Proxy ==
-                "http://127.0.0.1:8765/api/release/object"
+              [
+                (.Web // {}) | to_entries[] |
+                (.key | endswith(":443")) and
+                (.value.Handlers["/api/release/object"].Proxy ==
+                  "http://127.0.0.1:8765/api/release/object")
+              ] | any
             '
 
       - name: Reload TLS reverse proxy
