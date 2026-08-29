@@ -84,9 +84,18 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
+          # The revision is this step's own assertion because it is a fact about
+          # the checkout, which the client never sees.
           test "$(git -C product-source rev-parse HEAD)" = "$EXPECTED_REVISION"
-          declared="$(sed -n 's/^version = "\(.*\)"/\1/p' product-source/Cargo.toml | head -1)"
-          test "$declared" = "$EXPECTED_VERSION"
+          # The version is NOT. `release submit` reads it through the product's
+          # own `.wisent-release.json` `version_source` and refuses
+          # "--version disagrees with declared version source"
+          # (`cli::release_submit`), so asserting it again here would be a
+          # second authority -- and the one that used to live here read
+          # `product-source/Cargo.toml`, which no Node product has. Every
+          # `weles-worker` submission through this workflow died on that `sed`
+          # while the manifest it should have read declared
+          # `{"kind":"json","path":"package.json","pointer":"/version"}`.
           stado-rs/target/release/stado release submit \
             --source "$GITHUB_WORKSPACE/product-source" \
             --version "$EXPECTED_VERSION" \
