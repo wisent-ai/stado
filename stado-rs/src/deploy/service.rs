@@ -3693,6 +3693,48 @@ const REMOTE_HOME_PLACEHOLDER: &str = "__STADO_HOME__";
 /// `~/.stado`.
 const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 
+/// The environment every managed unit carries, before whatever its own
+/// declaration adds.
+///
+/// `HOME` and `STADO_CONFIG` are here because launchd sets neither for a job it
+/// starts, and without them a Stado process falls off the end of
+/// [`crate::config_file`]'s search order — `$STADO_CONFIG`,
+/// `./stado.config.json`, `~/.config/stado/config.json`, `~/.stado/config.json`
+/// — and runs on defaults. A coordinator that does that ticks forever against
+/// an empty store: `stado service ensure` installed
+/// `com.wisent.compute.service.stado-local-control-plane` on the always-on mac
+/// with `PATH` as its only variable, and eleven consecutive ticks reaped no
+/// expired lease and dispatched nothing while 55 pinned jobs sat in the store
+/// it could not see. The catalog-backed units on the same host
+/// (`com.wisent.always-on.stado-object-api`) carried `HOME`, `STADO_CONFIG` and
+/// the storage keys, so one installer produced a working unit and the other did
+/// not.
+///
+/// Both values ride the [`REMOTE_HOME_PLACEHOLDER`] the remote installer
+/// substitutes, so the account is the host's answer and never this machine's.
+/// The config path is the one `stado host config-set` writes and
+/// `stado host config-show` reads.
+///
+/// A declaration wins over all three: an entry in `extra_env` replaces the
+/// value in place rather than appending a second plist key for the same name.
+fn base_unit_environment(path: &str, extra_env: &[(String, String)]) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("HOME".to_string(), REMOTE_HOME_PLACEHOLDER.to_string()),
+        (
+            "STADO_CONFIG".to_string(),
+            format!("{REMOTE_HOME_PLACEHOLDER}/.config/stado/config.json"),
+        ),
+        ("PATH".to_string(), path.to_string()),
+    ];
+    for (variable, value) in extra_env {
+        match env.iter_mut().find(|(name, _)| name == variable) {
+            Some(existing) => existing.1 = value.clone(),
+            None => env.push((variable.clone(), value.clone())),
+        }
+    }
+    env
+}
+
 pub fn plan_deploy(
     target: &ComputeTarget,
     name: &str,
@@ -3758,9 +3800,7 @@ pub fn plan_deploy_labelled(
             os,
             label: label.clone(),
             exec_args,
-            env: std::iter::once(("PATH".to_string(), path.to_string()))
-                .chain(extra_env.iter().cloned())
-                .collect(),
+            env: base_unit_environment(path, extra_env),
         }
     };
     let darwin = render(LocalOs::Darwin);
