@@ -154,15 +154,73 @@ jobs:
           platform=darwin-arm64
           tag="stado-v$version"
           tag_commit="$(git rev-list -n 1 "$tag")"
+          recovery_stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          prefix="stado://releases/stado/$version/$platform"
+          archive_name="stado-v$version-$platform.tar.gz"
+          manifest_name="release-manifest-$platform.json"
+          release_dir="$(mktemp -d "$RUNNER_TEMP/stado-$version-$platform.XXXXXX")"
+          native_names=(
+            stado wc stado-coverage stado-fix stado-watchdog stado-mcp
+            SHA256SUMS "$archive_name" "$manifest_name"
+          )
+
+          present=0
+          for name in "${native_names[@]}"; do
+            state="$("$recovery_stado" storage stat "$prefix/$name" --json |
+              jq -r '.state // ""')"
+            case "$state" in
+              present) present=$((present + 1)) ;;
+              absent) ;;
+              *) echo "::error::$name has canonical state ${state:-unknown}"; false ;;
+            esac
+          done
+
+          if [ "$present" -eq "${#native_names[@]}" ]; then
+            for name in "${native_names[@]}"; do
+              "$recovery_stado" storage get "$prefix/$name" "$release_dir/$name"
+            done
+            jq -e \
+              --arg version "$version" \
+              --arg platform "$platform" \
+              --arg source_commit "$tag_commit" \
+              '.product == "stado" and .version == $version and
+               .platform == $platform and .source_commit == $source_commit and
+               (.sha256 | type == "string")' \
+              "$release_dir/$manifest_name" >/dev/null
+            expected_archive="$(jq -r '.sha256' "$release_dir/$manifest_name")"
+            actual_archive="$(openssl dgst -sha256 "$release_dir/$archive_name")"
+            actual_archive="${actual_archive##* }"
+            test "$actual_archive" = "$expected_archive"
+
+            extracted="$(mktemp -d "$RUNNER_TEMP/stado-$version-native-archive.XXXXXX")"
+            /usr/bin/tar -xzf "$release_dir/$archive_name" -C "$extracted"
+            cmp --silent "$release_dir/SHA256SUMS" "$extracted/SHA256SUMS"
+            while read -r expected name; do
+              case "$name" in
+                *[![:alnum:]_.-]*|"") echo "::error::unsafe release member: $name"; false ;;
+              esac
+              for root in "$release_dir" "$extracted"; do
+                test -f "$root/$name"
+                actual="$(openssl dgst -sha256 "$root/$name")"
+                actual="${actual##* }"
+                test "$actual" = "$expected"
+              done
+            done < "$release_dir/SHA256SUMS"
+            echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
           tag_source="$(mktemp -d "$RUNNER_TEMP/stado-$version-tag-source.XXXXXX")"
           rmdir "$tag_source"
+          cleanup_tag_source() {
+            git worktree remove --force "$tag_source" ||
+              { rm -rf "$tag_source"; git worktree prune; }
+          }
+          trap cleanup_tag_source EXIT
           git worktree add --detach "$tag_source" "$tag_commit"
-          trap 'git worktree remove --force "$tag_source"' EXIT
           cargo build --manifest-path "$tag_source/stado-rs/Cargo.toml" \
             --locked --release --bins
 
-          release_dir="$RUNNER_TEMP/stado-$version-$platform"
-          mkdir -p "$release_dir"
           for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
             cp "$tag_source/stado-rs/target/release/$name" "$release_dir/$name"
           done
@@ -175,7 +233,7 @@ jobs:
             done > SHA256SUMS
           )
 
-          archive="$RUNNER_TEMP/stado-v$version-$platform.tar.gz"
+          archive="$RUNNER_TEMP/$archive_name.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
           tag_stado="$tag_source/stado-rs/target/release/stado"
           "$tag_stado" storage archive "$release_dir" "$archive"
           machine_schema="$(
@@ -211,13 +269,26 @@ jobs:
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$tag_source/scripts/release_manifest.sh"
-          mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
+          mv "$archive" "$release_dir/$archive_name"
 
-          recovery_stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          prefix="stado://releases/stado/$version/$platform"
           for source in "$release_dir"/*; do
             name="${source##*/}"
-            "$recovery_stado" storage put "$prefix/$name" "$source" --if-absent
+            state="$("$recovery_stado" storage stat "$prefix/$name" --json |
+              jq -r '.state // ""')"
+            case "$state" in
+              present)
+                existing="$(mktemp "$RUNNER_TEMP/stado-existing-$name.XXXXXX")"
+                "$recovery_stado" storage get "$prefix/$name" "$existing"
+                cmp --silent "$source" "$existing"
+                ;;
+              absent)
+                "$recovery_stado" storage put "$prefix/$name" "$source" --if-absent
+                ;;
+              *)
+                echo "::error::$name has canonical state ${state:-unknown}"
+                false
+                ;;
+            esac
           done
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
       - name: Verify public native immutable bytes
