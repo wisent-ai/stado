@@ -154,8 +154,10 @@ jobs:
           platform=darwin-arm64
           tag="stado-v$version"
           tag_commit="$(git rev-list -n 1 "$tag")"
-          tag_source="$RUNNER_TEMP/stado-$version-tag-source"
+          tag_source="$(mktemp -d "$RUNNER_TEMP/stado-$version-tag-source.XXXXXX")"
+          rmdir "$tag_source"
           git worktree add --detach "$tag_source" "$tag_commit"
+          trap 'git worktree remove --force "$tag_source"' EXIT
           cargo build --manifest-path "$tag_source/stado-rs/Cargo.toml" \
             --locked --release --bins
 
