@@ -64,8 +64,6 @@ jobs:
           tag_commit="$(git rev-list -n 1 "stado-v$version")"
           "$stado_bin" storage get "$prefix/release-manifest-$platform.json" "$manifest"
           "$stado_bin" storage get "$prefix/SHA256SUMS" "$sums"
-          "$stado_bin" storage get "$prefix/stado-v$version-$platform.tar.gz" "$archive"
-
           jq -e \
             --arg version "$version" \
             --arg platform "$platform" \
@@ -73,13 +71,41 @@ jobs:
             '.product == "stado" and .version == $version and
              .platform == $platform and .source_commit == $source_commit' \
             "$manifest" >/dev/null
+
+          mkdir -p "$recovered"
+          archive_name="stado-v$version-$platform.tar.gz"
+          archive_uri="$prefix/$archive_name"
+          archive_state="$("$stado_bin" storage stat "$archive_uri" --json |
+            jq -r '.state // ""')"
+          case "$archive_state" in
+            present)
+              "$stado_bin" storage get "$archive_uri" "$archive"
+              ;;
+            absent)
+              for name in stado stado-coverage stado-fix stado-watchdog stado-mcp wc; do
+                expected="$(sed -n "s/  $name\$//p" "$sums")"
+                test -n "$expected"
+                "$stado_bin" storage get "$prefix/$name" "$recovered/$name"
+                actual="$(openssl dgst -sha256 "$recovered/$name")"
+                actual="${actual##* }"
+                test "$actual" = "$expected"
+              done
+              cp "$sums" "$recovered/SHA256SUMS"
+              "$stado_bin" storage archive "$recovered" "$archive"
+              ;;
+            *)
+              echo "::error::canonical archive state is ${archive_state:-unknown}"
+              false
+              ;;
+          esac
+
           expected_archive="$(jq -r '.sha256' "$manifest")"
           actual_archive="$(openssl dgst -sha256 "$archive")"
           actual_archive="${actual_archive##* }"
           test "$actual_archive" = "$expected_archive"
-
-          mkdir -p "$recovered"
-          /usr/bin/tar -xzf "$archive" -C "$recovered"
+          if [ "$archive_state" = present ]; then
+            /usr/bin/tar -xzf "$archive" -C "$recovered"
+          fi
           cmp --silent "$sums" "$recovered/SHA256SUMS"
           while read -r expected name; do
             case "$name" in
