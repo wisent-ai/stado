@@ -35,10 +35,12 @@ jobs:
           "$stado_bin" host exec charless-mac-mini -- \
             tailscale serve status --json |
             jq -e '
-              .Web | to_entries[] |
-              (.key | endswith(":443")) and
-              .value.Handlers["/api/release/object"].Proxy ==
-                "http://127.0.0.1:8765/api/release/object"
+              any(
+                .Web | to_entries[];
+                (.key | endswith(":443")) and
+                .value.Handlers["/api/release/object"].Proxy ==
+                  "http://127.0.0.1:8765/api/release/object"
+              )
             '
       - name: Resume the exact immutable publication
         env:
