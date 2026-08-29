@@ -25,9 +25,11 @@ jobs:
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
     steps:
       - uses: actions/checkout@v5
+      - name: Build the current immutable recovery client
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Reconcile public release origin
         run: |
-          stado_bin=/Users/lukaszbartoszcze/.stado/bin/stado
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           "$stado_bin" host recover-object-api charless-mac-mini --json \
             > "$RUNNER_TEMP/public-release-ingress.json"
           "$stado_bin" host exec charless-mac-mini -- \
@@ -38,8 +40,6 @@ jobs:
               .value.Handlers["/api/release/object"].Proxy ==
                 "http://127.0.0.1:8765/api/release/object"
             '
-      - name: Build the current immutable recovery client
-        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Resume the exact immutable publication
         env:
           STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}

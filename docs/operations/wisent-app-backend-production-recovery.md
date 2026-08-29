@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T22:15:58Z
+Last updated: 2026-08-29T01:03:00Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -39,34 +39,31 @@ override, reused one canonical SSH option construction. Main qualification run
 [33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217)
 succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
 
-**Current blocker: Funnel-path release delivery failures and fixes in flight.**
+**Current blocker: Stado 0.9.3 partial recovery publication workflow exists but CLI subcommand `recover-object-api` not implemented in running version 0.7.34.**
 
-**Recorded 0.9.2 deployment failure (run 33212229611):** "Validate public Linux
-release delivery" step failed repeatedly with "Stado object API returned HTTP 502
-Bad Gateway: <empty response body>" (21:39:07Z-21:41:52Z). Could not serve immutable
-`stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS` through public release delivery
-route. Failed step: release; skipped: deploy-control-plane.
+**Completed: Writer read-back transport layer recovered (run 33220762292, 2026-08-28T23:38:19Z)**
+- Branch: fix/resumable-writer-readback; head: a2f35bf3 "ci: avoid stado wc alias in transfer proof"
+- Job: release-sized-read-back → SUCCESS
+- Evidence: Full release-sized Stado object successfully transferred through authenticated writer loopback; byte-for-byte transfer verified
+- PR #136 "Resume authenticated Stado writer read-back" merged at 2026-08-28T23:47:06Z (commit b699b63f)
 
-**Fixes in flight:**
-- **PR #131 "Preserve release path through Funnel"** (merged 2026-08-28T14:00:45Z,
-  commit 2705a0672cf31b0495de6c5002b2e7d778119626, run 33177085951 SUCCESS):
-  Recorded issue: Public release handler stripped `/api/release/object` before proxying
-  to canonical resolver, so published immutable bytes answered 404 through Funnel.
-  Fix: Point path-scoped handler at same path on `127.0.0.1:18776`, assert exact
-  declaration in both canonical deployment flows (deploy.yml and deploy-existing-release.yml).
+**Completed: Stado 0.9.3 partial immutable release recovery workflow created (run 33224524061, 2026-08-29T01:02:24Z)**
+- PR #137 "Resume partial immutable Stado releases" merged at 2026-08-29T00:46:30Z (commit 7d2e1ee6, merge f03db782)
+- Commit timestamp: 2026-08-29T00:30:24Z by lbartoszcze
+- Changes: .github/workflows/deploy-existing-release.yml (workflow supports idempotent publication with existing tag)
+- Workflow description: "Completes an interrupted immutable release only from its existing tag-bound archive, verifies its manifest and member digests, publishes missing objects idempotently with the current transfer-safe client, verifies public bytes, and then invokes the established managed deployment path."
+- Merge qualification run 33224524061: version-check → SUCCESS (2026-08-29T01:02:24Z, completed 01:02:24Z)
 
-- **PR #134 "Mount Stado release delivery beside mini ingress"** (merged
-  2026-08-28T22:00:51Z, commit d5fbe82f9d7d767d71c68dafe2f95ab931f60824, run
-  33214002442 SUCCESS): Fixes the 0.9.2 deploy failure by reconciling only the
-  path-scoped public release route on mini's existing 443 Funnel, preserving Brama
-  root and its separate 8443 route. Change: explicit port 8443 instead of implicit
-  443 in STADO_API_URL and tailscale serve handler assertions.
+**NEW BLOCKER: Deployment triggered immediately after version-check pass (run 33225312766, 2026-08-29T01:02:51Z → 01:02:59Z)**
+- Run: 33225312766 "deploy existing Stado release" → FAILURE
+- Failed step: "Reconcile public release origin" (exit code 2, 8 seconds)
+- Error message: `error: unrecognized subcommand 'recover-object-api'` from stado CLI
+- Root cause: The stado CLI binary installed locally (version 0.7.34) does not expose the `recover_object_api` subcommand. The function exists in source code (stado-rs/src/cli/host.rs) but is not yet exposed as a public CLI subcommand.
+- Expected vs actual: Workflow expects `stado host recover-object-api charless-mac-mini --json` but CLI lacks this subcommand.
+- Release tag stado-v0.9.3 exists (SHA 925a03be7be273a4c95c14f666ff37a58fda4313, created by run 33216246052 at 22:18:11Z)
+- No retry triggered after deployment failure. Production state: port 8000 absent, bobloo HTTP 502, chat HTTP 502.
 
-**Merge qualification run in progress:** Run
-[33215035738](https://github.com/wisent-ai/stado/actions/runs/33215035738)
-(PR #134 merge, created 2026-08-28T22:00:54Z) version-check job in_progress.
-Once this qualifies, release deployment will be triggered. Production unchanged
-(port 8000 absent, bobloo/chat 502).
+**Next step:** CLI subcommand must be added to stado-rs and published before deployment can proceed.
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
