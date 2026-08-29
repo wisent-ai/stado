@@ -236,16 +236,37 @@ fn read_document_raw(fleet: &Fleet) -> String {
     std::fs::read_to_string(fleet.registry_blob()).expect("registry blob exists")
 }
 
-#[test]
-fn as_daemon_ensure_addresses_the_system_daemon_file() {
-    let plan = stado::deploy::service::plan_deploy_labelled(
+/// A registry target, spelled the way the canonical document spells one: only
+/// `name` and `kind` are required, and every field this plan reads carries a
+/// serde default.
+fn target(name: &str, role: &str, platform: &str) -> stado::targets::ComputeTarget {
+    serde_json::from_value(serde_json::json!({
+        "name": name,
+        "kind": "local",
+        "role": role,
+        "release_platform": platform,
+    }))
+    .expect("a registry target parses")
+}
+
+fn agent_plan(target: &stado::targets::ComputeTarget) -> stado::deploy::service::DeployPlan {
+    stado::deploy::service::plan_deploy_labelled(
+        target,
         "stado-agent-mini",
         "com.wisent.compute.service.stado-agent-mini",
         "/home/operator/.stado/bin/stado",
         &["agent".to_string(), "--auto".to_string()],
         &[],
     )
-    .expect("plan renders");
+    .expect("plan renders")
+}
+
+const AGENT_DAEMON_FILE: &str =
+    "/Library/LaunchDaemons/com.wisent.compute.service.stado-agent-mini.plist";
+
+#[test]
+fn as_daemon_ensure_addresses_the_system_daemon_file() {
+    let plan = agent_plan(&target("lukasz-macbook", "interactive", "darwin-arm64"));
 
     // Default placement follows the declaration and the per-login fallback:
     // no path is forced, so the remote prelude keeps its search order.
@@ -260,6 +281,6 @@ fn as_daemon_ensure_addresses_the_system_daemon_file() {
     daemon.force_daemon = true;
     assert_eq!(
         stado::deploy::service::ensure_unit_path(&daemon),
-        "/Library/LaunchDaemons/com.wisent.compute.service.stado-agent-mini.plist"
+        AGENT_DAEMON_FILE
     );
 }

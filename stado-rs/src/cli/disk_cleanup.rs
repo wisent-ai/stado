@@ -69,6 +69,7 @@ pub async fn install() -> Result<(), CmdError> {
         "disk-cleanup",
         "disk-cleanup",
         false,
+        crate::deploy::local_install::this_host_requires_daemon_domain().await,
         &runner,
         &hf_fetch,
         &mut echo,

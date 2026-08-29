@@ -613,11 +613,12 @@ pub enum ServiceCommands {
         reason: String,
         /// Install the unit as a system LaunchDaemon
         /// (`/Library/LaunchDaemons/<label>.plist`) instead of following the
-        /// declaration or the per-login fallback. For an always-on host with
-        /// no graphical session this is the only domain that keeps a service
-        /// alive; the privileged install and bootstrap steps run under
-        /// passwordless sudo, and a host without that grant is told exactly
-        /// which step was refused.
+        /// declaration or the per-login fallback. Implied for a registry host
+        /// declared always-on on Darwin, where that is the only domain a
+        /// service stays alive in; pass it for a host whose declaration does
+        /// not say so yet. The privileged install and bootstrap steps run
+        /// under passwordless sudo, and a host without that grant is told
+        /// exactly which step was refused.
         #[arg(long)]
         as_daemon: bool,
         #[arg(long)]
@@ -3337,7 +3338,7 @@ async fn deploy(
     } else {
         args
     };
-    let plan = service::plan_deploy(name, from, args).map_err(click)?;
+    let plan = service::plan_deploy(&target, name, from, args).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
     // unit that then cannot be recorded would leave an unmanaged unit
@@ -3583,11 +3584,25 @@ pub(crate) async fn ensure_local_dependency(
     .await
 }
 
-/// Re-render one declared service after its managed configuration changes.
+/// Re-render one declared service after its managed configuration changes,
+/// then restart it in place so the running process reads the new value.
 ///
-/// This uses the same idempotent declaration, environment, unit, and process
-/// reconciliation as `stado service ensure`; config mutation must not grow a
-/// second lifecycle path that unloads a healthy unit directly.
+/// The declaration half is the same idempotent reconciliation `stado service
+/// ensure` performs; config mutation must not grow a second lifecycle path
+/// that unloads a healthy unit directly.
+///
+/// The restart half is what makes `--reload-service` true. A config change is
+/// the one case where "already running the declared program" is not "already
+/// correct": the program is identical and its inputs are not. Every
+/// configuration reader in this binary — `config::object_api_namespaces`
+/// among them — is a `LazyLock` read once per process, so a unit `ensure`
+/// leaves untouched goes on serving the policy it started with. That is how
+/// granting the `service_audit/` prefix on charless-mac-mini printed
+/// `already_correct` for the object API and then refused the very next write.
+///
+/// `restart` is the in-place path — `launchctl kickstart -k` for a system
+/// LaunchDaemon, which never unloads the job — so this stays one lifecycle
+/// path rather than becoming the second one.
 pub(crate) async fn reconcile_after_config_change(
     name: &str,
     host: &str,
@@ -3602,7 +3617,8 @@ pub(crate) async fn reconcile_after_config_change(
         as_daemon: true,
         as_json: false,
     })
-    .await
+    .await?;
+    restart(name, Some(host), None, None, false).await
 }
 
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
@@ -3699,14 +3715,22 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .as_deref()
         .or_else(|| existing.and_then(declared_label))
     {
-        Some(label) => {
-            service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args, &unit_env)
-        }
-        None => service::plan_deploy(options.name, &unit.program, &unit.args),
+        Some(label) => service::plan_deploy_labelled(
+            &target,
+            options.name,
+            label,
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
+        None => service::plan_deploy(&target, options.name, &unit.program, &unit.args),
     }
     .map_err(click)?;
     let mut plan = plan;
-    plan.force_daemon = options.as_daemon;
+    // The plan already carries the host's own answer ([`requires_daemon_domain`]).
+    // `--as-daemon` stays the operator's override for a host whose declaration
+    // does not say always-on yet, so it can only turn the daemon domain on.
+    plan.force_daemon = plan.force_daemon || options.as_daemon;
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and

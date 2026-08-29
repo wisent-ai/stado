@@ -480,6 +480,27 @@ pub fn declared_always_on(target: &ComputeTarget) -> bool {
         .any(|word| word == ROLE_ALWAYS_ON)
 }
 
+/// Is the system domain the only launchd domain this host can load a unit
+/// into?
+///
+/// Both halves are the declaration's own words. `role` / `host_heuristic` say
+/// nobody is logged in graphically, so launchd builds no `gui/<uid>` and a
+/// LaunchAgent has nowhere to load — the fact [`MisdeclaredDomain`] reports.
+/// `release_platform` says launchd is the unit system at all: a Linux host
+/// keeps its `systemd --user` manager alive with `loginctl enable-linger` and
+/// has no `/Library/LaunchDaemons` for the daemon spelling to land in, so
+/// always-on there is not this question.
+///
+/// [`plan_deploy_labelled`] reads this, which makes the domain a unit is
+/// installed into a function of the host instead of a function of whoever
+/// remembered `--as-daemon`. Four units on the always-on mac were declared as
+/// per-login LaunchAgents and never loaded once — the active coordinator and
+/// the release agent among them — while `stado registry doctor` reported each
+/// one and every writer went on installing where the declaration said.
+pub fn requires_daemon_domain(target: &ComputeTarget) -> bool {
+    declared_always_on(target) && !target.release_platform.starts_with("linux")
+}
+
 /// Where a launchd job that belongs to the machine lives.
 const DAEMON_DIR: &str = "/Library/LaunchDaemons";
 /// The `/Users/<account>/...` prefix a per-account agent path carries. The
@@ -3649,6 +3670,12 @@ pub struct DeployPlan {
     /// runs whenever nobody needs it. `ensure_service` addresses the daemon
     /// file when this is set; the privileged steps it needs are the ones
     /// [`crate::deploy::service::ManagedService::privileged_command`] spells.
+    ///
+    /// Set from the target by [`requires_daemon_domain`] at plan time, so
+    /// `deploy`, `ensure` and the autonomy reconciler cannot disagree about
+    /// the domain of the same unit on the same host. `service ensure
+    /// --as-daemon` still turns it on for a host whose declaration does not
+    /// yet say always-on; nothing turns it off.
     pub force_daemon: bool,
 }
 
@@ -3666,10 +3693,15 @@ const REMOTE_HOME_PLACEHOLDER: &str = "__STADO_HOME__";
 /// `~/.stado`.
 const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 
-pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
+pub fn plan_deploy(
+    target: &ComputeTarget,
+    name: &str,
+    program: &str,
+    args: &[String],
+) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
     let label = local_install::label(DEPLOY_KIND, name);
-    plan_deploy_labelled(name, &label, program, args, &[])
+    plan_deploy_labelled(target, name, &label, program, args, &[])
 }
 
 /// [`plan_deploy`] at a label the declaration already carries.
@@ -3683,6 +3715,7 @@ pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployP
 /// that names its own label is rendered at that label, so a declared service
 /// is reinstallable from the document without becoming a second service.
 pub fn plan_deploy_labelled(
+    target: &ComputeTarget,
     name: &str,
     label: &str,
     program: &str,
@@ -3716,6 +3749,10 @@ pub fn plan_deploy_labelled(
         exec_args.push(program.to_string());
         exec_args.extend(args.iter().cloned());
         InstallPlan {
+            // Both spellings are rendered here and the host picks between them
+            // (`ensure_unit_path` / the remote prelude), so this plan never
+            // addresses a unit path itself and needs no account.
+            daemon: None,
             name: name.to_string(),
             kind: DEPLOY_KIND.to_string(),
             os,
@@ -3754,7 +3791,7 @@ pub fn plan_deploy_labelled(
             REMOTE_USER_PLACEHOLDER,
         ),
         linux_unit: linux.content(remote_home),
-        force_daemon: false,
+        force_daemon: requires_daemon_domain(target),
     };
     guard_heredoc(&plan.darwin_unit)?;
     guard_heredoc(&plan.darwin_daemon_unit)?;
@@ -3873,8 +3910,9 @@ impl EnsureOutcome {
 /// plists sit in `/Library/LaunchDaemons`; the same plist under
 /// `~/Library/LaunchAgents` there names a job launchd cannot keep alive,
 /// because the per-login domain it loads into exists solely inside sessions
-/// nobody opens. `force_daemon` is how `service ensure --as-daemon` moves such
-/// a unit to the one domain that survives on that host.
+/// nobody opens. `force_daemon` is how the plan carries that host fact
+/// ([`requires_daemon_domain`]), and how `service ensure --as-daemon` carries
+/// it for a host whose declaration has not caught up yet.
 pub fn ensure_unit_path(plan: &DeployPlan) -> String {
     if plan.force_daemon {
         format!("/Library/LaunchDaemons/{}.plist", plan.label)
