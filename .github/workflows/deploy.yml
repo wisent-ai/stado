@@ -525,10 +525,47 @@ jobs:
           # Each put reads exact bytes back through the authenticated writer;
           # public delivery is verified in the next step.
           export STADO_API_URL="$STADO_WRITER_API_URL"
+          # Largest object first, and it is the archive by two orders of
+          # magnitude. Alphabetical order put it last, behind SHA256SUMS, the
+          # manifest and four binaries -- so the one object whose transfer
+          # actually fails failed with six create-only objects already
+          # published, and no later attempt could ever complete that version:
+          # a rebuild lands in a fresh `$RUNNER_TEMP/stado-source.XXXX`, that
+          # path is baked into the binary by `env!("CARGO_MANIFEST_DIR")`, and
+          # the resumed run is refused with "immutable object already differs on
+          # the writer: .../SHA256SUMS". 0.9.4 died exactly that way at
+          # 20:41:46Z on `infra_down` and again at 20:47:39Z on the differing
+          # digest.
+          #
+          # Publishing the archive first makes the flakiest write the one that
+          # cannot poison a version: it either lands, and the small objects
+          # follow, or nothing for that version exists and the same tag can be
+          # retried clean.
+          archive_name="stado-v$version-$platform.tar.gz"
+          # The same bounded retry the Linux publisher above has had all along.
+          # `storage put --if-absent` is idempotent for identical immutable
+          # bytes and verifies them through the authenticated writer before
+          # returning, so a retry either completes the same object or refuses
+          # it; what it cannot do is invent one. The native publisher had no
+          # retry at all, which is why one `infra_down` on the 72 MB archive
+          # ended the release train while the Linux job rode out the same class
+          # of stall twelve times over.
+          publish() {
+            uri="stado://releases/stado/$version/$platform/$1"
+            for attempt in $(seq 1 12); do
+              if "$stado_bin" storage put "$uri" "$release_dir/$1" --if-absent; then
+                return 0
+              fi
+              sleep "$((attempt * 2))"
+            done
+            echo "::error::Could not create and verify $uri after 12 attempts"
+            return 1
+          }
+          publish "$archive_name"
           for source in "$release_dir"/*; do
             name="${source##*/}"
-            uri="stado://releases/stado/$version/$platform/$name"
-            "$stado_bin" storage put "$uri" "$source" --if-absent
+            test "$name" != "$archive_name" || continue
+            publish "$name"
           done
           echo "STADO_NATIVE_RELEASE_PLATFORM=$platform" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
