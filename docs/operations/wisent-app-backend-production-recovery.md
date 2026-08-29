@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-29T01:03:00Z
+Last updated: 2026-08-29T03:54:40Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -33,37 +33,32 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 
 ### Current single blocker
 
-**FIXED: SSH multiplexing issue** (PR #132, merged 2026-08-28T20:45:11Z):
-Commit `baf6f0c837d1fdbe5d08e05aa448c3d403c850be` removed contradictory `ControlMaster=no`
-override, reused one canonical SSH option construction. Main qualification run
-[33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217)
-succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
+**FIXED: Route verdict evaluation logic (PR #140, merged 2026-08-29T02:17:43Z)**
+- Commit `edb5082b` (merge), implementation `1d370bb8`
+- Changed jq filter from checking per-entry boolean results to using `any()` check
+- Route reconciliation now exits true if ANY entry matches the configuration
+- Verified working: Run 33230476813 version-check passed; run 33231109170 step 4 succeeded
 
-**Current blocker: Stado 0.9.3 partial recovery publication workflow exists but CLI subcommand `recover-object-api` not implemented in running version 0.7.34.**
+**FIXED: Native darwin-arm64 recovery publication missing (PR #141, merged 2026-08-29T03:04:11Z)**
+- Commit `bf477f54` (merge), implementation `735e3e08`
+- Added "Publish the exact tag native release" step to deployment workflow
+- Builds darwin-arm64 binary from exact git tag `stado-v0.9.3`
+- Publishes to storage with transfer-safe client, byte-verifies public delivery
+- Verified working: Run 33231109170 step 7 completed successfully at 2026-08-29T03:46:31Z
 
-**Completed: Writer read-back transport layer recovered (run 33220762292, 2026-08-28T23:38:19Z)**
-- Branch: fix/resumable-writer-readback; head: a2f35bf3 "ci: avoid stado wc alias in transfer proof"
-- Job: release-sized-read-back → SUCCESS
-- Evidence: Full release-sized Stado object successfully transferred through authenticated writer loopback; byte-for-byte transfer verified
-- PR #136 "Resume authenticated Stado writer read-back" merged at 2026-08-28T23:47:06Z (commit b699b63f)
-
-**Completed: Stado 0.9.3 partial immutable release recovery workflow created (run 33224524061, 2026-08-29T01:02:24Z)**
-- PR #137 "Resume partial immutable Stado releases" merged at 2026-08-29T00:46:30Z (commit 7d2e1ee6, merge f03db782)
-- Commit timestamp: 2026-08-29T00:30:24Z by lbartoszcze
-- Changes: .github/workflows/deploy-existing-release.yml (workflow supports idempotent publication with existing tag)
-- Workflow description: "Completes an interrupted immutable release only from its existing tag-bound archive, verifies its manifest and member digests, publishes missing objects idempotently with the current transfer-safe client, verifies public bytes, and then invokes the established managed deployment path."
-- Merge qualification run 33224524061: version-check → SUCCESS (2026-08-29T01:02:24Z, completed 01:02:24Z)
-
-**NEW BLOCKER: Deployment triggered immediately after version-check pass (run 33225312766, 2026-08-29T01:02:51Z → 01:02:59Z)**
-- Run: 33225312766 "deploy existing Stado release" → FAILURE
-- Failed step: "Reconcile public release origin" (exit code 2, 8 seconds)
-- Error message: `error: unrecognized subcommand 'recover-object-api'` from stado CLI
-- Root cause: The stado CLI binary installed locally (version 0.7.34) does not expose the `recover_object_api` subcommand. The function exists in source code (stado-rs/src/cli/host.rs) but is not yet exposed as a public CLI subcommand.
-- Expected vs actual: Workflow expects `stado host recover-object-api charless-mac-mini --json` but CLI lacks this subcommand.
-- Release tag stado-v0.9.3 exists (SHA 925a03be7be273a4c95c14f666ff37a58fda4313, created by run 33216246052 at 22:18:11Z)
-- No retry triggered after deployment failure. Production state: port 8000 absent, bobloo HTTP 502, chat HTTP 502.
-
-**Next step:** CLI subcommand must be added to stado-rs and published before deployment can proceed.
+**Current blocker: ACTIVE DEPLOYMENT IN PROGRESS**
+- Run 33231109170: "deploy existing Stado release" (started 2026-08-29T03:19:38Z)
+- Currently executing step 8/10: "Verify public native immutable bytes"
+- Completed steps 1-7 (43m+ total runtime):
+  * Step 1: Build recovery client (4m24s)
+  * Step 2: Reconcile public release origin (5s) [PR #140 fix verified working]
+  * Step 3: Resume exact immutable publication (4m24s)
+  * Step 4: Verify public immutable bytes (8m02s)
+  * Step 5: Publish exact tag native release (9m50s) [NEW - PR #141, darwin-arm64 published]
+- Pending steps (9-10):
+  * Step 9: Acquire release channel bearer
+  * Step 10: Deploy the existing immutable release
+- No blocker observed; deployment pipeline proceeding automatically
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
@@ -89,6 +84,8 @@ succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
 | UTC | Revision / PR / run | Observed outcome |
 |---|---|---|
 | 2026-08-28T04:26:42Z | PR #118; merge `d06f6cd3b52b6afb77a02925b8291e5309d805b6` | Merged last-known-good release-authorization preservation. Its immediate main gate 33141829292 was superseded/cancelled. |
+- PR [#140](https://github.com/wisent-ai/stado/pull/140) "Evaluate managed release routes as one verdict", merge `edb5082b`, implementation `1d370bb8`: Fixes route reconciliation jq filter to check if ANY entry matches instead of validating per-entry logic. Merged 2026-08-29T02:17:43Z.
+- PR [#141](https://github.com/wisent-ai/stado/pull/141) "Recover the exact native Stado release from its tag", merge `bf477f54`, implementation `735e3e08`: Adds native darwin-arm64 publication to deployment workflow; builds and publishes from exact git tag; byte-verifies public delivery before managed host reconciliation. Merged 2026-08-29T03:04:11Z.
 | 2026-08-28T10:17:32Z | PR #129 head `1046bf61dcd0c48a2fa14dac2e0c037e7d41351d`; run 33162202088 | Exact hosted version check succeeded for the 0.9.1 release PR. |
 | 2026-08-28T10:18:19Z | PR #129; merge `a5e7ecb1c552b4e4fe38237d26bc831338d1d535` | Merged canonical 0.9.1 version metadata. |
 | 2026-08-28T10:49:29Z–15:21:44Z | `stado-v0.9.1`; run 33164815481, attempt 6 | Qualification and immutable release publication jobs succeeded; control-plane deployment failed. |
