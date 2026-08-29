@@ -20,9 +20,9 @@ jobs:
     runs-on: [self-hosted, stado-control-plane]
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      STADO_API_URL: https://charless-mac-mini.tail6443b3.ts.net
-      WC_SKARBIEC_CONSUMER: stado-release-api-verifier
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+      STADO_WRITER_API_URL: http://127.0.0.1:18776
+      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
     steps:
       - uses: actions/checkout@v5
       - name: Reconcile public release origin
@@ -38,14 +38,95 @@ jobs:
               .value.Handlers["/api/release/object"].Proxy ==
                 "http://127.0.0.1:8765/api/release/object"
             '
-      - name: Acquire release channel bearer
+      - name: Build the current immutable recovery client
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
+      - name: Resume the exact immutable publication
+        env:
+          STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: |
-          stado_bin=/Users/lukaszbartoszcze/.stado/bin/stado
+          set -euo pipefail
+          version='${{ inputs.version }}'
+          case "$version" in
+            *[![:alnum:]._-]*|"") echo "::error::invalid Stado version"; false ;;
+          esac
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          platform=linux-amd64
+          prefix="stado://releases/stado/$version/$platform"
+          recovered="$RUNNER_TEMP/stado-$version-recovered"
+          manifest="$RUNNER_TEMP/release-manifest-$platform.json"
+          sums="$RUNNER_TEMP/SHA256SUMS"
+          archive="$RUNNER_TEMP/stado-v$version-$platform.tar.gz"
+
+          git fetch --force --depth=1 origin \
+            "refs/tags/stado-v$version:refs/tags/stado-v$version"
+          tag_commit="$(git rev-list -n 1 "stado-v$version")"
+          "$stado_bin" storage get "$prefix/release-manifest-$platform.json" "$manifest"
+          "$stado_bin" storage get "$prefix/SHA256SUMS" "$sums"
+          "$stado_bin" storage get "$prefix/stado-v$version-$platform.tar.gz" "$archive"
+
+          jq -e \
+            --arg version "$version" \
+            --arg platform "$platform" \
+            --arg source_commit "$tag_commit" \
+            '.product == "stado" and .version == $version and
+             .platform == $platform and .source_commit == $source_commit' \
+            "$manifest" >/dev/null
+          expected_archive="$(jq -r '.sha256' "$manifest")"
+          actual_archive="$(openssl dgst -sha256 "$archive")"
+          actual_archive="${actual_archive##* }"
+          test "$actual_archive" = "$expected_archive"
+
+          mkdir -p "$recovered"
+          /usr/bin/tar -xzf "$archive" -C "$recovered"
+          cmp --silent "$sums" "$recovered/SHA256SUMS"
+          while read -r expected name; do
+            case "$name" in
+              *[![:alnum:]_.-]*|"") echo "::error::unsafe release member: $name"; false ;;
+            esac
+            test -f "$recovered/$name"
+            actual="$(openssl dgst -sha256 "$recovered/$name")"
+            actual="${actual##* }"
+            test "$actual" = "$expected"
+          done < "$sums"
+          cp "$manifest" "$recovered/release-manifest-$platform.json"
+          cp "$archive" "$recovered/stado-v$version-$platform.tar.gz"
+
+          for source in "$recovered"/*; do
+            name="${source##*/}"
+            "$stado_bin" storage put "$prefix/$name" "$source" --if-absent
+          done
+      - name: Verify public immutable bytes
+        env:
+          STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
+          WC_SKARBIEC_CONSUMER: stado-release-api-verifier
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+        run: |
+          set -euo pipefail
+          version='${{ inputs.version }}'
+          platform=linux-amd64
+          prefix="stado://releases/stado/$version/$platform"
+          recovered="$RUNNER_TEMP/stado-$version-recovered"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          for source in "$recovered"/*; do
+            name="${source##*/}"
+            delivered="$RUNNER_TEMP/public-$name"
+            "$stado_bin" storage get "$prefix/$name" "$delivered"
+            cmp --silent "$source" "$delivered"
+          done
+      - name: Acquire release channel bearer
+        env:
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+        run: |
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           token="$("$stado_bin" secrets get stado-release-publisher --field token)"
           test -n "$token"
           echo "::add-mask::$token"
           echo "STADO_API_TOKEN=$token" >> "$GITHUB_ENV"
       - name: Deploy the existing immutable release
         env:
-          STADO_BIN: /Users/lukaszbartoszcze/.stado/bin/stado
+          STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
+          STADO_BIN: ${{ github.workspace }}/stado-rs/target/release/stado
         run: scripts/deploy_existing_stado_release.sh '${{ inputs.version }}'
