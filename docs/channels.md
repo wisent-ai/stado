@@ -86,11 +86,16 @@ Retries do not repair a declaration or grant. They are appropriate only after a 
 
 ## Tests
 
-Repository tests live under `stado-rs/tests/` and drive the real `stado` binary:
+Repository tests live under `stado-rs/tests/<area>/main.rs` and drive the real
+`stado` binary. The directory listing is the inventory; this page does not copy
+it, because a hand-copied list rots into names that do not exist. The journeys
+those tests answer for are declared in the Probierz manifest for app `stado`.
 
-- `tests/channel/` defends channel declaration, refusal, authorization, and object-transfer contracts;
-- `tests/e2e/` covers complete multi-component journeys;
-- `tests/service/` covers managed service grant synchronization, authentication checks, and service transitions;
-- `tests/storage/` covers object actions and their exact refusal contracts.
+The channel boundaries above are defended by:
+
+- `tests/channel/` — the public release channel: stat, download, digest verification, and execution of one immutable native release through the public HTTPS origin;
+- `tests/service/` — managed service grant synchronization, authentication checks, and service transitions;
+- `tests/recovery/` and `tests/recovery_release/` — host-channel recovery and signed release recovery;
+- `tests/domain/`, `tests/link/`, `tests/removefile/` — host-channel identity, declaration, and guarded mutation.
 
 Probierz is the execution and evidence boundary when it is operational. The test source remains in this repository. A passing parser, dry run, mock server, or successful process start is not channel evidence; the journey must observe the promised final state in the real connected component.
