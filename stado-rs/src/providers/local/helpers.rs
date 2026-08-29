@@ -223,6 +223,37 @@ pub fn compat_accel_types(local_vram_gb: i64) -> Vec<String> {
     accels
 }
 
+/// Does `identity` name this consumer?
+///
+/// Three spellings of one host reach the queue and every one of them is
+/// legitimate: the consumer id the agent publishes
+/// (`local-Charless-Mac-mini.local`), the machine's own hostname
+/// (`Charless-Mac-mini.local`), and the registry target name
+/// (`charless-mac-mini`) that `stado submit --pinned-host` and the makespan
+/// mirror write. Case is not load-bearing either: registry hostnames are
+/// stored normalized while `consumer_id` carries the machine's verbatim
+/// `gethostname()` casing.
+///
+/// One predicate for both `pinned_host` and `assigned_to`, because matching
+/// one spelling and refusing the other is how 55 jobs pinned to the always-on
+/// mac starved for seven days. `pinned_host` was tolerant, the makespan
+/// matcher mirrored that same `pinned_host` into `assigned_to`
+/// (`scheduler::makespan`), and the exact `assigned_to == consumer_id` test
+/// then refused every job the pin had just admitted:
+/// `eligibility_rejected=72, eligible_count=0` on a host reporting
+/// `claiming: yes, blockers: none`.
+fn names_this_consumer(identity: &str, consumer_id: &str, kind: &str) -> bool {
+    if identity.is_empty() || consumer_id.is_empty() {
+        return false;
+    }
+    let identity = identity.to_lowercase();
+    let cid = consumer_id.to_lowercase();
+    let kind_prefix = format!("{}-", kind.to_lowercase());
+    let machine = cid.strip_prefix(&kind_prefix).unwrap_or(&cid);
+    let bare = machine.strip_suffix(".local").unwrap_or(machine);
+    identity == cid || identity == machine || identity == bare
+}
+
 /// Local-agent claim rules. Python `_job_eligible`.
 ///
 /// NEW (0.4.100): if job.assigned_to was set by the centralized
@@ -249,6 +280,9 @@ pub fn compat_accel_types(local_vram_gb: i64) -> Vec<String> {
 /// compiles the wrong artifact under the right name — or, more often, fails
 /// halfway and reports it as the commit's fault. Either field empty is no
 /// constraint, which is every job submitted before build fan-out existed.
+///
+/// Pin and assignment matching both go through [`names_this_consumer`], so the
+/// two can never disagree about one host.
 #[allow(clippy::too_many_arguments)]
 pub fn job_eligible(
     job: &Job,
@@ -259,19 +293,12 @@ pub fn job_eligible(
     active_slot_count: usize,
     pinned_only: bool,
 ) -> bool {
-    let pinned_host = job.pinned_host.to_lowercase();
-    let cid = consumer_id.to_lowercase();
-    let kind_prefix = format!("{}-", kind.to_lowercase());
-    let consumer_machine = cid.strip_prefix(&kind_prefix).unwrap_or(&cid);
-    let machine = consumer_machine
-        .strip_suffix(".local")
-        .unwrap_or(consumer_machine);
-    let pin_matches = !pinned_host.is_empty() && (pinned_host == cid || pinned_host == machine);
-    if !pinned_host.is_empty() && !pin_matches {
+    let pin_matches = names_this_consumer(&job.pinned_host, consumer_id, kind);
+    if !job.pinned_host.is_empty() && !pin_matches {
         return false;
     }
     let assigned = job.assigned_to.as_str();
-    let assigned_matches = !assigned.is_empty() && assigned.eq_ignore_ascii_case(consumer_id);
+    let assigned_matches = names_this_consumer(assigned, consumer_id, kind);
     if !assigned.is_empty() && !consumer_id.is_empty() && !assigned_matches {
         return false;
     }
