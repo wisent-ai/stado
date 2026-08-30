@@ -89,6 +89,26 @@ stado service restart com.wisent.always-on.weles --host charless-mac-mini
 
 One gap is left named rather than papered over, and it is in Stado, not in Weles. `retire` boots out and disables only the two per-login spellings (`RETIRE_BODY`), so it cannot `launchctl disable system/<label>`. Retiring a system LaunchDaemon therefore needs `service stop` first — which does have the privileged path, through the host account credential the registry's `account_ref` names — and even then the label is only booted out, not disabled. `/Library/LaunchDaemons/com.wisent.always-on.weles.plist` remains, so launchd will load it again after a reboot and the rival returns. The durable fix is a privileged branch in `retire` mirroring `stop_service_with_password`: `sudo launchctl bootout system/<label>` followed by `sudo launchctl disable system/<label>`, gated on the same `account_ref` credential and refusing with the exact privileged command when no password is readable.
 
+### A fleet-wide model outage that was an ungranted entitlement, not a purchase
+
+Every signed agent on charless-mac-mini was refused by Brama with `429 subscription_unavailable: no active stateless provider models for signed agent`, `attempts: 0` — the candidate list was empty before any provider was called. Weles could not run a single browser task because of it.
+
+The refusal is reachable but not readable from outside: `/v1/subscriptions/<agent>` and `/v1/account/subscriptions` both answer 403 once the signature authenticates, because the caller's bearer is bound to a different agent than the signature claims. That 403 is not the boundary it looks like. `broker.rs`'s `list_subscriptions` shells out to an entitlements-router binary on the Brama host, and the ledger it reads is that host's Skarbiec vault: a subscription is a vault item carrying both `brama:subscription` and `brama:agent:<agent>`, with `brama:id:` and `brama:provider:` beside them. `parse_live_subscriptions` reports every live-discovered item as `active`, so "no active subscriptions" means precisely "no item is tagged for this agent" — never "the plan lapsed".
+
+Read where it lives, the answer was unambiguous. The vault held four subscriptions, all `state: active`: codex primary and secondary, claude-code, and kimi. Codex carried `brama:agent:wisent-app` and `brama:agent:lem`; the others carried `wisent-app` alone. Nothing anywhere carried `brama:agent:weles`. The entitlement had never been granted, so there was nothing to renew and nothing to buy.
+
+The repair was `stado host retag-vault-item`, whose own purpose is this: `brama:agent:weles` added to the codex primary and secondary, matching the sharing decision already made for `lem` and giving the worker the fallback `best_subscription_models` is built to walk. A real completion for the signed `weles` identity returned `200` with `ok` immediately afterwards, and the next browser task on that host returned `ok: true` with the page's real title.
+
+Reversing one grant is the same command with the agent tag removed:
+
+```console
+stado host retag-vault-item charless-mac-mini provider:codex:brama-sub-wisent-app-codex-primary --tags 'brama:subscription,brama:provider:codex,brama:id:brama-sub-wisent-app-codex-primary,brama:agent:wisent-app,brama:agent:lem'
+```
+
+`--tags` is now optional, and omitting it reads. That is not a convenience. The command replaces a tag list rather than adding to it, so an operator who cannot see the list they are replacing must guess it — and a guess that drops `brama:agent:lem` unsubscribes another agent from a paid plan while every check that counts credentials keeps answering green. The read is the same host-side `read_vault_phase` the write already used for its before/after report; it simply stops before writing.
+
+One defect found on the way is left named: the worker's model-router bearer and its agent signature identify two different agents, which is why the account-scoped reads answer 403 for a caller whose signature is valid. The completion path resolves subscriptions for the SIGNED agent, so this did not cause the outage, and the grant above fixed the outage without touching it. It should still be reconciled at the source — the credential the launcher acquires from Skarbiec — because an identity that is two identities will mislead the next person who reads it.
+
 ## Service directory
 
 The directory joins a producer, its endpoint, and declared consumers. `stado service directory show <service>` displays the resolved relationship. `stado service directory connect <service> --consumer <consumer>` establishes a declared connection. `stado service verify <service>` exercises reachability from the declared consumers instead of treating the producer's loopback listener as fleet reachability.

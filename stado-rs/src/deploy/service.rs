@@ -2364,7 +2364,66 @@ if [ \"$serves\" = no ]; then
       ;;
   esac
 fi
+# Render the unit so we can check for content drift (environment changes, etc)
+# beyond just the argv. On non-Darwin or when no unit exists, we'll proceed
+# with the normal create/update path. On Darwin with an existing unit, we'll
+# compare to see if content has drifted even when argv matches.
+rendered=''
+if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
+  staged=\"$HOME/.stado/$unit.plist.$$\"
+  if [ \"$domain\" = system ]; then
+    /bin/cat > \"$staged\" <<'@HEREDOC@'
+@DARWIN_DAEMON_UNIT@
+@HEREDOC@
+  else
+    /bin/mkdir -p \"$HOME/Library/LaunchAgents\" >/dev/null 2>&1 || bail 'cannot create LaunchAgents'
+    /bin/cat > \"$staged\" <<'@HEREDOC@'
+@DARWIN_UNIT@
+@HEREDOC@
+  fi
+  escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
+  account=$(/usr/bin/id -un)
+  /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
+  rendered=\"$staged.rendered\"
+fi
 if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
+  # argv matches and process serves - check for content drift
+  if [ -n \"$rendered\" ]; then
+    if /bin/cmp -s \"$rendered\" \"$unit_path\"; then
+      # File is identical - nothing to do
+      /bin/rm -f \"$staged\" \"$rendered\"
+      printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
+      say 'already_correct' \"$domain/$unit pid $pid\"
+      exit 0
+    fi
+    # File has drifted - install new version and converge in place with kickstart -k
+    if [ \"$domain\" = system ]; then
+      /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$rendered\" \"$unit_path\" || bail \"sudo -n install $unit_path was refused\"
+    else
+      /bin/cp \"$rendered\" \"$unit_path\" || bail \"cannot write $unit_path\"
+      /bin/chmod u=rw,go= \"$unit_path\" || bail \"cannot protect $unit_path\"
+    fi
+    /bin/rm -f \"$staged\" \"$rendered\"
+    # Unit was installed, now kickstart it in place
+    action=converged
+    detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
+    rc=$?
+    if [ \"$rc\" -ne 0 ]; then
+      say \"${action}_failed\" \"$rc $detail\"
+      exit 0
+    fi
+    /bin/sleep 1
+    stado_launchd_state
+    if [ \"$pc_loaded\" = no ]; then
+      say 'not_loaded' \"${detail:-launchctl reported success and left no job}\"
+      exit 0
+    fi
+    pid=\"$pc_pid\"
+    printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
+    say \"$action\" \"$unit_path\"
+    exit 0
+  fi
+  # Non-Darwin or no existing unit - nothing to do
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
   say 'already_correct' \"$domain/$unit pid $pid\"
   exit 0
@@ -2395,9 +2454,6 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
     account=$(/usr/bin/id -un)
     /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
     if [ \"$domain\" = system ]; then
-      # The one write this command cannot do as the login user. A host
-      # without passwordless sudo is told exactly that, rather than left
-      # with a rendered plist nobody ever loaded.
       /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$staged.rendered\" \"$unit_path\" || bail \"sudo -n install $unit_path was refused\"
     else
       /bin/cp \"$staged.rendered\" \"$unit_path\" || bail \"cannot write $unit_path\"
@@ -2425,8 +2481,8 @@ if [ \"$os\" = \"Darwin\" ]; then
 else
   # Same linger guarantee as DEPLOY_BODY: an ensured user unit must outlive
   # the login session that ensured it.
-  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
-    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \\
+    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \\
     || true
   systemctl_user daemon-reload >/dev/null 2>&1 || true
   if [ \"$had_unit\" = yes ]; then
@@ -2458,7 +2514,7 @@ else
   pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
   if [ \"$pid\" = 0 ]; then pid=''; fi
 fi
-printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
+printf 'STADO_ENSURE\t%s\t%s\t%s\n' \"$domain\" \"$pid\" \"$unit_path\"
 say \"$action\" \"$unit_path\"
 ";
 
@@ -3955,6 +4011,13 @@ pub const ACTION_CREATED: &str = "created";
 pub const ACTION_RESTARTED: &str = "restarted";
 /// The unit was there, running the declared program, and nothing was touched.
 pub const ACTION_ALREADY_CORRECT: &str = "already_correct";
+/// The unit was there, running the declared program with matching argv, but the
+/// rendered unit file had drifted; the unit was rewritten and kicked in place to
+/// converge. See the incident in ensure_service: changing base_unit_environment
+/// to render HOME or STADO_CONFIG leaves installed units with stale environments
+/// until they are deleted by hand. This action reports convergence without the
+/// window that bootout then bootstrap leaves.
+pub const ACTION_CONVERGED: &str = "converged";
 
 /// launchd's system domain: `/Library/LaunchDaemons`, reached with sudo, and
 /// the only domain that exists on an ssh login with no Aqua session.

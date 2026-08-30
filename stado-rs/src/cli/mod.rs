@@ -1220,6 +1220,23 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Authorize TARGET's service resolver to read the registry from the
+    /// service-directory authority.
+    ///
+    /// A resolver anywhere but on the authority host itself can only obtain a
+    /// registry snapshot over ssh to that host, and a resolver with no snapshot
+    /// binds none of its declared adapters — so the host publishes nothing at
+    /// all, loudly in its log and invisibly everywhere else. This mints the
+    /// resolver keypair on TARGET when it has none and appends its PUBLIC half
+    /// to the authority account's authorized_keys, once. The private half is
+    /// generated where it is used and never travels.
+    #[command(name = "resolver-key")]
+    ResolverKey {
+        target: String,
+        /// Emit the authorization report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -1355,8 +1372,15 @@ enum HostCommands {
         item: String,
         /// The complete tag list to store, comma separated. This replaces the
         /// item's tags rather than adding to them.
+        ///
+        /// Omit it to READ: the item's current state, revision and tags are
+        /// reported and nothing is written. A command that can only replace a
+        /// tag list forces an operator to guess the list they are replacing,
+        /// and a guess that drops `brama:agent:<other>` silently unsubscribes
+        /// another agent from a paid plan while every credential count stays
+        /// green.
         #[arg(long)]
-        tags: String,
+        tags: Option<String>,
         /// Emit the before/after report as JSON.
         #[arg(long)]
         json: bool,
@@ -1451,6 +1475,28 @@ enum HostCommands {
     },
     /// Open an encrypted local SSH forwarding channel to TARGET.
     #[command(name = "forward-remote")]
+    /// Close a forwarding channel `forward-local` opened, and reconcile its
+    /// markers.
+    ///
+    /// A tunnel the fleet can open and cannot close is a port it cannot
+    /// reclaim: the detached `ssh -f -N -R` outlives the command that made it,
+    /// the remote marker under `~/.stado/forwards` keeps asserting an endpoint,
+    /// and `host inventory` keeps reporting a forward that may no longer carry
+    /// anything. This ends the channel, deletes both markers, and re-reads the
+    /// host to confirm the port stopped listening.
+    ///
+    /// The ssh process is matched on its whole `-R` specification and its
+    /// destination, never on the word `ssh`: this machine runs several
+    /// forwards, and a match by program name would tear down the fleet's other
+    /// channels.
+    #[command(name = "forward-close")]
+    ForwardClose {
+        target: String,
+        /// The forward name whose markers were written.
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
     ForwardRemote {
         target: String,
         /// Safe name for the local endpoint marker.
@@ -2133,6 +2179,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RecoverObjectApi { target, json } => {
                 host::recover_object_api(&target, json).await
             }
+            HostCommands::ResolverKey { target, json } => {
+                host::authorize_resolver_key(&target, json).await
+            }
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
@@ -2285,7 +2334,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 item,
                 tags,
                 json,
-            } => host::retag_vault_item(&target, &item, &tags, json).await,
+            } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
             }
@@ -2319,6 +2368,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 local_port,
                 json,
             } => host::forward_local(&target, &name, remote_port, local_port, json).await,
+            HostCommands::ForwardClose { target, name, json } => {
+                host::forward_close(&target, &name, json).await
+            }
             HostCommands::ForwardRemote {
                 target,
                 name,
