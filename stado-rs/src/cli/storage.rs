@@ -1508,7 +1508,7 @@ impl RemoteObjectApi {
             let chunk_uri = chunk_object.to_string();
             let endpoint = self.endpoint(
                 "/api/object",
-                &[("uri", chunk_uri.as_str()), ("if_absent", "false")],
+                &[("uri", chunk_uri.as_str()), ("if_absent", "true")],
             )?;
             let chunk_metadata = BTreeMap::from([
                 ("stado-upload-id".to_string(), upload_id.clone()),
@@ -1529,15 +1529,17 @@ impl RemoteObjectApi {
                 .body(chunk)
                 .send()
                 .await?;
-            let stored: RemotePutResponse =
-                self.response_json(response, "object chunk PUT").await?;
-            if stored.state != "stored"
-                || stored.uri != chunk_uri
-                || stored.content_type != "application/octet-stream"
-            {
-                return Err(CmdError::click(
-                    "Stado object API returned an inconsistent object chunk PUT response",
-                ));
+            if response.status() != reqwest::StatusCode::PRECONDITION_FAILED {
+                let stored: RemotePutResponse =
+                    self.response_json(response, "object chunk PUT").await?;
+                if stored.state != "stored"
+                    || stored.uri != chunk_uri
+                    || stored.content_type != "application/octet-stream"
+                {
+                    return Err(CmdError::click(
+                        "Stado object API returned an inconsistent object chunk PUT response",
+                    ));
+                }
             }
             chunks.push(RemoteComposeChunk {
                 uri: chunk_uri,
