@@ -467,13 +467,19 @@ jobs:
         run: |
           release_dir="$RUNNER_TEMP/stado-native-release"
           mkdir -p "$release_dir"
+          # The binary set this platform publishes, declared once. SHA256SUMS
+          # is generated from it and the post-publish read-back below asserts
+          # against the same words, so the check cannot fall out of step with
+          # the declaration. `wc` is a copy of `stado`, not a separate build,
+          # which is why it is in this list and not in the build loop.
+          release_binaries="stado wc stado-coverage stado-fix stado-watchdog stado-mcp"
           for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
             cp "$STADO_SOURCE_DIR/stado-rs/target/release/$name" "$release_dir/$name"
           done
           cp "$release_dir/stado" "$release_dir/wc"
           (
             cd "$release_dir"
-            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+            for name in $release_binaries; do
               digest="$(openssl dgst -sha256 "$name")"
               printf '%s  %s\n' "${digest##* }" "$name"
             done > SHA256SUMS
@@ -567,6 +573,39 @@ jobs:
             test "$name" != "$archive_name" || continue
             publish "$name"
           done
+          # A publish loop that returned cleanly is not the same claim as a
+          # complete version. Read the coordinate back and compare it against
+          # the same declaration SHA256SUMS was generated from, plus the three
+          # release files themselves. `stado/0.11.0/darwin-arm64` holds the
+          # archive, the manifest, SHA256SUMS and `stado` alone -- five
+          # binaries short -- and nothing in this job noticed, because the
+          # connection to api.github.com dropped mid-loop and the version was
+          # left immutable and unusable with the job reporting what it had
+          # managed rather than what it had promised.
+          #
+          # Listed through the same authenticated writer route the puts went
+          # to, in one call, so the answer is immediate and does not depend on
+          # public delivery having caught up yet. The assignment takes the
+          # exit status of `stado` directly -- no pipe -- so a writer that
+          # cannot answer fails the job instead of reading as an empty
+          # coordinate with every object missing.
+          published="$(
+            "$stado_bin" storage objects releases "stado/$version/$platform/" --json
+          )"
+          missing=""
+          for name in $release_binaries SHA256SUMS "$archive_name" \
+                      "release-manifest-$platform.json"; do
+            uri="stado://releases/stado/$version/$platform/$name"
+            if ! printf '%s' "$published" |
+                 jq -e --arg uri "$uri" '[.objects[].uri] | index($uri) != null' \
+                 >/dev/null; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::$version is half-published on $platform; these declared objects are absent:$missing"
+            false
+          fi
           echo "STADO_NATIVE_RELEASE_PLATFORM=$platform" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"

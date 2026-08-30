@@ -1470,8 +1470,7 @@ impl RemoteObjectApi {
             let mut request =
                 self.request_as(reqwest::Method::GET, endpoint.clone(), bearer.as_deref());
             if !body.is_empty() {
-                request =
-                    request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
+                request = request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
             }
             let response = match request.send().await {
                 Ok(response) => response,
@@ -1486,10 +1485,7 @@ impl RemoteObjectApi {
                     continue;
                 }
             };
-            if response.status() == reqwest::StatusCode::NOT_FOUND
-                && body.is_empty()
-                && optional
-            {
+            if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
                 return Ok(None);
             }
             if !response.status().is_success() {
@@ -2284,6 +2280,36 @@ pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
         return Err(CmdError::click(format!("{object}: absent")));
     };
     Ok(bytes)
+}
+
+/// Whether one object is actually there, routed exactly like
+/// [`fetch_object`] but without moving the bytes.
+///
+/// Asking a whole version whether it is complete means asking about every
+/// object in it, and one of those is a 72 MB archive; a presence question
+/// must not download it.
+///
+/// [`Presence::Unreachable`] propagates as an error rather than `false`,
+/// because "the store did not answer" read as "the object is missing" is the
+/// exact confusion [`Presence`] exists to keep visible — and here it would
+/// turn a network blip into a false accusation that a good release is
+/// half-published.
+pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> {
+    let object = crate::object_store::ObjectRef::parse(uri)?;
+    let uri = object.to_string();
+    if object.namespace() == "releases" {
+        if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
+            return match remote.stat_release(&uri).await? {
+                Presence::Present { .. } => Ok(true),
+                Presence::Absent => Ok(false),
+                Presence::Unreachable(detail) => Err(CmdError::click(format!(
+                    "cannot tell whether {uri} is published: {detail}"
+                ))),
+            };
+        }
+    }
+    let store = JobStorage::new().await?;
+    Ok(store.read_bytes(&object.storage_path()).await?.is_some())
 }
 
 pub(crate) async fn fetch_object_versioned(

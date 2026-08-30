@@ -1517,6 +1517,88 @@ fn planned_steps(
     steps
 }
 
+/// Which objects one published coordinate declares but does not actually
+/// have, in the order the declaration names them.
+///
+/// `SHA256SUMS` is the declaration. The publisher writes one line per file it
+/// placed in the release directory, so that file names the exact set a
+/// complete version holds — and it is the only thing at the coordinate that
+/// does. The per-platform manifest carries product, version, platform,
+/// source commit and the archive digest; nothing in it lists the binaries.
+///
+/// Reading the declaration back and probing every name it lists is what sees
+/// a half-published version. The archive, the manifest and `SHA256SUMS` are
+/// written first, so a version that lost five of its six binaries still
+/// answers for all three and looks, to every check that came before this one,
+/// exactly like a finished release. `stado/0.10.0/darwin-arm64` and
+/// `stado/0.11.0/darwin-arm64` are both in that state permanently: the
+/// objects are immutable, so an interrupted publish can never be completed,
+/// and delivering from one installs a version whose binaries do not exist.
+///
+/// For the `stado` product the declaration is checked against
+/// [`crate::self_update::RELEASE_BINARIES`] as well, because a `SHA256SUMS`
+/// that is itself short would otherwise shrink the verified set to whatever
+/// happened to be listed.
+async fn missing_release_objects(
+    product: &Product,
+    version: &str,
+    platform: &str,
+) -> Result<Vec<String>, DeployError> {
+    let base = format!(
+        "stado://releases/{}/{version}/{platform}",
+        product.source.product
+    );
+    let sums_name = crate::self_update::SHA256SUMS_NAME;
+    let sums_uri = format!("{base}/{sums_name}");
+    let declares_binary_set = product.source.product == "stado";
+    let sums_present = crate::cli::storage::release_object_present(&sums_uri)
+        .await
+        .map_err(|error| DeployError(error.to_string()))?;
+    if !sums_present {
+        // Every published stado version carries one, so its absence is a
+        // missing object rather than a product that never had the file. A
+        // product that genuinely publishes no checksum manifest has no
+        // declared set here to check, and its archive digest is verified by
+        // the manifest identity above.
+        return Ok(if declares_binary_set {
+            vec![sums_name.to_string()]
+        } else {
+            Vec::new()
+        });
+    }
+    let sums = crate::cli::storage::fetch_object(&sums_uri)
+        .await
+        .map_err(|error| {
+            DeployError(format!(
+                "cannot read the release declaration at {sums_uri}: {error}"
+            ))
+        })?;
+    let sums = String::from_utf8(sums)
+        .map_err(|_| DeployError(format!("{sums_uri} is not UTF-8 text")))?;
+    let declared = crate::self_update::parse_sha256sums(&sums)
+        .map_err(|error| DeployError(format!("{sums_uri}: {error}")))?;
+    let mut names: Vec<String> = declared.into_keys().collect();
+    if declares_binary_set {
+        for &name in crate::self_update::RELEASE_BINARIES {
+            if !names.iter().any(|declared| declared == name) {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+    }
+    let mut missing = Vec::new();
+    for name in names {
+        let uri = format!("{base}/{name}");
+        if !crate::cli::storage::release_object_present(&uri)
+            .await
+            .map_err(|error| DeployError(error.to_string()))?
+        {
+            missing.push(name);
+        }
+    }
+    Ok(missing)
+}
+
 /// The immutable identity the canonical release manifest states for one
 /// declared product at one coordinate: its source commit and the archive
 /// digest a host must reproduce.
@@ -1525,6 +1607,14 @@ fn planned_steps(
 /// was never published has no manifest, and this is where that is refused —
 /// on the control plane, before a host is contacted, for a dry run exactly as
 /// for a delivery.
+///
+/// A manifest is not enough on its own, which is why
+/// [`missing_release_objects`] runs here too. The manifest is written early in
+/// a publish, so it exists for versions whose binaries do not, and both
+/// `stado host promote-version` and `stado host release` reach a coordinate
+/// through this one function. Refusing here is what stops an incomplete
+/// immutable version from being promoted into desired state or delivered to a
+/// host at all.
 pub(crate) async fn catalog_identity(
     product: &Product,
     version: &str,
@@ -1596,6 +1686,17 @@ pub(crate) async fn catalog_identity(
         return Err(DeployError(
             "canonical release manifest source_commit is invalid".to_string(),
         ));
+    }
+    let missing = missing_release_objects(product, version, platform).await?;
+    if !missing.is_empty() {
+        return Err(DeployError(format!(
+            "{} {version} is incomplete on {platform} and cannot be delivered: \
+             the release declares objects that are not published — {}. \
+             Release objects are immutable, so this version can never be \
+             completed; publish a new version instead",
+            product.source.product,
+            missing.join(", ")
+        )));
     }
     Ok((source_commit, sha256))
 }

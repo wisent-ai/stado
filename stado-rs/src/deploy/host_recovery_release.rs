@@ -63,12 +63,9 @@ impl RecoveryReleaseClient {
             .join("/api/release/object")
             .map_err(|error| DeployError(format!("invalid recovery release endpoint: {error}")))?;
         endpoint.query_pairs_mut().append_pair("uri", uri);
-        let mut response = self
-            .http
-            .get(endpoint)
-            .send()
-            .await
-            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?;
+        let mut response = self.http.get(endpoint).send().await.map_err(|error| {
+            DeployError(format!("signed release download failed for {uri}: {error}"))
+        })?;
         if !response.status().is_success() {
             return Err(DeployError(format!(
                 "signed release object {uri} returned HTTP {}",
@@ -89,11 +86,9 @@ impl RecoveryReleaseClient {
                 .unwrap_or_default()
                 .min(MAX_RELEASE_METADATA_BYTES as u64) as usize,
         );
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            DeployError(format!("signed release download failed for {uri}: {error}"))
+        })? {
             if bytes.len().saturating_add(chunk.len()) > MAX_RELEASE_METADATA_BYTES {
                 return Err(DeployError(format!(
                     "signed release object {uri} exceeds the recovery size limit"
@@ -109,12 +104,19 @@ impl RecoveryReleaseClient {
         version: &str,
         platform: &str,
     ) -> Result<(Vec<u8>, Vec<u8>), DeployError> {
-        let base = release_control::release_base("stado", version, platform).map_err(DeployError)?;
+        let base =
+            release_control::release_base("stado", version, platform).map_err(DeployError)?;
         let manifest = self
-            .get(&format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME))
+            .get(&format!(
+                "{base}/{}",
+                release_control::RELEASE_MANIFEST_NAME
+            ))
             .await?;
         let signature = self
-            .get(&format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME))
+            .get(&format!(
+                "{base}/{}",
+                release_control::RELEASE_SIGNATURE_NAME
+            ))
             .await?;
         Ok((manifest, signature))
     }
@@ -130,12 +132,9 @@ impl RecoveryReleaseClient {
             .join("/api/release/object")
             .map_err(|error| DeployError(format!("invalid recovery release endpoint: {error}")))?;
         endpoint.query_pairs_mut().append_pair("uri", uri);
-        let mut response = self
-            .http
-            .get(endpoint)
-            .send()
-            .await
-            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?;
+        let mut response = self.http.get(endpoint).send().await.map_err(|error| {
+            DeployError(format!("signed release download failed for {uri}: {error}"))
+        })?;
         if !response.status().is_success() {
             return Err(DeployError(format!(
                 "signed release object {uri} returned HTTP {}",
@@ -152,11 +151,9 @@ impl RecoveryReleaseClient {
         }
         let mut received = 0_u64;
         let mut digest = Sha256::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            DeployError(format!("signed release download failed for {uri}: {error}"))
+        })? {
             received = received
                 .checked_add(chunk.len() as u64)
                 .ok_or_else(|| DeployError("release archive size overflowed".to_string()))?;
@@ -166,14 +163,16 @@ impl RecoveryReleaseClient {
                 ));
             }
             digest.update(&chunk);
-            destination
-                .write_all(&chunk)
-                .map_err(|error| DeployError(format!("cannot stage signed release archive: {error}")))?;
+            destination.write_all(&chunk).map_err(|error| {
+                DeployError(format!("cannot stage signed release archive: {error}"))
+            })?;
         }
         destination
             .flush()
             .and_then(|()| destination.sync_all())
-            .map_err(|error| DeployError(format!("cannot commit signed release archive: {error}")))?;
+            .map_err(|error| {
+                DeployError(format!("cannot commit signed release archive: {error}"))
+            })?;
         if received != manifest.artifact_bytes
             || hex::encode(digest.finalize()) != manifest.artifact_sha256
         {
@@ -213,7 +212,6 @@ fn failed(
     })
 }
 
-
 fn recovery_control(registry: &Registry) -> Result<ReleaseControl, DeployError> {
     release_control::control(&registry.to_document())
         .map_err(DeployError)?
@@ -236,10 +234,7 @@ fn verify_release_metadata(
     let manifest: ReleaseManifest = serde_json::from_slice(manifest_bytes)
         .map_err(|error| DeployError(format!("release manifest is invalid: {error}")))?;
     release_control::validate_manifest(&manifest).map_err(DeployError)?;
-    if manifest.product != "stado"
-        || manifest.version != version
-        || manifest.platform != platform
-    {
+    if manifest.product != "stado" || manifest.version != version || manifest.platform != platform {
         return Err(DeployError(
             "release manifest identity does not match its object coordinate".to_string(),
         ));
@@ -394,7 +389,9 @@ pub async fn recover_with_client(
         )));
     }
     if !super::host_release::is_exact_semver(version) {
-        return Err(DeployError(format!("{version:?} is not an exact semantic version")));
+        return Err(DeployError(format!(
+            "{version:?} is not an exact semantic version"
+        )));
     }
     let control = recovery_control(registry)?;
     let platform = target.release_platform.as_str();
@@ -410,20 +407,15 @@ pub async fn recover_with_client(
             return Ok(failed(target_name, version, steps, detail, 1));
         }
     };
-    let (manifest, artifact) = match verify_release_metadata(
-        version,
-        platform,
-        &control,
-        &manifest_bytes,
-        &signature,
-    ) {
-        Ok(verified) => verified,
-        Err(error) => {
-            let detail = error.to_string();
-            steps.push(step("verify", "failed", &detail));
-            return Ok(failed(target_name, version, steps, detail, 1));
-        }
-    };
+    let (manifest, artifact) =
+        match verify_release_metadata(version, platform, &control, &manifest_bytes, &signature) {
+            Ok(verified) => verified,
+            Err(error) => {
+                let detail = error.to_string();
+                steps.push(step("verify", "failed", &detail));
+                return Ok(failed(target_name, version, steps, detail, 1));
+            }
+        };
 
     let mut archive = tempfile::NamedTempFile::new()
         .map_err(|error| DeployError(format!("cannot create private release archive: {error}")))?;
@@ -452,8 +444,9 @@ pub async fn recover_with_client(
         "ok",
         "release.json, release.sig, release.tar.gz",
     );
-    let extracted = tempfile::tempdir()
-        .map_err(|error| DeployError(format!("cannot create release staging directory: {error}")))?;
+    let extracted = tempfile::tempdir().map_err(|error| {
+        DeployError(format!("cannot create release staging directory: {error}"))
+    })?;
     let release_root = extracted.path().join("release");
     if let Err(error) = release_control::safe_extract_archive_file(
         archive.path(),
@@ -547,31 +540,20 @@ pub async fn recover_with_client(
         {
             steps.push(step("install", "failed", &detail));
         }
-        return Ok(failed(
-            target_name,
-            version,
-            steps,
-            detail,
-            installed.code,
-        ));
+        return Ok(failed(target_name, version, steps, detail, installed.code));
     }
 
-    let mut report = match host_recovery::recover_host_with_registry(
-        registry,
-        target_name,
-        &keyed_runner,
-    )
-    .await
-    {
-        Ok(report) => report,
-        Err(error) => {
-            let detail = error.to_string();
-            steps.push(step("recovery", "failed", &detail));
-            return Ok(failed(target_name, version, steps, detail, 1));
-        }
-    };
-    let recovered =
-        report.get("status").and_then(Value::as_str) == Some(host_recovery::STATUS_OK);
+    let mut report =
+        match host_recovery::recover_host_with_registry(registry, target_name, &keyed_runner).await
+        {
+            Ok(report) => report,
+            Err(error) => {
+                let detail = error.to_string();
+                steps.push(step("recovery", "failed", &detail));
+                return Ok(failed(target_name, version, steps, detail, 1));
+            }
+        };
+    let recovered = report.get("status").and_then(Value::as_str) == Some(host_recovery::STATUS_OK);
     steps.push(step(
         "recovery",
         if recovered { "ok" } else { "failed" },

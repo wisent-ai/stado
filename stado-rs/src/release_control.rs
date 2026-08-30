@@ -629,11 +629,18 @@ pub fn safe_extract_archive_file(
     expected_bytes: u64,
     destination: &Path,
 ) -> Result<(), String> {
-    let file = File::open(archive_path)
-        .map_err(|error| format!("cannot open release archive {}: {error}", archive_path.display()))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("cannot stat release archive {}: {error}", archive_path.display()))?;
+    let file = File::open(archive_path).map_err(|error| {
+        format!(
+            "cannot open release archive {}: {error}",
+            archive_path.display()
+        )
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "cannot stat release archive {}: {error}",
+            archive_path.display()
+        )
+    })?;
     if !metadata.is_file()
         || expected_bytes == 0
         || expected_bytes > MAX_RELEASE_BYTES
