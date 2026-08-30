@@ -104,9 +104,12 @@ pub fn is_refusal(outcome: &str) -> bool {
 /// key prefixes, the apply flag and the pass bound.
 const REMOTE_SCRIPT_TEMPLATE: &str = r#"set -u
 root=@ROOT@
-base="$root/@KEYROOT@"
-srcpfx="$base@FROM@"
-dstpfx="$base@TO@"
+# Braced, every one of them: a prefix is spliced immediately after the
+# expansion, and `$base` followed by a letter is the variable `baseecosystem`
+# as far as the shell is concerned.
+base="${root}/@KEYROOT@"
+srcpfx="${base}@FROM@"
+dstpfx="${base}@TO@"
 apply=@APPLY@
 limit=@LIMIT@
 if [ ! -d "$root" ]; then
@@ -155,7 +158,7 @@ if [ -d "$scan" ]; then
     scanned=$((scanned + 1))
     if [ "$limit" -gt 0 ] && [ "$decided" -ge "$limit" ]; then continue; fi
     relative=${source#"$srcpfx"}
-    destination="$dstpfx$relative"
+    destination="${dstpfx}${relative}"
     bytes=$(/usr/bin/wc -c < "$source" 2>/dev/null | /usr/bin/tr -d ' ')
     source_key=${source#"$root"/}
     destination_key=${destination#"$root"/}
@@ -228,7 +231,7 @@ if [ -d "$scan" ]; then
   # seen before it: `-delete` empties parents as it descends, so the count
   # taken first is a guess and the difference is the measurement.
   pruned=0
-  if [ "$apply" = yes ] && [ "$scan" != "$base" ] && [ -d "$scan" ]; then
+  if [ "$apply" = yes ] && [ "$scan" != "${base%/}" ] && [ -d "$scan" ]; then
     before=$(/usr/bin/find "$scan" -type d 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
     /usr/bin/find "$scan" -type d -empty -delete 2>/dev/null
     after=$(/usr/bin/find "$scan" -type d 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
@@ -258,7 +261,10 @@ pub fn remote_script(
 ) -> String {
     REMOTE_SCRIPT_TEMPLATE
         .replace("@ROOT@", &shlex_quote(store_root))
-        .replace("@KEYROOT@", &format!("{ROOT_PREFIX}{namespace}"))
+        // Trailing slash: the key prefixes an operator names are relative to
+        // the namespace root, and without it `ecosystem/probierz` and the
+        // first prefix would join into one word.
+        .replace("@KEYROOT@", &format!("{ROOT_PREFIX}{namespace}/"))
         .replace("@FROM@", from)
         .replace("@TO@", to)
         .replace("@APPLY@", if apply { "yes" } else { "no" })
