@@ -2543,29 +2543,46 @@ const UNOWNED_SCRIPT: &str = "set -u
 os=$(/usr/bin/uname -s)
 uid=$(/usr/bin/id -u)
 set -- @ROOTS@
+owned=''
+owner_of=''
 if [ \"$os\" = \"Darwin\" ]; then
-  owned=''
   for launchd_domain in \"gui/$uid\" \"user/$uid\" system; do
     owned=\"$owned $(/bin/launchctl print \"$launchd_domain\" 2>/dev/null | /usr/bin/awk '/services = \\{/ { inside = 1; next } inside && /^[[:space:]]*\\}/ { inside = 0 } inside && $1 ~ /^[0-9]+$/ { print $1 }' | /usr/bin/tr '\\n' ' ')\"
   done
+  # `owner_of` is set to the pid in the chain that matched, so a verdict of
+  # \"owned\" can be checked instead of taken. The whole reason this command
+  # answered an empty table for as long as it existed is that nothing printed
+  # WHY a candidate was judged owned: launchd claims about a thousand pids on a
+  # mac, and against a set that size the test is nearly always true.
   owns() {
     walk=\"$1\"
+    owner_of=''
     while [ -n \"$walk\" ] && [ \"$walk\" != 0 ] && [ \"$walk\" != 1 ]; do
-      case \" $owned \" in *\" $walk \"*) return 0 ;; esac
+      case \" $owned \" in *\" $walk \"*) owner_of=\"$walk\"; return 0 ;; esac
       walk=$(/bin/ps -p \"$walk\" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
     done
     return 1
   }
 else
+  # systemd hosts never build `owned`; the cgroup the kernel put the process in
+  # is the whole answer. Counting `owned` unconditionally crashed every Linux
+  # host with `owned: unbound variable` under `set -u`.
   owns() {
     cgroup=$(/bin/cat \"/proc/$1/cgroup\" 2>/dev/null | /usr/bin/sed -n 's/.*\\///p')
-    case \"$cgroup\" in *.service) return 0 ;; esac
+    owner_of=''
+    case \"$cgroup\" in *.service) owner_of=\"$cgroup\"; return 0 ;; esac
     return 1
   }
 fi
+owned_count=0
+for _pid in $owned; do owned_count=$((owned_count + 1)); done
+printf 'STADO_UNOWNED_OWNED\\t%s\\n' \"$owned_count\"
 seen=''
 for root in \"$@\"; do
+  matched=0
+  under_count=0
   for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
+    matched=$((matched + 1))
     case \" $seen \" in *\" $pid \"*) continue ;; esac
     command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
     if [ -z \"$command\" ]; then continue; fi
@@ -2580,11 +2597,25 @@ for root in \"$@\"; do
     case \"$exe\" in \"$root\"*) under=yes ;; esac
     case \"$entry\" in \"$root\"*) under=yes ;; esac
     if [ \"$under\" = no ]; then continue; fi
-    if owns \"$pid\"; then continue; fi
+    under_count=$((under_count + 1))
+    if owns \"$pid\"; then
+      # The verdict and its evidence, for every candidate. An operator reading
+      # \"owned\" needs the pid in the ancestry that launchd actually claimed:
+      # a chain that ends on a thousand-entry set is how 26 stado processes on
+      # one host were all judged owned and none reported.
+      printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'owned' \"$owner_of\"
+      continue
+    fi
+    printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'unowned' '-'
     seen=\"$seen $pid\"
     started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
     printf 'STADO_UNOWNED\\t%s\\t%s\\t%s\\n' \"$pid\" \"$started\" \"$command\"
   done
+  # What this root actually searched, printed whether or not it found anything.
+  # Without it an empty report is indistinguishable from a root that expanded
+  # to a path no process could ever run out of, and the empty table was read as
+  # \"no unowned processes\" for as long as this command has existed.
+  printf 'STADO_UNOWNED_ROOT\\t%s\\t%s\\t%s\\n' \"$root\" \"$matched\" \"$under_count\"
 done
 ";
 
@@ -4250,14 +4281,57 @@ impl UnownedProcess {
     }
 }
 
-/// Every product process on one host that no launchd job or systemd unit owns.
+/// What one host's unowned-process scan searched, beside what it found.
+///
+/// The result alone could not be read. An empty `processes` meant either that
+/// the host runs nothing unowned or that every root expanded to a path no
+/// process could run out of, and those need opposite responses. This carries
+/// the roots as the host expanded them, how many pids each one matched, how
+/// many of those actually execute out of it, and how many pids launchd claimed
+/// — so an empty answer states why it is empty.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnownedScan {
+    pub processes: Vec<UnownedProcess>,
+    /// `(root, pids matched by pgrep, pids executing out of the root)`.
+    pub roots: Vec<(String, usize, usize)>,
+    /// Pids launchd reported as owned across every printable domain.
+    pub owned_pids: usize,
+    /// `(pid, "owned"|"unowned", the ancestor pid launchd claimed)` for every
+    /// candidate that executes out of a managed root. The verdict without its
+    /// evidence is what made an empty table unreadable.
+    pub judged: Vec<(String, String, String)>,
+}
+
+impl UnownedScan {
+    /// One line an operator can read beside an empty table.
+    pub fn account(&self, host: &str) -> String {
+        let roots = self
+            .roots
+            .iter()
+            .map(|(root, matched, under)| format!("{root} matched {matched}, under {under}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "{host}: launchd claimed {} pid(s); {}",
+            self.owned_pids,
+            if roots.is_empty() {
+                "no root was searched".to_string()
+            } else {
+                roots
+            }
+        )
+    }
+}
+
+/// Every product process on one host that no launchd job or systemd unit owns,
+/// with an account of what was searched to find them.
 ///
 /// Read-only: it starts nothing, stops nothing and signals nothing, so it is
 /// safe to run against a live production host.
 pub async fn unowned_processes(
     target: &ComputeTarget,
     runner: &Runner,
-) -> Result<Vec<UnownedProcess>, DeployError> {
+) -> Result<UnownedScan, DeployError> {
     let mut roots = Vec::new();
     for root in managed_roots()? {
         // The roots keep `$HOME` unexpanded on this side and expanded on
@@ -4273,7 +4347,29 @@ pub async fn unowned_processes(
             "the unowned-process scan did not complete",
         )));
     }
-    Ok(parse_unowned(&target.name, &output.stdout))
+    let mut scan = UnownedScan {
+        processes: parse_unowned(&target.name, &output.stdout),
+        ..Default::default()
+    };
+    for line in output.stdout.lines() {
+        match host_channel::marker_fields(line).as_slice() {
+            ["STADO_UNOWNED_OWNED", count] => {
+                scan.owned_pids = count.trim().parse().unwrap_or_default();
+            }
+            ["STADO_UNOWNED_ROOT", root, matched, under] => scan.roots.push((
+                (*root).trim().to_string(),
+                matched.trim().parse().unwrap_or_default(),
+                under.trim().parse().unwrap_or_default(),
+            )),
+            ["STADO_UNOWNED_JUDGED", pid, verdict, owner] => scan.judged.push((
+                (*pid).trim().to_string(),
+                (*verdict).trim().to_string(),
+                (*owner).trim().to_string(),
+            )),
+            _ => {}
+        }
+    }
+    Ok(scan)
 }
 
 /// The `STADO_UNOWNED` marker lines, in the order the host printed them.
@@ -4307,6 +4403,13 @@ pub struct UndeclaredUnit {
     pub pid: String,
     /// The label's last exit status as launchd reports it.
     pub status: String,
+    /// The unit file the host found for the label, or empty when it found none.
+    pub path: String,
+    /// The argument vector that unit file declares, flattened to one line. A
+    /// label alone is not actionable: three naming conventions produce three
+    /// unrelated-looking labels for one job, and only the program says they are
+    /// the same job.
+    pub program: String,
 }
 
 impl UndeclaredUnit {
@@ -4316,28 +4419,319 @@ impl UndeclaredUnit {
             "label": self.label,
             "pid": self.pid,
             "status": self.status,
+            "path": self.path,
+            "program": self.program,
         })
     }
 }
 
-/// Read-only: `launchctl list`, and nothing else. It starts nothing, stops
-/// nothing, signals nothing and needs no sudo.
+/// Read-only: `launchctl list`, the unit files it names, and nothing else. It
+/// starts nothing, stops nothing, signals nothing and needs no sudo.
 const LOADED_LABELS_SCRIPT: &str = "set -u
 if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
   printf 'STADO_LOADED_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
   exit 0
 fi
-/bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 != \"Label\" { printf \"STADO_LOADED\\t%s\\t%s\\t%s\\n\", $1, $2, $3 }'
+# A label alone cannot be acted on: the fleet has three naming conventions for
+# the same job, so `com.wisent.compute.agent.<host>` and
+# `com.wisent.compute.service.stado-queue-agent` read as unrelated entries
+# until you know both run `stado agent`. The unit file says what it runs, and
+# it is world-readable in both domains, so the program travels with the label.
+# The union of what launchd lists and what the unit directories hold.
+# `launchctl list` shows only the domain this login can print, so a system
+# LaunchDaemon can be loaded and running and still be absent from it -- which is
+# how a stale queue agent stayed unnameable while three separate reports called
+# the host healthy. A label whose file exists is a label that can be acted on,
+# listed or not.
+labels=$(
+  {
+    /bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 ~ /^com\\.wisent\\./ { print $3 }'
+    for directory in /Library/LaunchDaemons \"$HOME/Library/LaunchAgents\" /Library/LaunchAgents; do
+      for file in \"$directory\"/com.wisent.*.plist; do
+        [ -f \"$file\" ] || continue
+        base=${file##*/}
+        printf '%s\\n' \"${base%.plist}\"
+      done
+    done
+  } | /usr/bin/sort -u
+)
+for label in $labels; do
+  pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $1 }')
+  status=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $2 }')
+  plist=''
+  for candidate in \"/Library/LaunchDaemons/$label.plist\" \"$HOME/Library/LaunchAgents/$label.plist\" \"/Library/LaunchAgents/$label.plist\"; do
+    if [ -f \"$candidate\" ]; then plist=\"$candidate\"; break; fi
+  done
+  program=''
+  if [ -n \"$plist\" ]; then
+    program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \
+      | /usr/bin/tr -d '[]\"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\\t\\r\\n' ' ')
+  fi
+  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\"
+done
 ";
 
+/// End every product process on TARGET that no DECLARED unit owns.
+///
+/// `service stop` ends a declared unit and the processes launchd disowned from
+/// it. Nothing ended a product process whose label the registry never declared,
+/// or whose label has since been removed while the process kept running — and
+/// on charless-mac-mini that is how a `stado agent` from 2026-08-27 went on
+/// publishing this host's capacity through three release deliveries, two
+/// restarts, a `service stop` and a `service remove`, refusing 55 pinned jobs
+/// the whole time.
+///
+/// Ownership here is the registry's, not launchd's. `unowned_processes` asks
+/// whether ANY launchd job claims the process, and on a mac that set is about a
+/// thousand pids, so a duplicate under an undeclared label reads as owned and
+/// is left alone. This asks the question that matters: is this process the one
+/// the document says should be running.
+///
+/// `SIGTERM` only, and only to processes executing out of a managed root whose
+/// pid is not held by a declared label and is not a descendant of one. Nothing
+/// is signalled on a `--dry-run`, which is the default at the CLI.
+const REAP_SCRIPT: &str = "set -u
+if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
+  printf 'STADO_REAP_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
+  exit 0
+fi
+apply=@APPLY@
+match=@MATCH@
+set -- @ROOTS@
+# The pids the DECLARED labels hold, and their descendants. Everything else
+# under a managed root is a process the document does not account for.
+keep=''
+for label in @LABELS@; do
+  pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l && $1 ~ /^[0-9]+$/ { print $1 }')
+  if [ -n \"$pid\" ]; then keep=\"$keep $pid\"; fi
+done
+kept() {
+  walk=\"$1\"
+  while [ -n \"$walk\" ] && [ \"$walk\" != 0 ] && [ \"$walk\" != 1 ]; do
+    case \" $keep \" in *\" $walk \"*) return 0 ;; esac
+    walk=$(/bin/ps -p \"$walk\" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+  done
+  return 1
+}
+printf 'STADO_REAP_KEEP\\t%s\\n' \"$(printf '%s' \"$keep\" | /usr/bin/tr -s ' ')\"
+self=$$
+seen=''
+for root in \"$@\"; do
+  for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
+    case \" $seen \" in *\" $pid \"*) continue ;; esac
+    if [ \"$pid\" = \"$self\" ]; then continue; fi
+    command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    if [ -z \"$command\" ]; then continue; fi
+    exe=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+    entry=$(printf '%s' \"$command\" | /usr/bin/awk '{ print $2 }')
+    under=no
+    case \"$exe\" in \"$root\"*) under=yes ;; esac
+    case \"$entry\" in \"$root\"*) under=yes ;; esac
+    if [ \"$under\" = no ]; then continue; fi
+    # The operator names the exact program being de-duplicated. Without this
+    # the keep-set decides the blast radius, and launchd holds a pid for only
+    # some declared labels: a fleet-wide dry run on charless-mac-mini proposed
+    # ending `skarbiec serve`, `stado dashboard`, `stado resolver serve` and the
+    # Weles API server, every one of them a live service, because their pids are
+    # not the ones their labels hold. One named program cannot do that.
+    case \"$command\" in *\"$match\"*) ;; *) continue ;; esac
+    if kept \"$pid\"; then continue; fi
+    seen=\"$seen $pid\"
+    started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    if [ \"$apply\" != yes ]; then
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'would_end' \"$started\" \"$command\"
+      continue
+    fi
+    /bin/kill \"$pid\" 2>/dev/null || true
+    /bin/sleep 2
+    if /bin/ps -p \"$pid\" -o pid= >/dev/null 2>&1; then
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'still_running' \"$started\" \"$command\"
+    else
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'ended' \"$started\" \"$command\"
+    fi
+  done
+done
+";
+
+/// A command substring that can ride inside double quotes in the fixed remote
+/// program.
+///
+/// [`quote_unit_path`] refuses a space, which is right for a unit path and
+/// wrong here: the whole point of the filter is to name
+/// `stado agent --target <host>` rather than a bare binary. The charset is
+/// widened by exactly a space and nothing else, so every character a shell
+/// would act on stays refused.
+fn quote_command_match(value: &str) -> Result<String, DeployError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(DeployError("the command substring is empty".to_string()));
+    }
+    let allowed = |c: char| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, ' ' | '-' | '_' | '.' | '/' | '=' | ':' | '+' | ',')
+    };
+    if let Some(bad) = trimmed.chars().find(|c| !allowed(*c)) {
+        return Err(DeployError(format!(
+            "command substring {trimmed:?} contains {bad:?}, which cannot ride the fixed remote \
+             program"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Boot one loaded launchd label out of the system domain.
+///
+/// The last gap in the world-to-declaration direction. `service list
+/// --undeclared` can now name a label the registry never declared, and
+/// `host remove-file` can now delete its unit file — but nothing could take the
+/// JOB out of launchd, and `service stop` refuses a label with no declaration
+/// to resolve. So `com.wisent.compute.service.stado-agent-mini` sat loaded with
+/// its file already deleted, running nothing, and `ensure` refused to install
+/// over it: "is loaded and runs [], not [...]; retire it first" — with nothing
+/// able to retire it.
+///
+/// Same `sudo -n` grant `ENSURE_BODY` uses to install a system daemon. A label
+/// launchd does not hold is reported `absent`, not an error: booting out
+/// something already gone is the state this command exists to reach.
+const BOOTOUT_SCRIPT: &str = "set -u
+label=@LABEL@
+report() { printf 'STADO_BOOTOUT\\t%s\\t%s\\n' \"$1\" \"$2\"; }
+if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
+  report refused \"not a launchd host\"
+  exit 0
+fi
+if ! /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+  report absent \"launchd holds no system/$label\"
+  exit 0
+fi
+if /usr/bin/sudo -n /bin/launchctl bootout \"system/$label\" 2>/dev/null; then
+  if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+    report failed \"bootout returned success and the job is still loaded\"
+  else
+    report booted_out \"\"
+  fi
+else
+  if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+    report refused \"sudo -n launchctl bootout system/$label was refused\"
+  else
+    report booted_out \"\"
+  fi
+fi
+";
+
+/// [`BOOTOUT_SCRIPT`] for one label. Returns `(state, detail)`.
+pub async fn bootout_label(
+    target: &ComputeTarget,
+    label: &str,
+    runner: &Runner,
+) -> Result<(String, String), DeployError> {
+    validate_unit_id(label)?;
+    let script = BOOTOUT_SCRIPT.replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?));
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "the bootout did not complete",
+        )));
+    }
+    output
+        .stdout
+        .lines()
+        .find_map(|line| match host_channel::marker_fields(line).as_slice() {
+            ["STADO_BOOTOUT", state, detail] => {
+                Some(((*state).trim().to_string(), (*detail).trim().to_string()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| DeployError(format!("{}: the bootout reported nothing", target.name)))
+}
+
+/// One process the reaper judged, and what it did about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReapedProcess {
+    pub host: String,
+    pub pid: String,
+    /// `would_end`, `ended`, or `still_running`.
+    pub outcome: String,
+    pub started_at: String,
+    pub command: String,
+}
+
+impl ReapedProcess {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "pid": self.pid,
+            "outcome": self.outcome,
+            "started_at": self.started_at,
+            "command": self.command,
+        })
+    }
+}
+
+/// [`REAP_SCRIPT`] against one host. `apply` false signals nothing.
+pub async fn reap_undeclared_processes(
+    target: &ComputeTarget,
+    command_match: &str,
+    apply: bool,
+    runner: &Runner,
+) -> Result<(Vec<ReapedProcess>, String), DeployError> {
+    if command_match.trim().is_empty() {
+        return Err(DeployError(
+            "a command substring is required: the reaper de-duplicates one named program, never \
+             everything under a managed root"
+                .to_string(),
+        ));
+    }
+    let mut roots = Vec::new();
+    for root in managed_roots()? {
+        roots.push(format!("\"{}\"", quote_unit_path(&root)?));
+    }
+    let mut labels = Vec::new();
+    for service in declared_services(target) {
+        labels.push(format!("\"{}\"", quote_unit_path(service.unit_id())?));
+    }
+    let script = REAP_SCRIPT
+        .replace("@ROOTS@", &roots.join(" "))
+        .replace("@LABELS@", &labels.join(" "))
+        .replace("@APPLY@", if apply { "yes" } else { "no" })
+        .replace(
+            "@MATCH@",
+            &format!("\"{}\"", quote_command_match(command_match)?),
+        );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "the reap did not complete",
+        )));
+    }
+    let mut kept = String::new();
+    let mut reaped = Vec::new();
+    for line in output.stdout.lines() {
+        match host_channel::marker_fields(line).as_slice() {
+            ["STADO_REAP_KEEP", pids] => kept = (*pids).trim().to_string(),
+            ["STADO_REAP", pid, outcome, started, command] => reaped.push(ReapedProcess {
+                host: target.name.clone(),
+                pid: (*pid).trim().to_string(),
+                outcome: (*outcome).trim().to_string(),
+                started_at: (*started).trim().to_string(),
+                command: (*command).trim().to_string(),
+            }),
+            _ => {}
+        }
+    }
+    Ok((reaped, kept))
+}
+
 /// Every launchd job loaded on TARGET under [`FLEET_LABEL_PREFIX`] that the
-/// registry does not declare.
+/// registry does not declare, with the unit file and program each one runs.
 ///
 /// This is the direction nothing in the product looked. `service list` walks
 /// the declaration and asks the host about each entry; `list --unowned` walks
-/// the processes and asks launchd who owns them. A unit launchd has loaded and
-/// the document has never heard of is in neither set, and so it was invisible
-/// to both.
+/// the processes and asks launchd who owns them — and on the always-on mac it
+/// correctly answered that nothing is unowned, because every duplicate IS
+/// owned, by a label the registry never heard of.
 ///
 /// charless-mac-mini was running three queue agents at once under that blind
 /// spot: `com.wisent.compute.service.stado-agent-mini`, the only one the
@@ -4366,7 +4760,7 @@ pub async fn undeclared_units(
         .stdout
         .lines()
         .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_LOADED", pid, status, label] => {
+            ["STADO_LOADED", pid, status, label, path, program] => {
                 let label = (*label).trim().to_string();
                 (label.starts_with(FLEET_LABEL_PREFIX) && !declared.contains(&label)).then(|| {
                     UndeclaredUnit {
@@ -4374,6 +4768,8 @@ pub async fn undeclared_units(
                         label,
                         pid: (*pid).trim().trim_matches('-').to_string(),
                         status: (*status).trim().to_string(),
+                        path: (*path).trim().trim_matches('-').to_string(),
+                        program: (*program).trim().to_string(),
                     }
                 })
             }
