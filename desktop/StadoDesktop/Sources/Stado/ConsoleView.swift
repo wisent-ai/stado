@@ -28,6 +28,7 @@ struct ConsoleView: View {
     @StateObject private var groupStore = FleetGroupStore()
     @StateObject private var productsStore = ProductsStore()
     @StateObject private var databasesStore = DatabasesStore()
+    @StateObject private var cloudflareStore = CloudflareRoutesStore()
 
     @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
@@ -324,7 +325,7 @@ struct ConsoleView: View {
             // platform rows answer which half broke.
             let failed = buildsStore.recipes.count(where: \.hasFailedRun)
             return failed > 0 ? (failed, .danger) : nil
-        case .registry, .deployments, .fleets, .products, .databases:
+        case .registry, .deployments, .fleets, .products, .databases, .cloudflare:
             return nil
         }
     }
@@ -391,6 +392,12 @@ struct ConsoleView: View {
                     scope: scopeName,
                     presentSetup: { presentDeploymentSetup() },
                     presentAccess: { presentDeploymentAccess() }
+                )
+            case .cloudflare:
+                CloudflareRoutesView(
+                    store: cloudflareStore,
+                    hosts: StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot),
+                    scope: scopeName
                 )
             }
         } else {

@@ -420,14 +420,12 @@ exists so that adding a machine never depends on them. See
 
 ### Desktop operator screens
 
-Stado Desktop is optional — the CLI stays canonical — but three of its screens
-are the fastest way to read a stalled fleet, because each one runs the same
-`stado` commands an operator would type and puts their answers side by side.
-Every read below is read-only; the two writes these screens can make
-(`host reclaim --apply`, `release quarantine clear`) print the exact command
-and refuse without a preview or a typed reason. Build and install the app with
-`desktop/StadoDesktop/scripts/build-app.sh`. The screenshots are live reads of
-the Wisent fleet.
+Stado Desktop is optional — the CLI stays canonical. Its screens run the same
+`stado` commands an operator would type and render the command's JSON answer;
+provider APIs and credential values do not get a second implementation in the
+app. Build and install it with
+`desktop/StadoDesktop/scripts/build-app.sh`. The screenshots below are live
+reads of the Wisent fleet.
 
 ![Stado Desktop Releases screen: brama on control-host blocked, its blockers, the candidate's stderr tail, and the quarantined digest the registry desires](desktop/StadoDesktop/docs/screenshots/releases.png)
 
@@ -452,6 +450,14 @@ starts from the inspector and previews before it deletes
 state, the program it declares, the binary the process is really executing and
 whether the two agree (`stado service converge`), plus the product processes no
 unit owns at all (`stado service list --unowned`).*
+
+*Cloudflare routes — publish one hostname through a declared Cloudflare Tunnel
+connector without leaving Stado Desktop. The form reads nonsecret item ids with
+`stado credentials ls --json`, exposes every option of
+`stado cloudflare route-tunnel`, and quotes the exact invocation before it can
+run. Its confirmation states the write order — tunnel ingress, owner-only
+connector token, connector restart, then proxied DNS — and the completed screen
+shows the CLI's nonsecret receipt.*
 
 ## Operational model
 

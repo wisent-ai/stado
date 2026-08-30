@@ -27,6 +27,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case builds
     case releases
     case deployments
+    case cloudflare
 
     var id: String { rawValue }
 
@@ -44,6 +45,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .builds: "Builds"
         case .releases: "Releases"
         case .deployments: "Deployments"
+        case .cloudflare: "Cloudflare routes"
         }
     }
 
@@ -61,6 +63,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .builds: "hammer"
         case .releases: "shippingbox"
         case .deployments: "point.3.connected.trianglepath.dotted"
+        case .cloudflare: "network"
         }
     }
 
@@ -78,6 +81,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .builds: "Which repositories the control plane builds on new commits, and what the last build produced"
         case .releases: "What each product should run, what its host runs, and what is holding the rollout"
         case .deployments: "Which Stado backend this console reads, and who else may read it"
+        case .cloudflare: "Publish a hostname through a declared Cloudflare Tunnel connector"
         }
     }
 
@@ -85,7 +89,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         switch self {
         case .posture, .queue, .products: .work
         case .hosts, .fleets, .disk, .services: .fleet
-        case .databases, .registry, .builds, .releases, .deployments: .system
+        case .databases, .registry, .builds, .releases, .cloudflare, .deployments: .system
         }
     }
 
