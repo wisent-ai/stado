@@ -1282,6 +1282,49 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Move objects from one key prefix to another inside TARGET's store,
+    /// on the host that holds it.
+    ///
+    /// The object API has GET, PUT, DELETE, list and stat and no move, so
+    /// re-addressing an object used to mean pulling its body to the control
+    /// plane and pushing it back. On 2026-08-30 doing that with 134 MiB GGUF
+    /// parts took the always-on mac's release ingress down for ten minutes.
+    /// Inside one store the bytes never move at all: the destination is
+    /// hard-linked, hashed, compared against the source, and only then is the
+    /// source unlinked.
+    ///
+    /// Previews by default. An existing destination is never overwritten.
+    #[command(name = "object-relocate")]
+    ObjectRelocate {
+        target: String,
+        /// Store namespace holding both addresses, e.g. probierz.
+        #[arg(long)]
+        namespace: String,
+        /// The mis-addressed key prefix, e.g. ecosystem/probierz/.
+        #[arg(long)]
+        from_prefix: String,
+        /// The key prefix it belongs under. Empty means the namespace root.
+        #[arg(long, default_value = "")]
+        to_prefix: String,
+        /// Store root on the host. Defaults to the object API's own backing
+        /// directory, $HOME/.stado/local-storage.
+        #[arg(long)]
+        store_root: Option<String>,
+        /// Report what a pass would move and change nothing. The default, so
+        /// it never has to be remembered.
+        #[arg(long)]
+        dry_run: bool,
+        /// Relocate what the pass names.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Decide at most this many objects in one pass. 0 is every one of
+        /// them; the command is resumable either way.
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Preview what the registry cleanup would delete on TARGET.
     Cleanup {
         target: String,
@@ -2200,6 +2243,29 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
             HostCommands::Ping { target, json } => host::ping(&target, json).await,
             HostCommands::Disk { target, json } => host::disk(&target, json).await,
+            // Same default as `host reclaim`: `--dry-run` is what happens
+            // when nothing is asked for, and clap refuses it beside `--apply`.
+            HostCommands::ObjectRelocate {
+                target,
+                namespace,
+                from_prefix,
+                to_prefix,
+                store_root,
+                dry_run: _,
+                apply,
+                limit,
+                json,
+            } => {
+                let plan = crate::deploy::host_object_relocate::RelocatePlan {
+                    namespace,
+                    from: from_prefix,
+                    to: to_prefix,
+                    store_root,
+                    apply,
+                    limit,
+                };
+                host::object_relocate(&target, &plan, json).await
+            }
             HostCommands::Cleanup {
                 target,
                 dry_run,

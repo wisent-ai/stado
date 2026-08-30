@@ -34,6 +34,13 @@
 //!   It needs `$HOME`, which is exactly why it is NOT an `host_exec`
 //!   allowlist entry: that table's contract is a fixed argv of absolute
 //!   paths with no operator-supplied path in it.
+//! - [`host_object_relocate`] — `stado host object-relocate`: re-address
+//!   objects from one key prefix to another INSIDE the store, on the host
+//!   that holds it. The object API has no move and no server-side copy, so
+//!   the alternative was pulling 134 MiB bodies through the control plane's
+//!   loopback writer, which is what took that host's release ingress down.
+//!   It previews by default and `--apply` verifies every destination before
+//!   it unlinks a source.
 //!
 //! [`host_release`] is the one WRITE command in that group, and the only
 //! thing in this crate that owns "get this build onto that host" — the gap
@@ -87,6 +94,7 @@ pub mod host_gates;
 pub mod host_gui_automation;
 pub mod host_inventory;
 pub mod host_link;
+pub mod host_object_relocate;
 pub mod host_ping;
 pub mod host_precheck_runner;
 pub mod host_reboot;

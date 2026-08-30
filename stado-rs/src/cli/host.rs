@@ -1129,6 +1129,113 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
     report_outcome(&report, expected)
 }
 
+/// `stado host object-relocate TARGET --namespace NS --from-prefix P
+/// [--to-prefix Q] [--apply]` — re-address objects inside the store, on the
+/// host that holds it.
+///
+/// The refusals are printed last and printed always, because they are the
+/// only lines an operator has to act on: an object whose destination exists
+/// with different bytes is still at its wrong address and still has a second
+/// copy, and a run that reports 88 moves and hides one of those reads as a
+/// completed repair.
+pub async fn object_relocate(
+    target: &str,
+    plan: &crate::deploy::host_object_relocate::RelocatePlan,
+    json: bool,
+) -> Result<(), CmdError> {
+    let apply = plan.apply;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_object_relocate::relocate_host(target, plan, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let expected = crate::deploy::host_object_relocate::OK_STATUS;
+    if json {
+        print_json(&report);
+        return report_outcome(&report, expected);
+    }
+    let store = report.get("store");
+    let named = |key: &str| cell(store.and_then(|value| value.get(key)));
+    if let Some(Value::String(root)) = store.and_then(|value| value.get("missing_root")) {
+        println!("no store at {root} on this host — nothing was read");
+        return report_outcome(&report, expected);
+    }
+    if let Some(Value::String(os)) = store.and_then(|value| value.get("no_hasher")) {
+        println!(
+            "no sha256 program on this {os} host, so no body could be verified and \
+             none was touched"
+        );
+        return report_outcome(&report, expected);
+    }
+    println!(
+        "store {}\n  from {}\n    to {}",
+        named("root"),
+        named("source_prefix"),
+        named("destination_prefix"),
+    );
+    let totals = report.get("totals");
+    let counted = |key: &str| {
+        totals
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+    };
+    let objects: Vec<&Value> = report
+        .get("objects")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default();
+    let field = |item: &Value, key: &str| cell(item.get(key));
+    super::table::print(
+        &["OUTCOME", "BYTES", "SOURCE KEY", "DESTINATION KEY"],
+        &objects
+            .iter()
+            .map(|item| {
+                vec![
+                    field(item, "outcome"),
+                    field(item, "bytes"),
+                    field(item, "source_key"),
+                    field(item, "destination_key"),
+                ]
+            })
+            .collect::<Vec<_>>(),
+    );
+    println!(
+        "\n{} scanned, {} decided, {} relocated ({:.2} GiB), {} refused, {} empty \
+         directories pruned",
+        counted("scanned"),
+        counted("decided"),
+        counted("moved"),
+        counted("moved_bytes") as f64 / 1024.0_f64.powi(3),
+        counted("refused"),
+        counted("pruned_directories"),
+    );
+    if !apply {
+        println!("nothing was changed: pass --apply to relocate what is listed above");
+    }
+    // A pass the host cut short states so rather than letting its totals read
+    // as the whole tree.
+    if totals.and_then(|value| value.get("complete")) != Some(&Value::Bool(true)) {
+        println!(
+            "the host's closing count never arrived, so these totals are a lower bound; \
+             run the command again"
+        );
+    }
+    let remaining = counted("remaining");
+    if remaining > 0 {
+        println!("{remaining} left under the source prefix; run the command again to continue");
+    }
+    for item in &objects {
+        let outcome = item.get("outcome").and_then(Value::as_str).unwrap_or("");
+        if crate::deploy::host_object_relocate::is_refusal(outcome) {
+            println!(
+                "  {outcome}: {} still holds its own bytes and was left where it is",
+                field(item, "source_key")
+            );
+        }
+    }
+    report_outcome(&report, expected)
+}
+
 /// `stado host cleanup TARGET --dry-run [--json]` — preview what the
 /// registry cleanup would delete (`docs/missing-commands.md` item five).
 ///
