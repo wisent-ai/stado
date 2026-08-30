@@ -946,6 +946,48 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     let mut enqueue_failure = None;
     for p in &platforms {
+        let has_uncommitted_record = run
+            .platforms
+            .get(p)
+            .is_some_and(|platform| platform.state != PlatformRunState::Published);
+        if has_uncommitted_record {
+            let base = release_control::release_base(&m.product, &args.version, p)
+                .map_err(CmdError::click)?;
+            let manifest_uri =
+                format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
+            // release.json is the coordinate's commit marker. A process may
+            // publish it and lose the next status write; rebuilding then creates
+            // a different qualification timestamp and collides with the
+            // immutable coordinate. Recover only after the complete signed
+            // coordinate verifies and names this exact source revision.
+            if super::storage::release_object_present(&manifest_uri).await? {
+                let artifact = super::release_cmd::verified_artifact_for_submit(
+                    &m.product,
+                    &args.version,
+                    p,
+                )
+                .await?;
+                if artifact.source_revision != commit {
+                    return Err(CmdError::click(format!(
+                        "published release {p} names source revision {}, expected {commit}",
+                        artifact.source_revision
+                    )));
+                }
+                {
+                    let platform = run.platforms.get_mut(p).expect("checked above");
+                    platform.state = PlatformRunState::Published;
+                    platform.artifact_sha256 = Some(artifact.artifact_sha256);
+                    platform.release_manifest_sha256 = Some(artifact.manifest_sha256);
+                    platform.qualification_uri = Some(format!(
+                        "{base}/{}",
+                        release_control::RELEASE_QUALIFICATION_NAME
+                    ));
+                    platform.failure = None;
+                }
+                save(&mut run).await?;
+                continue;
+            }
+        }
         if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
             let r = match enqueue(
                 &id,
