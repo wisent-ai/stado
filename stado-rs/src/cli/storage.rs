@@ -1160,6 +1160,8 @@ fn max_object_api_download_body() -> usize {
     crate::object_store::max_object_bytes()
 }
 
+const OBJECT_API_CHUNK_BYTES: usize = 3 * 1024 * 1024;
+
 struct RemoteObjectApi {
     http: reqwest::Client,
     base_url: url::Url,
@@ -1175,6 +1177,30 @@ struct RemotePutResponse {
     state: String,
     uri: String,
     content_type: String,
+}
+
+#[derive(serde::Serialize)]
+struct RemoteComposeChunk {
+    uri: String,
+    size: usize,
+    sha256: String,
+}
+
+#[derive(serde::Serialize)]
+struct RemoteComposeRequest<'a> {
+    uri: &'a str,
+    content_type: &'a str,
+    if_absent: bool,
+    metadata: &'a BTreeMap<String, String>,
+    upload_id: &'a str,
+    size: usize,
+    chunks: &'a [RemoteComposeChunk],
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteComposeResponse {
+    status: u16,
+    payload: Value,
 }
 
 #[derive(serde::Deserialize)]
@@ -1197,6 +1223,66 @@ struct RemoteObjectListItem {
     updated_at: Option<String>,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
+}
+
+fn partial_content_bounds(
+    response: &reqwest::Response,
+    expected_start: usize,
+    operation: &str,
+) -> Result<(usize, usize), CmdError> {
+    let content_range = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Stado object API {operation} partial response carries no Content-Range"
+            ))
+        })?;
+    let (range, total) = content_range
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+            ))
+        })?;
+    let (start, end) = range.split_once('-').ok_or_else(|| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let start = start.parse::<usize>().map_err(|_| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let end = end.parse::<usize>().map_err(|_| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let total = total.parse::<usize>().map_err(|_| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let end_exclusive = end.checked_add(1).ok_or_else(|| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    if start != expected_start
+        || end < start
+        || end_exclusive > total
+        || end_exclusive.saturating_sub(start) > OBJECT_API_CHUNK_BYTES
+    {
+        return Err(CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?} \
+             for byte offset {expected_start}"
+        )));
+    }
+    Ok((end_exclusive, total))
 }
 
 impl RemoteObjectApi {
@@ -1397,6 +1483,114 @@ impl RemoteObjectApi {
         Ok(Some(token))
     }
 
+    async fn put_chunked(
+        &self,
+        uri: &str,
+        content_type: &str,
+        if_absent: bool,
+        bytes: bytes::Bytes,
+        metadata: &BTreeMap<String, String>,
+        bearer: Option<&str>,
+    ) -> Result<RemotePutResponse, CmdError> {
+        let object = crate::object_store::ObjectRef::parse(uri)?;
+        let upload_id = hex::encode(Sha256::digest(&bytes));
+        let mut chunks =
+            Vec::with_capacity(bytes.len().div_ceil(OBJECT_API_CHUNK_BYTES));
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let end = offset
+                .saturating_add(OBJECT_API_CHUNK_BYTES)
+                .min(bytes.len());
+            let chunk = bytes.slice(offset..end);
+            let index = chunks.len();
+            let sha256 = hex::encode(Sha256::digest(&chunk));
+            let chunk_object = crate::object_store::ObjectRef::new(
+                object.namespace(),
+                &format!(
+                    "{}.__stado_upload/{upload_id}/{index:08}",
+                    object.key()
+                ),
+            )?;
+            let chunk_uri = chunk_object.to_string();
+            let endpoint = self.endpoint(
+                "/api/object",
+                &[("uri", chunk_uri.as_str()), ("if_absent", "true")],
+            )?;
+            let chunk_metadata = BTreeMap::from([
+                ("stado-upload-id".to_string(), upload_id.clone()),
+                ("stado-upload-index".to_string(), index.to_string()),
+                ("stado-upload-sha256".to_string(), sha256.clone()),
+                ("stado-upload-target".to_string(), uri.to_string()),
+            ]);
+            let response = self
+                .request_as(reqwest::Method::PUT, endpoint, bearer)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/octet-stream",
+                )
+                .header(
+                    "x-stado-object-metadata",
+                    serde_json::to_string(&chunk_metadata)?,
+                )
+                .body(chunk)
+                .send()
+                .await?;
+            if !matches!(
+                response.status(),
+                reqwest::StatusCode::CONFLICT | reqwest::StatusCode::PRECONDITION_FAILED
+            ) {
+                let stored: RemotePutResponse =
+                    self.response_json(response, "object chunk PUT").await?;
+                if stored.state != "stored"
+                    || stored.uri != chunk_uri
+                    || stored.content_type != "application/octet-stream"
+                {
+                    return Err(CmdError::click(
+                        "Stado object API returned an inconsistent object chunk PUT response",
+                    ));
+                }
+            }
+            chunks.push(RemoteComposeChunk {
+                uri: chunk_uri,
+                size: end - offset,
+                sha256,
+            });
+            offset = end;
+        }
+
+        let endpoint = self.endpoint("/api/object/compose", &[])?;
+        let request = RemoteComposeRequest {
+            uri,
+            content_type,
+            if_absent,
+            metadata,
+            upload_id: &upload_id,
+            size: bytes.len(),
+            chunks: &chunks,
+        };
+        let response = self
+            .request_as(reqwest::Method::POST, endpoint, bearer)
+            .json(&request)
+            .send()
+            .await?;
+        let response: RemoteComposeResponse = self
+            .response_json(response, "object chunk composition")
+            .await?;
+        let status = reqwest::StatusCode::from_u16(response.status)
+            .map_err(|_| CmdError::click("object composition returned an invalid HTTP status"))?;
+        if !status.is_success() {
+            return Err(CmdError::click(format!(
+                "Stado object API returned HTTP {status}: {}",
+                response.payload
+            )));
+        }
+        serde_json::from_value(response.payload).map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API returned an invalid object composition payload: {error}"
+            ))
+        })
+    }
+
     async fn put_with_metadata(
         &self,
         uri: &str,
@@ -1405,16 +1599,40 @@ impl RemoteObjectApi {
         bytes: Vec<u8>,
         metadata: &BTreeMap<String, String>,
     ) -> Result<(), CmdError> {
+        let create_only = if_absent;
         let if_absent = if if_absent { "true" } else { "false" };
-        let endpoint = self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
+        let endpoint =
+            self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
         let bearer = self.release_bearer(uri).await?;
+        let bytes = bytes::Bytes::from(bytes);
         let response = self
             .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .header("x-stado-object-metadata", serde_json::to_string(metadata)?)
-            .body(bytes)
+            .body(bytes.clone())
             .send()
             .await?;
+        if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            let payload = self
+                .put_chunked(
+                    uri,
+                    content_type,
+                    create_only,
+                    bytes,
+                    metadata,
+                    bearer.as_deref(),
+                )
+                .await?;
+            if payload.state != "stored"
+                || payload.uri != uri
+                || payload.content_type != content_type
+            {
+                return Err(CmdError::click(
+                    "Stado object API returned an inconsistent object composition response",
+                ));
+            }
+            return Ok(());
+        }
         // Name the object and the credential that was presented. The bare
         // `401 unauthorized or non-immutable release write` named neither, and
         // reading it cost a day: the same sentence covers a missing bearer, a
@@ -1455,6 +1673,103 @@ impl RemoteObjectApi {
         self.get_object_resumable(uri, true).await
     }
 
+    async fn get_object_in_ranges(
+        &self,
+        endpoint: url::Url,
+        bearer: Option<&str>,
+        optional: bool,
+    ) -> Result<Option<Vec<u8>>, CmdError> {
+        let limit = max_object_api_download_body();
+        let mut body = Vec::new();
+        let mut failures = 0usize;
+
+        'download: loop {
+            let start = body.len();
+            let end = start
+                .saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1))
+                .min(limit.saturating_sub(1));
+            let response = match self
+                .request_as(reqwest::Method::GET, endpoint.clone(), bearer)
+                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    if failures > 3 {
+                        return Err(CmdError::click(format!(
+                            "authenticated object GET exhausted its byte-range retries after \
+                             {start} bytes: {error}"
+                        )));
+                    }
+                    continue;
+                }
+            };
+            if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(self.response_error(response).await);
+            }
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(CmdError::click(format!(
+                    "Stado object API object GET refused the byte range beginning at {start}"
+                )));
+            }
+            let (end_exclusive, total) =
+                partial_content_bounds(&response, start, "object GET")?;
+            if total > limit {
+                return Err(CmdError::click(format!(
+                    "Stado object API object GET response exceeds the {limit}-byte limit"
+                )));
+            }
+            body.reserve(total.saturating_sub(body.capacity()));
+
+            let mut response = response;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if chunk.len() > end_exclusive.saturating_sub(body.len()) {
+                            return Err(CmdError::click(
+                                "Stado object API object GET sent bytes outside the requested \
+                                 range",
+                            ));
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    Ok(None) if body.len() != end_exclusive => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "authenticated object GET exhausted its byte-range retries after \
+                                 {} of {end_exclusive} bytes",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                    Ok(None) if body.len() == total => return Ok(Some(body)),
+                    Ok(None) => {
+                        failures = 0;
+                        continue 'download;
+                    }
+                    Err(error) => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "authenticated object GET exhausted its byte-range retries after \
+                                 {} bytes: {error}",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                }
+            }
+        }
+    }
+
     async fn get_object_resumable(
         &self,
         uri: &str,
@@ -1487,6 +1802,12 @@ impl RemoteObjectApi {
             };
             if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
                 return Ok(None);
+            }
+            if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE && body.is_empty() {
+                drop(response);
+                return self
+                    .get_object_in_ranges(endpoint, bearer.as_deref(), optional)
+                    .await;
             }
             if !response.status().is_success() {
                 return Err(self.response_error(response).await);
@@ -1646,6 +1967,27 @@ impl RemoteObjectApi {
             .body(bytes)
             .send()
             .await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let presented = crate::object_store::ObjectRef::parse(uri)
+                .ok()
+                .and_then(|object| {
+                    crate::object_store::release_policy_key(object.namespace(), object.key())
+                })
+                .and_then(|key| crate::config::release_publisher_for_key(&key))
+                .map(|publisher| format!("publisher item {}", publisher.item()))
+                .unwrap_or_else(|| {
+                    if bearer.is_some() {
+                        "a resolved release credential".to_string()
+                    } else {
+                        "the coordinator storage token".to_string()
+                    }
+                });
+            let refusal = self.response_error(response).await;
+            return Err(CmdError::click(format!(
+                "{refusal}; conditional PUT {uri} with if_version={expected_version:?} presented \
+                 {presented}"
+            )));
+        }
         let payload: Value = self
             .response_json(response, "conditional object PUT")
             .await?;
@@ -1657,6 +1999,116 @@ impl RemoteObjectApi {
             ));
         }
         Ok(())
+    }
+
+    async fn get_release_in_ranges(&self, origin: url::Url) -> Result<Vec<u8>, CmdError> {
+        let limit = max_object_api_download_body();
+        let mut body = Vec::new();
+        let mut failures = 0usize;
+
+        'download: loop {
+            let start = body.len();
+            let end = start
+                .saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1))
+                .min(limit.saturating_sub(1));
+            let mut endpoint = origin.clone();
+            let mut selected = None;
+            for hop in 0..=3 {
+                let request = if hop == 0 {
+                    self.request(reqwest::Method::GET, endpoint.clone())
+                } else {
+                    self.http.get(endpoint.clone())
+                }
+                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "public release GET exhausted its byte-range retries after \
+                                 {start} bytes: {error}"
+                            )));
+                        }
+                        continue 'download;
+                    }
+                };
+                if response.status().is_redirection() {
+                    let location = response
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
+                    endpoint = response.url().join(location).map_err(|error| {
+                        CmdError::click(format!("invalid release redirect: {error}"))
+                    })?;
+                    continue;
+                }
+                selected = Some(response);
+                break;
+            }
+            let Some(response) = selected else {
+                return Err(CmdError::click("too many release download redirects"));
+            };
+            if !response.status().is_success() {
+                return Err(self.response_error(response).await);
+            }
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(CmdError::click(format!(
+                    "Stado object API release GET refused the byte range beginning at {start}"
+                )));
+            }
+            let (end_exclusive, total) =
+                partial_content_bounds(&response, start, "release GET")?;
+            if total > limit {
+                return Err(CmdError::click(format!(
+                    "Stado object API release GET response exceeds the {limit}-byte limit"
+                )));
+            }
+            body.reserve(total.saturating_sub(body.capacity()));
+
+            let mut response = response;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if chunk.len() > end_exclusive.saturating_sub(body.len()) {
+                            return Err(CmdError::click(
+                                "Stado object API release GET sent bytes outside the requested \
+                                 range",
+                            ));
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    Ok(None) if body.len() != end_exclusive => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "public release GET exhausted its byte-range retries after {} of \
+                                 {end_exclusive} bytes",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                    Ok(None) if body.len() == total => return Ok(body),
+                    Ok(None) => {
+                        failures = 0;
+                        continue 'download;
+                    }
+                    Err(error) => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "public release GET exhausted its byte-range retries after {} \
+                                 bytes: {error}",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                }
+            }
+        }
     }
 
     async fn get_release(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
@@ -1688,6 +2140,12 @@ impl RemoteObjectApi {
                         CmdError::click(format!("invalid release redirect: {error}"))
                     })?;
                     continue;
+                }
+                if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE
+                    && body.is_empty()
+                {
+                    drop(response);
+                    return self.get_release_in_ranges(origin).await;
                 }
                 if !response.status().is_success() {
                     return Err(self.response_error(response).await);

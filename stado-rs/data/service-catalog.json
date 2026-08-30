@@ -47,7 +47,9 @@
         "WC_OBJECT_SKARBIEC_TOKEN_FILE": "$HOME/.stado/stado-object-api-verifier-skarbiec-token",
         "WC_RELEASE_SKARBIEC_TOKEN_FILE": "$HOME/.stado/stado-release-api-verifier-skarbiec-token",
         "WC_STORAGE_BACKEND": "local",
-        "WC_LOCAL_STORAGE_PATH": "$HOME/.stado/local-storage"
+        "WC_LOCAL_STORAGE_PATH": "$HOME/.stado/local-storage",
+        "WC_BACKUP_STORAGE_BACKEND": "local",
+        "WC_BACKUP_LOCAL_STORAGE_PATH": "$HOME/.stado/local-backup"
       }
     },
     {
