@@ -34,6 +34,20 @@ impl ReadFailoverBackend {
 
 #[async_trait]
 impl BlobBackend for ReadFailoverBackend {
+    /// Addressing follows the PRIMARY, which is the writer and therefore the
+    /// authority on where an object lives. Inheriting the trait default here
+    /// would have silently overridden a primary that spells its keys
+    /// differently — the object API being the one that does — so a store with
+    /// a backup configured addressed every object one way and a store without
+    /// one addressed it the other.
+    fn blob_path(&self, object: &crate::object_store::ObjectRef) -> String {
+        self.primary.blob_path(object)
+    }
+
+    fn blob_prefix(&self, namespace: &str, prefix: &str) -> Result<String, StorageError> {
+        self.primary.blob_prefix(namespace, prefix)
+    }
+
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError> {
         self.primary.upload_text(path, content).await?;
         if let Err(error) = self.backup.upload_text(path, content).await {

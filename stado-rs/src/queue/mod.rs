@@ -157,6 +157,33 @@ pub enum StorageError {
 /// `/` separators.
 #[async_trait]
 pub trait BlobBackend: Send + Sync {
+    /// The blob name THIS backend addresses one `stado://` object by.
+    ///
+    /// Two spellings of one object exist in this crate and they are both
+    /// plain strings, so every caller holding an [`crate::object_store::
+    /// ObjectRef`] has had to guess which one its backend wanted: the
+    /// qualified store path `ecosystem/<namespace>/<key>`, which is where a
+    /// filesystem or bucket backend keeps the bytes, or the bare `<key>`,
+    /// which is what the object API takes because it re-prefixes with its own
+    /// configured namespace. Guessing wrong is silent in the worst direction:
+    /// a read reports the object absent, and a write creates a second object
+    /// at `ecosystem/<ns>/ecosystem/<ns>/<key>` where nothing resolves it.
+    /// That is not hypothetical — it happened 417 times to `probierz`, and
+    /// `stado storage stat` still answered `absent` for objects the same
+    /// store served over HTTP 200.
+    ///
+    /// So the backend answers it. The default is the qualified path, which is
+    /// what every storage backend but one uses.
+    fn blob_path(&self, object: &crate::object_store::ObjectRef) -> String {
+        object.storage_path()
+    }
+
+    /// The listing prefix THIS backend takes for a `stado://<namespace>/`
+    /// prefix, which may name a whole namespace and carry no key.
+    fn blob_prefix(&self, namespace: &str, prefix: &str) -> Result<String, StorageError> {
+        crate::object_store::ObjectRef::namespace_prefix(namespace, prefix)
+    }
+
     /// Unconditional overwrite of a text blob.
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError>;
 
