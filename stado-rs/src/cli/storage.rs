@@ -1529,7 +1529,10 @@ impl RemoteObjectApi {
                 .body(chunk)
                 .send()
                 .await?;
-            if response.status() != reqwest::StatusCode::PRECONDITION_FAILED {
+            if !matches!(
+                response.status(),
+                reqwest::StatusCode::CONFLICT | reqwest::StatusCode::PRECONDITION_FAILED
+            ) {
                 let stored: RemotePutResponse =
                     self.response_json(response, "object chunk PUT").await?;
                 if stored.state != "stored"
