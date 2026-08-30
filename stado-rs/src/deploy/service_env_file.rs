@@ -55,7 +55,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use super::{host_channel, DeployError, Runner};
+use super::{host_channel, host_inventory, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// `status` for a report that came back whole.
@@ -99,6 +99,28 @@ pub const VALUE_REDACTED: &str = "redacted";
 pub const VALUE_REVEALED: &str = "revealed";
 /// The assignment is present and its value is the empty string.
 pub const VALUE_EMPTY: &str = "empty";
+
+// The read-back verdict for one key a caller has just written. This is how a
+// writer sees its own write: `env-set` reports the value it wrote, then asks
+// the host whether that key's EFFECTIVE assignment now holds it. The
+// comparison is made ON THE HOST, against the same unquoting the shell would
+// apply, so a secret is verified exactly without its value ever coming back.
+
+/// No expectation was sent; the report says nothing about any key.
+pub const EXPECT_NOT_ASKED: &str = "not_asked";
+/// The key's effective assignment holds exactly what the caller wrote.
+pub const EXPECT_MATCHED: &str = "matched";
+/// The key is assigned and holds something else. Something on the host owns
+/// this key and overwrote the caller.
+pub const EXPECT_DIFFERS: &str = "differs";
+/// The file assigns that key nowhere at all.
+pub const EXPECT_ABSENT: &str = "absent";
+/// The file or its assignments could not be read, so the write could not be
+/// checked either way. Reported by the host on every path where it refused to
+/// open the file, and substituted by [`expectation`] when the report did not
+/// arrive whole — because "the write was overwritten" and "nobody could look"
+/// must never collapse into one word.
+pub const EXPECT_UNVERIFIED: &str = "unverified";
 
 /// A plain `KEY=value` assignment.
 pub const FORM_ASSIGNMENT: &str = "assignment";
@@ -198,6 +220,11 @@ pub struct EnvFileReport {
     /// How many assignments the file has, including any past [`MAX_ENTRIES`]
     /// that `entries` therefore does not list.
     pub entries_seen: u32,
+    /// [`EXPECT_NOT_ASKED`], [`EXPECT_MATCHED`], [`EXPECT_DIFFERS`] or
+    /// [`EXPECT_ABSENT`] — the host's verdict on the one key the caller asked
+    /// it to check, decided against that key's LAST assignment because that is
+    /// the one a sourced file leaves behind.
+    pub expected: String,
     /// [`LISTENERS_READ`], [`LISTENERS_READ_WITHOUT_NAMES`] or
     /// [`LISTENERS_FAILED`].
     pub listeners_state: String,
@@ -235,6 +262,15 @@ decode=-D
 if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
 env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 "$decode")
 reveal=$(printf '%s' '@REVEAL_B64@' | /usr/bin/base64 "$decode")
+# The one key/value pair the caller wants checked. Both arrive base64-encoded
+# in this script's own body — never in an argument vector — and the value is
+# handed to awk through a command-scoped assignment prefix, so it enters that
+# one process's environment and nothing else's. The value is already on this
+# host by construction: `env-set` just wrote it into the file, so re-sending it
+# to the reader that checks the write adds no exposure. What must never happen
+# is the reverse trip, and it does not: the host answers with one word.
+expect_key=$(printf '%s' '@EXPECT_KEY_B64@' | /usr/bin/base64 "$decode")
+expect_value=$(printf '%s' '@EXPECT_VALUE_B64@' | /usr/bin/base64 "$decode")
 
 # Every field below is either a compile-time constant of this script or has
 # been through the awk sanitizer, so `report` never carries host text that
@@ -248,7 +284,7 @@ report() {
 # the caller has to be able to tell "this path is a symlink" from "the channel
 # broke", and an empty entries list has to arrive with the reason beside it.
 refuse() {
-  report '' "$1" "$2" unknown false 0 unread '"entries":[],"entries_seen":0' unread ''
+  report '' "$1" "$2" unknown false 0 unread '"entries":[],"entries_seen":0,"expected":"unverified"' unread ''
   exit 0
 }
 
@@ -309,7 +345,8 @@ case "$mode" in
 esac
 
 entries_state=read
-if ! entries_fragment=$(/usr/bin/awk \
+if ! entries_fragment=$(STADO_EXPECT_KEY="$expect_key" STADO_EXPECT_VALUE="$expect_value" \
+    /usr/bin/awk \
     -v reveal="$reveal" \
     -v max_entries=@MAX_ENTRIES@ \
     -v max_chars=@MAX_VALUE_CHARS@ '
@@ -363,13 +400,17 @@ function inert(text) {
 function secretish(name) {
   return (name ~ /TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|KEY|BEARER|PRIVATE|SIGNING|SIGNATURE|SALT|COOKIE|AUTH|SESSION/)
 }
+BEGIN {
+  expect_key = ENVIRON["STADO_EXPECT_KEY"]
+  expect_value = ENVIRON["STADO_EXPECT_VALUE"]
+  expected = (expect_key == "" ? "not_asked" : "absent")
+}
 {
   line = $0
   sub(/\r$/, "", line)
   sub(/^[ \t]+/, "", line)
   if (line == "" || line ~ /^#/) next
   seen++
-  if (seen > max_entries) next
   form = "assignment"
   if (line ~ /^export[ \t]+/) {
     form = "export"
@@ -418,17 +459,32 @@ function secretish(name) {
       state = "shown"
       shown = value
     }
+    # The one question the caller asked, answered against every assignment to
+    # that key in turn so the LAST one decides — the assignment a sourced file
+    # actually leaves behind. Compared after unquoting, because the writer that
+    # overwrote env-set on this fleet wraps its value in shell quotes, and a
+    # textual comparison would call an identical endpoint a mismatch.
+    #
+    # No apostrophe may appear in this program: it is delivered inside a
+    # single-quoted shell word, so one would end the word and truncate the
+    # program.
+    if (expect_key != "" && key == expect_key) {
+      expected = (probe == expect_value ? "matched" : "differs")
+    }
   }
+  # The cap bounds what is REPORTED, and is applied after the classification
+  # above so a file past the cap still answers the question about its own key.
+  if (seen > max_entries) next
   out = out sep sprintf("{\"line\":%d,\"form\":\"%s\",\"key\":\"%s\",\"value_state\":\"%s\",\"value\":\"%s\",\"chars\":%d}", \
     NR, form, jsonsafe(key), state, clamp(jsonsafe(shown)), chars)
   sep = ","
 }
 END {
-  printf "\"entries\":[%s],\"entries_seen\":%d", out, seen + 0
+  printf "\"entries\":[%s],\"entries_seen\":%d,\"expected\":\"%s\"", out, seen + 0, expected
 }
 ' "$env_path"); then
   entries_state=parse_failed
-  entries_fragment='"entries":[],"entries_seen":0'
+  entries_fragment='"entries":[],"entries_seen":0,"expected":"unverified"'
 fi
 
 # The socket table, with the program that owns each port. lsof first, with the
@@ -520,17 +576,53 @@ report "$(printf '%s' "$env_path" | /usr/bin/awk '{ gsub(/[^ -~]/, "?"); gsub(/[
   "$listeners_state" "$listeners_json"
 "##;
 
-/// The remote program for one env file, with the reveal selection bound in.
+/// What one read of a managed env file asks for.
 ///
-/// Both operands travel base64-encoded inside the request body, never in an
+/// `expect` is what lets a WRITER see its own write. `env-set` has just put a
+/// value in this file; passing the same key and value here makes the host
+/// compare them against that key's effective assignment and answer with one
+/// word. Exact for a secret as well as an endpoint, and nothing comes back but
+/// the word — which is why this is a parameter of the reader rather than a
+/// length comparison in the caller.
+pub struct EnvFileRequest<'a> {
+    pub env_path: &'a str,
+    /// Show this one key's value in full whatever its name suggests.
+    pub reveal: Option<&'a str>,
+    /// One key and the exact text its effective assignment should hold.
+    pub expect: Option<(&'a str, &'a str)>,
+}
+
+impl<'a> EnvFileRequest<'a> {
+    /// A plain read: no reveal, no expectation.
+    pub fn read(env_path: &'a str) -> Self {
+        Self {
+            env_path,
+            reveal: None,
+            expect: None,
+        }
+    }
+}
+
+/// The remote program for one env file, with this request's selections bound in.
+///
+/// Every operand travels base64-encoded inside the request body, never in an
 /// argument vector, for the same reason `env-set` encodes its value: the
 /// script text is the only thing that reaches the host.
-pub fn remote_env_file_script(env_path: &str, reveal: Option<&str>) -> String {
+pub fn remote_env_file_script(request: &EnvFileRequest<'_>) -> String {
+    let (expect_key, expect_value) = request.expect.unwrap_or_default();
     REMOTE_ENV_FILE_BODY
-        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace(
+            "@ENV_PATH_B64@",
+            &STANDARD.encode(request.env_path.as_bytes()),
+        )
         .replace(
             "@REVEAL_B64@",
-            &STANDARD.encode(reveal.unwrap_or_default().as_bytes()),
+            &STANDARD.encode(request.reveal.unwrap_or_default().as_bytes()),
+        )
+        .replace("@EXPECT_KEY_B64@", &STANDARD.encode(expect_key.as_bytes()))
+        .replace(
+            "@EXPECT_VALUE_B64@",
+            &STANDARD.encode(expect_value.as_bytes()),
         )
         .replace("@MAX_ENTRIES@", &MAX_ENTRIES.to_string())
         .replace("@MAX_VALUE_CHARS@", &MAX_VALUE_CHARS.to_string())
@@ -803,6 +895,63 @@ pub fn endpoint_rows(report: &EnvFileReport) -> Vec<EndpointRow> {
     rows
 }
 
+/// The read-back verdict for the one key a write asked about.
+///
+/// The report's own word, except when the report says the file was never
+/// opened or its assignments were never parsed. A writer that treated an
+/// unreadable file as "not overwritten" would report success for a write
+/// nobody checked, which is the failure this whole path exists to remove.
+pub fn expectation(report: &EnvFileReport) -> &str {
+    if report.file_state != FILE_READ || report.entries_state != ENTRIES_READ {
+        return EXPECT_UNVERIFIED;
+    }
+    &report.expected
+}
+
+/// The assignment of `key` a shell that sourced this file would end up with:
+/// the LAST one, in file order.
+pub fn effective_entry<'a>(report: &'a EnvFileReport, key: &str) -> Option<&'a EnvEntry> {
+    report
+        .entries
+        .iter()
+        .rfind(|entry| entry.form != FORM_UNPARSABLE && entry.key == key)
+}
+
+/// The forward marker whose URL is exactly `value`, when one holds it.
+///
+/// This is the attribution that turns "your write was overwritten" into an
+/// actionable sentence. A host-side reconciler that rewrites an env key from a
+/// marker leaves the marker's own text in the file, so a marker holding
+/// exactly what came back names the declaration the operator must correct
+/// instead of the file they will otherwise keep fighting. Exact match only: a
+/// marker that merely shares a port is a guess, and a wrong attribution sends
+/// an operator to the wrong file.
+pub fn marker_holding<'a>(
+    markers: &'a [host_inventory::ForwardMarker],
+    value: &str,
+) -> Option<&'a host_inventory::ForwardMarker> {
+    let value = value.trim();
+    markers
+        .iter()
+        .find(|marker| marker.state == host_inventory::MARKER_READ && marker.url.trim() == value)
+}
+
+/// Read this host's forward markers, for [`marker_holding`].
+///
+/// Deliberately a second round trip, taken only when a write did not survive:
+/// the markers are not needed to answer "did it survive", and a reader that
+/// collected them every time would make the common path pay for the rare
+/// diagnosis. The inventory script is reused rather than reimplemented so this
+/// command and `host inventory` cannot disagree about what a marker says.
+pub async fn forward_markers(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Vec<host_inventory::ForwardMarker>, DeployError> {
+    let script = host_inventory::remote_inventory_script()?;
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(host_inventory::parse_inventory(&output.stdout)?.forwards)
+}
+
 /// The env file as the `--json` report, in `host inventory`'s report shape.
 pub fn to_report(target: &ComputeTarget, unit: &str, report: &EnvFileReport) -> Map<String, Value> {
     let mut payload = host_channel::base_report(target);
@@ -849,6 +998,7 @@ pub fn to_report(target: &ComputeTarget, unit: &str, report: &EnvFileReport) -> 
             .filter(|entry| entry.value_state == VALUE_REDACTED)
             .count()),
     );
+    payload.insert("expected".to_string(), json!(expectation(report)));
     payload
 }
 
@@ -859,11 +1009,10 @@ pub fn to_report(target: &ComputeTarget, unit: &str, report: &EnvFileReport) -> 
 /// exercisable through the [`Runner`] seam without a registry.
 pub async fn read_env_file(
     target: &ComputeTarget,
-    env_path: &str,
-    reveal: Option<&str>,
+    request: &EnvFileRequest<'_>,
     runner: &Runner,
 ) -> Result<EnvFileReport, DeployError> {
-    let script = remote_env_file_script(env_path, reveal);
+    let script = remote_env_file_script(request);
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(
@@ -1019,6 +1168,7 @@ mod tests {
                 entry(2, FORM_EXPORT, "WC_SKARBIEC_URL", "http://127.0.0.1:8785"),
             ],
             entries_seen: 2,
+            expected: EXPECT_NOT_ASKED.to_string(),
             listeners_state: LISTENERS_READ.to_string(),
             listeners: vec![ProcListener {
                 address: "127.0.0.1".to_string(),
@@ -1031,5 +1181,45 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[usize::MIN].port, 8785);
         assert_eq!(rows[usize::MIN].verdict, ENDPOINT_DEAD);
+    }
+
+    /// The remote program must be valid shell, checked by the real shell.
+    ///
+    /// This exists because of a mistake worth making impossible: the awk
+    /// program is delivered inside a single-quoted shell word, and one
+    /// apostrophe in an awk COMMENT ends that word and truncates the program.
+    /// The host then reported `unexpected EOF while looking for matching "` and
+    /// every command in this module failed at once. `bash -n` is the only
+    /// reviewer that cannot miss it.
+    #[test]
+    fn every_rendered_script_parses_as_shell() {
+        for request in [
+            EnvFileRequest::read("$HOME/.config/weles/worker.env"),
+            EnvFileRequest {
+                env_path: "$HOME/.config/weles/worker.env",
+                reveal: Some("WELES_API_TOKEN"),
+                expect: Some(("WC_SKARBIEC_URL", "http://127.0.0.1:8895")),
+            },
+        ] {
+            let script = remote_env_file_script(&request);
+            let mut child = std::process::Command::new("bash")
+                .arg("-n")
+                .stdin(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("bash runs");
+            std::io::Write::write_all(
+                child.stdin.as_mut().expect("bash takes stdin"),
+                script.as_bytes(),
+            )
+            .expect("script is written");
+            drop(child.stdin.take());
+            let output = child.wait_with_output().expect("bash finishes");
+            assert!(
+                output.status.success(),
+                "the rendered script is not valid shell: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
