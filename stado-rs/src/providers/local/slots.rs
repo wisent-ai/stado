@@ -594,6 +594,29 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
     }
 }
 
+/// The blob name [`JobStorage`] addresses `object` by.
+///
+/// The two spellings are not interchangeable and which one is right depends on
+/// the store. `stado://<ns>/<key>` is stored at `ecosystem/<ns>/<key>`, and the
+/// object API is addressed by the bare `<key>` because it applies that mapping
+/// itself; every other backend is addressed by the path that is actually on it.
+///
+/// The read path below worked this out and the write path did not, so job output
+/// mirrored to an `output_uri` was uploaded under `ecosystem/<ns>/<key>` as if
+/// that were a key, and the object API mapped it again. That is where the
+/// 9.58 GiB at `ecosystem/probierz/ecosystem/probierz/` came from — 417 objects
+/// including every release-pipeline receipt and archive, each one the only copy
+/// of itself, none of them reachable at the address the pipeline recorded. The
+/// newest arrived twenty minutes before this was written, so it was not history.
+/// One function now, used by both directions.
+fn store_name(object: &crate::object_store::ObjectRef) -> String {
+    if object.namespace() == crate::config::wc_stado_storage_namespace() {
+        object.key().to_string()
+    } else {
+        object.storage_path()
+    }
+}
+
 /// Copy every output file to the caller's provider-neutral Stado object
 /// prefix. Additive — the canonical status path was already uploaded.
 ///
@@ -638,7 +661,7 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
         };
         match tokio::fs::read(&path).await {
             Ok(content) => {
-                if let Err(error) = store.upload_bytes(&object.storage_path(), &content).await {
+                if let Err(error) = store.upload_bytes(&store_name(&object), &content).await {
                     log_fn(&format!(
                         "output_uri mirror failed for {} -> {object}: {error}",
                         job.job_id
@@ -705,13 +728,7 @@ async fn materialize_stado_inputs(
         let content = if object.namespace() == "releases" {
             store.download_release(&object.to_string()).await?
         } else {
-            let storage_path = if object.namespace() == crate::config::wc_stado_storage_namespace()
-            {
-                object.key().to_string()
-            } else {
-                object.storage_path()
-            };
-            store.read_bytes(&storage_path).await?
+            store.read_bytes(&store_name(&object)).await?
         }
         .ok_or_else(|| StorageError::Other(format!("input {name} is absent: {object}")))?;
         if let Some(expected) = spec
