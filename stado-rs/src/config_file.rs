@@ -519,9 +519,21 @@ pub fn validate(data: &Value) -> Vec<String> {
     let backup_path = primary_field
         .backup_path
         .expect("storage backend catalog entry must define its backup path");
+    // An empty backup backend is the documented "there is no Stado-managed
+    // backup" state that `queue::copy::Endpoint::configured_backup` reads and
+    // returns `None` for. Validation rejected it anyway, because the catalog
+    // lookup only skips `null`, so the one decision an operator might have to
+    // make about a replica — that this host should not have one — could not be
+    // written down. On 2026-08-30 that host's mis-addressed replication had to
+    // be stopped by pointing the backup at the primary's own store instead, so
+    // the same-store guard would refuse it: a workaround standing in for a
+    // setting that already existed everywhere except here. The primary keeps
+    // rejecting empty, because a queue store is required and always was.
+    let backup_declared = binding_in(root, primary_field.backup_path)
+        .filter(|value| value.as_str().is_none_or(|name| !name.trim().is_empty()));
     let backup_variant = catalog_variant(
         crate::capabilities::RuntimeFacet::Storage,
-        binding_in(root, primary_field.backup_path),
+        backup_declared,
         backup_path,
         &mut problems,
     );
