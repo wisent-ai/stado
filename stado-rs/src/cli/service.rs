@@ -73,6 +73,14 @@ pub enum ServiceCommands {
     /// processes ran that way for four days, executing a binary older than the
     /// one on disk, and every answer in this group was about declared units
     /// and so said nothing about them.
+    ///
+    /// `--undeclared` answers the third question, which had no answer at all:
+    /// which units launchd has LOADED that the registry does not declare.
+    /// Neither of the other two can see one — `list` walks the document and
+    /// asks the host about each entry, `--unowned` walks the processes and asks
+    /// launchd who owns them, and a loaded job the document never heard of is
+    /// in neither set. charless-mac-mini ran three queue agents at once in that
+    /// blind spot for seven days.
     List {
         /// Report the product processes no unit owns instead of the declared
         /// managed set. This is the one question in this group the beacons
@@ -80,6 +88,11 @@ pub enum ServiceCommands {
         /// declaration -- so it costs one read-only ssh per kind=local host.
         #[arg(long)]
         unowned: bool,
+        /// Report the launchd jobs a host has loaded under this fleet's own
+        /// label prefix that the registry does not declare. One read-only
+        /// `launchctl list` per kind=local host.
+        #[arg(long)]
+        undeclared: bool,
         #[arg(long)]
         json: bool,
     },
@@ -669,8 +682,19 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::Catalog { json } => catalog(json).await,
-        ServiceCommands::List { unowned, json } => {
-            if unowned {
+        ServiceCommands::List {
+            unowned,
+            undeclared,
+            json,
+        } => {
+            if unowned && undeclared {
+                return Err(CmdError::usage(
+                    "--unowned and --undeclared are two different questions; ask one at a time",
+                ));
+            }
+            if undeclared {
+                list_undeclared(json).await
+            } else if unowned {
                 list_unowned(json).await
             } else {
                 list(json).await
@@ -1117,6 +1141,58 @@ async fn list_unowned(json: bool) -> Result<(), CmdError> {
         );
     }
     fail_if_any(&failures, "scan for unowned processes")
+}
+
+/// `service list --undeclared` — launchd jobs a host has loaded that the
+/// registry does not declare, fleet-wide.
+///
+/// The third question, and the one that had no answer. [`list`] walks the
+/// document and asks the host about each entry. [`list_unowned`] walks the
+/// processes and asks launchd who owns them. A unit launchd has LOADED and the
+/// document has never heard of is in neither set, so nothing in this binary
+/// could name one.
+///
+/// charless-mac-mini was running three queue agents at once in that blind spot:
+/// `com.wisent.compute.service.stado-agent-mini`, the only one the registry
+/// declares, plus `com.wisent.compute.agent.charless-mac-mini` from
+/// `stado bootstrap --local`'s label convention and
+/// `com.wisent.compute.service.stado-queue-agent` from a third. All three
+/// published capacity for the same consumer id, so whichever wrote last decided
+/// what the host answered — and the oldest of them, three days into a stale
+/// binary, refused 55 pinned jobs for a week while every report in this group
+/// said the declared agent was fine.
+///
+/// An empty answer means the hosts were asked and had nothing, because a host
+/// that will not answer is named on stderr and makes the command fail.
+async fn list_undeclared(json: bool) -> Result<(), CmdError> {
+    let registry = registry::read_registry().await?;
+    let runner = production_runner();
+    let mut found: Vec<service::UndeclaredUnit> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for target in registry.local_targets() {
+        match service::undeclared_units(target, &runner).await {
+            Ok(units) => found.extend(units),
+            Err(exc) => failures.push(format!("{}: {exc}", target.name)),
+        }
+    }
+    if json {
+        let payload: Vec<Value> = found.iter().map(service::UndeclaredUnit::to_json).collect();
+        print_json(&json!({"undeclared": payload}))?;
+    } else {
+        let cells: Vec<Vec<String>> = found
+            .iter()
+            .map(|unit| {
+                vec![
+                    unit.host.clone(),
+                    unit.label.clone(),
+                    dash(&unit.pid),
+                    unit.status.clone(),
+                ]
+            })
+            .collect();
+        table::print(&["HOST", "LABEL", "PID", "LAST_EXIT"], &cells);
+    }
+    fail_if_any(&failures, "scan for undeclared units")
 }
 
 async fn onboarding_catalog() -> Result<(), CmdError> {

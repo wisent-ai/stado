@@ -4292,6 +4292,96 @@ fn parse_unowned(host: &str, stdout: &str) -> Vec<UnownedProcess> {
         .collect()
 }
 
+/// The label prefix every unit this fleet installs carries, whichever writer
+/// installed it: `local_install::LABEL_PREFIX` mints
+/// `com.wisent.compute.<kind>.<name>` and the always-on set is
+/// `com.wisent.always-on.<name>`, so one prefix covers both.
+const FLEET_LABEL_PREFIX: &str = "com.wisent.";
+
+/// One launchd job loaded on a host that the registry does not declare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndeclaredUnit {
+    pub host: String,
+    pub label: String,
+    /// The pid launchd holds for the label, or empty when it holds none.
+    pub pid: String,
+    /// The label's last exit status as launchd reports it.
+    pub status: String,
+}
+
+impl UndeclaredUnit {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "label": self.label,
+            "pid": self.pid,
+            "status": self.status,
+        })
+    }
+}
+
+/// Read-only: `launchctl list`, and nothing else. It starts nothing, stops
+/// nothing, signals nothing and needs no sudo.
+const LOADED_LABELS_SCRIPT: &str = "set -u
+if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
+  printf 'STADO_LOADED_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
+  exit 0
+fi
+/bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 != \"Label\" { printf \"STADO_LOADED\\t%s\\t%s\\t%s\\n\", $1, $2, $3 }'
+";
+
+/// Every launchd job loaded on TARGET under [`FLEET_LABEL_PREFIX`] that the
+/// registry does not declare.
+///
+/// This is the direction nothing in the product looked. `service list` walks
+/// the declaration and asks the host about each entry; `list --unowned` walks
+/// the processes and asks launchd who owns them. A unit launchd has loaded and
+/// the document has never heard of is in neither set, and so it was invisible
+/// to both.
+///
+/// charless-mac-mini was running three queue agents at once under that blind
+/// spot: `com.wisent.compute.service.stado-agent-mini`, the only one the
+/// registry declares, plus `com.wisent.compute.agent.charless-mac-mini` from
+/// `stado bootstrap --local`'s label convention and
+/// `com.wisent.compute.service.stado-queue-agent` from a third. All three
+/// published capacity for the same consumer id, so the oldest binary on the
+/// box decided what the host answered, and 55 pinned jobs were refused for
+/// seven days by a process no report could name.
+pub async fn undeclared_units(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Vec<UndeclaredUnit>, DeployError> {
+    let output = host_channel::run_script(target, LOADED_LABELS_SCRIPT, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "the loaded-unit scan did not complete",
+        )));
+    }
+    let declared: std::collections::BTreeSet<String> = declared_services(target)
+        .iter()
+        .map(|service| service.unit_id().to_string())
+        .collect();
+    Ok(output
+        .stdout
+        .lines()
+        .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
+            ["STADO_LOADED", pid, status, label] => {
+                let label = (*label).trim().to_string();
+                (label.starts_with(FLEET_LABEL_PREFIX) && !declared.contains(&label)).then(|| {
+                    UndeclaredUnit {
+                        host: target.name.clone(),
+                        label,
+                        pid: (*pid).trim().trim_matches('-').to_string(),
+                        status: (*status).trim().to_string(),
+                    }
+                })
+            }
+            _ => None,
+        })
+        .collect())
+}
+
 /// The managed-service record a completed deploy or adopt should be
 /// recorded under, built from what the host actually reported rather than
 /// from what the operator hoped: the resolved unit id, the resolved path,
