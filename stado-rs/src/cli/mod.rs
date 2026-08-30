@@ -1220,6 +1220,23 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Authorize TARGET's service resolver to read the registry from the
+    /// service-directory authority.
+    ///
+    /// A resolver anywhere but on the authority host itself can only obtain a
+    /// registry snapshot over ssh to that host, and a resolver with no snapshot
+    /// binds none of its declared adapters — so the host publishes nothing at
+    /// all, loudly in its log and invisibly everywhere else. This mints the
+    /// resolver keypair on TARGET when it has none and appends its PUBLIC half
+    /// to the authority account's authorized_keys, once. The private half is
+    /// generated where it is used and never travels.
+    #[command(name = "resolver-key")]
+    ResolverKey {
+        target: String,
+        /// Emit the authorization report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -2183,6 +2200,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::recover(&target, bundled_registry, release.as_deref()).await,
             HostCommands::RecoverObjectApi { target, json } => {
                 host::recover_object_api(&target, json).await
+            }
+            HostCommands::ResolverKey { target, json } => {
+                host::authorize_resolver_key(&target, json).await
             }
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {

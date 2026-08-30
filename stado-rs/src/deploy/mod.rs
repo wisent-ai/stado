@@ -95,6 +95,7 @@ pub mod host_reclaim;
 pub mod host_recovery;
 pub mod host_recovery_release;
 pub mod host_release;
+pub mod host_resolver_key;
 pub mod host_uptime;
 pub mod host_user_delete;
 pub mod host_users;
