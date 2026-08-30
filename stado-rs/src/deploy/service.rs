@@ -4437,7 +4437,25 @@ fi
 # `com.wisent.compute.service.stado-queue-agent` read as unrelated entries
 # until you know both run `stado agent`. The unit file says what it runs, and
 # it is world-readable in both domains, so the program travels with the label.
-for label in $(/bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 ~ /^com\\.wisent\\./ { print $3 }'); do
+# The union of what launchd lists and what the unit directories hold.
+# `launchctl list` shows only the domain this login can print, so a system
+# LaunchDaemon can be loaded and running and still be absent from it -- which is
+# how a stale queue agent stayed unnameable while three separate reports called
+# the host healthy. A label whose file exists is a label that can be acted on,
+# listed or not.
+labels=$(
+  {
+    /bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 ~ /^com\\.wisent\\./ { print $3 }'
+    for directory in /Library/LaunchDaemons \"$HOME/Library/LaunchAgents\" /Library/LaunchAgents; do
+      for file in \"$directory\"/com.wisent.*.plist; do
+        [ -f \"$file\" ] || continue
+        base=${file##*/}
+        printf '%s\\n' \"${base%.plist}\"
+      done
+    done
+  } | /usr/bin/sort -u
+)
+for label in $labels; do
   pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $1 }')
   status=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $2 }')
   plist=''
