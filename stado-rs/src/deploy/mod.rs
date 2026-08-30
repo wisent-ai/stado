@@ -110,6 +110,7 @@ pub mod service_file_fetch;
 pub mod service_serving;
 pub mod ssh_key;
 pub mod stream;
+pub mod weles_browser_runtime;
 pub mod weles_browser_task;
 pub mod weles_capture;
 

@@ -1686,6 +1686,37 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Verify, and with --repair complete, the browser runtime TARGET's Weles
+    /// release declares it needs.
+    ///
+    /// The worker records its sessions, so a missing recording dependency kills
+    /// `browserContext.newPage` before any navigation and every browser task on
+    /// the host fails. On charless-mac-mini that was Playwright's ffmpeg, absent
+    /// at ms-playwright/ffmpeg-1011/ffmpeg-mac, and three runs had already
+    /// failed that way before anyone looked. Recording is the evidence Weles
+    /// exists to keep, so the repair completes the runtime rather than turning
+    /// recording off.
+    ///
+    /// The requirement is read from `browsers.json` inside the installed
+    /// release, never hardcoded here, because Playwright pins an exact revision
+    /// per component and a constant would verify the wrong path the moment the
+    /// release moved. Verification reports every component the release installs
+    /// by default; --repair installs only the ones named, defaulting to the one
+    /// Weles takes from that cache, so a repair never downloads browsers
+    /// nothing drives.
+    #[command(name = "weles-browser-runtime")]
+    WelesBrowserRuntime {
+        target: String,
+        /// Component to install with --repair; repeat for each. Defaults to
+        /// ffmpeg, which is what the recording path needs.
+        #[arg(long = "component")]
+        components: Vec<String>,
+        /// Install the missing components, then verify again.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's effective Stado configuration through its fleet channel.
     ConfigShow { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
@@ -2366,6 +2397,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 })
                 .await
             }
+            HostCommands::WelesBrowserRuntime {
+                target,
+                components,
+                repair,
+                json,
+            } => host::weles_browser_runtime(&target, &components, repair, json).await,
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,
