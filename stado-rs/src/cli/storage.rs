@@ -450,6 +450,28 @@ pub(crate) async fn copy_between(
             from.describe()
         )));
     }
+    // A copy moves bytes; it must never move the address they live at. The
+    // object API is addressed by bare ecosystem keys and every bucket or
+    // directory by namespace-qualified store paths, so crossing the two
+    // rewrites every name in the set. That is not a hypothetical: it put
+    // 9.6 GiB at `ecosystem/probierz/ecosystem/probierz/` in the store the
+    // object API serves on charless-mac-mini, and bare `artifacts/`,
+    // `status/` and `runs/` trees in that host's backup beside their
+    // correctly-qualified twins. Both copies reported success.
+    if from.keys_are_namespace_qualified() != to.keys_are_namespace_qualified() {
+        let (qualified, bare) = if from.keys_are_namespace_qualified() {
+            (from.describe(), to.describe())
+        } else {
+            (to.describe(), from.describe())
+        };
+        return Err(CmdError::click(format!(
+            "{qualified} names objects by their namespace-qualified store path and {bare} names \
+             them by bare ecosystem key, so copying between the two would re-address every \
+             object: keys gain a second `ecosystem/<namespace>/` in one direction and lose the \
+             one they have in the other. Copy to a store of the same kind, or address the same \
+             store through one endpoint on both sides."
+        )));
+    }
 
     let source = from.build().await?;
     let destination = to.build().await?;

@@ -188,6 +188,28 @@ impl Endpoint {
         }
     }
 
+    /// Whether this endpoint's object names are namespace-qualified store
+    /// paths or bare ecosystem keys.
+    ///
+    /// The two are not interchangeable and a copy between them rewrites every
+    /// address it touches. `stado://<ns>/<key>` lives at
+    /// `ecosystem/<ns>/<key>` in whatever store backs the object API, and the
+    /// API's own listing returns the bare `<key>`. A bucket or a directory
+    /// returns what is actually on it, prefix and all.
+    ///
+    /// So a `local` -> `stado` copy offers `ecosystem/<ns>/<key>` as a key and
+    /// the API stores it at `ecosystem/<ns>/ecosystem/<ns>/<key>`, and a
+    /// `stado` -> `local` copy writes `<key>` at the root with the namespace
+    /// dropped. Both happened on charless-mac-mini: 9.6 GiB of
+    /// `ecosystem/probierz/ecosystem/probierz/` in the store the object API
+    /// serves, and bare `artifacts/`, `status/` and `runs/` trees in the backup
+    /// beside their correctly-qualified twins. Neither copy failed. Both
+    /// succeeded and silently produced objects at addresses nothing else in the
+    /// fleet will ever look at.
+    pub fn keys_are_namespace_qualified(&self) -> bool {
+        self.adapter() != Some(StorageAdapter::StadoObject)
+    }
+
     /// The value behind one configuration key of this endpoint, for callers that
     /// check a backend is fully configured before using it.
     ///
@@ -701,6 +723,26 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
             source_endpoint.describe()
         )));
     }
+    // The replica must hold the same objects at the same addresses, and these
+    // two endpoints do not agree on what an address is: the object API answers
+    // in bare ecosystem keys, a directory or bucket in namespace-qualified
+    // store paths. Replicating across that boundary writes every object at a
+    // name nothing else resolves — the namespace dropped in one direction,
+    // doubled in the other — and it does it on every coordinator tick, so the
+    // replica grows without ever becoming a replica. charless-mac-mini's backup
+    // went from 32.3 GiB to 47.8 GiB this way, larger than the 32.7 GiB primary
+    // it was supposed to mirror.
+    if source_endpoint.keys_are_namespace_qualified()
+        != destination_endpoint.keys_are_namespace_qualified()
+    {
+        return Err(StorageError::Other(format!(
+            "the primary {} and the backup {} name objects differently — one by bare ecosystem \
+             key, the other by namespace-qualified store path — so replication would re-address \
+             every object it copied. Configure a backup of the same kind as the primary.",
+            source_endpoint.describe(),
+            destination_endpoint.describe()
+        )));
+    }
     let source = source_endpoint.build().await?;
     let destination = destination_endpoint.build().await?;
     let report = copy(
@@ -718,27 +760,42 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
     Ok(Some(report))
 }
 
+/// Delete every object in the backup that the source does not have.
+///
+/// A replica that keeps what the source deleted is not a replica. This used to
+/// walk [`CANONICAL_PREFIXES`] only, which left everything outside them
+/// accumulating for the lifetime of the host: on charless-mac-mini that was
+/// 11.4 GiB of `artifacts/models` and 2.7 GiB of `status/`, and it is why the
+/// 47.8 GiB replica had grown larger than the 32.7 GiB primary it mirrors. The
+/// operator's decision, recorded here because the reason outlives the diff: the
+/// backup mirrors the source in full, and objects the source no longer has are
+/// deleted from it on the next replication pass.
+///
+/// The resume sentinel is the one exception, because the copier writes it to
+/// the destination itself ([`SENTINEL_PATH`]) and the source never has it.
+/// Deleting it would discard the cursor mid-copy.
 async fn prune_backup_extras(
     source: &Arc<dyn BlobBackend>,
     destination: &Arc<dyn BlobBackend>,
 ) -> Result<(), StorageError> {
-    for prefix in CANONICAL_PREFIXES {
-        let source_names = source
-            .list_blobs_with_meta(prefix)
-            .await?
-            .into_iter()
-            .map(|blob| blob.name)
-            .collect::<BTreeSet<_>>();
-        let destination_names = destination
-            .list_blobs_with_meta(prefix)
-            .await?
-            .into_iter()
-            .map(|blob| blob.name)
-            .collect::<BTreeSet<_>>();
-        for stale in destination_names.difference(&source_names) {
-            if !source.exists(stale).await? {
-                destination.delete(stale).await?;
-            }
+    let source_names = source
+        .list_blobs_with_meta("")
+        .await?
+        .into_iter()
+        .map(|blob| blob.name)
+        .collect::<BTreeSet<_>>();
+    let destination_names = destination
+        .list_blobs_with_meta("")
+        .await?
+        .into_iter()
+        .map(|blob| blob.name)
+        .collect::<BTreeSet<_>>();
+    for stale in destination_names.difference(&source_names) {
+        if stale == SENTINEL_PATH {
+            continue;
+        }
+        if !source.exists(stale).await? {
+            destination.delete(stale).await?;
         }
     }
     Ok(())
