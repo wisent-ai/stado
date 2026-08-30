@@ -4471,6 +4471,259 @@ for label in $labels; do
 done
 ";
 
+/// End every product process on TARGET that no DECLARED unit owns.
+///
+/// `service stop` ends a declared unit and the processes launchd disowned from
+/// it. Nothing ended a product process whose label the registry never declared,
+/// or whose label has since been removed while the process kept running — and
+/// on charless-mac-mini that is how a `stado agent` from 2026-08-27 went on
+/// publishing this host's capacity through three release deliveries, two
+/// restarts, a `service stop` and a `service remove`, refusing 55 pinned jobs
+/// the whole time.
+///
+/// Ownership here is the registry's, not launchd's. `unowned_processes` asks
+/// whether ANY launchd job claims the process, and on a mac that set is about a
+/// thousand pids, so a duplicate under an undeclared label reads as owned and
+/// is left alone. This asks the question that matters: is this process the one
+/// the document says should be running.
+///
+/// `SIGTERM` only, and only to processes executing out of a managed root whose
+/// pid is not held by a declared label and is not a descendant of one. Nothing
+/// is signalled on a `--dry-run`, which is the default at the CLI.
+const REAP_SCRIPT: &str = "set -u
+if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
+  printf 'STADO_REAP_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
+  exit 0
+fi
+apply=@APPLY@
+match=@MATCH@
+set -- @ROOTS@
+# The pids the DECLARED labels hold, and their descendants. Everything else
+# under a managed root is a process the document does not account for.
+keep=''
+for label in @LABELS@; do
+  pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l && $1 ~ /^[0-9]+$/ { print $1 }')
+  if [ -n \"$pid\" ]; then keep=\"$keep $pid\"; fi
+done
+kept() {
+  walk=\"$1\"
+  while [ -n \"$walk\" ] && [ \"$walk\" != 0 ] && [ \"$walk\" != 1 ]; do
+    case \" $keep \" in *\" $walk \"*) return 0 ;; esac
+    walk=$(/bin/ps -p \"$walk\" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+  done
+  return 1
+}
+printf 'STADO_REAP_KEEP\\t%s\\n' \"$(printf '%s' \"$keep\" | /usr/bin/tr -s ' ')\"
+self=$$
+seen=''
+for root in \"$@\"; do
+  for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
+    case \" $seen \" in *\" $pid \"*) continue ;; esac
+    if [ \"$pid\" = \"$self\" ]; then continue; fi
+    command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    if [ -z \"$command\" ]; then continue; fi
+    exe=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+    entry=$(printf '%s' \"$command\" | /usr/bin/awk '{ print $2 }')
+    under=no
+    case \"$exe\" in \"$root\"*) under=yes ;; esac
+    case \"$entry\" in \"$root\"*) under=yes ;; esac
+    if [ \"$under\" = no ]; then continue; fi
+    # The operator names the exact program being de-duplicated. Without this
+    # the keep-set decides the blast radius, and launchd holds a pid for only
+    # some declared labels: a fleet-wide dry run on charless-mac-mini proposed
+    # ending `skarbiec serve`, `stado dashboard`, `stado resolver serve` and the
+    # Weles API server, every one of them a live service, because their pids are
+    # not the ones their labels hold. One named program cannot do that.
+    case \"$command\" in *\"$match\"*) ;; *) continue ;; esac
+    if kept \"$pid\"; then continue; fi
+    seen=\"$seen $pid\"
+    started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    if [ \"$apply\" != yes ]; then
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'would_end' \"$started\" \"$command\"
+      continue
+    fi
+    /bin/kill \"$pid\" 2>/dev/null || true
+    /bin/sleep 2
+    if /bin/ps -p \"$pid\" -o pid= >/dev/null 2>&1; then
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'still_running' \"$started\" \"$command\"
+    else
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'ended' \"$started\" \"$command\"
+    fi
+  done
+done
+";
+
+/// A command substring that can ride inside double quotes in the fixed remote
+/// program.
+///
+/// [`quote_unit_path`] refuses a space, which is right for a unit path and
+/// wrong here: the whole point of the filter is to name
+/// `stado agent --target <host>` rather than a bare binary. The charset is
+/// widened by exactly a space and nothing else, so every character a shell
+/// would act on stays refused.
+fn quote_command_match(value: &str) -> Result<String, DeployError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(DeployError("the command substring is empty".to_string()));
+    }
+    let allowed = |c: char| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, ' ' | '-' | '_' | '.' | '/' | '=' | ':' | '+' | ',')
+    };
+    if let Some(bad) = trimmed.chars().find(|c| !allowed(*c)) {
+        return Err(DeployError(format!(
+            "command substring {trimmed:?} contains {bad:?}, which cannot ride the fixed remote \
+             program"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Boot one loaded launchd label out of the system domain.
+///
+/// The last gap in the world-to-declaration direction. `service list
+/// --undeclared` can now name a label the registry never declared, and
+/// `host remove-file` can now delete its unit file — but nothing could take the
+/// JOB out of launchd, and `service stop` refuses a label with no declaration
+/// to resolve. So `com.wisent.compute.service.stado-agent-mini` sat loaded with
+/// its file already deleted, running nothing, and `ensure` refused to install
+/// over it: "is loaded and runs [], not [...]; retire it first" — with nothing
+/// able to retire it.
+///
+/// Same `sudo -n` grant `ENSURE_BODY` uses to install a system daemon. A label
+/// launchd does not hold is reported `absent`, not an error: booting out
+/// something already gone is the state this command exists to reach.
+const BOOTOUT_SCRIPT: &str = "set -u
+label=@LABEL@
+report() { printf 'STADO_BOOTOUT\\t%s\\t%s\\n' \"$1\" \"$2\"; }
+if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
+  report refused \"not a launchd host\"
+  exit 0
+fi
+if ! /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+  report absent \"launchd holds no system/$label\"
+  exit 0
+fi
+if /usr/bin/sudo -n /bin/launchctl bootout \"system/$label\" 2>/dev/null; then
+  if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+    report failed \"bootout returned success and the job is still loaded\"
+  else
+    report booted_out \"\"
+  fi
+else
+  if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+    report refused \"sudo -n launchctl bootout system/$label was refused\"
+  else
+    report booted_out \"\"
+  fi
+fi
+";
+
+/// [`BOOTOUT_SCRIPT`] for one label. Returns `(state, detail)`.
+pub async fn bootout_label(
+    target: &ComputeTarget,
+    label: &str,
+    runner: &Runner,
+) -> Result<(String, String), DeployError> {
+    validate_unit_id(label)?;
+    let script = BOOTOUT_SCRIPT.replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?));
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "the bootout did not complete",
+        )));
+    }
+    output
+        .stdout
+        .lines()
+        .find_map(|line| match host_channel::marker_fields(line).as_slice() {
+            ["STADO_BOOTOUT", state, detail] => {
+                Some(((*state).trim().to_string(), (*detail).trim().to_string()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| DeployError(format!("{}: the bootout reported nothing", target.name)))
+}
+
+/// One process the reaper judged, and what it did about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReapedProcess {
+    pub host: String,
+    pub pid: String,
+    /// `would_end`, `ended`, or `still_running`.
+    pub outcome: String,
+    pub started_at: String,
+    pub command: String,
+}
+
+impl ReapedProcess {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "pid": self.pid,
+            "outcome": self.outcome,
+            "started_at": self.started_at,
+            "command": self.command,
+        })
+    }
+}
+
+/// [`REAP_SCRIPT`] against one host. `apply` false signals nothing.
+pub async fn reap_undeclared_processes(
+    target: &ComputeTarget,
+    command_match: &str,
+    apply: bool,
+    runner: &Runner,
+) -> Result<(Vec<ReapedProcess>, String), DeployError> {
+    if command_match.trim().is_empty() {
+        return Err(DeployError(
+            "a command substring is required: the reaper de-duplicates one named program, never \
+             everything under a managed root"
+                .to_string(),
+        ));
+    }
+    let mut roots = Vec::new();
+    for root in managed_roots()? {
+        roots.push(format!("\"{}\"", quote_unit_path(&root)?));
+    }
+    let mut labels = Vec::new();
+    for service in declared_services(target) {
+        labels.push(format!("\"{}\"", quote_unit_path(service.unit_id())?));
+    }
+    let script = REAP_SCRIPT
+        .replace("@ROOTS@", &roots.join(" "))
+        .replace("@LABELS@", &labels.join(" "))
+        .replace("@APPLY@", if apply { "yes" } else { "no" })
+        .replace(
+            "@MATCH@",
+            &format!("\"{}\"", quote_command_match(command_match)?),
+        );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "the reap did not complete",
+        )));
+    }
+    let mut kept = String::new();
+    let mut reaped = Vec::new();
+    for line in output.stdout.lines() {
+        match host_channel::marker_fields(line).as_slice() {
+            ["STADO_REAP_KEEP", pids] => kept = (*pids).trim().to_string(),
+            ["STADO_REAP", pid, outcome, started, command] => reaped.push(ReapedProcess {
+                host: target.name.clone(),
+                pid: (*pid).trim().to_string(),
+                outcome: (*outcome).trim().to_string(),
+                started_at: (*started).trim().to_string(),
+                command: (*command).trim().to_string(),
+            }),
+            _ => {}
+        }
+    }
+    Ok((reaped, kept))
+}
+
 /// Every launchd job loaded on TARGET under [`FLEET_LABEL_PREFIX`] that the
 /// registry does not declare, with the unit file and program each one runs.
 ///

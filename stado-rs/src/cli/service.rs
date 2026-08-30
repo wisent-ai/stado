@@ -97,6 +97,52 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// End every product process on a host that no declared unit owns.
+    ///
+    /// `stop` ends a declared unit and the processes launchd disowned from it.
+    /// Nothing ended a process whose label the registry never declared, or
+    /// whose label was removed while the process kept running. On
+    /// charless-mac-mini that is how a `stado agent` from 2026-08-27 kept
+    /// publishing the host's capacity through three release deliveries, two
+    /// restarts, a `service stop` and a `service remove`, refusing 55 pinned
+    /// jobs for a week — and why `service list --undeclared` could name the
+    /// state while no command could end it.
+    ///
+    /// Reports without signalling anything unless `--apply` is given.
+    /// Boot one loaded launchd label out of the system domain.
+    ///
+    /// For a label the registry does not declare, which `stop` cannot resolve
+    /// and `retire` cannot reach. `service list --undeclared` names them.
+    Bootout {
+        /// launchd label, as the host knows it.
+        label: String,
+        /// Registry host that has it loaded.
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    Reap {
+        /// Registry host to reap. Required: this signals processes.
+        #[arg(long)]
+        host: String,
+        /// The exact program being de-duplicated, as a substring of its command
+        /// line -- for example `stado agent --target charless-mac-mini`.
+        /// Required, and deliberately not defaulted: a fleet-wide reap on that
+        /// host proposed ending `skarbiec serve`, `stado dashboard`,
+        /// `stado resolver serve` and the Weles API server, because launchd
+        /// holds a pid for only some declared labels and everything else read
+        /// as undeclared.
+        #[arg(long)]
+        command: String,
+        /// Send SIGTERM. Without it every row is reported as `would_end`.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Go to each consumer and check the endpoint it is told to use.
     ///
     /// `list` reports what hosts say about their units. This reports whether
@@ -700,6 +746,13 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 list(json).await
             }
         }
+        ServiceCommands::Bootout { label, host, json } => bootout(&label, &host, json).await,
+        ServiceCommands::Reap {
+            host,
+            command,
+            apply,
+            json,
+        } => reap(&host, &command, apply, json).await,
         ServiceCommands::Verify { host, local, json } => {
             if local {
                 crate::cli::service_verify::verify_local(json).await
@@ -1223,6 +1276,101 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
         table::print(&["HOST", "LABEL", "PID", "LAST_EXIT", "RUNS"], &cells);
     }
     fail_if_any(&failures, "scan for undeclared units")
+}
+
+/// `service bootout LABEL --host HOST` — take one loaded label out of launchd's
+/// system domain, declared or not.
+async fn bootout(label: &str, host: &str, json: bool) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let runner = production_runner();
+    let (state, detail) = service::bootout_label(&target, label, &runner)
+        .await
+        .map_err(click)?;
+    if json {
+        return print_json(&json!({
+            "host": target.name,
+            "label": label,
+            "state": state,
+            "detail": detail,
+        }));
+    }
+    table::print(
+        &["HOST", "LABEL", "STATE", "DETAIL"],
+        &[vec![
+            target.name.clone(),
+            label.to_string(),
+            state.clone(),
+            detail.clone(),
+        ]],
+    );
+    if state == "refused" || state == "failed" {
+        return Err(CmdError::click(format!(
+            "{}: {label} {state}: {detail}",
+            target.name
+        )));
+    }
+    Ok(())
+}
+
+/// `service reap --host HOST [--apply]` — end the product processes on HOST
+/// that no declared unit owns.
+///
+/// Ownership is the registry's, not launchd's. `list --unowned` asks whether ANY
+/// launchd job claims a process, and on a mac that set is about a thousand pids,
+/// so a duplicate running under a label the document never declared reads as
+/// owned and is left alone. This asks the question that matters: is this process
+/// the one the document says should be running.
+async fn reap(host: &str, command: &str, apply: bool, json: bool) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let runner = production_runner();
+    let (reaped, kept) = service::reap_undeclared_processes(&target, command, apply, &runner)
+        .await
+        .map_err(click)?;
+    if json {
+        let payload: Vec<Value> = reaped.iter().map(service::ReapedProcess::to_json).collect();
+        return print_json(&json!({
+            "host": target.name,
+            "applied": apply,
+            "kept_pids": kept,
+            "reaped": payload,
+        }));
+    }
+    let cells: Vec<Vec<String>> = reaped
+        .iter()
+        .map(|process| {
+            vec![
+                process.pid.clone(),
+                process.outcome.clone(),
+                dash(&process.started_at),
+                process.command.clone(),
+            ]
+        })
+        .collect();
+    table::print(&["PID", "OUTCOME", "STARTED_AT", "COMMAND"], &cells);
+    // The kept set is the other half of the verdict: an empty table with no
+    // kept pid means the declared units are not running either, which is a
+    // different problem from a clean host.
+    println!(
+        "{}: declared units hold pid(s) [{}]{}",
+        target.name,
+        if kept.is_empty() { "none" } else { &kept },
+        if apply {
+            ""
+        } else {
+            "; nothing was signalled (pass --apply)"
+        }
+    );
+    let stubborn = reaped
+        .iter()
+        .filter(|process| process.outcome == "still_running")
+        .count();
+    if stubborn > 0 {
+        return Err(CmdError::click(format!(
+            "{}: {stubborn} process(es) did not end on SIGTERM; their rows name each pid",
+            target.name
+        )));
+    }
+    Ok(())
 }
 
 async fn onboarding_catalog() -> Result<(), CmdError> {

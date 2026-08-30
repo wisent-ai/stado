@@ -3384,9 +3384,20 @@ pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFile
         r#"set -u
 path={quoted}
 report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
+# `/Library/LaunchDaemons/com.wisent.*.plist` is a managed area too. The fleet
+# INSTALLS there — `deploy::service::ENSURE_BODY` writes a system daemon with
+# `sudo -n /usr/bin/install -m 644 -o root -g wheel` — and until now it could
+# not delete what it wrote, so `service remove` refused with "outside the
+# managed home areas" and every always-on host only ever accumulated unit
+# files. charless-mac-mini reached 81 that the registry does not declare,
+# including a `com.wisent.compute.service.com.wisent.compute.service.stado-agent-mini`
+# whose KeepAlive job restarted a duplicate queue agent every time it was
+# stopped. Create and delete now share one grant and one guard set.
+privileged=no
 case "$path" in
   "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*) ;;
-  *) report refused "outside the managed home areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
+  /Library/LaunchDaemons/com.wisent.*.plist) privileged=yes ;;
+  *) report refused "outside the managed areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
 esac
 if [ -L "$path" ]; then
   report refused "a symlink points outside the managed area; remove it by hand: rm -- $path"
@@ -3394,10 +3405,24 @@ elif [ -d "$path" ]; then
   report refused "a directory is not removed by a single-file command"
 elif [ ! -e "$path" ]; then
   report absent ""
-elif [ ! -O "$path" ]; then
-  report refused "not owned by this account; remove it on the host with: sudo rm -- $path"
 elif [ ! -f "$path" ]; then
   report refused "not a regular file"
+elif [ "$privileged" = yes ]; then
+  # Owned by root by construction, so the `-O` test the home areas use would
+  # refuse every one of them. The grant is the same `sudo -n` the install used;
+  # a host without it is told which command was refused rather than left with a
+  # unit nobody can remove.
+  if /usr/bin/sudo -n /bin/rm -f -- "$path"; then
+    if [ -e "$path" ]; then
+      report failed "sudo rm succeeded and the path is still there"
+    else
+      report removed ""
+    fi
+  else
+    report refused "sudo -n rm -- $path was refused; this host has no passwordless grant"
+  fi
+elif [ ! -O "$path" ]; then
+  report refused "not owned by this account; remove it on the host with: sudo rm -- $path"
 else
   rm -f -- "$path"
   if [ -e "$path" ]; then
@@ -3957,9 +3982,9 @@ async fn reconcile_verifier(
     let grant = token_metadata
         .as_array()
         .and_then(|tokens| {
-            tokens.iter().find(|entry| {
-                entry.get("consumer").and_then(Value::as_str) == Some(consumer)
-            })
+            tokens
+                .iter()
+                .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer))
         })
         .ok_or_else(|| {
             CmdError::click(format!(
@@ -3989,22 +4014,16 @@ async fn reconcile_verifier(
             .map_err(|error| CmdError::click(error.to_string()))?;
         let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
         let authoritative: Value = serde_json::from_str(&authoritative_text)?;
-        let target_vaults = remote_skarbiec_metadata(
-            &resolved,
-            &runner,
-            &skarbiec,
-            &vault,
-            &gnupg_home,
-            "vaults",
-        )
-        .await?;
+        let target_vaults =
+            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "vaults")
+                .await?;
         let target_owner = target_vaults
             .get("vaults")
             .and_then(Value::as_array)
             .and_then(|vaults| {
-                vaults.iter().find(|entry| {
-                    entry.get("path").and_then(Value::as_str) == Some(vault.as_str())
-                })
+                vaults
+                    .iter()
+                    .find(|entry| entry.get("path").and_then(Value::as_str) == Some(vault.as_str()))
             })
             .and_then(|entry| entry.get("owner"))
             .and_then(Value::as_str)
@@ -4048,8 +4067,8 @@ async fn reconcile_verifier(
                         "authoritative release publisher item {item} has no lifecycle controller"
                     ))
                 })?;
-            let token = crate::credential_store::owner::read_string(item, "token")
-                .map_err(|error| {
+            let token =
+                crate::credential_store::owner::read_string(item, "token").map_err(|error| {
                     CmdError::click(format!(
                         "cannot read authoritative release publisher item {item}: {error}"
                     ))
@@ -4251,7 +4270,11 @@ async fn reconcile_verifier(
         } else {
             "can read"
         };
-        println!("{}: {consumer} {verb} {}", resolved.name, item_list.join(","));
+        println!(
+            "{}: {consumer} {verb} {}",
+            resolved.name,
+            item_list.join(",")
+        );
     }
     Ok(())
 }
