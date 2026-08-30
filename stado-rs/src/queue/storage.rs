@@ -152,16 +152,38 @@ impl JobStorage {
         storage.with_configured_read_failover().await
     }
 
+    /// Attach the read-failover mirror, when the configured backup can hold a
+    /// replica of this primary at all.
+    ///
+    /// This is the OTHER writer to the backup, and until now the unchecked
+    /// one: `ReadFailoverBackend` copies every `upload_*` to the backup as it
+    /// happens, so it does not need replication to be switched on and it is not
+    /// stopped by switching replication off. On charless-mac-mini it refilled
+    /// `~/.stado/local-backup` at 2 GiB per minute — 48.29 GiB of proven
+    /// duplicates deleted, back over 15 GiB seven minutes later — hours after
+    /// the coordinator's replication had been stopped, because a `stado`
+    /// primary names objects by bare key and a directory stores the name it is
+    /// handed, so every artifact a job published landed at
+    /// `local-backup/artifacts/...` where nothing looks for it.
+    ///
+    /// A pairing that cannot hold a replica gets NO mirror, and the reason is
+    /// printed once. Not an error: erroring here would take down every stado
+    /// process on a host whose configuration is merely worthless rather than
+    /// dangerous — the agent, the coordinator and the object API server among
+    /// them — and the store itself is fine. Read failover is dropped with it,
+    /// which is honest, because a replica written at addresses nothing resolves
+    /// could never have answered a read either.
     async fn with_configured_read_failover(mut self) -> Result<Self, StorageError> {
         let Some(endpoint) = super::copy::Endpoint::configured_backup() else {
             return Ok(self);
         };
         let primary = super::copy::Endpoint::configured_primary();
-        if primary.describe() == endpoint.describe() {
-            return Err(StorageError::Other(format!(
-                "primary and backup resolve to the same store ({})",
-                primary.describe()
-            )));
+        if let Some(refusal) = primary.cannot_replicate(&endpoint) {
+            eprintln!(
+                "[storage-replica] no disaster-recovery mirror for this store: {refusal} \
+                 Nothing is written to the backup and reads do not fail over to it."
+            );
+            return Ok(self);
         }
         let backup = endpoint.build().await?;
         self.backend = Arc::new(super::failover::ReadFailoverBackend::new(
