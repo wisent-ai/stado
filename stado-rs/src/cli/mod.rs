@@ -1440,6 +1440,16 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Classify HOST's local replica against the store it mirrors, object by
+    /// object. Read-only: it deletes nothing and is the number to read before
+    /// anyone reclaims a replica.
+    #[command(name = "backup-audit")]
+    BackupAudit {
+        target: String,
+        /// Emit the classification as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -2341,6 +2351,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 revision,
                 json,
             } => host::verify_release_platform(&target, &repo, &revision, json).await,
+            HostCommands::BackupAudit { target, json } => host::backup_audit(&target, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,

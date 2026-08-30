@@ -5754,6 +5754,89 @@ pub async fn forward_remote(
     Ok(())
 }
 
+/// The replica roots every fleet host uses, relative to the managed home. Both
+/// are the values the service catalog declares for the object API unit
+/// (`WC_LOCAL_STORAGE_PATH`) and its replica, so this command reads the same
+/// layout the fleet installs rather than asking an operator to name a path.
+const BACKUP_ROOT: &str = ".stado/local-backup";
+const PRIMARY_ROOT: &str = ".stado/local-storage";
+
+/// Classify a host's local replica against the store it mirrors.
+///
+/// Read-only, and deliberately separate from any command that deletes: the
+/// first time a tree on this fleet was assumed to be duplicate data it turned
+/// out to be the only copy of 9.58 GiB, so the number comes first and the
+/// reclaim is a decision someone takes afterwards with the classification in
+/// front of them.
+pub async fn backup_audit(target: &str, json: bool) -> Result<(), CmdError> {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.trim().is_empty() {
+        return Err(CmdError::click(
+            "this control plane has no storage.stado.namespace, so a replica path cannot be \
+             resolved to a primary address",
+        ));
+    }
+    let runner = crate::deploy::production_runner();
+    let (_, audit) = crate::deploy::host_backup_audit::audit_host(
+        target,
+        namespace,
+        BACKUP_ROOT,
+        PRIMARY_ROOT,
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let gib = |bytes: u64| bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+    if json {
+        let classes: serde_json::Map<String, Value> = audit
+            .classes
+            .iter()
+            .map(|(class, totals)| {
+                (
+                    class.clone(),
+                    json!({"objects": totals.objects, "bytes": totals.bytes}),
+                )
+            })
+            .collect();
+        print_json(&json!({
+            "host": audit.host,
+            "complete": audit.complete,
+            "unavailable": audit.unavailable,
+            "classes": classes,
+            "reclaimable_bytes": audit.reclaimable_bytes(),
+            "retained_bytes": audit.retained_bytes(),
+        }));
+        return Ok(());
+    }
+    for class in [
+        crate::deploy::host_backup_audit::TWIN,
+        crate::deploy::host_backup_audit::ABSENT,
+        crate::deploy::host_backup_audit::DIFFERS,
+        crate::deploy::host_backup_audit::SAME_SIZE_UNPROVEN,
+    ] {
+        let totals = audit.classes.get(class).cloned().unwrap_or_default();
+        println!(
+            "{class:9} {:>7} object(s)  {:>8.2} GiB",
+            totals.objects,
+            gib(totals.bytes)
+        );
+        for (bytes, path) in audit.examples.get(class).into_iter().flatten() {
+            println!("          {:>8.2} GiB  {path}", gib(*bytes));
+        }
+    }
+    println!(
+        "reclaim:  {:.2} GiB proven present and identical in the primary; {:.2} GiB is data and stays",
+        gib(audit.reclaimable_bytes()),
+        gib(audit.retained_bytes())
+    );
+    if !audit.complete {
+        println!(
+            "warning:  the host did not finish classifying, so these totals are a floor, not the answer"
+        );
+    }
+    Ok(())
+}
+
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()
         || !value
