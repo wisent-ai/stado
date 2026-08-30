@@ -1448,8 +1448,7 @@ impl RemoteObjectApi {
             let mut request =
                 self.request_as(reqwest::Method::GET, endpoint.clone(), bearer.as_deref());
             if !body.is_empty() {
-                request =
-                    request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
+                request = request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
             }
             let response = match request.send().await {
                 Ok(response) => response,
@@ -1464,10 +1463,7 @@ impl RemoteObjectApi {
                     continue;
                 }
             };
-            if response.status() == reqwest::StatusCode::NOT_FOUND
-                && body.is_empty()
-                && optional
-            {
+            if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
                 return Ok(None);
             }
             if !response.status().is_success() {

@@ -22,7 +22,6 @@ fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is required by the recovery journey"))
 }
 
-
 impl Journey {
     fn load(version_variable: &str) -> Self {
         let work = tempfile::tempdir().expect("temporary recovery root");
@@ -40,7 +39,9 @@ impl Journey {
         let entry = registry["targets"]
             .as_array()
             .and_then(|targets| targets.iter().find(|entry| entry["name"] == target))
-            .unwrap_or_else(|| panic!("dedicated target {target:?} is present in recovery registry"));
+            .unwrap_or_else(|| {
+                panic!("dedicated target {target:?} is present in recovery registry")
+            });
         assert!(
             entry["ssh"].as_str().is_some_and(|ssh| !ssh.is_empty()),
             "dedicated recovery target declares ssh"
@@ -93,7 +94,6 @@ impl Journey {
     fn recover_current(&self) -> Output {
         self.run_recovery(&self.registry, false)
     }
-
 }
 
 fn report(output: &Output) -> Value {
@@ -150,7 +150,10 @@ fn cli_refuses_a_manifest_whose_key_is_not_trusted_by_the_loaded_registry() {
         }
     }
     let rejected = journey.stado(&wrong_key);
-    assert!(!rejected.status.success(), "untrusted signing key must be refused");
+    assert!(
+        !rejected.status.success(),
+        "untrusted signing key must be refused"
+    );
     let rejected = report(&rejected);
     assert_eq!(step_status(&rejected, "download"), Some("ok"));
     assert_eq!(step_status(&rejected, "verify"), Some("failed"));
@@ -168,7 +171,10 @@ fn cli_refuses_a_manifest_whose_key_is_not_trusted_by_the_loaded_registry() {
 fn cli_refuses_a_signed_manifest_whose_identity_differs_from_its_coordinate() {
     let journey = Journey::load("STADO_RECOVERY_IDENTITY_VERSION");
     let rejected = journey.stado(&journey.registry);
-    assert!(!rejected.status.success(), "identity mismatch must be refused");
+    assert!(
+        !rejected.status.success(),
+        "identity mismatch must be refused"
+    );
     let rejected = report(&rejected);
     assert_eq!(step_status(&rejected, "download"), Some("ok"));
     assert_eq!(step_status(&rejected, "verify"), Some("failed"));
@@ -183,7 +189,10 @@ fn cli_refuses_a_signed_manifest_whose_identity_differs_from_its_coordinate() {
 fn cli_refuses_an_archive_that_differs_from_its_signed_digest_or_size() {
     let journey = Journey::load("STADO_RECOVERY_ARCHIVE_MISMATCH_VERSION");
     let rejected = journey.stado(&journey.registry);
-    assert!(!rejected.status.success(), "archive mismatch must be refused");
+    assert!(
+        !rejected.status.success(),
+        "archive mismatch must be refused"
+    );
     let rejected = report(&rejected);
     assert_eq!(step_status(&rejected, "download"), Some("ok"));
     assert_eq!(step_status(&rejected, "verify"), Some("failed"));
@@ -207,8 +216,14 @@ fn cli_preserves_the_old_binary_and_installs_without_a_local_or_old_remote_resol
         "signed recovery failed: {document}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    for name in ["download", "verify", "backup", "install", "resolver", "recovery"] {
-        assert_eq!(step_status(&document, name), Some("ok"), "{name}: {document}");
+    for name in [
+        "download", "verify", "backup", "install", "resolver", "recovery",
+    ] {
+        assert_eq!(
+            step_status(&document, name),
+            Some("ok"),
+            "{name}: {document}"
+        );
     }
     assert_eq!(step_status(&document, "rollback"), None);
 }
@@ -220,7 +235,10 @@ fn failed_resolver_probe_atomically_restores_the_previous_binary() {
     let journey = Journey::load("STADO_RECOVERY_ROLLBACK_VERSION");
 
     let output = journey.stado(&journey.registry);
-    assert!(!output.status.success(), "negative resolver fixture must be refused");
+    assert!(
+        !output.status.success(),
+        "negative resolver fixture must be refused"
+    );
     let document = report(&output);
     assert_eq!(step_status(&document, "install"), Some("ok"));
     assert_eq!(step_status(&document, "resolver"), Some("failed"));
