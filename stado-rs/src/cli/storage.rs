@@ -714,7 +714,7 @@ async fn ls_canonical(store: &JobStorage, as_json: bool) -> Result<(), CmdError>
 async fn ls_prefix(store: &JobStorage, prefix: &str, args: &StorageLsArgs) -> Result<(), CmdError> {
     let backend = store.backend();
     let mut blobs = backend
-        .list_blobs_with_meta(&backend_prefix(prefix)?)
+        .list_blobs_with_meta(&backend_prefix(backend, prefix)?)
         .await?;
     blobs.sort_by(|left, right| left.name.cmp(&right.name));
     let total = blobs.len();
@@ -893,19 +893,20 @@ async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
 /// Resolve a CLI path argument to the key the backend actually stores under.
 ///
 /// Two addressing forms reach the commands that take a path: a `stado://` product
-/// URI, whose on-disk key carries the canonical root prefix, and a bare queue path,
-/// which is already a backend key. Only the explicit scheme is rewritten, so queue
-/// callers are untouched.
+/// URI, and a bare queue path, which is already a backend key. Only the explicit
+/// scheme is rewritten, so queue callers are untouched.
 ///
-/// Passing the URI through verbatim is why `stat` and `cat` answered "absent" about
-/// objects that `put` had just stored and `objects` listed: both skipped the
-/// mapping that the product commands apply through `ObjectRef`. A command that
-/// reports a healthy object as missing is worse than one that cannot address it at
-/// all, because it reads as a failed write and invites a retry that immutability
-/// then refuses.
-fn backend_key(path: &str) -> Result<String, CmdError> {
+/// WHICH key a URI becomes is the backend's answer, not this module's. The first
+/// repair here rewrote every URI into the qualified store path
+/// `ecosystem/<namespace>/<key>`, which is right for a filesystem or a bucket and
+/// wrong for the object API: that backend re-prefixes with its own namespace, so
+/// the qualified path asks it for `ecosystem/<ns>/ecosystem/<ns>/<key>`. With the
+/// fleet store bound to the object API, `stat` therefore reported `absent` for
+/// objects the same store served over HTTP 200 — the same doubled address a writer
+/// defect had already created 417 real objects at.
+fn backend_key(backend: &Arc<dyn BlobBackend>, path: &str) -> Result<String, CmdError> {
     if path.starts_with("stado://") {
-        Ok(crate::object_store::ObjectRef::parse(path)?.storage_path())
+        Ok(backend.blob_path(&crate::object_store::ObjectRef::parse(path)?))
     } else {
         Ok(path.to_string())
     }
@@ -913,13 +914,11 @@ fn backend_key(path: &str) -> Result<String, CmdError> {
 
 /// The same resolution for a listing prefix, which may name a whole namespace and
 /// therefore carry no key at all.
-fn backend_prefix(prefix: &str) -> Result<String, CmdError> {
+fn backend_prefix(backend: &Arc<dyn BlobBackend>, prefix: &str) -> Result<String, CmdError> {
     match prefix.strip_prefix("stado://") {
         Some(rest) => {
             let (namespace, key) = rest.split_once('/').unwrap_or((rest, ""));
-            Ok(crate::object_store::ObjectRef::namespace_prefix(
-                namespace, key,
-            )?)
+            Ok(backend.blob_prefix(namespace, key)?)
         }
         None => Ok(prefix.to_string()),
     }
@@ -935,7 +934,20 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     // so asking it reports `absent` for every release ever published -- an answer
     // indistinguishable from a real absence. Only the witness differs here: one
     // rendering below reports whichever answered, so the two cannot drift.
-    let parsed = crate::object_store::ObjectRef::parse(&args.path);
+    // ONLY a `stado://` argument names a namespace. `ObjectRef::parse` accepts
+    // a bare `<namespace>/<key>` too, so a queue path was read as a coordinate
+    // in a foreign namespace — `artifacts/models/...` became namespace
+    // `artifacts` — and the probe went to the object API's list route, which
+    // answered 401 for a namespace this token has no grant on. An object the
+    // very same store serves cannot be reported unreachable because the path
+    // was spelled without a scheme.
+    let parsed = if args.path.starts_with("stado://") {
+        crate::object_store::ObjectRef::parse(&args.path)
+    } else {
+        Err(crate::queue::StorageError::Other(
+            "a bare path addresses the queue store, not a namespace".to_string(),
+        ))
+    };
     let release = match &parsed {
         Ok(object) if object.namespace() == "releases" => {
             RemoteObjectApi::configured_release_reader()?.map(|remote| (remote, object.to_string()))
@@ -1031,7 +1043,7 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
         None => {
             let store = JobStorage::new().await?;
             let backend = store.backend();
-            let probe_path = backend_key(&args.path)?;
+            let probe_path = backend_key(backend, &args.path)?;
             let presence = probe(backend, &probe_path).await;
 
             // Metadata and the timestamp come from the listing, which is a separate
@@ -1134,7 +1146,10 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
 /// unreachable store is an error here too and never an empty body.
 async fn cat(args: &StorageCatArgs) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let Some(bytes) = store.read_bytes(&backend_key(&args.path)?).await? else {
+    let Some(bytes) = store
+        .read_bytes(&backend_key(store.backend(), &args.path)?)
+        .await?
+    else {
         return Err(CmdError::click(format!(
             "{:?}: absent — the store answered and the object is not there",
             args.path
@@ -1160,6 +1175,8 @@ fn max_object_api_download_body() -> usize {
     crate::object_store::max_object_bytes()
 }
 
+const OBJECT_API_CHUNK_BYTES: usize = 3 * 1024 * 1024;
+
 struct RemoteObjectApi {
     http: reqwest::Client,
     base_url: url::Url,
@@ -1175,6 +1192,30 @@ struct RemotePutResponse {
     state: String,
     uri: String,
     content_type: String,
+}
+
+#[derive(serde::Serialize)]
+struct RemoteComposeChunk {
+    uri: String,
+    size: usize,
+    sha256: String,
+}
+
+#[derive(serde::Serialize)]
+struct RemoteComposeRequest<'a> {
+    uri: &'a str,
+    content_type: &'a str,
+    if_absent: bool,
+    metadata: &'a BTreeMap<String, String>,
+    upload_id: &'a str,
+    size: usize,
+    chunks: &'a [RemoteComposeChunk],
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteComposeResponse {
+    status: u16,
+    payload: Value,
 }
 
 #[derive(serde::Deserialize)]
@@ -1197,6 +1238,66 @@ struct RemoteObjectListItem {
     updated_at: Option<String>,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
+}
+
+fn partial_content_bounds(
+    response: &reqwest::Response,
+    expected_start: usize,
+    operation: &str,
+) -> Result<(usize, usize), CmdError> {
+    let content_range = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Stado object API {operation} partial response carries no Content-Range"
+            ))
+        })?;
+    let (range, total) = content_range
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+            ))
+        })?;
+    let (start, end) = range.split_once('-').ok_or_else(|| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let start = start.parse::<usize>().map_err(|_| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let end = end.parse::<usize>().map_err(|_| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let total = total.parse::<usize>().map_err(|_| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    let end_exclusive = end.checked_add(1).ok_or_else(|| {
+        CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+        ))
+    })?;
+    if start != expected_start
+        || end < start
+        || end_exclusive > total
+        || end_exclusive.saturating_sub(start) > OBJECT_API_CHUNK_BYTES
+    {
+        return Err(CmdError::click(format!(
+            "Stado object API {operation} returned invalid Content-Range {content_range:?} \
+             for byte offset {expected_start}"
+        )));
+    }
+    Ok((end_exclusive, total))
 }
 
 impl RemoteObjectApi {
@@ -1397,6 +1498,114 @@ impl RemoteObjectApi {
         Ok(Some(token))
     }
 
+    async fn put_chunked(
+        &self,
+        uri: &str,
+        content_type: &str,
+        if_absent: bool,
+        bytes: bytes::Bytes,
+        metadata: &BTreeMap<String, String>,
+        bearer: Option<&str>,
+    ) -> Result<RemotePutResponse, CmdError> {
+        let object = crate::object_store::ObjectRef::parse(uri)?;
+        let upload_id = hex::encode(Sha256::digest(&bytes));
+        let mut chunks =
+            Vec::with_capacity(bytes.len().div_ceil(OBJECT_API_CHUNK_BYTES));
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let end = offset
+                .saturating_add(OBJECT_API_CHUNK_BYTES)
+                .min(bytes.len());
+            let chunk = bytes.slice(offset..end);
+            let index = chunks.len();
+            let sha256 = hex::encode(Sha256::digest(&chunk));
+            let chunk_object = crate::object_store::ObjectRef::new(
+                object.namespace(),
+                &format!(
+                    "{}.__stado_upload/{upload_id}/{index:08}",
+                    object.key()
+                ),
+            )?;
+            let chunk_uri = chunk_object.to_string();
+            let endpoint = self.endpoint(
+                "/api/object",
+                &[("uri", chunk_uri.as_str()), ("if_absent", "true")],
+            )?;
+            let chunk_metadata = BTreeMap::from([
+                ("stado-upload-id".to_string(), upload_id.clone()),
+                ("stado-upload-index".to_string(), index.to_string()),
+                ("stado-upload-sha256".to_string(), sha256.clone()),
+                ("stado-upload-target".to_string(), uri.to_string()),
+            ]);
+            let response = self
+                .request_as(reqwest::Method::PUT, endpoint, bearer)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/octet-stream",
+                )
+                .header(
+                    "x-stado-object-metadata",
+                    serde_json::to_string(&chunk_metadata)?,
+                )
+                .body(chunk)
+                .send()
+                .await?;
+            if !matches!(
+                response.status(),
+                reqwest::StatusCode::CONFLICT | reqwest::StatusCode::PRECONDITION_FAILED
+            ) {
+                let stored: RemotePutResponse =
+                    self.response_json(response, "object chunk PUT").await?;
+                if stored.state != "stored"
+                    || stored.uri != chunk_uri
+                    || stored.content_type != "application/octet-stream"
+                {
+                    return Err(CmdError::click(
+                        "Stado object API returned an inconsistent object chunk PUT response",
+                    ));
+                }
+            }
+            chunks.push(RemoteComposeChunk {
+                uri: chunk_uri,
+                size: end - offset,
+                sha256,
+            });
+            offset = end;
+        }
+
+        let endpoint = self.endpoint("/api/object/compose", &[])?;
+        let request = RemoteComposeRequest {
+            uri,
+            content_type,
+            if_absent,
+            metadata,
+            upload_id: &upload_id,
+            size: bytes.len(),
+            chunks: &chunks,
+        };
+        let response = self
+            .request_as(reqwest::Method::POST, endpoint, bearer)
+            .json(&request)
+            .send()
+            .await?;
+        let response: RemoteComposeResponse = self
+            .response_json(response, "object chunk composition")
+            .await?;
+        let status = reqwest::StatusCode::from_u16(response.status)
+            .map_err(|_| CmdError::click("object composition returned an invalid HTTP status"))?;
+        if !status.is_success() {
+            return Err(CmdError::click(format!(
+                "Stado object API returned HTTP {status}: {}",
+                response.payload
+            )));
+        }
+        serde_json::from_value(response.payload).map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API returned an invalid object composition payload: {error}"
+            ))
+        })
+    }
+
     async fn put_with_metadata(
         &self,
         uri: &str,
@@ -1405,16 +1614,40 @@ impl RemoteObjectApi {
         bytes: Vec<u8>,
         metadata: &BTreeMap<String, String>,
     ) -> Result<(), CmdError> {
+        let create_only = if_absent;
         let if_absent = if if_absent { "true" } else { "false" };
-        let endpoint = self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
+        let endpoint =
+            self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
         let bearer = self.release_bearer(uri).await?;
+        let bytes = bytes::Bytes::from(bytes);
         let response = self
             .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .header("x-stado-object-metadata", serde_json::to_string(metadata)?)
-            .body(bytes)
+            .body(bytes.clone())
             .send()
             .await?;
+        if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            let payload = self
+                .put_chunked(
+                    uri,
+                    content_type,
+                    create_only,
+                    bytes,
+                    metadata,
+                    bearer.as_deref(),
+                )
+                .await?;
+            if payload.state != "stored"
+                || payload.uri != uri
+                || payload.content_type != content_type
+            {
+                return Err(CmdError::click(
+                    "Stado object API returned an inconsistent object composition response",
+                ));
+            }
+            return Ok(());
+        }
         // Name the object and the credential that was presented. The bare
         // `401 unauthorized or non-immutable release write` named neither, and
         // reading it cost a day: the same sentence covers a missing bearer, a
@@ -1455,6 +1688,103 @@ impl RemoteObjectApi {
         self.get_object_resumable(uri, true).await
     }
 
+    async fn get_object_in_ranges(
+        &self,
+        endpoint: url::Url,
+        bearer: Option<&str>,
+        optional: bool,
+    ) -> Result<Option<Vec<u8>>, CmdError> {
+        let limit = max_object_api_download_body();
+        let mut body = Vec::new();
+        let mut failures = 0usize;
+
+        'download: loop {
+            let start = body.len();
+            let end = start
+                .saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1))
+                .min(limit.saturating_sub(1));
+            let response = match self
+                .request_as(reqwest::Method::GET, endpoint.clone(), bearer)
+                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    if failures > 3 {
+                        return Err(CmdError::click(format!(
+                            "authenticated object GET exhausted its byte-range retries after \
+                             {start} bytes: {error}"
+                        )));
+                    }
+                    continue;
+                }
+            };
+            if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(self.response_error(response).await);
+            }
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(CmdError::click(format!(
+                    "Stado object API object GET refused the byte range beginning at {start}"
+                )));
+            }
+            let (end_exclusive, total) =
+                partial_content_bounds(&response, start, "object GET")?;
+            if total > limit {
+                return Err(CmdError::click(format!(
+                    "Stado object API object GET response exceeds the {limit}-byte limit"
+                )));
+            }
+            body.reserve(total.saturating_sub(body.capacity()));
+
+            let mut response = response;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if chunk.len() > end_exclusive.saturating_sub(body.len()) {
+                            return Err(CmdError::click(
+                                "Stado object API object GET sent bytes outside the requested \
+                                 range",
+                            ));
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    Ok(None) if body.len() != end_exclusive => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "authenticated object GET exhausted its byte-range retries after \
+                                 {} of {end_exclusive} bytes",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                    Ok(None) if body.len() == total => return Ok(Some(body)),
+                    Ok(None) => {
+                        failures = 0;
+                        continue 'download;
+                    }
+                    Err(error) => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "authenticated object GET exhausted its byte-range retries after \
+                                 {} bytes: {error}",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                }
+            }
+        }
+    }
+
     async fn get_object_resumable(
         &self,
         uri: &str,
@@ -1487,6 +1817,12 @@ impl RemoteObjectApi {
             };
             if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
                 return Ok(None);
+            }
+            if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE && body.is_empty() {
+                drop(response);
+                return self
+                    .get_object_in_ranges(endpoint, bearer.as_deref(), optional)
+                    .await;
             }
             if !response.status().is_success() {
                 return Err(self.response_error(response).await);
@@ -1646,6 +1982,27 @@ impl RemoteObjectApi {
             .body(bytes)
             .send()
             .await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let presented = crate::object_store::ObjectRef::parse(uri)
+                .ok()
+                .and_then(|object| {
+                    crate::object_store::release_policy_key(object.namespace(), object.key())
+                })
+                .and_then(|key| crate::config::release_publisher_for_key(&key))
+                .map(|publisher| format!("publisher item {}", publisher.item()))
+                .unwrap_or_else(|| {
+                    if bearer.is_some() {
+                        "a resolved release credential".to_string()
+                    } else {
+                        "the coordinator storage token".to_string()
+                    }
+                });
+            let refusal = self.response_error(response).await;
+            return Err(CmdError::click(format!(
+                "{refusal}; conditional PUT {uri} with if_version={expected_version:?} presented \
+                 {presented}"
+            )));
+        }
         let payload: Value = self
             .response_json(response, "conditional object PUT")
             .await?;
@@ -1657,6 +2014,116 @@ impl RemoteObjectApi {
             ));
         }
         Ok(())
+    }
+
+    async fn get_release_in_ranges(&self, origin: url::Url) -> Result<Vec<u8>, CmdError> {
+        let limit = max_object_api_download_body();
+        let mut body = Vec::new();
+        let mut failures = 0usize;
+
+        'download: loop {
+            let start = body.len();
+            let end = start
+                .saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1))
+                .min(limit.saturating_sub(1));
+            let mut endpoint = origin.clone();
+            let mut selected = None;
+            for hop in 0..=3 {
+                let request = if hop == 0 {
+                    self.request(reqwest::Method::GET, endpoint.clone())
+                } else {
+                    self.http.get(endpoint.clone())
+                }
+                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "public release GET exhausted its byte-range retries after \
+                                 {start} bytes: {error}"
+                            )));
+                        }
+                        continue 'download;
+                    }
+                };
+                if response.status().is_redirection() {
+                    let location = response
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
+                    endpoint = response.url().join(location).map_err(|error| {
+                        CmdError::click(format!("invalid release redirect: {error}"))
+                    })?;
+                    continue;
+                }
+                selected = Some(response);
+                break;
+            }
+            let Some(response) = selected else {
+                return Err(CmdError::click("too many release download redirects"));
+            };
+            if !response.status().is_success() {
+                return Err(self.response_error(response).await);
+            }
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(CmdError::click(format!(
+                    "Stado object API release GET refused the byte range beginning at {start}"
+                )));
+            }
+            let (end_exclusive, total) =
+                partial_content_bounds(&response, start, "release GET")?;
+            if total > limit {
+                return Err(CmdError::click(format!(
+                    "Stado object API release GET response exceeds the {limit}-byte limit"
+                )));
+            }
+            body.reserve(total.saturating_sub(body.capacity()));
+
+            let mut response = response;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if chunk.len() > end_exclusive.saturating_sub(body.len()) {
+                            return Err(CmdError::click(
+                                "Stado object API release GET sent bytes outside the requested \
+                                 range",
+                            ));
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    Ok(None) if body.len() != end_exclusive => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "public release GET exhausted its byte-range retries after {} of \
+                                 {end_exclusive} bytes",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                    Ok(None) if body.len() == total => return Ok(body),
+                    Ok(None) => {
+                        failures = 0;
+                        continue 'download;
+                    }
+                    Err(error) => {
+                        failures = failures.saturating_add(1);
+                        if failures > 3 {
+                            return Err(CmdError::click(format!(
+                                "public release GET exhausted its byte-range retries after {} \
+                                 bytes: {error}",
+                                body.len()
+                            )));
+                        }
+                        continue 'download;
+                    }
+                }
+            }
+        }
     }
 
     async fn get_release(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
@@ -1688,6 +2155,12 @@ impl RemoteObjectApi {
                         CmdError::click(format!("invalid release redirect: {error}"))
                     })?;
                     continue;
+                }
+                if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE
+                    && body.is_empty()
+                {
+                    drop(response);
+                    return self.get_release_in_ranges(origin).await;
                 }
                 if !response.status().is_success() {
                     return Err(self.response_error(response).await);

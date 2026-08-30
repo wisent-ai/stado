@@ -4552,6 +4552,26 @@ pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), C
     Ok(())
 }
 
+/// Authorize TARGET's service resolver on the service-directory authority.
+pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let report = crate::deploy::host_resolver_key::authorize(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: resolver key {} ({}), authorized_keys on {} {}",
+            report["target"].as_str().unwrap_or_default(),
+            report["key_state"].as_str().unwrap_or_default(),
+            report["key_type"].as_str().unwrap_or_default(),
+            report["authority"].as_str().unwrap_or_default(),
+            report["authorized_keys"].as_str().unwrap_or_default(),
+        );
+    }
+    Ok(())
+}
+
 /// One declared log path out of a unit plist: `StandardOutPath` or
 /// `StandardErrorPath`, or nothing when the plist does not declare it.
 /// PlistBuddy writes its "does not exist" to stderr and prints nothing, so a

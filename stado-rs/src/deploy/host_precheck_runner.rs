@@ -329,6 +329,16 @@ async fn brama_skarbiec_context(
     })
 }
 
+/// The Probierz agent identity the runner signs Kronika requests with, resolved
+/// through Brama's own Skarbiec broker rather than named here.
+///
+/// `target` is the host whose Brama installation holds that broker, which is
+/// NOT always the runner's host -- see [`brama_identity_host`]. The route is
+/// `agent:probierz`, and the item and field behind it are whatever Brama's
+/// capability-routes table says today: a credential that is retagged or renamed
+/// is still found, and this function never has to be edited to follow it.
+/// Resolving it anywhere other than beside Brama would mean reading a second
+/// copy of one fleet identity out of a second vault, and the two would drift.
 async fn kronika_agent_credential(
     target: &ComputeTarget,
 ) -> Result<ProbierzAgentCredential, DeployError> {
@@ -1422,31 +1432,87 @@ fn report(
     })
 }
 
+/// The consumer identity the runner presents to Brama. It is the same name the
+/// installer writes into `routes/kronika-agent-id`, so the authorization this
+/// function checks and the identity the runner actually uses are one word.
+const BRAMA_CONSUMER: &str = "kronika";
+
+/// The loopback origin the runner's egress boundary opens, and the port that
+/// boundary permits.
+///
+/// Only a private loopback HTTP origin can be returned, because that is the
+/// only thing the rendered boundary can express: the runner uid is permitted
+/// exactly `127.0.0.1:<port>` and rejected on every network in
+/// [`BLOCKED_IPV4_NETWORKS`] and [`BLOCKED_IPV6_NETWORKS`], which includes the
+/// tailnet and the rest of loopback. The route has to terminate on the runner's
+/// own box.
+///
+/// Where that origin is declared depends on whether the box runs Brama, and
+/// this used to read one map for both cases -- which is why it refused every
+/// host except the one Brama is active on, with `brama declares no endpoint for
+/// runner target ...`.
+///
+/// [`crate::targets::Service::endpoints`] is "the address a host DIALS", and
+/// the directory may only carry an entry where something genuinely answers it.
+/// Three rules enforce that, and together they mean the map can name the box
+/// Brama runs on and the boxes it could move to, and no third machine that
+/// merely calls it:
+///
+/// * `stado service verify` probes each entry from the host it names and
+///   reports silence as `unreachable`, exiting non-zero.
+/// * `brama` is a placement-backed route (`brama-skarbiec`), so
+///   [`crate::service_resolution::validate_registry_contract`] requires
+///   `endpoints` and `standby` together to name exactly that profile's hosts.
+///   An entry for any other target makes the whole registry document invalid
+///   for every reader on the fleet.
+/// * within that profile, `active_profile_host` refuses a document in which
+///   more than one host declares the managed unit. There is one Brama.
+///
+/// So a runner host that is not Brama's active host reaches Brama the way every
+/// other consumer on such a host does: through that host's own resolver
+/// adapter, which binds a loopback port and proxies to the active host. That
+/// socket must never be written into the directory --
+/// [`crate::service_resolution::self_referencing_endpoints`] reports exactly
+/// that shape and `stado registry doctor` exits non-zero on it -- so it is read
+/// from where it IS declared: the target's own `service_resolver` policy.
+///
+/// Either way the runner dials Brama and nothing else. Nothing here can name a
+/// provider, and nothing here can name a host other than the runner's own.
 async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployError> {
     let registry = host_channel::canonical_registry().await?;
     let service = registry
         .service("brama")
         .ok_or_else(|| DeployError("service directory carries no brama service".to_string()))?;
-    let consumer = service
-        .consumers
-        .get("kronika")
-        .ok_or_else(|| DeployError("brama does not authorize consumer \"kronika\"".to_string()))?;
+    let consumer = service.consumers.get(BRAMA_CONSUMER).ok_or_else(|| {
+        DeployError(format!(
+            "brama does not authorize consumer {BRAMA_CONSUMER:?}"
+        ))
+    })?;
     if !consumer
         .capabilities
         .iter()
         .any(|capability| capability == "model-routing")
     {
-        return Err(DeployError(
-            "brama consumer \"kronika\" lacks model-routing".to_string(),
-        ));
+        return Err(DeployError(format!(
+            "brama consumer {BRAMA_CONSUMER:?} lacks model-routing"
+        )));
     }
-    let endpoint = service.address_for(target_name).ok_or_else(|| {
-        DeployError(format!(
-            "brama declares no endpoint for runner target {target_name:?}"
-        ))
-    })?;
-    let parsed = url::Url::parse(&endpoint.url)
-        .map_err(|error| DeployError(format!("brama endpoint is invalid: {error}")))?;
+    let url = if service.active_host == target_name {
+        // The box serves Brama itself, so the address it dials is the address
+        // it serves on, and the directory is the one place that records it.
+        service
+            .address_for(target_name)
+            .map(|endpoint| endpoint.url.clone())
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "brama is active on {target_name:?} and the directory declares no endpoint there"
+                ))
+            })?
+    } else {
+        brama_gateway_origin(&registry, target_name)?
+    };
+    let parsed = url::Url::parse(&url)
+        .map_err(|error| DeployError(format!("brama route is invalid: {error}")))?;
     if parsed.scheme() != "http"
         || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
         || parsed.path() != "/"
@@ -1454,14 +1520,52 @@ async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployE
         || parsed.fragment().is_some()
     {
         return Err(DeployError(format!(
-            "brama endpoint for {target_name:?} must be a private loopback HTTP origin, got {}",
-            endpoint.url
+            "brama route for {target_name:?} must be a private loopback HTTP origin, got {url}"
         )));
     }
     let port = parsed
         .port_or_known_default()
-        .ok_or_else(|| DeployError("brama endpoint has no port".to_string()))?;
-    Ok((endpoint.url.trim_end_matches('/').to_string(), port))
+        .ok_or_else(|| DeployError("brama route has no port".to_string()))?;
+    Ok((url.trim_end_matches('/').to_string(), port))
+}
+
+/// The loopback socket `target_name`'s own resolver publishes for Brama to the
+/// runner's consumer identity, as an HTTP origin.
+///
+/// Read from the registry rather than probed, for the same reason the rest of
+/// this module reads the registry: the installer renders a boundary from it, and
+/// a boundary rendered from an observation is a boundary that changes when the
+/// observation was taken. Whether the socket is answering is
+/// `stado resolver status` on that host, and the installed runner's own
+/// `precheck-runner status`.
+fn brama_gateway_origin(
+    registry: &crate::targets::Registry,
+    target_name: &str,
+) -> Result<String, DeployError> {
+    let target = host_channel::resolve_target(registry, target_name)?;
+    let declared = target.extra.get("service_resolver").ok_or_else(|| {
+        DeployError(format!(
+            "brama is not active on {target_name:?} and that target declares no service_resolver, \
+             so nothing on it publishes a Brama route the runner could be permitted to dial"
+        ))
+    })?;
+    let config: crate::service_resolution::ResolverConfig =
+        serde_json::from_value(declared.clone()).map_err(|error| {
+            DeployError(format!(
+                "{target_name}: registry target service_resolver is invalid: {error}"
+            ))
+        })?;
+    let adapter = config
+        .adapters
+        .iter()
+        .find(|adapter| adapter.service == "brama" && adapter.consumer == BRAMA_CONSUMER)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{target_name}: its resolver declares no brama adapter for consumer \
+                 {BRAMA_CONSUMER:?}, so the runner has no Brama route on its own host"
+            ))
+        })?;
+    Ok(format!("http://{}", adapter.bind))
 }
 
 async fn install_kronika_agent_secret(
@@ -1526,12 +1630,37 @@ async fn install_kronika_agent_secret(
     Ok(())
 }
 
+/// The host whose Brama installation holds the Probierz agent identity for a
+/// runner being installed on `target`.
+///
+/// The runner's own box when Brama runs there, and Brama's single active host
+/// otherwise. The Probierz identity is not a per-machine secret: it is one fleet
+/// agent identity, minted by the capability-routes table of the Brama the runner
+/// is authorized against. Reading it beside that Brama is the only place it can
+/// be read from without keeping a second copy in a second vault, and a host that
+/// does not run Brama has no such vault at all -- which is what
+/// `cannot read Brama's Skarbiec path declarations:
+/// /root/.config/brama/service.env: No such file or directory` was reporting.
+///
+/// The secret still lands only in the runner host's own owner-only file, written
+/// by [`install_kronika_agent_secret`] through the audited channel.
+async fn brama_identity_host(target: &ComputeTarget) -> Result<ComputeTarget, DeployError> {
+    let registry = host_channel::canonical_registry().await?;
+    let service = registry
+        .service("brama")
+        .ok_or_else(|| DeployError("service directory carries no brama service".to_string()))?;
+    if service.active_host == target.name {
+        return Ok(target.clone());
+    }
+    host_channel::resolve_target(&registry, &service.active_host).cloned()
+}
+
 async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
     let kronika_credential = if profile.kind == PRECHECK.kind {
-        Some(kronika_agent_credential(&target).await?)
+        Some(kronika_agent_credential(&brama_identity_host(&target).await?).await?)
     } else {
         None
     };

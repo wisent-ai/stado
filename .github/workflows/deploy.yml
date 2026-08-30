@@ -80,15 +80,70 @@ jobs:
           echo "::error::Timed out waiting for exact source qualification on $SOURCE_SHA"
           exit 1
 
-  release:
+  # The version and channel this tag names, resolved once, off the contended
+  # runner, before either platform builds anything.
+  #
+  # It used to live inside the Linux job, which is why `deploy-control-plane`
+  # had to declare `needs: release` merely to read `channel` -- and that one
+  # line was the whole coupling. It cost the macOS platform two versions:
+  # 0.10.0's Linux job was cancelled and 0.12.0's failed in a read-back of
+  # already-published Linux bytes, and in both cases the darwin job executed
+  # zero steps and its coordinate was left at 0 of 9 objects. Nothing was
+  # wrong with darwin's inputs either time.
+  #
+  # Resolving identity here makes the two platforms siblings: each publishes
+  # to its own immutable coordinate, each is judged on its own, and neither
+  # can strand the other. Both still assert their own completeness before
+  # reporting success, so a platform ends whole or empty, never partial.
+  identity:
     needs: qualification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       channel: ${{ steps.release_identity.outputs.channel }}
       version: ${{ steps.release_identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve exact release identity
+        id: release_identity
+        run: |
+          die() {
+            printf 'FATAL: %s\n' "$*" > /dev/stderr
+            false
+          }
+          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+          version="${version_line#*\"}"
+          version="${version%%\"*}"
+          test -n "$version" || die "Cargo release version is unresolved"
+          test "$GITHUB_REF_NAME" = "stado-v$version" ||
+            die "tag $GITHUB_REF_NAME must equal stado-v$version"
+          case "$version" in
+            *-*) channel=candidate ;;
+            *) channel=stable ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  # One platform, judged on its own. A failure here no longer decides whether
+  # darwin ever publishes.
+  publish-linux:
+    needs: identity
     runs-on: [self-hosted, stado-control-plane]
+    # There is exactly one `stado-control-plane` runner, and PR gates want it
+    # too. Queue for it instead of competing for it: this group serializes
+    # every runner-bound job in the repository and never cancels the holder,
+    # so a PR check waits behind a release train rather than displacing it.
+    # Seven pushes from one branch churned this runner during the window in
+    # which two release attempts died.
+    concurrency:
+      group: stado-control-plane-runner
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
+      STADO_VERSION: ${{ needs.identity.outputs.version }}
+      STADO_RELEASE_CHANNEL: ${{ needs.identity.outputs.channel }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       # The writer uses one declared resolver adapter for both mutation and
       # authenticated read-back. Fleet delivery verifies the public read-only
@@ -113,29 +168,6 @@ jobs:
           printf '%s\n' /opt/homebrew/bin "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v zig >/dev/null || /opt/homebrew/bin/brew install zig
           command -v cargo-zigbuild >/dev/null || cargo install cargo-zigbuild --locked
-      - name: Resolve exact release identity
-        id: release_identity
-        run: |
-          die() {
-            printf 'FATAL: %s\n' "$*" > /dev/stderr
-            false
-          }
-          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
-          version="${version_line#*\"}"
-          version="${version%%\"*}"
-          test -n "$version" || die "Cargo release version is unresolved"
-          test "$GITHUB_REF_NAME" = "stado-v$version" ||
-            die "tag $GITHUB_REF_NAME must equal stado-v$version"
-          case "$version" in
-            *-*) channel=candidate ;;
-            *) channel=stable ;;
-          esac
-          echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
-          echo "STADO_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
-
       - name: Build provider-neutral Rust release
         # The control-plane runner is an arm64 Mac. Build the exact Linux x86_64
         # target with cargo-zigbuild: unlike Docker Desktop it has no daemon whose
@@ -212,7 +244,11 @@ jobs:
             # service env deliberately redacts token-file variables. Recovery
             # already proved their exact checked-in values before persisting the plist.
             .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
-            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]"
+            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
+            .[0].environment.WC_STORAGE_BACKEND == "local" and
+            .[0].environment.WC_LOCAL_STORAGE_PATH == "/Users/charles/.stado/local-storage" and
+            .[0].environment.WC_BACKUP_STORAGE_BACKEND == "local" and
+            .[0].environment.WC_BACKUP_LOCAL_STORAGE_PATH == "/Users/charles/.stado/local-backup"
           ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
           preflight() {
             # This release owns only the Stado product prefix. Its authenticated
@@ -412,10 +448,24 @@ jobs:
             fi
           done
 
+  # The darwin platform, and the control-plane delivery that follows it.
+  #
+  # `needs: identity`, NOT `needs: publish-linux`. The two coordinates are
+  # independent -- `stado/<version>/darwin-arm64/` shares nothing with
+  # `stado/<version>/linux-amd64/` -- and this job used to depend on the Linux
+  # job for one reason only: to read `channel`. `identity` publishes that now.
+  #
+  # Publication is asserted complete before the delivery steps below run, so a
+  # delivery or ingress failure leaves the coordinate whole rather than
+  # partial, and a Linux failure leaves it untouched rather than empty forever.
   deploy-control-plane:
-    needs: release
-    if: needs.release.outputs.channel == 'stable'
+    needs: identity
+    if: needs.identity.outputs.channel == 'stable'
     runs-on: [self-hosted, stado-control-plane]
+    # Same single runner as publish-linux; queue for it, never displace it.
+    concurrency:
+      group: stado-control-plane-runner
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -487,6 +537,15 @@ jobs:
           version_line="$(sed -n '/^version = /p' "$STADO_SOURCE_DIR/stado-rs/Cargo.toml")"
           version="${version_line#*\"}"
           version="${version%%\"*}"
+          # This job clones the tag itself, so it derives the version a second
+          # time. Two derivations of one fact must be checked against each
+          # other rather than assumed equal: `identity` is what asserted the
+          # tag names this version, and publishing a coordinate it never
+          # judged would put bytes at an address nothing qualified.
+          test "$version" = "${{ needs.identity.outputs.version }}" || {
+            echo "::error::this clone declares $version but the qualified tag names ${{ needs.identity.outputs.version }}"
+            false
+          }
           case "${STADO_CONTROL_PLATFORM:?set the native release platform}" in
             macos-arm64|darwin-arm64) platform=darwin-arm64 ;;
             *) platform="$STADO_CONTROL_PLATFORM" ;;
@@ -515,7 +574,7 @@ jobs:
           STADO_RELEASE_DIR="$release_dir" \
           STADO_RELEASE_ARCHIVE="$archive" \
           STADO_RELEASE_VERSION="$version" \
-          STADO_RELEASE_CHANNEL="${{ needs.release.outputs.channel }}" \
+          STADO_RELEASE_CHANNEL="${{ needs.identity.outputs.channel }}" \
           STADO_RELEASE_PLATFORM="$platform" \
           STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
           STADO_RELEASE_SOURCE_REPOSITORY="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \

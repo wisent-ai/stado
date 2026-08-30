@@ -362,6 +362,21 @@ impl StadoObjectBackend {
 
 #[async_trait]
 impl BlobBackend for StadoObjectBackend {
+    /// The object API is addressed by the bare key: [`Self::object`] builds
+    /// `ObjectRef::new(&self.namespace, path)`, so handing it a qualified
+    /// store path asks for `<namespace>/ecosystem/<namespace>/<key>`.
+    fn blob_path(&self, object: &ObjectRef) -> String {
+        object.key().to_string()
+    }
+
+    /// The list route takes `namespace` and `prefix` as separate query
+    /// parameters, so the prefix it wants is the bare one too. An empty
+    /// prefix is the whole namespace and is passed through as empty rather
+    /// than validated as a key.
+    fn blob_prefix(&self, _namespace: &str, prefix: &str) -> Result<String, StorageError> {
+        Ok(prefix.trim_matches('/').to_string())
+    }
+
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError> {
         self.upload(path, content.as_bytes().to_vec(), false)
             .await
