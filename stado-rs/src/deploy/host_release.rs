@@ -1368,13 +1368,9 @@ pub async fn release_target(
     }
 
     // Phase two: fetch, verify, stage. Still nothing in the install root.
-    let stage = host_channel::run_script_with_timeout(
-        target,
-        &stage_script(&plan),
-        STAGE_TIMEOUT,
-        runner,
-    )
-    .await?;
+    let stage =
+        host_channel::run_script_with_timeout(target, &stage_script(&plan), STAGE_TIMEOUT, runner)
+            .await?;
     let stage_markers = markers(&stage.stdout);
     report.insert(
         "fetched_sha256".to_string(),
@@ -1530,10 +1526,17 @@ fn planned_steps(
 /// a half-published version. The archive, the manifest and `SHA256SUMS` are
 /// written first, so a version that lost five of its six binaries still
 /// answers for all three and looks, to every check that came before this one,
-/// exactly like a finished release. `stado/0.10.0/darwin-arm64` and
-/// `stado/0.11.0/darwin-arm64` are both in that state permanently: the
-/// objects are immutable, so an interrupted publish can never be completed,
-/// and delivering from one installs a version whose binaries do not exist.
+/// exactly like a finished release. `stado/0.11.0/darwin-arm64` is in that
+/// state permanently: 4 objects of 9, missing `wc`, `stado-coverage`,
+/// `stado-fix`, `stado-watchdog` and `stado-mcp`. The objects are immutable,
+/// so an interrupted publish can never be completed, and delivering from it
+/// installs a version whose binaries do not exist.
+///
+/// `stado/0.10.0/darwin-arm64` is a different shape and is refused earlier:
+/// it holds nothing at all — 0 of 9 — so the manifest check above rejects it
+/// before this function runs, while its `linux-amd64` leg is a complete 9.
+/// Both were measured object by object through the release API on
+/// 2026-08-30; only 0.11.0 needed this check to be caught.
 ///
 /// For the `stado` product the declaration is checked against
 /// [`crate::self_update::RELEASE_BINARIES`] as well, because a `SHA256SUMS`
