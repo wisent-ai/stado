@@ -44,6 +44,21 @@
 //! namespace-qualified store path and maps straight through, while a bare path
 //! is what a cross-addressed writer produced and its primary address is that
 //! path inside the configured namespace.
+//!
+//! # Deliver the binary before declaring the cleaner, never the reverse
+//!
+//! A registry `disk_cleanup` policy is validated as a whole by whatever binary
+//! reads it ([`crate::targets`]'s allowed-cleaner list), and an unknown cleaner
+//! name fails that validation for the ENTIRE policy — not just for the name it
+//! did not recognise. So declaring `backup_twins` in a host's policy while that
+//! host still runs a binary without this module stops every cleaner it already
+//! runs, and turns a disk that was being cleaned slowly into one that is not
+//! being cleaned at all.
+//!
+//! `charless-mac-mini` is exactly that case at the time of writing: its policy
+//! declares `huggingface_cache` and `weles_recordings` (not even
+//! `queue_workdirs`), and the installed binary is 0.9.5. The order is deliver
+//! the release that carries this file, then add the declaration.
 
 use std::fs::File;
 use std::io::Read;
