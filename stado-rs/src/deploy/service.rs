@@ -3654,13 +3654,26 @@ pub async fn stop_service_with_password(
 }
 
 /// `service retire` on one host: bootout / disable, files kept.
+///
+/// Unlike a command that is merely tested to be working, `retire` must verify
+/// a postcondition: the unit is actually unloaded. If bootout/disable fails
+/// or is ineffective, the report reflects the host's state, not the script's
+/// exit status, and the caller correctly refuses to forget the declaration.
 pub async fn retire_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
-    let script = remote_script(service.unit_id(), "", &service.path, RETIRE_BODY)?;
-    run_remote(target, script, runner).await
+    let body = RETIRE_BODY.to_string();
+    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(STOPPED_DESCRIBE, STOPPED_PROBE),
+        runner,
+    )
+    .await
 }
 
 /// `service adopt`'s probe: does this unit actually exist on this host, and
