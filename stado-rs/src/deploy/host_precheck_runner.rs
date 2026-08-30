@@ -34,7 +34,7 @@ pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
 pub const MODEL_REVIEW_SECRET: &str = "BRAMA_MODEL_ROUTER_TOKEN";
-const MODEL_REVIEW_ALIAS: &str = "best";
+const MODEL_REVIEW_ALIAS: &str = "wisent-backend/evaluation";
 const MODEL_REVIEW_ORIGIN: &str = "https://brama.wisent.com";
 const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
 const BRAMA_INTROSPECTION_CONSUMER: &str = "brama-token-introspector";
@@ -579,10 +579,28 @@ async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
         .send()
         .await
         .map_err(|error| DeployError(format!("Brama bearer verification failed: {error}")))?;
-    if !response.status().is_success() {
+    let status = response.status();
+    if !status.is_success() {
         return Err(DeployError(format!(
             "Brama refused the newly minted model-review bearer with HTTP {}",
-            response.status().as_u16()
+            status.as_u16()
+        )));
+    }
+    let catalog: Value = response
+        .json()
+        .await
+        .map_err(|error| DeployError(format!("Brama model catalog is invalid: {error}")))?;
+    let route_advertised = catalog
+        .get("data")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models
+                .iter()
+                .any(|model| model.get("id").and_then(Value::as_str) == Some(MODEL_REVIEW_ALIAS))
+        });
+    if !route_advertised {
+        return Err(DeployError(format!(
+            "Brama did not advertise the model-review route {MODEL_REVIEW_ALIAS}"
         )));
     }
     Ok(())
