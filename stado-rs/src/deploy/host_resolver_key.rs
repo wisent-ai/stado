@@ -34,6 +34,24 @@
 //! Idempotent by construction: the key is generated only when absent, and the
 //! line is appended only when an exact whole-line match is missing, so a second
 //! run reports `already_present` and writes nothing.
+//!
+//! Authorizing the key is necessary and was not sufficient, and the second
+//! blocker is worth naming here because it presents identically. Once the RTX
+//! host could authenticate, `resolver snapshot` on the authority answered
+//! `Error: primary and backup resolve to the same store (stado://probierz)`,
+//! from `queue::storage::JobStorage::with_configured_read_failover`. The
+//! authority declared `storage.backup.backend = stado` behind a `stado`
+//! primary, and for the Stado object adapter `queue::copy::Endpoint::describe`
+//! reads a namespace that is global to the process and ignores every
+//! per-endpoint locator — so two `stado` endpoints are the same store by
+//! construction and the guard can never pass. That killed the snapshot for
+//! EVERY non-authority resolver on the fleet, not only this one, and it
+//! surfaced as an unattributable `error_code="unknown"` at
+//! `failure_point="cli.resolver.snapshot"`. The fleet's declared value is
+//! `local`, which both other hosts already carried along with the
+//! `~/.stado/local-backup` path the authority also already had; it was
+//! one-host drift, repaired with
+//! `stado host config-set <authority> storage.backup.backend local`.
 
 use serde_json::{json, Value};
 
