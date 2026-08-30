@@ -5088,6 +5088,83 @@ pub async fn weles_capture(
 /// row to read, not an error to retry. A batch nobody enqueued exits non-zero,
 /// after printing the report, because that is the one question the report
 /// cannot answer by being empty.
+/// `stado host weles-browser-runtime` — verify, and optionally complete, the
+/// browser runtime a Weles host needs.
+///
+/// Verify always runs first and runs again after a repair, so the command
+/// reports the host's state rather than the installer's exit code: an install
+/// that printed success and left the marker absent is the failure this whole
+/// family of commands exists to catch.
+pub async fn weles_browser_runtime(
+    target: &str,
+    components: &[String],
+    repair: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    // One set decides both what is judged and what a repair installs, so the
+    // verdict can never fail on something --repair would not have fixed.
+    let required: Vec<String> = if components.is_empty() {
+        vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
+    } else {
+        components.to_vec()
+    };
+    let mut report =
+        crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let mut installed: Vec<String> = Vec::new();
+    if repair {
+        installed = crate::deploy::weles_browser_runtime::repair(&resolved, &required, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // Re-verify: the host's own answer decides, not the installer's.
+        report =
+            crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+
+    if json {
+        let mut object = report.to_report(&resolved.name);
+        object.insert("repaired".to_string(), serde_json::json!(installed));
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+    } else {
+        println!("host:     {}", resolved.name);
+        println!("runtime:  {}", report.verdict());
+        for line in &installed {
+            println!("repair:   {line}");
+        }
+        super::table::print(
+            &["COMPONENT", "REVISION", "DEFAULT", "STATE", "EXPECTED AT"],
+            &report
+                .components
+                .iter()
+                .map(|component| {
+                    vec![
+                        component.name.clone(),
+                        component.revision.clone(),
+                        component.install_by_default.to_string(),
+                        component.state.clone(),
+                        component.expected_path.clone(),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    match report.failure(&resolved.name) {
+        Some(reason) => Err(CmdError::click(reason)),
+        None => Ok(()),
+    }
+}
+
 /// What one `host weles-browser-task` invocation asks for.
 pub struct BrowserTaskRequest<'a> {
     pub target: &'a str,
