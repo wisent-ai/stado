@@ -36,9 +36,10 @@ pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2
 pub const MODEL_REVIEW_SECRET: &str = "BRAMA_MODEL_ROUTER_TOKEN";
 const MODEL_REVIEW_ALIAS: &str = "wisent-backend/evaluation";
 const MODEL_REVIEW_ORIGIN: &str = "https://brama.wisent.com";
-const MODEL_REVIEW_PRIMARY_ROUTE: &str = "local-openai/chat-primary";
+const MODEL_REVIEW_PRIMARY_ROUTE: &str = "best";
 const BRAMA_DESKTOP_MODEL_ROUTER_ITEM: &str = "brama-desktop-model-router";
 const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
+const MODEL_REVIEW_AGENT_AUDIENCE: &str = "weles";
 const BRAMA_INTROSPECTION_CONSUMER: &str = "brama-token-introspector";
 const BRAMA_INTROSPECTION_CAPABILITY: &str = "introspect:tokens";
 const BRAMA_INTROSPECTION_TOKEN_FILE: &str = "brama-token-introspector-skarbiec-token";
@@ -568,10 +569,11 @@ async fn reconcile_brama_introspection_grant(
     }
     Ok(())
 }
+
 async fn reconcile_model_review_route(
     target: &ComputeTarget,
     context: &BramaSkarbiecContext,
-) -> Result<(), DeployError> {
+) -> Result<String, DeployError> {
     let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
     let read = host_channel::run_program(
         target,
@@ -625,7 +627,7 @@ async fn reconcile_model_review_route(
             response.status().as_u16()
         )));
     }
-    Ok(())
+    Ok(MODEL_REVIEW_PRIMARY_ROUTE.to_string())
 }
 
 async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
@@ -675,7 +677,7 @@ pub async fn reconcile_model_review_secret(
     let target = host_channel::canonical_target(target_name).await?;
     let context = brama_skarbiec_context(&target).await?;
     reconcile_brama_introspection_grant(&target, &context).await?;
-    reconcile_model_review_route(&target, &context).await?;
+    let primary_route = reconcile_model_review_route(&target, &context).await?;
     let github_token = github_credential().await?;
     let client_id = model_review_client_id(repository);
     let capability = format!("call:brama#{MODEL_REVIEW_ALIAS}");
@@ -693,6 +695,8 @@ pub async fn reconcile_model_review_secret(
             &client_id,
             "--capabilities",
             &capability,
+            "--audience",
+            MODEL_REVIEW_AGENT_AUDIENCE,
             "--replace-capabilities",
             "--ttl-seconds",
             MODEL_REVIEW_TOKEN_TTL_SECONDS,
@@ -722,7 +726,8 @@ pub async fn reconcile_model_review_secret(
         "repository": repository,
         "client_id": client_id,
         "model": MODEL_REVIEW_ALIAS,
-        "primary_route": MODEL_REVIEW_PRIMARY_ROUTE,
+        "primary_route": primary_route,
+        "audience": MODEL_REVIEW_AGENT_AUDIENCE,
         "secret": MODEL_REVIEW_SECRET,
         "status": "reconciled",
     }))
