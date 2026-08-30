@@ -293,20 +293,55 @@ pub fn job_eligible(
     active_slot_count: usize,
     pinned_only: bool,
 ) -> bool {
+    eligibility_refusal(
+        job,
+        gpu_type,
+        vram_gb,
+        kind,
+        consumer_id,
+        active_slot_count,
+        pinned_only,
+    )
+    .is_none()
+}
+
+/// The name of the first rule that refuses this job, or `None` when the agent
+/// may claim it.
+///
+/// [`job_eligible`] is this function's boolean, and the agent's capacity
+/// broadcast carries the name. It counted `eligibility_rejected=72,
+/// eligible_count=0` on the always-on mac for seven days without ever saying
+/// WHICH of nine rules refused, so an operator holding that number could not
+/// tell a wrong pin from a wrong platform from a wrong accelerator, and
+/// reading it cost a day of inference over one host's process table. A count
+/// with no reason is a measurement of the wrong thing.
+///
+/// Each name is the field the rule judges, so the answer points straight at
+/// the job document or the registry declaration that has to change.
+#[allow(clippy::too_many_arguments)]
+pub fn eligibility_refusal(
+    job: &Job,
+    gpu_type: &str,
+    vram_gb: i64,
+    kind: &str,
+    consumer_id: &str,
+    active_slot_count: usize,
+    pinned_only: bool,
+) -> Option<&'static str> {
     let pin_matches = names_this_consumer(&job.pinned_host, consumer_id, kind);
     if !job.pinned_host.is_empty() && !pin_matches {
-        return false;
+        return Some("pinned_host names another consumer");
     }
     let assigned = job.assigned_to.as_str();
     let assigned_matches = names_this_consumer(assigned, consumer_id, kind);
     if !assigned.is_empty() && !consumer_id.is_empty() && !assigned_matches {
-        return false;
+        return Some("assigned_to names another consumer");
     }
     if pinned_only && !pin_matches && !assigned_matches {
-        return false;
+        return Some("host claims pinned work only and this job names nobody");
     }
     if job.exclusive && active_slot_count > 0 {
-        return false;
+        return Some("job is exclusive and a slot is active");
     }
     // This host's own release platform, from the one place the rest of the
     // build learns it — the same word the registry records as the target's
@@ -317,14 +352,14 @@ pub fn job_eligible(
         &job.platform_os,
         &job.architecture,
     ) {
-        return false;
+        return Some("platform_os/architecture is not this machine");
     }
     if crate::capabilities::execution_adapter(kind)
         != Some(crate::capabilities::ExecutionAdapter::Local)
     {
         if let Some(caps) = MODEL_RE.captures(&job.command) {
             if config::is_local_only_model(caps[1].trim_matches(['\'', '"'])) {
-                return false;
+                return Some("command names a local-only model on a non-local executor");
             }
         }
     }
@@ -335,7 +370,7 @@ pub fn job_eligible(
             kind,
         )
     {
-        return false;
+        return Some("pin_to_provider names another provider");
     }
     let job_accel = job.gpu_type.as_str();
     let matches = crate::capabilities::ProviderId::Local.matches(&job.provider)
@@ -343,16 +378,16 @@ pub fn job_eligible(
         || job_accel == gpu_type
         || (vram_gb > 0 && compat_accel_types(vram_gb).iter().any(|a| a == job_accel));
     if !matches {
-        return false;
+        return Some("gpu_type is not this machine's accelerator");
     }
     let cap = job.max_cost_per_hour_usd;
     if cap > 0.0 && !job_accel.is_empty() {
         let rate = accel_hourly_rate(job_accel, job.preemptible);
         if rate > 0.0 && rate > cap {
-            return false;
+            return Some("max_cost_per_hour_usd is below this accelerator's rate");
         }
     }
-    true
+    None
 }
 
 /// Slot-shaped capacity broadcast for back-compat schedulers.

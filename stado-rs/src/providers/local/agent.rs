@@ -1154,6 +1154,18 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // to reach a running agent without an operator restarting it.
         let queue_control = control::read(&store).await?;
         agent_diag.insert("queue_paused".into(), Value::from(queue_control.paused));
+        // Which build is answering for this host. The broadcast carried a
+        // capacity verdict, a claim-loop census and a disk report and never the
+        // version that produced them, so after `host release` installed 0.9.5
+        // and `service converge` reported `installed 0.9.5, in-sync`, there was
+        // no way to tell whether the process still refusing every pinned job
+        // was the new binary or one of the older ones the same host was running
+        // — and the question had to be answered by reading process ages out of
+        // `ps`, on a machine whose pid counter had wrapped.
+        agent_diag.insert(
+            "agent_version".into(),
+            Value::from(env!("CARGO_PKG_VERSION")),
+        );
         if queue_control.paused {
             agent_diag.insert(
                 "queue_pause_reason".into(),
@@ -1336,7 +1348,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 );
                 continue;
             }
-            if !helpers::job_eligible(
+            if let Some(reason) = helpers::eligibility_refusal(
                 job,
                 &gpu_type,
                 total_vram_gb,
@@ -1346,6 +1358,18 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 pinned_only,
             ) {
                 diag_eligibility_rejected += 1;
+                // The count alone read `eligibility_rejected=72,
+                // eligible_count=0` on the always-on mac for seven days and
+                // named none of the nine rules that produce it, so the number
+                // could not distinguish a wrong pin from a wrong platform and
+                // an operator holding it had to reconstruct the answer from the
+                // host's process table. The newest refusal carries its rule and
+                // the job it judged.
+                agent_diag.insert(
+                    "last_eligibility_reject_job_id".into(),
+                    Value::from(job.job_id.clone()),
+                );
+                agent_diag.insert("last_eligibility_reject_reason".into(), Value::from(reason));
                 continue;
             }
             diag_eligible += 1;
