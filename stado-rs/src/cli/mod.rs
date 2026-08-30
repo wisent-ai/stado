@@ -1355,8 +1355,15 @@ enum HostCommands {
         item: String,
         /// The complete tag list to store, comma separated. This replaces the
         /// item's tags rather than adding to them.
+        ///
+        /// Omit it to READ: the item's current state, revision and tags are
+        /// reported and nothing is written. A command that can only replace a
+        /// tag list forces an operator to guess the list they are replacing,
+        /// and a guess that drops `brama:agent:<other>` silently unsubscribes
+        /// another agent from a paid plan while every credential count stays
+        /// green.
         #[arg(long)]
-        tags: String,
+        tags: Option<String>,
         /// Emit the before/after report as JSON.
         #[arg(long)]
         json: bool,
@@ -2285,7 +2292,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 item,
                 tags,
                 json,
-            } => host::retag_vault_item(&target, &item, &tags, json).await,
+            } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
             }

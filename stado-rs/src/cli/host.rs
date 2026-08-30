@@ -3653,12 +3653,14 @@ async fn read_vault_phase(
 pub async fn retag_vault_item(
     target: &str,
     item: &str,
-    tags: &str,
+    tags: Option<&str>,
     json: bool,
 ) -> Result<(), CmdError> {
     vault_word("vault item", item)?;
-    for tag in tags.split(',') {
-        vault_word("tag", tag)?;
+    if let Some(tags) = tags {
+        for tag in tags.split(',') {
+            vault_word("tag", tag)?;
+        }
     }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -3747,6 +3749,30 @@ pub async fn retag_vault_item(
     let before = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(refused)?;
+    // No --tags: this is a read. Report what the host holds and write nothing,
+    // so the operator who is about to replace a tag list can see the list they
+    // would be replacing.
+    let Some(tags) = tags else {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "target": resolved.name,
+                    "item": item,
+                    "read_only": true,
+                    "state": before.state,
+                    "revision": before.revision,
+                    "tags": before.tags,
+                }))?
+            );
+        } else {
+            println!(
+                "{}: {item} has rev={} state={} tags={}",
+                resolved.name, before.revision, before.state, before.tags
+            );
+        }
+        return Ok(());
+    };
     let retagged = crate::deploy::host_channel::run_command(
         &resolved,
         &format!(
