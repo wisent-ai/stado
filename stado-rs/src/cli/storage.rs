@@ -714,7 +714,7 @@ async fn ls_canonical(store: &JobStorage, as_json: bool) -> Result<(), CmdError>
 async fn ls_prefix(store: &JobStorage, prefix: &str, args: &StorageLsArgs) -> Result<(), CmdError> {
     let backend = store.backend();
     let mut blobs = backend
-        .list_blobs_with_meta(&backend_prefix(prefix)?)
+        .list_blobs_with_meta(&backend_prefix(backend, prefix)?)
         .await?;
     blobs.sort_by(|left, right| left.name.cmp(&right.name));
     let total = blobs.len();
@@ -893,19 +893,20 @@ async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
 /// Resolve a CLI path argument to the key the backend actually stores under.
 ///
 /// Two addressing forms reach the commands that take a path: a `stado://` product
-/// URI, whose on-disk key carries the canonical root prefix, and a bare queue path,
-/// which is already a backend key. Only the explicit scheme is rewritten, so queue
-/// callers are untouched.
+/// URI, and a bare queue path, which is already a backend key. Only the explicit
+/// scheme is rewritten, so queue callers are untouched.
 ///
-/// Passing the URI through verbatim is why `stat` and `cat` answered "absent" about
-/// objects that `put` had just stored and `objects` listed: both skipped the
-/// mapping that the product commands apply through `ObjectRef`. A command that
-/// reports a healthy object as missing is worse than one that cannot address it at
-/// all, because it reads as a failed write and invites a retry that immutability
-/// then refuses.
-fn backend_key(path: &str) -> Result<String, CmdError> {
+/// WHICH key a URI becomes is the backend's answer, not this module's. The first
+/// repair here rewrote every URI into the qualified store path
+/// `ecosystem/<namespace>/<key>`, which is right for a filesystem or a bucket and
+/// wrong for the object API: that backend re-prefixes with its own namespace, so
+/// the qualified path asks it for `ecosystem/<ns>/ecosystem/<ns>/<key>`. With the
+/// fleet store bound to the object API, `stat` therefore reported `absent` for
+/// objects the same store served over HTTP 200 — the same doubled address a writer
+/// defect had already created 417 real objects at.
+fn backend_key(backend: &Arc<dyn BlobBackend>, path: &str) -> Result<String, CmdError> {
     if path.starts_with("stado://") {
-        Ok(crate::object_store::ObjectRef::parse(path)?.storage_path())
+        Ok(backend.blob_path(&crate::object_store::ObjectRef::parse(path)?))
     } else {
         Ok(path.to_string())
     }
@@ -913,13 +914,11 @@ fn backend_key(path: &str) -> Result<String, CmdError> {
 
 /// The same resolution for a listing prefix, which may name a whole namespace and
 /// therefore carry no key at all.
-fn backend_prefix(prefix: &str) -> Result<String, CmdError> {
+fn backend_prefix(backend: &Arc<dyn BlobBackend>, prefix: &str) -> Result<String, CmdError> {
     match prefix.strip_prefix("stado://") {
         Some(rest) => {
             let (namespace, key) = rest.split_once('/').unwrap_or((rest, ""));
-            Ok(crate::object_store::ObjectRef::namespace_prefix(
-                namespace, key,
-            )?)
+            Ok(backend.blob_prefix(namespace, key)?)
         }
         None => Ok(prefix.to_string()),
     }
@@ -935,7 +934,20 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     // so asking it reports `absent` for every release ever published -- an answer
     // indistinguishable from a real absence. Only the witness differs here: one
     // rendering below reports whichever answered, so the two cannot drift.
-    let parsed = crate::object_store::ObjectRef::parse(&args.path);
+    // ONLY a `stado://` argument names a namespace. `ObjectRef::parse` accepts
+    // a bare `<namespace>/<key>` too, so a queue path was read as a coordinate
+    // in a foreign namespace — `artifacts/models/...` became namespace
+    // `artifacts` — and the probe went to the object API's list route, which
+    // answered 401 for a namespace this token has no grant on. An object the
+    // very same store serves cannot be reported unreachable because the path
+    // was spelled without a scheme.
+    let parsed = if args.path.starts_with("stado://") {
+        crate::object_store::ObjectRef::parse(&args.path)
+    } else {
+        Err(crate::queue::StorageError::Other(
+            "a bare path addresses the queue store, not a namespace".to_string(),
+        ))
+    };
     let release = match &parsed {
         Ok(object) if object.namespace() == "releases" => {
             RemoteObjectApi::configured_release_reader()?.map(|remote| (remote, object.to_string()))
@@ -1031,7 +1043,7 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
         None => {
             let store = JobStorage::new().await?;
             let backend = store.backend();
-            let probe_path = backend_key(&args.path)?;
+            let probe_path = backend_key(backend, &args.path)?;
             let presence = probe(backend, &probe_path).await;
 
             // Metadata and the timestamp come from the listing, which is a separate
@@ -1134,7 +1146,10 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
 /// unreachable store is an error here too and never an empty body.
 async fn cat(args: &StorageCatArgs) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let Some(bytes) = store.read_bytes(&backend_key(&args.path)?).await? else {
+    let Some(bytes) = store
+        .read_bytes(&backend_key(store.backend(), &args.path)?)
+        .await?
+    else {
         return Err(CmdError::click(format!(
             "{:?}: absent — the store answered and the object is not there",
             args.path
