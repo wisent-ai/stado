@@ -1458,6 +1458,28 @@ enum HostCommands {
     },
     /// Open an encrypted local SSH forwarding channel to TARGET.
     #[command(name = "forward-remote")]
+    /// Close a forwarding channel `forward-local` opened, and reconcile its
+    /// markers.
+    ///
+    /// A tunnel the fleet can open and cannot close is a port it cannot
+    /// reclaim: the detached `ssh -f -N -R` outlives the command that made it,
+    /// the remote marker under `~/.stado/forwards` keeps asserting an endpoint,
+    /// and `host inventory` keeps reporting a forward that may no longer carry
+    /// anything. This ends the channel, deletes both markers, and re-reads the
+    /// host to confirm the port stopped listening.
+    ///
+    /// The ssh process is matched on its whole `-R` specification and its
+    /// destination, never on the word `ssh`: this machine runs several
+    /// forwards, and a match by program name would tear down the fleet's other
+    /// channels.
+    #[command(name = "forward-close")]
+    ForwardClose {
+        target: String,
+        /// The forward name whose markers were written.
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
     ForwardRemote {
         target: String,
         /// Safe name for the local endpoint marker.
@@ -2326,6 +2348,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 local_port,
                 json,
             } => host::forward_local(&target, &name, remote_port, local_port, json).await,
+            HostCommands::ForwardClose { target, name, json } => {
+                host::forward_close(&target, &name, json).await
+            }
             HostCommands::ForwardRemote {
                 target,
                 name,
