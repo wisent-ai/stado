@@ -1820,28 +1820,32 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return response,
         };
-        if release_object_namespace(object.namespace()) {
-            return send_json(
-                http_status("403"),
-                &json!({"error": "release objects are immutable and cannot be deleted"}),
-            );
-        }
-        if !self.boundaries_available(&[Boundary::Object]).await {
-            return send_json(
-                http_status("503"),
-                &json!({"error": "object authorization unavailable"}),
-            );
-        }
-        match authorize_object(
-            self,
-            request,
-            object.namespace(),
-            object.key(),
-            false,
-            "delete",
-        )
-        .await
-        {
+        let authorized = if release_object_namespace(object.namespace()) {
+            let Some(target_key) = release_upload_target_key(object.key()) else {
+                return send_json(
+                    http_status("403"),
+                    &json!({"error": "release objects are immutable and cannot be deleted"}),
+                );
+            };
+            authorize_release(self, request, target_key, false).await
+        } else {
+            if !self.boundaries_available(&[Boundary::Object]).await {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "object authorization unavailable"}),
+                );
+            }
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "delete",
+            )
+            .await
+        };
+        match authorized {
             Ok(true) => {}
             Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
             Err(()) => {
@@ -2560,6 +2564,30 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// reported separately so the route can return a redacted 503.
 fn release_object_namespace(namespace: &str) -> bool {
     matches!(namespace, "releases" | "sources")
+}
+
+/// Return the immutable target governed by one disposable chunk key.
+///
+/// Release objects remain undeletable. Only the exact staging shape emitted by
+/// the chunked uploader can be removed, and it is authenticated against the
+/// final target rather than against an independently chosen prefix.
+fn release_upload_target_key(key: &str) -> Option<&str> {
+    let (target, suffix) = key.split_once(".__stado_upload/")?;
+    let mut parts = suffix.split('/');
+    let upload_id = parts.next()?;
+    let chunk_index = parts.next()?;
+    if target.is_empty()
+        || upload_id.len() != 64
+        || !upload_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || chunk_index.len() != 8
+        || !chunk_index.bytes().all(|byte| byte.is_ascii_digit())
+        || parts.next().is_some()
+    {
+        return None;
+    }
+    Some(target)
 }
 
 /// Route-scoped host beacon publication: the bearer stored as

@@ -8,8 +8,9 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::net::SocketAddr;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -150,6 +151,65 @@ fn state_path(target: &ReleaseTargetPolicy, product: &str) -> PathBuf {
 
 fn proxy_state_path(target: &ReleaseTargetPolicy, product: &str) -> PathBuf {
     Path::new(&target.state_dir).join(format!("{product}-proxy.json"))
+}
+
+struct ProductReconcileLock {
+    file: File,
+}
+
+impl Drop for ProductReconcileLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
+fn acquire_product_reconcile_lock(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+) -> Result<Option<ProductReconcileLock>, String> {
+    let state_dir = Path::new(&target.state_dir);
+    std::fs::create_dir_all(state_dir).map_err(|error| {
+        format!(
+            "cannot create release state directory {}: {error}",
+            state_dir.display()
+        )
+    })?;
+    let path = state_dir.join(format!("{product}.reconcile.lock"));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|error| format!("cannot open release lock {}: {error}", path.display()))?;
+    if !file
+        .metadata()
+        .map_err(|error| format!("cannot inspect release lock {}: {error}", path.display()))?
+        .is_file()
+    {
+        return Err(format!(
+            "release lock is not a regular file: {}",
+            path.display()
+        ));
+    }
+    match fs2::FileExt::try_lock_exclusive(&file) {
+        Ok(()) => Ok(Some(ProductReconcileLock { file })),
+        Err(error)
+            if error.kind() == io::ErrorKind::WouldBlock
+                || matches!(
+                    error.raw_os_error(),
+                    Some(code)
+                        if code == nix::libc::EACCES || code == nix::libc::EAGAIN
+                ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(format!(
+            "cannot acquire release lock {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 /// The exact bytes one document is committed as: compact JSON and one trailing
@@ -1286,6 +1346,9 @@ pub async fn reconcile_once(target_name: &str) -> Result<Vec<HostReleaseState>, 
             continue;
         }
         let Some(target) = policy.targets.get(target_name) else {
+            continue;
+        };
+        let Some(_reconcile_lock) = acquire_product_reconcile_lock(target, product)? else {
             continue;
         };
         let result = reconcile_product(&control, product, policy, target_name, target).await;
