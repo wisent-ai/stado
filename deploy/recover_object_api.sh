@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Restore the Stado object API when its own client route is unavailable.
 #
-# The listener is the authority for stado:// objects, so it must read the
-# physical local store directly. If it inherits the operator profile's
-# `storage.backend=stado`, startup calls its own unopened port and launchd
-# loops forever. This helper gives the system daemon an explicit local backend,
-# preserves the prior plist, and only unloads a drifted job after proving that
-# its loopback health endpoint is already unavailable.
+# The listener is the authority for stado:// objects, so both of its storage
+# backends must be direct. If either inherits the operator profile's
+# `storage.backend=stado`, startup calls its own unopened port and launchd loops
+# forever. This helper gives the system daemon explicit local primary and backup
+# stores, preserves the prior plist, and only unloads a drifted job after proving
+# that its loopback health endpoint is already unavailable.
 set -euo pipefail
 
 label="com.wisent.always-on.stado-object-api"
@@ -27,6 +27,7 @@ if [ ! -x "$program" ]; then
 fi
 
 store="$HOME/.stado/local-storage"
+backup_store="$HOME/.stado/local-backup"
 if [ -r "$config" ]; then
   configured=$(/usr/bin/python3 - "$config" <<'PY'
 import json, os, sys
@@ -37,11 +38,26 @@ print(os.path.abspath(os.path.expanduser(value)) if value else "")
 PY
 )
   if [ -n "$configured" ]; then store="$configured"; fi
+  configured_backup=$(/usr/bin/python3 - "$config" <<'PY'
+import json, os, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    document = json.load(handle)
+value = ((((document.get("storage") or {}).get("backup") or {}).get("local") or {}).get("path") or "")
+print(os.path.abspath(os.path.expanduser(value)) if value else "")
+PY
+)
+  if [ -n "$configured_backup" ]; then backup_store="$configured_backup"; fi
 fi
 if [ ! -d "$store" ] || [ ! -r "$store/registry.json" ]; then
   printf 'local_store_missing %s\n' "$store" >&2
   exit 67
 fi
+if [ "$backup_store" = "$store" ]; then
+  printf 'local_backup_matches_primary %s\n' "$store" >&2
+  exit 68
+fi
+/bin/mkdir -p "$backup_store"
+/bin/chmod 700 "$backup_store"
 
 /bin/mkdir -p "$work" "$HOME/.stado/logs"
 /bin/chmod 700 "$work" "$HOME/.stado/logs"
@@ -51,10 +67,10 @@ staged=$(/usr/bin/mktemp "$work/$label.plist.XXXXXX")
 trap '/bin/rm -f "$staged"' EXIT HUP INT TERM
 account=$(/usr/bin/id -un)
 
-/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$account" "$log" "$HOME" "$config" <<'PY'
+/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$backup_store" "$account" "$log" "$HOME" "$config" <<'PY'
 import plistlib, sys
 
-path, label, program, store, account, log, home, config = sys.argv[1:]
+path, label, program, store, backup_store, account, log, home, config = sys.argv[1:]
 document = {
     "Label": label,
     "ProgramArguments": [
@@ -75,6 +91,8 @@ document = {
         "WC_RELEASE_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-release-api-verifier-skarbiec-token",
         "WC_STORAGE_BACKEND": "local",
         "WC_LOCAL_STORAGE_PATH": store,
+        "WC_BACKUP_STORAGE_BACKEND": "local",
+        "WC_BACKUP_LOCAL_STORAGE_PATH": backup_store,
     },
     "RunAtLoad": True,
     "KeepAlive": True,

@@ -212,7 +212,11 @@ jobs:
             # service env deliberately redacts token-file variables. Recovery
             # already proved their exact checked-in values before persisting the plist.
             .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
-            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]"
+            .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
+            .[0].environment.WC_STORAGE_BACKEND == "local" and
+            .[0].environment.WC_LOCAL_STORAGE_PATH == "/Users/charles/.stado/local-storage" and
+            .[0].environment.WC_BACKUP_STORAGE_BACKEND == "local" and
+            .[0].environment.WC_BACKUP_LOCAL_STORAGE_PATH == "/Users/charles/.stado/local-backup"
           ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
           preflight() {
             # This release owns only the Stado product prefix. Its authenticated
