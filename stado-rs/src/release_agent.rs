@@ -523,31 +523,49 @@ async fn await_ready_because(
     }
 }
 
-/// Does something already answer the stable bind's readiness path?
+/// Does the expected release answer the stable bind's readiness path?
 ///
-/// The agent tracks its proxy by pid, so a proxy left behind by an earlier run is
-/// invisible to it: `proxy_alive` says no, the spawn fails with `Address already
-/// in use`, and the rollout is failed for a bind that is being served correctly.
-/// Asking the port rather than the record is the only way to tell a stale pid from
-/// a dead proxy.
-/// Returns what the bind answered, so a declined adoption records evidence rather
-/// than a silent `false`. The first version returned a bool, declined once, and
-/// left no way to tell a refused connection from a proxy pointing at an upstream
-/// that had just been terminated.
-async fn stable_bind_answer(serving: &BlueGreenServing) -> Result<(), String> {
+/// A successful readiness response alone is not enough: the legacy process can
+/// answer the same path while the proxy spawn fails with `Address already in
+/// use`. Adoption therefore requires the response's immutable build version to
+/// match the active release. Without that identity check the agent reported a
+/// routed candidate while public traffic still reached its predecessor.
+async fn stable_bind_answer(
+    serving: &BlueGreenServing,
+    expected_version: &str,
+) -> Result<(), String> {
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    match reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get(&url)
         .timeout(Duration::from_secs(3))
         .send()
         .await
-    {
-        Ok(response) if response.status().is_success() => Ok(()),
-        Ok(response) => Err(format!("{url} answered HTTP {}", response.status())),
-        Err(error) if error.is_timeout() => Err(format!("{url} did not answer within 3s")),
-        Err(error) if error.is_connect() => Err(format!("{url} refused the connection")),
-        Err(error) => Err(format!("{url} failed: {error}")),
+        .map_err(|error| {
+            if error.is_timeout() {
+                format!("{url} did not answer within 3s")
+            } else if error.is_connect() {
+                format!("{url} refused the connection")
+            } else {
+                format!("{url} failed: {error}")
+            }
+        })?;
+    if !response.status().is_success() {
+        return Err(format!("{url} answered HTTP {}", response.status()));
     }
+    let document: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("{url} returned unreadable build identity: {error}"))?;
+    let observed_version = document
+        .pointer("/build/version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("{url} readiness response carries no build.version"))?;
+    if observed_version != expected_version {
+        return Err(format!(
+            "{url} serves version {observed_version}, expected {expected_version}"
+        ));
+    }
+    Ok(())
 }
 
 fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
@@ -1071,7 +1089,7 @@ async fn reconcile_product(
             if proxy_alive(&state) {
                 Ok(())
             } else {
-                match stable_bind_answer(&serving).await {
+                match stable_bind_answer(&serving, &active.version).await {
                     Ok(()) => {
                         state.proxy_pid = None;
                         state.detail =
@@ -1092,7 +1110,10 @@ async fn reconcile_product(
             }
             return Ok(state);
         }
-        if matches!(state.phase, RolloutPhase::Ready | RolloutPhase::Routed) {
+        if !matches!(
+            state.phase,
+            RolloutPhase::Monitoring | RolloutPhase::Committed
+        ) {
             state.phase = RolloutPhase::Routed;
             state.detail = format!("stable proxy routed to candidate port {}", active.port);
             state.cutover_at.get_or_insert_with(Utc::now);
@@ -1273,7 +1294,7 @@ async fn reconcile_product(
             // second binder returns `Address already in use (os error 48)`, and the
             // rollout used to fail for a bind that was serving correctly -- state
             // said "no proxy", the port said otherwise, and nothing compared them.
-            match stable_bind_answer(&serving).await {
+            match stable_bind_answer(&serving, &process.version).await {
                 Ok(()) => {
                     state.proxy_pid = None;
                     state.detail =
