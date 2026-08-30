@@ -1581,6 +1581,19 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect every image rendered by one HTTPS surface in a read-only Weles
+    /// browser session on TARGET. The objective and safety constraints are
+    /// fixed by Stado; the caller supplies only the URL.
+    #[command(name = "weles-image-inspect")]
+    WelesImageInspect {
+        target: String,
+        /// HTTPS page Weles must render and inspect.
+        #[arg(long)]
+        url: String,
+        /// Emit the complete redacted Weles result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Enqueue one batch of `generic_capture` actions on TARGET's Weles
     /// admission API from a checked-in capture plan. The plan is refused in
     /// full before the host is contacted, the loopback API is reached over the
@@ -2248,6 +2261,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
             HostCommands::WelesActivity { target, json } => {
                 host::weles_activity(&target, json).await
+            }
+            HostCommands::WelesImageInspect { target, url, json } => {
+                host::weles_image_inspect(&target, &url, json).await
             }
             HostCommands::WelesCapture {
                 target,

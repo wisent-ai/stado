@@ -3957,9 +3957,9 @@ async fn reconcile_verifier(
     let grant = token_metadata
         .as_array()
         .and_then(|tokens| {
-            tokens.iter().find(|entry| {
-                entry.get("consumer").and_then(Value::as_str) == Some(consumer)
-            })
+            tokens
+                .iter()
+                .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer))
         })
         .ok_or_else(|| {
             CmdError::click(format!(
@@ -3989,22 +3989,16 @@ async fn reconcile_verifier(
             .map_err(|error| CmdError::click(error.to_string()))?;
         let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
         let authoritative: Value = serde_json::from_str(&authoritative_text)?;
-        let target_vaults = remote_skarbiec_metadata(
-            &resolved,
-            &runner,
-            &skarbiec,
-            &vault,
-            &gnupg_home,
-            "vaults",
-        )
-        .await?;
+        let target_vaults =
+            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "vaults")
+                .await?;
         let target_owner = target_vaults
             .get("vaults")
             .and_then(Value::as_array)
             .and_then(|vaults| {
-                vaults.iter().find(|entry| {
-                    entry.get("path").and_then(Value::as_str) == Some(vault.as_str())
-                })
+                vaults
+                    .iter()
+                    .find(|entry| entry.get("path").and_then(Value::as_str) == Some(vault.as_str()))
             })
             .and_then(|entry| entry.get("owner"))
             .and_then(Value::as_str)
@@ -4048,8 +4042,8 @@ async fn reconcile_verifier(
                         "authoritative release publisher item {item} has no lifecycle controller"
                     ))
                 })?;
-            let token = crate::credential_store::owner::read_string(item, "token")
-                .map_err(|error| {
+            let token =
+                crate::credential_store::owner::read_string(item, "token").map_err(|error| {
                     CmdError::click(format!(
                         "cannot read authoritative release publisher item {item}: {error}"
                     ))
@@ -4251,7 +4245,11 @@ async fn reconcile_verifier(
         } else {
             "can read"
         };
-        println!("{}: {consumer} {verb} {}", resolved.name, item_list.join(","));
+        println!(
+            "{}: {consumer} {verb} {}",
+            resolved.name,
+            item_list.join(",")
+        );
     }
     Ok(())
 }
@@ -4863,6 +4861,74 @@ pub async fn weles_activity(target: &str, json: bool) -> Result<(), CmdError> {
             run["id"].as_str().unwrap_or("-"),
             run["updated_at"].as_str().unwrap_or("-"),
         );
+    }
+    Ok(())
+}
+
+/// Inspect the images rendered by one HTTPS surface in a read-only Weles
+/// browser session on TARGET.
+pub async fn weles_image_inspect(
+    target: &str,
+    source_url: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    let parsed = url::Url::parse(source_url)
+        .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(CmdError::usage(
+            "--url must be an HTTPS URL without embedded credentials",
+        ));
+    }
+    let source_url = parsed.to_string();
+    let host = parsed.host_str().expect("checked above");
+    let objective = "Inspect this public page without signing in or changing any user or application state. Scroll through the whole page to trigger lazy-loaded media. Inspect every rendered img element and report its currentSrc URL host and pathname, complete flag, naturalWidth and naturalHeight. Inspect PerformanceResourceTiming entries for image resources and /api/stado/object requests, including responseStatus where Chromium exposes it. Count loaded and failed images, count /api/stado/object image URLs, list every failed URL or HTTP status, and list any visible image-error placeholder text and the affected card or room name. Return one concise JSON object containing final_url, rendered_images, loaded_images, failed_images, stado_object_images, failed_resources, placeholders, and observations. Do not click controls that mutate data, create an account, or submit forms.";
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let result = crate::deploy::weles_capture::run_action_payload(
+        &channel,
+        "generic_browser_task",
+        json!({
+            "url": source_url.as_str(),
+            "objective": objective,
+            "flow_name": format!("stado-image-inspection:{host}"),
+            "session_label": format!("stado-image-inspection-{host}"),
+            "proxy": "none",
+            "headless": true,
+            "constraints": {
+                "read_only": true,
+                "no_login": true,
+                "no_mutation": true,
+            },
+        }),
+    )
+    .await
+    .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let report = json!({
+        "target": target,
+        "source_url": source_url.as_str(),
+        "action": "generic_browser_task",
+        "endpoint": admission.declared_url,
+        "transport": channel.transport(),
+        "admission_token": channel.token_state(),
+        "result": result,
+    });
+    if json {
+        print_json(&report);
+    } else {
+        println!(
+            "{target}: inspected {} through {}",
+            report["source_url"].as_str().unwrap_or(source_url.as_str()),
+            admission.declared_url,
+        );
+        print_json(&result);
     }
     Ok(())
 }

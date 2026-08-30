@@ -688,16 +688,14 @@ impl Channel {
     }
 }
 
-/// Run one non-capture action through Weles's synchronous API.
-///
-/// Callers still name a fixed action in product code; this function does not
-/// expose an arbitrary-action CLI.
-pub async fn run_action(
+/// Run one fixed non-capture action through Weles's synchronous API and retain
+/// its complete redacted result.
+pub async fn run_action_payload(
     channel: &Channel,
     action: &str,
     params: Value,
-) -> Result<String, DeployError> {
-    let data = channel
+) -> Result<Value, DeployError> {
+    channel
         .call(
             RUN_ROUTE,
             &json!({
@@ -707,7 +705,19 @@ pub async fn run_action(
                 "timeout_ms": REQUEST_TIMEOUT.as_millis(),
             }),
         )
-        .await?;
+        .await
+}
+
+/// Run one non-capture action through Weles's synchronous API.
+///
+/// Callers still name a fixed action in product code; this function does not
+/// expose an arbitrary-action CLI.
+pub async fn run_action(
+    channel: &Channel,
+    action: &str,
+    params: Value,
+) -> Result<String, DeployError> {
+    let data = run_action_payload(channel, action, params).await?;
     data.get("run_id")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
