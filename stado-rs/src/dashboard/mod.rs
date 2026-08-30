@@ -398,6 +398,12 @@ impl Dashboard {
     async fn release_token(&self, item: &str) -> Result<String, ()> {
         let mut tokens = self.release_tokens.lock().await;
         let now = Instant::now();
+        if let Some(cached) = tokens.get(item) {
+            if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_FRESH_FOR {
+                return cached.value.clone().ok_or(());
+            }
+        }
+
         match crate::skarbiec::read_release_token(item, "token").await {
             Ok(Some(value)) if !value.is_empty() => {
                 tokens.insert(
@@ -410,7 +416,26 @@ impl Dashboard {
                 Ok(value)
             }
             Ok(_) => {
+                if let Some(cached) = tokens.get(item) {
+                    if let Some(value) = &cached.value {
+                        if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
+                            eprintln!(
+                                "[dashboard] release verifier item unavailable for {item}; using \
+                                 the last token loaded {}s ago",
+                                now.duration_since(cached.loaded_at).as_secs()
+                            );
+                            return Ok(value.clone());
+                        }
+                    }
+                }
                 eprintln!("[dashboard] release verifier item unavailable: {item}");
+                tokens.insert(
+                    item.to_string(),
+                    CachedObjectToken {
+                        value: None,
+                        loaded_at: now,
+                    },
+                );
                 Err(())
             }
             Err(error) => {
@@ -418,7 +443,8 @@ impl Dashboard {
                     if let Some(value) = &cached.value {
                         if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
                             eprintln!(
-                                "[dashboard] release verifier refresh failed for {item}; using the last token loaded {}s ago: {error}",
+                                "[dashboard] release verifier refresh failed for {item}; using the \
+                                 last token loaded {}s ago: {error}",
                                 now.duration_since(cached.loaded_at).as_secs()
                             );
                             return Ok(value.clone());
@@ -426,6 +452,13 @@ impl Dashboard {
                     }
                 }
                 eprintln!("[dashboard] release verifier failed for {item}: {error}");
+                tokens.insert(
+                    item.to_string(),
+                    CachedObjectToken {
+                        value: None,
+                        loaded_at: now,
+                    },
+                );
                 Err(())
             }
         }
