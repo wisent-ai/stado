@@ -14,7 +14,7 @@
 //! on purpose, for a reason it was republishing every tick — existed only
 //! inside `capacity/<consumer>.json`, which nothing read.
 //!
-//! Three sources, joined here and re-derived nowhere:
+//! Four sources, joined here and re-derived nowhere:
 //!
 //! - the host's own capacity publication (`capacity/<consumer>.json`), whose
 //!   `diag` words are reported VERBATIM. A blocker an operator reads here has
@@ -24,11 +24,22 @@
 //!   [`crate::targets::DiskCleanupPolicy`] serialized as it stands;
 //! - `df -Pk /` and the janitor's own state file, read with the exact script
 //!   [`crate::deploy::host_disk`] sends, so `host gates` and `host disk` can
-//!   never disagree about how much space this host has.
+//!   never disagree about how much space this host has;
+//! - the host's own effective `wc_storage_backend`, read with the exact script
+//!   `stado host config-show` sends, and classified by
+//!   [`crate::capabilities::storage_reach`]. The fourth source exists because
+//!   of a second incident on the same machine: its agent unit was re-declared
+//!   with a `STADO_CONFIG` that set the backend to `local`, so the agent
+//!   published its capacity into an on-disk store on that one box and read a
+//!   stale registry back out of it. Everything above kept reporting normally —
+//!   the agent was running, it was publishing, its numbers were internally
+//!   consistent — and the only true statement was that no host but that one
+//!   could address a single object it wrote. Seventy-four jobs waited days.
 //!
 //! Read-only, and safe against a live production host: one ssh read of one
-//! `df` and one `cat`, plus one object read. Nothing restarts, nothing cycles,
-//! nothing is deleted. The write half — actually getting the space back — is
+//! `df` and one `cat`, one ssh read of `stado config show`, plus one object
+//! read. Nothing restarts, nothing cycles, nothing is deleted. The write
+//! half — actually getting the space back — is
 //! [`crate::deploy::host_reclaim`].
 
 use chrono::{DateTime, Utc};
@@ -36,6 +47,7 @@ use serde_json::{json, Map, Value};
 
 use super::host_channel;
 use super::{host_disk, DeployError, Runner};
+use crate::capabilities::{storage_reach, StorageReach};
 use crate::providers::local::disk_cleanup;
 use crate::queue::capacity::{self, Publication};
 use crate::queue::JobStorage;
@@ -73,6 +85,58 @@ pub const NO_CAPACITY_PUBLICATION: &str = "no_capacity_publication";
 /// with its age, because "the agent said this an hour ago" and "nobody ever
 /// said anything" are different findings.
 pub const CAPACITY_PUBLICATION_STALE: &str = "capacity_publication_stale";
+
+/// This host's queue agent is bound to a storage backend whose coordinates
+/// carry only as far as the machine that wrote them
+/// ([`StorageReach::Device`]), so everything it publishes — its capacity
+/// broadcast, its claims, its view of the registry — lands in a store no other
+/// host in the fleet can address.
+///
+/// Neither the agent's word nor the registry's: an agent writing into a
+/// device-local store does not know it is alone, and this is the one blocker
+/// in this list that the host cannot report about itself. The condition is
+/// [`crate::capabilities::StorageReach`]'s, resolved from the host's own
+/// effective `wc_storage_backend` read over the same channel `stado host
+/// config-show` uses.
+///
+/// The incident: the Mac mini's agent unit was re-declared with a
+/// `STADO_CONFIG` pointing at a config that set `wc_storage_backend` to
+/// `local`, so the agent bound its `JobStorage` to `~/.stado/local-storage` on
+/// that one machine. It kept ticking, kept reading a `registry.json` out of
+/// that private store — a stale 20 GiB watermark against a canonical 15 —
+/// kept computing [`DISK_PRESSURE_UNRESOLVED`] against it, and kept publishing
+/// capacity nothing in the fleet could ever read. Seventy-four jobs, fifty-five
+/// of them pinned to that host, sat in the fleet queue for days. Every surface
+/// in this CLI reported the host in-sync, and this command — the one command
+/// written to answer "why is this host claiming nothing" — could say only
+/// [`CAPACITY_PUBLICATION_STALE`], which was true and was a symptom.
+///
+/// Reported BEFORE [`CAPACITY_PUBLICATION_STALE`] for exactly that reason: a
+/// host addressing a private store has no way to publish anything the control
+/// plane will see, so its publication is stale by construction and the
+/// staleness is downstream of this.
+pub const AGENT_STORE_DEVICE_ONLY: &str = "agent_store_device_only";
+
+/// This host answered with a storage backend this build has no adapter for, so
+/// how far its agent's writes carry is not a thing this command can decide.
+///
+/// A blocker and not a note, and deliberately: the two cases where a host's
+/// store cannot be shown to be the fleet's are "it demonstrably is not"
+/// ([`AGENT_STORE_DEVICE_ONLY`]) and "this control plane cannot tell", and the
+/// second one is how the first one gets missed for a week. It usually means
+/// the host is running a newer or older Stado than the machine asking.
+pub const AGENT_STORE_UNKNOWN: &str = "agent_store_unknown";
+
+/// The host did not answer with a storage backend at all — the remote `config
+/// show` failed, or its output carried no `wc_storage_backend`.
+///
+/// A NOTE and never a blocker: the disk read and the capacity read both
+/// succeeded to get this far, so the verdict this command reports is still the
+/// verdict, and a store read that could not be taken is a gap in the
+/// diagnosis rather than a reason the host claims nothing. It is reported
+/// because the alternative is a report that silently omits the store line and
+/// reads as "the store is fine".
+pub const AGENT_STORE_UNREADABLE: &str = "agent_store_unreadable";
 
 /// Local APFS snapshots are holding space while this host cannot prove it has
 /// room, and no command in this product will take them.
@@ -112,6 +176,18 @@ pub struct HostGates {
     /// published nothing.
     pub free_slots: Option<i64>,
     pub slots_declared: i64,
+    /// The storage backend this host's own installed binary resolves from the
+    /// config its services consume, or `None` when the host would not answer
+    /// with one ([`AGENT_STORE_UNREADABLE`]). Reported beside
+    /// `fleet_store_backend` and never compared away to a boolean: an
+    /// operator has to be able to read "that host writes to `local`, the fleet
+    /// reads `stado`" off one screen and go fix the unit that set it.
+    pub agent_store_backend: Option<String>,
+    /// The storage backend THIS control plane reads
+    /// ([`crate::config::wc_storage_backend`]) — the other half of the
+    /// sentence, because a backend name alone says nothing about whether the
+    /// two ends agree.
+    pub fleet_store_backend: String,
     /// Findings that are true and are NOT reasons this host claims nothing, so
     /// they can never change `claiming` or the exit status: an operator needs
     /// them to act, and a note that could fail a script would be suppressed
@@ -146,11 +222,17 @@ pub const AGENT_DECLARED_NOT_LOADED: &str = "agent_declared_not_loaded";
 
 /// Read every gate that decides whether `host` claims.
 ///
-/// One ssh read and one object read, in that order. An unreachable host is an
+/// Two ssh reads and one object read, in that order. An unreachable host is an
 /// error carrying the remote's own last line rather than a report full of
 /// nulls: "this box is not answering" is a different answer from "this box is
 /// answering and refuses to claim", and only the second one is what this
 /// command was written to find.
+///
+/// The second ssh read — which store the host's agent is bound to — is the
+/// only one that is allowed to fail quietly. By the time it runs, the disk and
+/// the capacity reads have both succeeded, so there is a verdict worth
+/// printing; a host that will not answer that one question gets
+/// [`AGENT_STORE_UNREADABLE`] noted and keeps its verdict.
 pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, DeployError> {
     let registry = host_channel::canonical_registry().await?;
     let target = host_channel::resolve_target(&registry, host)?.clone();
@@ -167,25 +249,70 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         )));
     }
     let reading = host_disk::parse_output(&output.stdout, interval);
+    let agent_store = agent_store_backend(&target, runner).await;
 
     let store = JobStorage::new()
         .await
         .map_err(|exc| DeployError(exc.to_string()))?;
     let publication = publication(&registry, &target, &store).await?;
 
-    let mut gates = assemble(&target, &reading, publication.as_ref(), Utc::now());
+    let mut gates = assemble(
+        &target,
+        &reading,
+        publication.as_ref(),
+        agent_store.as_deref(),
+        Utc::now(),
+    );
     gates.waiting_jobs = waiting_jobs(&registry, &target, &store, Utc::now()).await?;
     Ok(gates)
 }
 
-/// Join the three sources into the verdict.
+/// The `wc_storage_backend` this host's own installed binary resolves from the
+/// config its services consume, or `None` when the host would not say.
+///
+/// Read with [`crate::cli::host::remote_config_output`] — the exact script
+/// `stado host config-show` sends — and not a second remote script of this
+/// module's own, for the same reason `host gates` and `host disk` share one
+/// `df`: two scripts reading one host's configuration would eventually read
+/// two different configurations, under a different `HOME` or a different
+/// `STADO_CONFIG`, and the whole finding here is which configuration that
+/// host's services actually consume.
+///
+/// The field is `resolved.wc_storage_backend`: `config show` reports the file
+/// it read and the values it resolved separately, and only the resolved half
+/// is what the agent on that host actually binds its `JobStorage` to — a
+/// `WC_STORAGE_BACKEND` exported by the unit beats the file, which is one of
+/// the two ways the Mac mini got where it got.
+///
+/// Failure and a missing field collapse to the same `None` deliberately.
+/// "The read did not happen" and "the read happened and said nothing about the
+/// store" are the same finding for an operator: this command cannot tell them
+/// where that agent publishes, and must say so rather than imply the store is
+/// fine.
+async fn agent_store_backend(target: &ComputeTarget, runner: &Runner) -> Option<String> {
+    let stdout = crate::cli::host::remote_config_output(target, None, runner)
+        .await
+        .ok()?;
+    serde_json::from_str::<Value>(&stdout)
+        .ok()?
+        .get("resolved")?
+        .get("wc_storage_backend")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Join the four sources into the verdict.
 ///
 /// Split out from the reads so the truth table is exercisable without a host,
 /// a registry or a store.
+///
+/// `agent_store` is the host's own effective `wc_storage_backend`, or `None`
+/// when the host would not answer with one.
 fn assemble(
     target: &ComputeTarget,
     reading: &host_disk::DiskReading,
     publication: Option<&Publication>,
+    agent_store: Option<&str>,
     now: DateTime<Utc>,
 ) -> HostGates {
     let policy = target.disk_cleanup.as_ref();
@@ -226,6 +353,16 @@ fn assemble(
     };
 
     let mut blockers: Vec<String> = Vec::new();
+    // First in the vector, ahead of the staleness it causes: an agent bound to
+    // a device-local store cannot publish anything this control plane will
+    // ever read, so its publication is missing or stale BY CONSTRUCTION, and
+    // an operator reading `capacity_publication_stale` first goes looking at
+    // the agent's uptime instead of at the config its unit exports.
+    match agent_store.map(storage_reach) {
+        Some(Some(StorageReach::Fleet)) | None => {}
+        Some(Some(StorageReach::Device)) => blockers.push(AGENT_STORE_DEVICE_ONLY.to_string()),
+        Some(None) => blockers.push(AGENT_STORE_UNKNOWN.to_string()),
+    }
     if publication.is_none() {
         blockers.push(NO_CAPACITY_PUBLICATION.to_string());
     } else if stale {
@@ -257,6 +394,9 @@ fn assemble(
     if disk_pressure_unresolved && local_snapshots.is_some_and(|count| count > 0) {
         notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
     }
+    if agent_store.is_none() {
+        notes.push(AGENT_STORE_UNREADABLE.to_string());
+    }
 
     HostGates {
         host: target.name.clone(),
@@ -271,6 +411,8 @@ fn assemble(
         age_seconds,
         free_slots: payload.map(|p| free_slots(p, target.gpu_type.as_deref())),
         slots_declared: target.slots,
+        agent_store_backend: agent_store.map(str::to_string),
+        fleet_store_backend: crate::config::wc_storage_backend().to_string(),
         notes,
         local_snapshots,
         waiting_jobs: Vec::new(),
@@ -450,6 +592,18 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "age_seconds": gates.age_seconds,
             "free_slots": gates.free_slots,
             "slots_declared": gates.slots_declared,
+        }),
+    );
+    report.insert(
+        "store".to_string(),
+        json!({
+            // Both ends of the sentence, never a boolean verdict: the operator
+            // who has to go fix the unit needs the backend name the host
+            // resolved, and the one this control plane reads, side by side.
+            // `agent_backend` is null on a host that would not answer, which
+            // the `agent_store_unreadable` note also says.
+            "agent_backend": gates.agent_store_backend,
+            "fleet_backend": gates.fleet_store_backend,
         }),
     );
     report.insert(

@@ -490,6 +490,43 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Write one Skarbiec item field into an owner-only raw bearer file.
+    ///
+    /// `WC_STADO_STORAGE_TOKEN_FILE` has to name a file whose entire content
+    /// is the bearer, because `queue/stado_object.rs` resolves a token file
+    /// and nothing else. `secret-sync` can put a Skarbiec field into a unit's
+    /// env file, and `grant-sync` can reconcile a grant against a token file
+    /// that is already on the host, but nothing could create that file. So the
+    /// only remaining way to bind a host to the fleet object store was to
+    /// hand-copy a secret onto it, which is the one thing the fleet-wide
+    /// "everything through Stado" rule exists to prevent. Lacking the file,
+    /// charless-mac-mini's queue agent bound its `JobStorage` to a
+    /// device-local store instead and published no capacity for seven days
+    /// while 74 fleet jobs waited on a host every surface reported as
+    /// in-sync -- a fleet claim written to a device store does not fail, it
+    /// succeeds where nobody else can see it.
+    ///
+    /// The value is read through the isolated service-verifier grant and
+    /// carried in the SSH request body. It is never printed or placed in argv.
+    TokenFileSync {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// The single registry host to update.
+        #[arg(long)]
+        host: String,
+        /// Skarbiec item containing the bearer.
+        #[arg(long)]
+        item: String,
+        /// Exact string field in the Skarbiec item.
+        #[arg(long, default_value = "token")]
+        field: String,
+        /// Destination bearer file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        token_file: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Verify a managed service's bearer against a read-only loopback endpoint.
     ///
     /// With `--repair`, a failed check atomically synchronizes the secret,
@@ -1010,6 +1047,24 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 vault_file: &vault_file,
                 ttl_seconds,
                 audience: audience.as_deref(),
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::TokenFileSync {
+            name,
+            host,
+            item,
+            field,
+            token_file,
+            json,
+        } => {
+            token_file_sync(TokenFileSyncOptions {
+                name: &name,
+                host: &host,
+                item: &item,
+                field: &field,
+                token_file: &token_file,
                 as_json: json,
             })
             .await
@@ -3148,6 +3203,94 @@ async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdError> {
         table::print(&["HOST", "UNIT", "CONSUMER", "SYNC", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "grant sync")
+}
+
+struct TokenFileSyncOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    item: &'a str,
+    field: &'a str,
+    token_file: &'a str,
+    as_json: bool,
+}
+
+/// `secret-sync` with a raw file as the destination instead of an `env`
+/// assignment.
+///
+/// Everything before the write is shared with `secret-sync` on purpose: the
+/// same isolated service-verifier grant reads the same single field, and the
+/// value reaches the host only inside the approved channel's request body.
+/// What differs is where it lands -- a file whose entire content is the bearer,
+/// which is the only form `WC_STADO_STORAGE_TOKEN_FILE` accepts.
+///
+/// The three refusals below happen before any host is contacted. An empty
+/// `--item` or `--field` would otherwise be sent to Skarbiec as a lookup that
+/// cannot match, and an empty `--token-file` would be refused only after the
+/// bearer had already been read and put on the wire; a request that cannot
+/// succeed should not move a secret at all.
+async fn token_file_sync(options: TokenFileSyncOptions<'_>) -> Result<(), CmdError> {
+    let TokenFileSyncOptions {
+        name,
+        host,
+        item,
+        field,
+        token_file,
+        as_json,
+    } = options;
+    if item.trim().is_empty() {
+        return Err(CmdError::click("--item must name a Skarbiec item"));
+    }
+    if field.trim().is_empty() {
+        return Err(CmdError::click(
+            "--field must name a string field in the Skarbiec item",
+        ));
+    }
+    if token_file.trim().is_empty() {
+        return Err(CmdError::click(
+            "--token-file must be a file path on the target, absolute or rooted at $HOME",
+        ));
+    }
+    let secret = service_secret(item, field).await?;
+
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let synced = service::write_token_file_on_host(&target, token_file, &secret, &runner)
+            .await
+            .map_err(click)?;
+        if !synced.succeeded("token_file_synced") {
+            failures.push(format!("{}: {}", declared.host, synced.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&synced.status),
+            dash(&synced.detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "item": item,
+            "field": field,
+            "token_file": token_file,
+            "sync": synced.to_json(),
+        }));
+    }
+    drop(secret);
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "SYNC", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "token file sync")
 }
 
 struct AuthCheckOptions<'a> {

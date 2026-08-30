@@ -1236,6 +1236,23 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
         gates.policy_mode.as_deref().unwrap_or("none declared"),
     );
+    // Both stores on one line, ahead of the capacity line the first one
+    // explains: an agent bound to a device-local store publishes capacity into
+    // a store nothing here reads, and an operator who cannot see the two
+    // backend names side by side reads `capacity_publication_stale` and goes
+    // looking at the agent's uptime instead of at what its unit exports.
+    match gates.agent_store_backend.as_deref() {
+        Some(backend) => println!(
+            "store:    agent writes to {backend}, this control plane reads {}{}",
+            gates.fleet_store_backend,
+            store_clause(&gates.blockers),
+        ),
+        None => println!(
+            "store:    this host did not answer with a storage backend, so where its agent \
+             publishes cannot be shown; this control plane reads {}",
+            gates.fleet_store_backend
+        ),
+    }
     match gates.published_at.as_deref() {
         Some(published) => println!(
             "capacity: {} free slot(s) of {} declared, published {} ({})",
@@ -1305,6 +1322,31 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
 /// GiB with one decimal, or a dash for a number this host did not answer with.
 fn gigabytes(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_string(), |gb| format!("{gb} GiB"))
+}
+
+/// What the two backend names mean when they do not agree, read off the
+/// blocker [`crate::deploy::host_gates`] already decided.
+///
+/// Keyed off the blocker and never re-classified here: a second classifier of
+/// storage backends in the CLI would eventually disagree with the one in the
+/// reader about one host, and the operator would believe whichever line they
+/// read first.
+fn store_clause(blockers: &[String]) -> &'static str {
+    if blockers
+        .iter()
+        .any(|blocker| blocker == crate::deploy::host_gates::AGENT_STORE_DEVICE_ONLY)
+    {
+        return " — a store only that host can address, so nothing its agent publishes ever \
+                reaches this fleet";
+    }
+    if blockers
+        .iter()
+        .any(|blocker| blocker == crate::deploy::host_gates::AGENT_STORE_UNKNOWN)
+    {
+        return " — a backend this build has no adapter for, so how far that agent's writes \
+                carry cannot be decided here";
+    }
+    ""
 }
 
 /// A host that is not claiming is a failed verdict, not a failed command: the
@@ -5959,6 +6001,33 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
     let target = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout = remote_config_output(&target, update, &crate::deploy::production_runner()).await?;
+    print!("{stdout}");
+    Ok(())
+}
+
+/// One `stado config show` on a fleet host — the effective configuration its
+/// own installed binary resolves, from its own `STADO_CONFIG` — returned
+/// instead of printed.
+///
+/// Factored out of [`remote_config`] so [`crate::deploy::host_gates`] can ask
+/// a host which storage backend its queue agent is bound to without a second
+/// remote script existing for the same question. Two scripts reading one
+/// host's configuration would eventually read it two different ways — a
+/// different `STADO_CONFIG`, a different binary, a different `HOME` — and the
+/// answer that matters here is exactly "what does the config the services
+/// consume say", which is what this one already asks.
+///
+/// The incident: the Mac mini's agent unit was re-declared with a
+/// `STADO_CONFIG` naming a config that set `wc_storage_backend: "local"`, so
+/// the agent published its capacity into an on-disk store on that machine and
+/// nothing in the fleet ever read it. `host config-show` could see that field
+/// the whole time; nothing that judged the host asked it.
+pub(crate) async fn remote_config_output(
+    target: &ComputeTarget,
+    update: Option<(&str, &str)>,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
     let action = match update {
         None => "\"$binary\" config show".to_string(),
         Some((key, value)) => format!(
@@ -5979,10 +6048,10 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
          {action}\n"
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
-        &target,
+        target,
         &script,
         std::time::Duration::from_secs(60),
-        &crate::deploy::production_runner(),
+        runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
@@ -5994,8 +6063,7 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
             ),
         ));
     }
-    print!("{}", output.stdout);
-    Ok(())
+    Ok(output.stdout)
 }
 
 pub async fn verify_release_platform(

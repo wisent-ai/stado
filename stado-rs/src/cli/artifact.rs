@@ -320,14 +320,7 @@ fn fleet_visible(manifest: &ArtifactManifest) -> Result<(), CmdError> {
     // Ask the store how far it carries. Every storage adapter declares this, so
     // a backend added later is classified by whoever adds it rather than by
     // whether its name happens to be matched here.
-    let reach = crate::capabilities::constructible_variant(
-        crate::capabilities::RuntimeFacet::Storage,
-        backend,
-    )
-    .and_then(|variant| match variant.adapter {
-        crate::capabilities::RuntimeAdapter::Storage(adapter) => Some(adapter.reach()),
-        _ => None,
-    });
+    let reach = crate::capabilities::storage_reach(backend);
     match reach {
         Some(crate::capabilities::StorageReach::Fleet) => Ok(()),
         Some(crate::capabilities::StorageReach::Device) => Err(CmdError::click(format!(

@@ -1431,3 +1431,15 @@ pub fn disk_pressure_unresolved(low_bytes: Option<i64>, free_bytes: Option<i64>)
         _ => true,
     }
 }
+
+/// Whether free space is below the janitor's low watermark, with both numbers
+/// known. The janitor's own `report.pressure_active`, asked from outside a pass.
+///
+/// Separate from [`disk_pressure_unresolved`] because the two answer different
+/// questions and one answer for both stopped a host for seven days. Not knowing
+/// the threshold is a reason to refuse admission; being under it is a reason to
+/// reclaim, and on a host with nothing eligible to delete it is a state no pass
+/// can leave, so it must never be the thing that silences a capacity broadcast.
+pub fn disk_pressure_active(low_bytes: Option<i64>, free_bytes: Option<i64>) -> bool {
+    matches!((low_bytes, free_bytes), (Some(low), Some(free)) if free < low)
+}

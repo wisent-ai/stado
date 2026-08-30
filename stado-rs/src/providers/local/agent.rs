@@ -598,6 +598,57 @@ fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
     ]
 }
 
+/// Publish one capacity broadcast and say, in the log, which branch of the loop
+/// produced it and whether the store accepted it.
+///
+/// The loop below can leave its iteration nine ways and used to name none of
+/// them. On the always-on mac that cost seven days: the log showed
+/// `loop: iter-start` and a disk-cleanup report every ten seconds, nothing
+/// after, and the broadcast in the fleet store stayed frozen at a timestamp
+/// three minutes before the agent's unit was re-declared. Both facts were
+/// consistent with about four different branches and with a crash-restart loop,
+/// and separating them took a census of a log that should simply have said.
+///
+/// Two of the publish sites also discarded the store's answer with `let _ =`, so
+/// an agent whose every write was being refused reported exactly what an agent
+/// with nothing to say reports. The result is returned to the caller, and the
+/// failure is logged here either way, because a broadcast nobody accepted is the
+/// one event this process exists to perform.
+#[allow(clippy::too_many_arguments)]
+async fn publish_branch(
+    store: &JobStorage,
+    consumer_id: &str,
+    kind: &str,
+    branch: &str,
+    free_slots: &BTreeMap<String, i64>,
+    free_vram_gb: Option<i64>,
+    total_vram_gb: Option<i64>,
+    diag: Option<Map<String, Value>>,
+    log_fn: &mut dyn FnMut(&str),
+) -> Result<(), StorageError> {
+    let outcome = publish_capacity(
+        store,
+        consumer_id,
+        kind,
+        free_slots,
+        free_vram_gb,
+        total_vram_gb,
+        diag,
+    )
+    .await;
+    match &outcome {
+        Ok(()) => log_fn(&format!(
+            "loop: {branch}: published free_vram_gb={} free_slots={}",
+            free_vram_gb.unwrap_or_default(),
+            free_slots.values().sum::<i64>()
+        )),
+        Err(exc) => log_fn(&format!(
+            "loop: {branch}: capacity publish REFUSED by the store: {exc}"
+        )),
+    }
+    outcome
+}
+
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
 ///
@@ -632,6 +683,36 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
 
     let store = JobStorage::new().await?;
     log_fn("init: JobStorage done");
+    // Which store this agent just bound to, and whether a coordinate written
+    // there means anything to anyone else.
+    //
+    // A capacity broadcast is a claim about the fleet. Written into a store
+    // whose reach is `Device` the write does not fail -- it succeeds, and every
+    // other host reports the broadcast absent, which is indistinguishable from
+    // an agent that never ran. That is what the always-on mac did for an
+    // afternoon: its unit was re-declared carrying `STADO_CONFIG`, the host
+    // configuration behind that path selects `storage.backend: local`, and from
+    // that moment the agent published into a directory on its own disk while the
+    // scheduler read a frozen row and 55 jobs pinned to that host waited on a
+    // capacity number nobody was writing any more.
+    //
+    // The agent keeps running: it is also the host's disk janitor, and stopping
+    // cleanup on a machine under disk pressure trades one outage for another.
+    // What it must not do is stay quiet about it. The store is named on every
+    // iteration, in the log, which is the one channel that still reaches an
+    // operator when the store itself is the thing that is wrong.
+    let storage_backend = crate::config::wc_storage_backend();
+    let store_reach = crate::capabilities::storage_reach(storage_backend);
+    let store_answers_for_fleet =
+        store_reach == Some(crate::capabilities::StorageReach::Fleet);
+    log_fn(&format!(
+        "init: capacity broadcasts go to the {storage_backend:?} store, which answers for {}",
+        match store_reach {
+            Some(crate::capabilities::StorageReach::Fleet) => "the fleet",
+            Some(crate::capabilities::StorageReach::Device) => "this machine only",
+            None => "an unknown scope: this build does not know that backend",
+        }
+    ));
     let sizing = Sizing::new();
     let consumer_id = format!("{kind}-{hostname}");
     let mut slots: Vec<ActiveSlot> = Vec::new();
@@ -654,6 +735,21 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     loop {
         // Phase breadcrumbs for the 40GB a2-highgpu-1g first-iter hang.
         log_fn("loop: iter-start");
+        // Every broadcast says which store wrote it. A reader holding a frozen
+        // row could not tell a stopped agent from a running one publishing
+        // somewhere else, and that is the question that took an afternoon.
+        agent_diag.insert("storage_backend".into(), Value::from(storage_backend));
+        agent_diag.insert(
+            "storage_answers_for_fleet".into(),
+            Value::from(store_answers_for_fleet),
+        );
+        if !store_answers_for_fleet {
+            log_fn(&format!(
+                "loop: this agent's {storage_backend:?} store does not answer for the fleet, so \
+                 every capacity broadcast below is invisible to the scheduler and to every other \
+                 host; the queue it reads is not the fleet queue"
+            ));
+        }
         if let Err(exc) = crate::config::refresh_model_policy(&store).await {
             log_fn(&format!(
                 "model policy refresh failed; retaining last good policy: {exc}"
@@ -693,29 +789,57 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // Python: shutil.disk_usage(expanduser("~")).free, OSError -> None.
         let current_free_bytes =
             disk_cleanup::free_bytes(&crate::config_file::expand_tilde("~")).ok();
+        // Two different questions used to share one answer, and the conflation
+        // is what froze the always-on mac. "Can this agent read its disk policy
+        // at all" is a reason to fail admission closed: an agent that does not
+        // know its own threshold cannot judge anything. "Is free space below the
+        // janitor's low watermark" is not that. It is the janitor's cue to start
+        // deleting, and on a host whose cleaners have nothing eligible to delete
+        // -- every cleaner on that mac reported zero eligible items -- it is a
+        // condition no cleanup pass can clear, so treating it as an admission
+        // gate stopped the host permanently and silently: 19.6 GiB free against
+        // a 20 GiB watermark, a zero-capacity publish, `continue`, forever.
+        //
+        // So pressure no longer suppresses the broadcast and no longer skips the
+        // claim loop. It is published as a fact. Admission keeps the gates that
+        // measure what a job would actually consume: the `$HOME` write probe and
+        // staging backpressure in `disk_gate`, and the per-job raw-disk reserve
+        // in the claim loop below, each of which refuses the specific work that
+        // would run the disk out rather than refusing the host.
         let disk_policy_known = disk_low_bytes.is_some();
-        let pressure_unresolved =
-            disk_cleanup::disk_pressure_unresolved(disk_low_bytes, current_free_bytes);
+        let readings_incomplete = disk_low_bytes.is_none() || current_free_bytes.is_none();
+        let pressure_active =
+            disk_cleanup::disk_pressure_active(disk_low_bytes, current_free_bytes);
         agent_diag.insert(
             "disk_cleanup_policy_known".into(),
             Value::from(disk_policy_known),
         );
+        // The key keeps its published name: `host gates` reads it to say the
+        // agent is refusing to claim because it cannot read its disk policy, and
+        // that is now exactly what it means and nothing more.
         agent_diag.insert(
             "disk_pressure_unresolved".into(),
-            Value::from(pressure_unresolved),
+            Value::from(readings_incomplete),
         );
-        if pressure_unresolved {
-            // Fail admission closed until both the policy threshold and
-            // free space are known (Python's zero-cap gate).
+        agent_diag.insert("disk_pressure_active".into(), Value::from(pressure_active));
+        if readings_incomplete {
             let zero_diag = agent_diag.clone();
-            let _ = publish_capacity(
+            log_fn(&format!(
+                "loop: disk-policy-unreadable: low watermark {} and free space {} -- failing \
+                 admission closed until both are known",
+                disk_low_bytes.map_or("unknown".to_string(), |bytes| bytes.to_string()),
+                current_free_bytes.map_or("unknown".to_string(), |bytes| bytes.to_string())
+            ));
+            let _ = publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "disk-policy-unreadable",
                 &BTreeMap::new(),
                 Some(0),
                 Some(total_vram_gb),
                 Some(zero_diag.clone()),
+                log_fn,
             )
             .await;
             last_cap = Some(LastCap {
@@ -727,16 +851,26 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
+        if pressure_active {
+            log_fn(&format!(
+                "loop: disk-pressure-active: {} bytes free is below the {} byte low watermark; \
+                 the janitor reclaims, admission is unaffected, the broadcast continues",
+                current_free_bytes.unwrap_or_default(),
+                disk_low_bytes.unwrap_or_default()
+            ));
+        }
         // The republish keep-alive below is unchanged from Python.
         if let Some(cap) = &last_cap {
-            let _ = publish_capacity(
+            let _ = publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "keep-alive-republish",
                 &cap.free_slots,
                 Some(cap.free_vram_gb),
                 Some(cap.total_vram_gb),
                 Some(cap.diag.clone()),
+                log_fn,
             )
             .await;
         }
@@ -834,14 +968,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             }
         }
         if !gpu_power_policy_ok {
-            publish_capacity(
+            publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "gpu-power-policy-unmet",
                 &BTreeMap::new(),
                 Some(0),
                 Some(total_vram_gb),
                 Some(agent_diag.clone()),
+                log_fn,
             )
             .await?;
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
@@ -862,14 +998,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         }
         let inference_reservation = crate::inference::reservation::active();
         if vast_active {
-            publish_capacity(
+            publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "vast-renter-active",
                 &BTreeMap::new(),
                 Some(0),
                 Some(total_vram_gb),
                 Some(agent_diag.clone()),
+                log_fn,
             )
             .await?;
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
@@ -957,14 +1095,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     Ok(false) if !should_yield && slots.is_empty() => {
                         agent_diag
                             .insert("inference_runtime_state".into(), Value::from("resuming"));
-                        publish_capacity(
+                        publish_branch(
                             &store,
                             &consumer_id,
                             kind,
+                            "inference-resuming",
                             &BTreeMap::new(),
                             Some(0),
                             Some(total_vram_gb),
                             Some(agent_diag.clone()),
+                            log_fn,
                         )
                         .await?;
                         log_fn(&format!(
@@ -1004,14 +1144,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let (refuse_disk, disk_diag) = disk_gate::gate_and_maybe_evict(log_fn);
         agent_diag.extend(diag_map(&disk_diag));
         if refuse_disk {
-            publish_capacity(
+            publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "disk-gate-refused",
                 &BTreeMap::new(),
                 Some(0),
                 Some(total_vram_gb),
                 Some(agent_diag.clone()),
+                log_fn,
             )
             .await?;
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -1029,14 +1171,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 "settling_slot_ids".into(),
                 Value::Array(settling_ids.into_iter().map(Value::String).collect()),
             );
-            publish_capacity(
+            publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "slots-settling-for-vram",
                 &BTreeMap::new(),
                 Some(0),
                 Some(total_vram_gb),
                 Some(agent_diag.clone()),
+                log_fn,
             )
             .await?;
             last_cap = Some(LastCap {
@@ -1056,14 +1200,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // below still reject anything needing VRAM we don't have.
             agent_diag.insert("vram_buffer_gb".into(), Value::from(vram_buffer_gb));
             agent_diag.insert("vram_buffer_free_gb".into(), Value::from(free_vram_gb));
-            publish_capacity(
+            publish_branch(
                 &store,
                 &consumer_id,
                 kind,
+                "vram-below-safety-buffer",
                 &BTreeMap::new(),
                 Some(0),
                 Some(total_vram_gb),
                 Some(agent_diag.clone()),
+                log_fn,
             )
             .await?;
             // Python also stamps _last_cap here, but the normal publish
@@ -1083,14 +1229,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     "NVIDIA driver probe failed; publishing zero capacity: {}",
                     cuda_detail.chars().take(160).collect::<String>()
                 ));
-                publish_capacity(
+                publish_branch(
                     &store,
                     &consumer_id,
                     kind,
+                    "nvidia-driver-probe-failed",
                     &BTreeMap::new(),
                     Some(0),
                     Some(total_vram_gb),
                     Some(agent_diag.clone()),
+                    log_fn,
                 )
                 .await?;
                 last_cap = Some(LastCap {
@@ -1123,14 +1271,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         );
         let free_slots =
             helpers::build_capacity_dict_per_card(&gpu_type, &broadcast_cards, total_vram_gb);
-        publish_capacity(
+        publish_branch(
             &store,
             &consumer_id,
             kind,
+            "claim-loop-open",
             &free_slots,
             Some(free_vram_gb),
             Some(total_vram_gb),
             Some(agent_diag.clone()),
+            log_fn,
         )
         .await?;
         last_cap = Some(LastCap {
