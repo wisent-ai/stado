@@ -3772,12 +3772,14 @@ async fn read_vault_phase(
 pub async fn retag_vault_item(
     target: &str,
     item: &str,
-    tags: &str,
+    tags: Option<&str>,
     json: bool,
 ) -> Result<(), CmdError> {
     vault_word("vault item", item)?;
-    for tag in tags.split(',') {
-        vault_word("tag", tag)?;
+    if let Some(tags) = tags {
+        for tag in tags.split(',') {
+            vault_word("tag", tag)?;
+        }
     }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -3866,6 +3868,30 @@ pub async fn retag_vault_item(
     let before = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(refused)?;
+    // No --tags: this is a read. Report what the host holds and write nothing,
+    // so the operator who is about to replace a tag list can see the list they
+    // would be replacing.
+    let Some(tags) = tags else {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "target": resolved.name,
+                    "item": item,
+                    "read_only": true,
+                    "state": before.state,
+                    "revision": before.revision,
+                    "tags": before.tags,
+                }))?
+            );
+        } else {
+            println!(
+                "{}: {item} has rev={} state={} tags={}",
+                resolved.name, before.revision, before.state, before.tags
+            );
+        }
+        return Ok(());
+    };
     let retagged = crate::deploy::host_channel::run_command(
         &resolved,
         &format!(
@@ -5475,6 +5501,188 @@ pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Resu
 /// Open a background reverse SSH forward using the exact registry channel.
 /// Both ends bind loopback; SSH supplies transport encryption and refuses to
 /// report success until the remote listener exists.
+/// The `-R` specification `forward_local` gave ssh, which is what identifies
+/// one channel among several on this machine.
+///
+/// Matching on this and the destination, never on the program name: this host
+/// runs other forwards, and `pkill ssh` would take the fleet's other channels
+/// down with the one being closed.
+fn reverse_forward_spec(remote_port: u16, local_port: u16) -> String {
+    format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}")
+}
+
+/// `stado host forward-close TARGET NAME` — end a channel `forward-local`
+/// opened and reconcile both of its markers.
+///
+/// Order matters. The process is ended first, then the markers are removed,
+/// then the host is re-read: a marker deleted while the tunnel still carried
+/// traffic would leave a live port nothing describes, which is worse than the
+/// stale marker it was trying to fix.
+pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("forward name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let local_marker = std::path::Path::new(&home)
+        .join(".stado")
+        .join("forwards")
+        .join(format!("{name}.local"));
+
+    // The ports come from the markers the open wrote, so a close addresses the
+    // exact channel that was opened rather than a port an operator remembers.
+    let local_port = std::fs::read_to_string(&local_marker)
+        .ok()
+        .and_then(|body| url::Url::parse(body.trim()).ok())
+        .and_then(|parsed| parsed.port());
+    let remote_marker_body = crate::deploy::service_file_fetch::fetch_file(
+        &resolved,
+        &format!("$HOME/.stado/forwards/{name}.url"),
+        &runner,
+    )
+    .await
+    .ok()
+    .filter(|fetched| fetched.ok())
+    .map(|fetched| String::from_utf8_lossy(&fetched.content).trim().to_string());
+    let remote_port = remote_marker_body
+        .as_deref()
+        .and_then(|body| url::Url::parse(body).ok())
+        .and_then(|parsed| parsed.port());
+
+    if local_port.is_none() && remote_port.is_none() {
+        return Err(CmdError::click(format!(
+            "{target}: no forward named {name:?} is recorded here or on the host, so there is \
+             nothing to close; `stado host inventory {target}` lists the markers that exist"
+        )));
+    }
+
+    // End the ssh that carries it, matched on the whole -R spec.
+    let mut ended: Vec<String> = Vec::new();
+    if let (Some(remote), Some(local)) = (remote_port, local_port) {
+        let spec = reverse_forward_spec(remote, local);
+        let listing = tokio::process::Command::new("/bin/ps")
+            .args(["ax", "-o", "pid=", "-o", "command="])
+            .output()
+            .await?;
+        for line in String::from_utf8_lossy(&listing.stdout).lines() {
+            let trimmed = line.trim_start();
+            let Some((pid, command)) = trimmed.split_once(char::is_whitespace) else {
+                continue;
+            };
+            if !command.contains(&spec) || !command.contains("ssh") {
+                continue;
+            }
+            let Ok(parsed) = pid.parse::<i32>() else { continue };
+            let killed = tokio::process::Command::new("/bin/kill")
+                .args(["-TERM", &parsed.to_string()])
+                .output()
+                .await?;
+            ended.push(format!(
+                "pid {parsed}{}",
+                if killed.status.success() { "" } else { " (signal refused)" }
+            ));
+        }
+    }
+
+    // Then the markers, remote first: it is the one other machines read.
+    let remote_removed = if remote_marker_body.is_some() {
+        let script = format!(
+            "set -eu\n/bin/rm -f \"$HOME/.stado/forwards/\"{name}\".url\"\n",
+            name = crate::deploy::shlex_quote(name)
+        );
+        let removed = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !removed.ok() {
+            return Err(CmdError::click(format!(
+                "{target}: the channel was ended and its host marker could not be removed, so \
+                 the host still advertises an endpoint: {}",
+                crate::deploy::host_channel::last_error_line(&removed, "remote marker removal failed")
+            )));
+        }
+        true
+    } else {
+        false
+    };
+    let local_removed = std::fs::remove_file(&local_marker).is_ok();
+
+    // Re-read: the host's own answer decides whether the port is reclaimed.
+    let still_listening = match remote_port {
+        Some(port) => {
+            let report = crate::deploy::service_serving::read_serving(
+                &resolved,
+                "com.wisent.host-health-beacon",
+                "",
+                &[port],
+                &runner,
+            )
+            .await
+            .ok();
+            report.map(|report| {
+                report
+                    .ports
+                    .first()
+                    .is_some_and(|entry| !entry.holders.is_empty())
+            })
+        }
+        None => None,
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "name": name,
+                "remote_port": remote_port,
+                "local_port": local_port,
+                "ended": ended,
+                "remote_marker_removed": remote_removed,
+                "local_marker_removed": local_removed,
+                "remote_port_still_listening": still_listening,
+            }))?
+        );
+    } else {
+        println!("host:     {}", resolved.name);
+        println!("forward:  {name}");
+        println!(
+            "ports:    remote {} local {}",
+            remote_port.map_or_else(|| "-".to_string(), |port| port.to_string()),
+            local_port.map_or_else(|| "-".to_string(), |port| port.to_string())
+        );
+        println!(
+            "ended:    {}",
+            if ended.is_empty() {
+                "no matching ssh process on this machine".to_string()
+            } else {
+                ended.join(", ")
+            }
+        );
+        println!(
+            "markers:  host {} local {}",
+            if remote_removed { "removed" } else { "absent" },
+            if local_removed { "removed" } else { "absent" }
+        );
+        println!(
+            "port:     {}",
+            match still_listening {
+                Some(true) => "STILL LISTENING on the host",
+                Some(false) => "reclaimed",
+                None => "unverified",
+            }
+        );
+    }
+    match still_listening {
+        Some(true) => Err(CmdError::click(format!(
+            "{}: {name} was closed and its remote port is still listening, so something else \
+             holds it; the markers are gone and the port is not this forward's any more",
+            resolved.name
+        ))),
+        _ => Ok(()),
+    }
+}
+
 pub async fn forward_local(
     target: &str,
     name: &str,
