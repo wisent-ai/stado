@@ -106,6 +106,7 @@ pub mod reconcile;
 pub mod service;
 pub mod service_catalog;
 pub mod service_env_file;
+pub mod service_file_fetch;
 pub mod ssh_key;
 pub mod stream;
 pub mod weles_capture;
