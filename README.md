@@ -451,13 +451,14 @@ state, the program it declares, the binary the process is really executing and
 whether the two agree (`stado service converge`), plus the product processes no
 unit owns at all (`stado service list --unowned`).*
 
-*Cloudflare routes — publish one hostname through a declared Cloudflare Tunnel
-connector without leaving Stado Desktop. The form reads nonsecret item ids with
-`stado credentials ls --json`, exposes every option of
-`stado cloudflare route-tunnel`, and quotes the exact invocation before it can
-run. Its confirmation states the write order — tunnel ingress, owner-only
-connector token, connector restart, then proxied DNS — and the completed screen
-shows the CLI's nonsecret receipt.*
+*Cloudflare routes — list, inspect, add, update and remove hostnames on a
+declared Cloudflare Tunnel without leaving Stado Desktop. The screen compares
+tunnel ingress with exact proxied CNAMEs, reports connector connections
+separately from the deliberately unprobed origin, and reads nonsecret item ids
+with `stado credentials ls --json`. Add/update exposes every option of
+`stado cloudflare route-tunnel`; removal deletes matching tunnel DNS before
+ingress and preserves the shared connector, service and credential. Every
+mutation quotes its exact CLI invocation and requires a confirmation.*
 
 ## Operational model
 
