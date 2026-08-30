@@ -32,7 +32,8 @@ use crate::deploy::service::{
     SOURCE_REGISTRY,
 };
 use crate::deploy::{
-    host_channel, host_exec, production_runner, service_env_file, service_file_fetch, DeployError,
+    host_channel, host_exec, production_runner, service_env_file, service_file_fetch,
+    service_serving, DeployError,
 };
 use crate::observations;
 use crate::queue::JobStorage;
@@ -492,6 +493,51 @@ pub enum ServiceCommands {
         /// Environment file on the target, absolute or rooted at $HOME.
         #[arg(long)]
         env_file: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Is the DECLARED unit the process on its own port?
+    ///
+    /// `show` reports what the unit file declares and used to spell that
+    /// `runs`; `endpoint-check` reports whether anything answers on a declared
+    /// port. Neither asks the one question an outage turns on. On 2026-08-30
+    /// `com.wisent.always-on.weles` was reported `runs` while both pids its
+    /// last restart produced were already gone and its stderr ended in
+    /// `EADDRINUSE 127.0.0.1:58101`: something WAS listening there, and it was
+    /// a different launchd job — the undeclared unit the Weles release
+    /// deployer bootstraps, running an identical argument vector.
+    ///
+    /// So ownership here is decided by launchd label, never by argv. The pid
+    /// holding each port is walked up its own parent chain until a pid appears
+    /// in `launchctl list`, because a launcher script is the job and the
+    /// server it starts is the child that holds the socket. A label that
+    /// cannot be read — a system LaunchDaemon is invisible to an unprivileged
+    /// `launchctl list` — is reported `unknown`, never as "nobody owns it".
+    ///
+    /// Verdicts are `serving`, `not_serving`, and `unknown` for a question
+    /// that could not be answered; the third is never folded into either of
+    /// the others. Exits non-zero on anything but `serving`, because a control
+    /// plane that cannot tell reported this host healthy for days.
+    Serving {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// The single registry host to check.
+        #[arg(long)]
+        host: String,
+        /// One loopback port this unit is supposed to SERVE; repeat for each.
+        ///
+        /// Deliberately not taken from the unit's env file. That file names
+        /// every endpoint the unit touches, and most of them are ports it
+        /// CALLS — `STADO_API_URL`, `WC_SKARBIEC_URL` — owned by other
+        /// services on purpose. Judging those as "this unit must own it" makes
+        /// every healthy dependency a finding, which is how a check stops
+        /// being read. `endpoint-check` is the command for dependencies; this
+        /// one is about the ports the service itself answers on. Omit these
+        /// and the service directory's declared endpoint for this host is
+        /// used.
+        #[arg(long = "port")]
+        ports: Vec<u16>,
         #[arg(long)]
         json: bool,
     },
@@ -1077,6 +1123,20 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 name: &name,
                 host: &host,
                 env_file: &env_file,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::Serving {
+            name,
+            host,
+            ports,
+            json,
+        } => {
+            serving(ServingOptions {
+                name: &name,
+                host: &host,
+                ports: &ports,
                 as_json: json,
             })
             .await
@@ -3431,6 +3491,134 @@ async fn endpoint_check(options: EndpointCheckOptions<'_>) -> Result<(), CmdErro
         print_json(&Value::Array(payload))?;
     }
     fail_if_any(&failures, "endpoint check")
+}
+
+struct ServingOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    ports: &'a [u16],
+    as_json: bool,
+}
+
+/// The loopback port the service directory declares for this service on this
+/// host, when it declares one.
+///
+/// This is the fleet's own statement of what the service answers on, which is
+/// the only source that distinguishes a port a unit SERVES from one it merely
+/// calls. `host_precheck_runner` reads the directory the same way.
+async fn directory_port(name: &str, host: &str) -> Option<u16> {
+    let registry = host_channel::canonical_registry().await.ok()?;
+    let service = registry.service(name)?;
+    let endpoint = service.address_for(host)?;
+    url::Url::parse(&endpoint.url).ok()?.port()
+}
+
+/// `service serving`: the declared unit against the process on its port.
+///
+/// The ports come from the unit's own env file by the same derivation
+/// `endpoint-check` uses, plus any `--port` the operator names. Registry
+/// knowledge — whether the label that owns a foreign pid is itself declared —
+/// is resolved here rather than on the host, because the registry is this
+/// side's document and a host must never be asked to judge its own
+/// declaration.
+async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError> {
+    let ServingOptions {
+        name,
+        host,
+        ports,
+        as_json,
+    } = options;
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    // Every label this host declares, so a foreign owner is reported as
+    // declared-elsewhere rather than merely foreign. Registry knowledge is
+    // this side's; a host is never asked to judge its own declaration.
+    let declared_labels: Vec<String> = service::declared_services(&target)
+        .iter()
+        .map(|found| found.unit_id().to_string())
+        .collect();
+    let is_declared = |label: &str| declared_labels.iter().any(|known| known == label);
+
+    let mut payload = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let mut wanted: Vec<u16> = ports.to_vec();
+        if wanted.is_empty() {
+            if let Some(port) = directory_port(name, host).await {
+                wanted.push(port);
+            }
+        }
+        if wanted.is_empty() {
+            return Err(CmdError::click(format!(
+                "the service directory declares no endpoint for {name:?} on {host}, so which \
+                 port it must serve is unknown; name it with --port <n>"
+            )));
+        }
+        wanted.truncate(service_serving::MAX_PORTS);
+
+        let report = service_serving::read_serving(
+            &target,
+            declared.unit_id(),
+            &declared.path,
+            &wanted,
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        let verdicts = service_serving::port_verdicts(&report);
+        if let Some(reason) = service_serving::failure(&declared.host, &report, &verdicts) {
+            failures.push(reason);
+        }
+
+        if as_json {
+            payload.push(Value::Object(service_serving::to_report(
+                &target,
+                &report,
+                &verdicts,
+                &is_declared,
+            )));
+            continue;
+        }
+
+        println!("host:     {}", declared.host);
+        println!("unit:     {}", declared.unit_id());
+        println!(
+            "launchd:  loaded {}, pid {}",
+            report.loaded,
+            dash(&report.launchd_pid)
+        );
+        println!("serving:  {}", service_serving::verdict(&report, &verdicts));
+        table::print(
+            &["PORT", "VERDICT", "HOLDER", "OWNING UNIT", "DECLARED"],
+            &verdicts
+                .iter()
+                .map(|port| {
+                    let owner = port
+                        .holders
+                        .iter()
+                        .find(|holder| holder.owner_state == service_serving::OWNER_RESOLVED)
+                        .map(|holder| holder.owner.clone());
+                    vec![
+                        port.port.to_string(),
+                        port.verdict.to_string(),
+                        port.holder_cell(),
+                        owner.clone().unwrap_or_else(|| "-".to_string()),
+                        owner.map_or_else(
+                            || "-".to_string(),
+                            |label| is_declared(&label).to_string(),
+                        ),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    }
+    fail_if_any(&failures, "serving check")
 }
 
 struct GrantSyncOptions<'a> {
