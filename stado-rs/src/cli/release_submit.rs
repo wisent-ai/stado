@@ -946,11 +946,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     let mut enqueue_failure = None;
     for p in &platforms {
-        let has_uncommitted_record = run
-            .platforms
-            .get(p)
-            .is_some_and(|platform| platform.state != PlatformRunState::Published);
-        if has_uncommitted_record {
+        if run.platforms.contains_key(p) {
             let base = release_control::release_base(&m.product, &args.version, p)
                 .map_err(CmdError::click)?;
             let manifest_uri =
@@ -986,6 +982,19 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 }
                 save(&mut run).await?;
                 continue;
+            }
+            // A run may say Published while its coordinate was written through
+            // an obsolete object origin. The durable qualification job is still
+            // the source of truth; republish it instead of treating absent
+            // release.json as a committed release.
+            if run.platforms[p].state == PlatformRunState::Published {
+                let platform = run.platforms.get_mut(p).expect("checked above");
+                platform.state = PlatformRunState::Qualified;
+                platform.artifact_sha256 = None;
+                platform.release_manifest_sha256 = None;
+                platform.qualification_uri = None;
+                platform.failure = None;
+                save(&mut run).await?;
             }
         }
         if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
