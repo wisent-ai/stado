@@ -17,7 +17,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
 
-use super::{host_channel, production_runner, CommandOutput, DeployError};
+use super::{host_channel, production_runner, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
@@ -33,11 +33,22 @@ pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
 pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
+pub const MODEL_REVIEW_SECRET: &str = "BRAMA_MODEL_ROUTER_TOKEN";
+const MODEL_REVIEW_ALIAS: &str = "best";
+const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
 
 struct ProbierzAgentCredential {
     item: String,
     field: String,
     secret: String,
+}
+
+struct BramaSkarbiecContext {
+    runner: Runner,
+    skarbiec: String,
+    vault: String,
+    routes: String,
+    gnupg: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -266,9 +277,9 @@ async fn github_credential() -> Result<String, DeployError> {
     admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
 }
 
-async fn kronika_agent_credential(
+async fn brama_skarbiec_context(
     target: &ComputeTarget,
-) -> Result<ProbierzAgentCredential, DeployError> {
+) -> Result<BramaSkarbiecContext, DeployError> {
     let runner = production_runner();
     let home = host_channel::remote_home(target, &runner).await?;
     let service_env = format!("{home}/.config/brama/service.env");
@@ -300,10 +311,24 @@ async fn kronika_agent_credential(
         &home,
     )?;
     let gnupg_path = brama_service_path(&service_paths.stdout, "BRAMA_GNUPG_HOME", &home)?;
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
-    let vault = format!("SKARBIEC_VAULT_FILE={vault_path}");
-    let routes = format!("SKARBIEC_CAPABILITY_ROUTES_FILE={routes_path}");
-    let gnupg = format!("GNUPGHOME={gnupg_path}");
+    Ok(BramaSkarbiecContext {
+        runner,
+        skarbiec: format!("{home}/.stado/bin/skarbiec"),
+        vault: format!("SKARBIEC_VAULT_FILE={vault_path}"),
+        routes: format!("SKARBIEC_CAPABILITY_ROUTES_FILE={routes_path}"),
+        gnupg: format!("GNUPGHOME={gnupg_path}"),
+    })
+}
+
+async fn kronika_agent_credential(
+    target: &ComputeTarget,
+) -> Result<ProbierzAgentCredential, DeployError> {
+    let context = brama_skarbiec_context(target).await?;
+    let runner = context.runner;
+    let skarbiec = context.skarbiec;
+    let vault = context.vault;
+    let routes = context.routes;
+    let gnupg = context.gnupg;
     let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
     let reconciled_routes = host_channel::run_program(
         target,
@@ -464,6 +489,78 @@ fn set_repository_secret(
         )));
     }
     Ok(())
+}
+
+fn model_review_client_id(repository: &str) -> String {
+    let mut client_id = String::from("github-");
+    for byte in repository.bytes() {
+        let normalized = if byte.is_ascii_alphanumeric() {
+            byte.to_ascii_lowercase() as char
+        } else {
+            '-'
+        };
+        if normalized != '-' || !client_id.ends_with('-') {
+            client_id.push(normalized);
+        }
+    }
+    client_id.push_str("-model-review");
+    client_id
+}
+
+pub async fn reconcile_model_review_secret(
+    target_name: &str,
+    repository: &str,
+) -> Result<Value, DeployError> {
+    let repository = repository_name(repository)?;
+    let target = host_channel::canonical_target(target_name).await?;
+    let context = brama_skarbiec_context(&target).await?;
+    let github_token = github_credential().await?;
+    let client_id = model_review_client_id(repository);
+    let capability = format!("call:brama#{MODEL_REVIEW_ALIAS}");
+    let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    let minted = host_channel::run_program(
+        &target,
+        &[
+            "/usr/bin/env",
+            &context.vault,
+            &context.routes,
+            &context.gnupg,
+            program_path,
+            &context.skarbiec,
+            "token-mint",
+            &client_id,
+            "--capabilities",
+            &capability,
+            "--ttl-seconds",
+            MODEL_REVIEW_TOKEN_TTL_SECONDS,
+        ],
+        &context.runner,
+    )
+    .await?;
+    if !minted.ok() {
+        return Err(DeployError(format!(
+            "{}: model review bearer mint failed: {}",
+            target.name,
+            command_failure(&minted, "Skarbiec token mint failed")
+        )));
+    }
+    let document: Value = serde_json::from_str(&minted.stdout)
+        .map_err(|error| DeployError(format!("Skarbiec token response is invalid: {error}")))?;
+    let token = document
+        .get("token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .ok_or_else(|| DeployError("Skarbiec token response has no bearer".to_string()))?;
+    set_repository_secret(repository, MODEL_REVIEW_SECRET, token, &github_token)?;
+    Ok(json!({
+        "target": target.name,
+        "organization": GITHUB_ORGANIZATION,
+        "repository": repository,
+        "client_id": client_id,
+        "model": MODEL_REVIEW_ALIAS,
+        "secret": MODEL_REVIEW_SECRET,
+        "status": "reconciled",
+    }))
 }
 
 async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployError> {

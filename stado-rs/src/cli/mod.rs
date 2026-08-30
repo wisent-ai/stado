@@ -1111,6 +1111,15 @@ enum HostPrecheckRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Mint a dedicated Brama review bearer and install it as a repository secret.
+    ModelReviewAdd {
+        target: String,
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the reconciliation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2143,6 +2152,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     precheck_runner::repository_add(&repository, runner_group.as_deref(), json)
                         .await
                 }
+                HostPrecheckRunnerCommands::ModelReviewAdd {
+                    target,
+                    repository,
+                    json,
+                } => precheck_runner::model_review_add(&target, &repository, json).await,
             },
             HostCommands::PublisherRunner(command) => match command {
                 HostPublisherRunnerCommands::Install {
