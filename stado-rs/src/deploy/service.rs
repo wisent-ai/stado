@@ -2543,29 +2543,46 @@ const UNOWNED_SCRIPT: &str = "set -u
 os=$(/usr/bin/uname -s)
 uid=$(/usr/bin/id -u)
 set -- @ROOTS@
+owned=''
+owner_of=''
 if [ \"$os\" = \"Darwin\" ]; then
-  owned=''
   for launchd_domain in \"gui/$uid\" \"user/$uid\" system; do
     owned=\"$owned $(/bin/launchctl print \"$launchd_domain\" 2>/dev/null | /usr/bin/awk '/services = \\{/ { inside = 1; next } inside && /^[[:space:]]*\\}/ { inside = 0 } inside && $1 ~ /^[0-9]+$/ { print $1 }' | /usr/bin/tr '\\n' ' ')\"
   done
+  # `owner_of` is set to the pid in the chain that matched, so a verdict of
+  # \"owned\" can be checked instead of taken. The whole reason this command
+  # answered an empty table for as long as it existed is that nothing printed
+  # WHY a candidate was judged owned: launchd claims about a thousand pids on a
+  # mac, and against a set that size the test is nearly always true.
   owns() {
     walk=\"$1\"
+    owner_of=''
     while [ -n \"$walk\" ] && [ \"$walk\" != 0 ] && [ \"$walk\" != 1 ]; do
-      case \" $owned \" in *\" $walk \"*) return 0 ;; esac
+      case \" $owned \" in *\" $walk \"*) owner_of=\"$walk\"; return 0 ;; esac
       walk=$(/bin/ps -p \"$walk\" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
     done
     return 1
   }
 else
+  # systemd hosts never build `owned`; the cgroup the kernel put the process in
+  # is the whole answer. Counting `owned` unconditionally crashed every Linux
+  # host with `owned: unbound variable` under `set -u`.
   owns() {
     cgroup=$(/bin/cat \"/proc/$1/cgroup\" 2>/dev/null | /usr/bin/sed -n 's/.*\\///p')
-    case \"$cgroup\" in *.service) return 0 ;; esac
+    owner_of=''
+    case \"$cgroup\" in *.service) owner_of=\"$cgroup\"; return 0 ;; esac
     return 1
   }
 fi
+owned_count=0
+for _pid in $owned; do owned_count=$((owned_count + 1)); done
+printf 'STADO_UNOWNED_OWNED\\t%s\\n' \"$owned_count\"
 seen=''
 for root in \"$@\"; do
+  matched=0
+  under_count=0
   for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
+    matched=$((matched + 1))
     case \" $seen \" in *\" $pid \"*) continue ;; esac
     command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
     if [ -z \"$command\" ]; then continue; fi
@@ -2580,11 +2597,25 @@ for root in \"$@\"; do
     case \"$exe\" in \"$root\"*) under=yes ;; esac
     case \"$entry\" in \"$root\"*) under=yes ;; esac
     if [ \"$under\" = no ]; then continue; fi
-    if owns \"$pid\"; then continue; fi
+    under_count=$((under_count + 1))
+    if owns \"$pid\"; then
+      # The verdict and its evidence, for every candidate. An operator reading
+      # \"owned\" needs the pid in the ancestry that launchd actually claimed:
+      # a chain that ends on a thousand-entry set is how 26 stado processes on
+      # one host were all judged owned and none reported.
+      printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'owned' \"$owner_of\"
+      continue
+    fi
+    printf 'STADO_UNOWNED_JUDGED\\t%s\\t%s\\t%s\\n' \"$pid\" 'unowned' '-'
     seen=\"$seen $pid\"
     started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
     printf 'STADO_UNOWNED\\t%s\\t%s\\t%s\\n' \"$pid\" \"$started\" \"$command\"
   done
+  # What this root actually searched, printed whether or not it found anything.
+  # Without it an empty report is indistinguishable from a root that expanded
+  # to a path no process could ever run out of, and the empty table was read as
+  # \"no unowned processes\" for as long as this command has existed.
+  printf 'STADO_UNOWNED_ROOT\\t%s\\t%s\\t%s\\n' \"$root\" \"$matched\" \"$under_count\"
 done
 ";
 
@@ -4250,14 +4281,57 @@ impl UnownedProcess {
     }
 }
 
-/// Every product process on one host that no launchd job or systemd unit owns.
+/// What one host's unowned-process scan searched, beside what it found.
+///
+/// The result alone could not be read. An empty `processes` meant either that
+/// the host runs nothing unowned or that every root expanded to a path no
+/// process could run out of, and those need opposite responses. This carries
+/// the roots as the host expanded them, how many pids each one matched, how
+/// many of those actually execute out of it, and how many pids launchd claimed
+/// — so an empty answer states why it is empty.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnownedScan {
+    pub processes: Vec<UnownedProcess>,
+    /// `(root, pids matched by pgrep, pids executing out of the root)`.
+    pub roots: Vec<(String, usize, usize)>,
+    /// Pids launchd reported as owned across every printable domain.
+    pub owned_pids: usize,
+    /// `(pid, "owned"|"unowned", the ancestor pid launchd claimed)` for every
+    /// candidate that executes out of a managed root. The verdict without its
+    /// evidence is what made an empty table unreadable.
+    pub judged: Vec<(String, String, String)>,
+}
+
+impl UnownedScan {
+    /// One line an operator can read beside an empty table.
+    pub fn account(&self, host: &str) -> String {
+        let roots = self
+            .roots
+            .iter()
+            .map(|(root, matched, under)| format!("{root} matched {matched}, under {under}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "{host}: launchd claimed {} pid(s); {}",
+            self.owned_pids,
+            if roots.is_empty() {
+                "no root was searched".to_string()
+            } else {
+                roots
+            }
+        )
+    }
+}
+
+/// Every product process on one host that no launchd job or systemd unit owns,
+/// with an account of what was searched to find them.
 ///
 /// Read-only: it starts nothing, stops nothing and signals nothing, so it is
 /// safe to run against a live production host.
 pub async fn unowned_processes(
     target: &ComputeTarget,
     runner: &Runner,
-) -> Result<Vec<UnownedProcess>, DeployError> {
+) -> Result<UnownedScan, DeployError> {
     let mut roots = Vec::new();
     for root in managed_roots()? {
         // The roots keep `$HOME` unexpanded on this side and expanded on
@@ -4273,7 +4347,29 @@ pub async fn unowned_processes(
             "the unowned-process scan did not complete",
         )));
     }
-    Ok(parse_unowned(&target.name, &output.stdout))
+    let mut scan = UnownedScan {
+        processes: parse_unowned(&target.name, &output.stdout),
+        ..Default::default()
+    };
+    for line in output.stdout.lines() {
+        match host_channel::marker_fields(line).as_slice() {
+            ["STADO_UNOWNED_OWNED", count] => {
+                scan.owned_pids = count.trim().parse().unwrap_or_default();
+            }
+            ["STADO_UNOWNED_ROOT", root, matched, under] => scan.roots.push((
+                (*root).trim().to_string(),
+                matched.trim().parse().unwrap_or_default(),
+                under.trim().parse().unwrap_or_default(),
+            )),
+            ["STADO_UNOWNED_JUDGED", pid, verdict, owner] => scan.judged.push((
+                (*pid).trim().to_string(),
+                (*verdict).trim().to_string(),
+                (*owner).trim().to_string(),
+            )),
+            _ => {}
+        }
+    }
+    Ok(scan)
 }
 
 /// The `STADO_UNOWNED` marker lines, in the order the host printed them.

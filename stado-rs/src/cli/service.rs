@@ -1112,16 +1112,30 @@ async fn list_unowned(json: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
     let runner = production_runner();
     let mut found: Vec<service::UnownedProcess> = Vec::new();
+    let mut accounts: Vec<String> = Vec::new();
+    let mut verdicts: Vec<(String, Vec<(String, String, String)>)> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
     for target in registry.local_targets() {
         match service::unowned_processes(target, &runner).await {
-            Ok(processes) => found.extend(processes),
+            Ok(scan) => {
+                accounts.push(scan.account(&target.name));
+                verdicts.push((target.name.clone(), scan.judged.clone()));
+                found.extend(scan.processes);
+            }
             Err(exc) => failures.push(format!("{}: {exc}", target.name)),
         }
     }
     if json {
         let payload: Vec<Value> = found.iter().map(service::UnownedProcess::to_json).collect();
-        print_json(&json!({"unowned": payload}))?;
+        let judged: Vec<Value> = verdicts
+            .iter()
+            .flat_map(|(host, rows)| {
+                rows.iter().map(move |(pid, verdict, owner)| {
+                    json!({"host": host, "pid": pid, "verdict": verdict, "claimed_by": owner})
+                })
+            })
+            .collect();
+        print_json(&json!({"unowned": payload, "searched": accounts, "judged": judged}))?;
     } else {
         let cells: Vec<Vec<String>> = found
             .iter()
@@ -1139,6 +1153,17 @@ async fn list_unowned(json: bool) -> Result<(), CmdError> {
             &["HOST", "PID", "PRODUCT_GUESS", "STARTED_AT", "COMMAND"],
             &cells,
         );
+        // Printed on every run, not only the empty one: a table with three rows
+        // and a root that matched nothing is the same unread answer as an empty
+        // table, one root later.
+        for account in &accounts {
+            println!("searched {account}");
+        }
+        for (host, judged) in &verdicts {
+            for (pid, verdict, owner) in judged {
+                println!("judged {host}: pid {pid} {verdict} (launchd claimed {owner})");
+            }
+        }
     }
     fail_if_any(&failures, "scan for unowned processes")
 }
