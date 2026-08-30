@@ -434,20 +434,62 @@ impl JobStorage {
         Ok(Some(Job::from_json(&data)?))
     }
 
-    /// Rewrite a queued job priority in-place (read-modify-write).
-    /// `false` when the job blob does not exist.
-    pub async fn update_priority(
+    /// Atomically rewrite one queued job's priority and rebuild its marker.
+    /// `None` means the job left `queue/` before the update could finish.
+    pub async fn update_queued_priority(
         &self,
         job_id: &str,
-        prefix: &str,
         new_priority: i64,
-    ) -> Result<bool, StorageError> {
-        let Some(mut job) = self.read_job(prefix, job_id).await? else {
-            return Ok(false);
-        };
-        job.priority = new_priority;
-        self.write_job(prefix, &job).await?;
-        Ok(true)
+    ) -> Result<Option<Job>, StorageError> {
+        if !(0..=99_999_999).contains(&new_priority) {
+            return Err(StorageError::Other(
+                "job priority must be between 0 and 99999999".into(),
+            ));
+        }
+        let path = format!("queue/{job_id}.json");
+        for _ in 0..3 {
+            let Some(versioned) = self.read_text_versioned(&path).await? else {
+                return Ok(None);
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            job.priority = new_priority;
+            match self
+                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
+                .await
+            {
+                Ok(_) => {}
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => return Err(error),
+            }
+
+            if !self.backend.exists(&path).await? {
+                self.delete_priority_marker(job_id).await?;
+                return Ok(None);
+            }
+            if let Err(error) = self
+                .backend
+                .set_metadata(&path, &Self::job_metadata(&job))
+                .await
+            {
+                if matches!(&error, StorageError::NotFound(_)) {
+                    self.delete_priority_marker(job_id).await?;
+                    return Ok(None);
+                }
+                return Err(error);
+            }
+            self.delete_priority_marker(job_id).await?;
+            if new_priority > 0 {
+                self.write_priority_marker(&job).await?;
+            }
+            if !self.backend.exists(&path).await? {
+                self.delete_priority_marker(job_id).await?;
+                return Ok(None);
+            }
+            return Ok(Some(job));
+        }
+        Err(StorageError::StorageConflict(format!(
+            "queue/{job_id}.json changed while its priority was being updated"
+        )))
     }
 
     /// Delete the job blob; also drops the priority marker in `queue/`.

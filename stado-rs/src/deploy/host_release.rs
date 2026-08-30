@@ -92,6 +92,8 @@
 //!   declared unit — `skarbiec`, a CLI rather than a daemon — is activated
 //!   and reported as having no unit, not silently "restarted".
 
+use std::time::Duration;
+
 use serde_json::{json, Map, Value};
 
 use super::products::{self, Install, Product, Readback};
@@ -107,6 +109,10 @@ pub const ALREADY_ACTIVE_STATUS: &str = "already_active";
 /// `status` for a `--dry-run`: the plan was built and the host was probed
 /// read-only. No mutating program was sent.
 pub const PLANNED_STATUS: &str = "planned";
+/// A release archive can be hundreds of MiB. Keep the short host-channel
+/// timeout for probes and activation, but bound download, hashing and extract
+/// with enough time for the declared public release channel.
+const STAGE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The remote marker prefix, in the tab-delimited `STADO_*` protocol
 /// [`crate::deploy::host_recovery::parse_output`] established.
@@ -1362,7 +1368,13 @@ pub async fn release_target(
     }
 
     // Phase two: fetch, verify, stage. Still nothing in the install root.
-    let stage = host_channel::run_script(target, &stage_script(&plan), runner).await?;
+    let stage = host_channel::run_script_with_timeout(
+        target,
+        &stage_script(&plan),
+        STAGE_TIMEOUT,
+        runner,
+    )
+    .await?;
     let stage_markers = markers(&stage.stdout);
     report.insert(
         "fetched_sha256".to_string(),
