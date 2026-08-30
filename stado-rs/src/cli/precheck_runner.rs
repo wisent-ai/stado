@@ -84,6 +84,32 @@ pub async fn repository_add(
     Ok(())
 }
 
+/// Mint one repository-scoped Brama review bearer and install it as a GitHub secret.
+pub async fn model_review_add(
+    target: &str,
+    repository: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let report =
+        crate::deploy::host_precheck_runner::reconcile_model_review_secret(target, repository)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!(
+            "{}",
+            crate::deploy::host_recovery::to_sorted_pretty(&report)
+        );
+    } else {
+        println!(
+            "{}/{}: Brama model review secret {}",
+            cell(report.get("organization")),
+            cell(report.get("repository")),
+            cell(report.get("status"))
+        );
+    }
+    Ok(())
+}
+
 /// Install or reconcile the isolated GitHub pre-check runner on TARGET.
 pub async fn install(target: &str, json: bool) -> Result<(), CmdError> {
     render(target, "install", false, &[], json).await
