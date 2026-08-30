@@ -31,7 +31,7 @@ use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, UnitDomain, SOURCE_RECOVERY,
     SOURCE_REGISTRY,
 };
-use crate::deploy::{host_channel, host_exec, production_runner, DeployError};
+use crate::deploy::{host_channel, host_exec, production_runner, service_env_file, DeployError};
 use crate::observations;
 use crate::queue::JobStorage;
 use crate::targets;
@@ -394,6 +394,63 @@ pub enum ServiceCommands {
         /// Exact environment variable name.
         #[arg(long)]
         key: String,
+        /// Environment file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        env_file: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Read a managed service's owner-controlled env file, duplicates and all.
+    ///
+    /// The counterpart of `env-set`: same approved encrypted channel, same
+    /// `$HOME` confinement, opposite direction. `service env` answers what the
+    /// UNIT FILE declares; this answers what the file a launcher `.`-sources
+    /// declares, which on this fleet is where the interesting values live.
+    ///
+    /// Every assignment is listed in FILE ORDER with its line number, and a
+    /// key assigned twice is reported twice — `effective` for the last
+    /// assignment, `shadowed` for every earlier one — because a sourced file
+    /// assigns top to bottom and a later duplicate silently wins.
+    ///
+    /// A value whose key looks like a credential is withheld, and a URL
+    /// carrying userinfo is withheld whatever its key is called. An endpoint,
+    /// a port, a flag or a `$REFERENCE` is shown whatever its key is called:
+    /// those are what an operator reads this file to verify. The decision is
+    /// made ON THE HOST, so a withheld value never crosses the channel.
+    EnvShow {
+        /// Service whose host-local process reads the environment.
+        name: String,
+        /// The single registry host to read.
+        #[arg(long)]
+        host: String,
+        /// Environment file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        env_file: String,
+        /// Show this one variable's value in full, whatever its name suggests.
+        /// The key name travels; no secret is ever placed in a remote command
+        /// line either way.
+        #[arg(long)]
+        reveal: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Does this unit's env file agree with what is actually listening?
+    ///
+    /// The endpoint half of `env-show`: every loopback URL or port the file's
+    /// effective assignments declare, checked against the host's own socket
+    /// table, with the process that holds each port named. `host inventory`
+    /// does this for forward markers; this does it for a unit's environment.
+    ///
+    /// Exits non-zero when a loopback endpoint is declared and nothing is
+    /// listening there, and when the check could not be performed at all.
+    EndpointCheck {
+        /// Service whose host-local process reads the environment.
+        name: String,
+        /// The single registry host to check.
+        #[arg(long)]
+        host: String,
         /// Environment file on the target, absolute or rooted at $HOME.
         #[arg(long)]
         env_file: String,
@@ -898,6 +955,36 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 name: &name,
                 host: &host,
                 key: &key,
+                env_file: &env_file,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::EnvShow {
+            name,
+            host,
+            env_file,
+            reveal,
+            json,
+        } => {
+            env_show(EnvShowOptions {
+                name: &name,
+                host: &host,
+                env_file: &env_file,
+                reveal: reveal.as_deref(),
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::EndpointCheck {
+            name,
+            host,
+            env_file,
+            json,
+        } => {
+            endpoint_check(EndpointCheckOptions {
+                name: &name,
+                host: &host,
                 env_file: &env_file,
                 as_json: json,
             })
@@ -2691,6 +2778,294 @@ async fn env_unset(options: EnvUnsetOptions<'_>) -> Result<(), CmdError> {
         table::print(&["HOST", "UNIT", "KEY", "UPDATE", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "environment update")
+}
+
+struct EnvShowOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    env_file: &'a str,
+    reveal: Option<&'a str>,
+    as_json: bool,
+}
+
+/// The head every env-file reader prints: which file, how protected, how big.
+///
+/// The mode is not decoration. This file is the one an operator is about to
+/// believe, and a `worker.env` the group can read is a finding that belongs
+/// next to its contents rather than in a separate audit nobody runs.
+fn print_env_file_head(report: &service_env_file::EnvFileReport) {
+    println!(
+        "env file: {} ({})",
+        dash(&report.path),
+        if report.file_state == service_env_file::FILE_READ {
+            format!(
+                "mode {}, {}, {} bytes",
+                dash(&report.mode),
+                if report.owner_only {
+                    "owner-only"
+                } else {
+                    "READABLE BEYOND ITS OWNER"
+                },
+                report.bytes
+            )
+        } else {
+            format!("{}: {}", report.file_state, dash(&report.detail))
+        }
+    );
+}
+
+/// Why a report cannot be believed, or `None` when it can.
+///
+/// A file that was never opened and a file that holds no assignments are
+/// opposite answers, and this command must not exit zero on the first while
+/// printing the empty table of the second.
+fn env_file_failure(host: &str, report: &service_env_file::EnvFileReport) -> Option<String> {
+    if report.file_state != service_env_file::FILE_READ {
+        return Some(format!(
+            "{host}: {} — {}",
+            report.file_state,
+            dash(&report.detail)
+        ));
+    }
+    if report.entries_state != service_env_file::ENTRIES_READ {
+        return Some(format!(
+            "{host}: the file was readable and its assignments were not parsed ({})",
+            report.entries_state
+        ));
+    }
+    None
+}
+
+async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError> {
+    let EnvShowOptions {
+        name,
+        host,
+        env_file,
+        reveal,
+        as_json,
+    } = options;
+    if let Some(key) = reveal {
+        validate_env_key(key)?;
+    }
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service_env_file::read_env_file(&target, env_file, reveal, &runner)
+            .await
+            .map_err(click)?;
+        if let Some(failure) = env_file_failure(&declared.host, &report) {
+            failures.push(failure);
+        }
+        if as_json {
+            payload.push(Value::Object(service_env_file::to_report(
+                &target,
+                declared.unit_id(),
+                &report,
+            )));
+            continue;
+        }
+
+        println!("host:     {}", declared.host);
+        println!("unit:     {}", declared.unit_id());
+        print_env_file_head(&report);
+        let roles = service_env_file::shadowing(&report.entries);
+        table::print(
+            &[
+                "LINE",
+                "FORM",
+                "KEY",
+                "RESOLUTION",
+                "VALUE STATE",
+                "CHARS",
+                "VALUE",
+            ],
+            &report
+                .entries
+                .iter()
+                .zip(&roles)
+                .map(|(entry, role)| {
+                    vec![
+                        entry.line.to_string(),
+                        entry.form.clone(),
+                        dash(&entry.key),
+                        dash(role),
+                        entry.value_state.clone(),
+                        entry.chars.to_string(),
+                        dash(&entry.value),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+        if report.entries_seen as usize > report.entries.len() {
+            println!(
+                "entries: {} of {} shown — the rest were cut at this command's cap",
+                report.entries.len(),
+                report.entries_seen
+            );
+        }
+        // The prime suspect, said in words rather than left for the operator
+        // to notice by scanning a KEY column. This is the finding the outage
+        // that motivated this command turned on.
+        let duplicates = service_env_file::duplicate_keys(&report.entries);
+        if duplicates.is_empty() {
+            println!("duplicates: none — every key is assigned exactly once");
+        } else {
+            println!(
+                "duplicates: {} — the LAST assignment wins when this file is sourced, so \
+                 every row marked {} above is dead text. `env-set` rewrites only lines \
+                 spelled KEY=, so an `export KEY=` duplicate survives it.",
+                duplicates.join(", "),
+                service_env_file::SHADOWED
+            );
+        }
+        let redacted = report
+            .entries
+            .iter()
+            .filter(|entry| entry.value_state == service_env_file::VALUE_REDACTED)
+            .count();
+        if redacted > usize::MIN {
+            println!(
+                "redacted: {redacted} value(s) never left the host. Show one with \
+                 --reveal KEY."
+            );
+        }
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    }
+    fail_if_any(&failures, "environment read")
+}
+
+struct EndpointCheckOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    env_file: &'a str,
+    as_json: bool,
+}
+
+async fn endpoint_check(options: EndpointCheckOptions<'_>) -> Result<(), CmdError> {
+    let EndpointCheckOptions {
+        name,
+        host,
+        env_file,
+        as_json,
+    } = options;
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service_env_file::read_env_file(&target, env_file, None, &runner)
+            .await
+            .map_err(click)?;
+        if let Some(failure) = env_file_failure(&declared.host, &report) {
+            failures.push(failure);
+        }
+        let rows = service_env_file::endpoint_rows(&report);
+        let dead: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.verdict == service_env_file::ENDPOINT_DEAD)
+            .map(|row| row.key.as_str())
+            .collect();
+        if !dead.is_empty() {
+            failures.push(format!(
+                "{}: nothing is listening where {} points",
+                declared.host,
+                dead.join(", ")
+            ));
+        }
+        // A check that could not be performed is not a check that passed.
+        if report.file_state == service_env_file::FILE_READ
+            && report.listeners_state == service_env_file::LISTENERS_FAILED
+        {
+            failures.push(format!(
+                "{}: the socket table could not be read, so no endpoint below was judged",
+                declared.host
+            ));
+        }
+
+        if as_json {
+            let mut object = service_env_file::to_report(&target, declared.unit_id(), &report);
+            object.insert("listeners_state".to_string(), json!(report.listeners_state));
+            object.insert(
+                "endpoints".to_string(),
+                Value::Array(
+                    rows.iter()
+                        .map(|row| {
+                            json!({
+                                "key": row.key,
+                                "line": row.line,
+                                "declared": row.declared,
+                                "port": row.port,
+                                "listening": row.verdict,
+                                "holders": row.holders,
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+            object.insert("dead_endpoints".to_string(), json!(dead));
+            payload.push(Value::Object(object));
+            continue;
+        }
+
+        println!("host:     {}", declared.host);
+        println!("unit:     {}", declared.unit_id());
+        print_env_file_head(&report);
+        table::print(
+            &["KEY", "LINE", "DECLARED", "PORT", "LISTENING", "PROCESS"],
+            &rows
+                .iter()
+                .map(|row| {
+                    vec![
+                        row.key.clone(),
+                        row.line.to_string(),
+                        row.declared.clone(),
+                        row.port.to_string(),
+                        row.verdict.to_string(),
+                        dash(&row.holders.join(", ")),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+        if rows.is_empty() {
+            println!(
+                "endpoints: none — no effective assignment in this file names a URL or a port"
+            );
+        }
+        if report.listeners_state == service_env_file::LISTENERS_READ_WITHOUT_NAMES {
+            // Say why the PROCESS column is thin, where it is being read.
+            println!(
+                "listeners: {} — lsof was unavailable, so the ports are the kernel's and \
+                 the owners are bare pids",
+                report.listeners_state
+            );
+        }
+        let shadowed = service_env_file::duplicate_keys(&report.entries);
+        if !shadowed.is_empty() {
+            println!(
+                "duplicates: {} — only the last assignment of each was judged above, \
+                 because that is the one the unit runs with",
+                shadowed.join(", ")
+            );
+        }
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    }
+    fail_if_any(&failures, "endpoint check")
 }
 
 struct GrantSyncOptions<'a> {
