@@ -1216,10 +1216,11 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
                     unit.label.clone(),
                     dash(&unit.pid),
                     unit.status.clone(),
+                    unit.program.clone(),
                 ]
             })
             .collect();
-        table::print(&["HOST", "LABEL", "PID", "LAST_EXIT"], &cells);
+        table::print(&["HOST", "LABEL", "PID", "LAST_EXIT", "RUNS"], &cells);
     }
     fail_if_any(&failures, "scan for undeclared units")
 }

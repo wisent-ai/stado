@@ -4403,6 +4403,13 @@ pub struct UndeclaredUnit {
     pub pid: String,
     /// The label's last exit status as launchd reports it.
     pub status: String,
+    /// The unit file the host found for the label, or empty when it found none.
+    pub path: String,
+    /// The argument vector that unit file declares, flattened to one line. A
+    /// label alone is not actionable: three naming conventions produce three
+    /// unrelated-looking labels for one job, and only the program says they are
+    /// the same job.
+    pub program: String,
 }
 
 impl UndeclaredUnit {
@@ -4412,28 +4419,48 @@ impl UndeclaredUnit {
             "label": self.label,
             "pid": self.pid,
             "status": self.status,
+            "path": self.path,
+            "program": self.program,
         })
     }
 }
 
-/// Read-only: `launchctl list`, and nothing else. It starts nothing, stops
-/// nothing, signals nothing and needs no sudo.
+/// Read-only: `launchctl list`, the unit files it names, and nothing else. It
+/// starts nothing, stops nothing, signals nothing and needs no sudo.
 const LOADED_LABELS_SCRIPT: &str = "set -u
 if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
   printf 'STADO_LOADED_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
   exit 0
 fi
-/bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 != \"Label\" { printf \"STADO_LOADED\\t%s\\t%s\\t%s\\n\", $1, $2, $3 }'
+# A label alone cannot be acted on: the fleet has three naming conventions for
+# the same job, so `com.wisent.compute.agent.<host>` and
+# `com.wisent.compute.service.stado-queue-agent` read as unrelated entries
+# until you know both run `stado agent`. The unit file says what it runs, and
+# it is world-readable in both domains, so the program travels with the label.
+for label in $(/bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 ~ /^com\\.wisent\\./ { print $3 }'); do
+  pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $1 }')
+  status=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $2 }')
+  plist=''
+  for candidate in \"/Library/LaunchDaemons/$label.plist\" \"$HOME/Library/LaunchAgents/$label.plist\" \"/Library/LaunchAgents/$label.plist\"; do
+    if [ -f \"$candidate\" ]; then plist=\"$candidate\"; break; fi
+  done
+  program=''
+  if [ -n \"$plist\" ]; then
+    program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \
+      | /usr/bin/tr -d '[]\"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\\t\\r\\n' ' ')
+  fi
+  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\"
+done
 ";
 
 /// Every launchd job loaded on TARGET under [`FLEET_LABEL_PREFIX`] that the
-/// registry does not declare.
+/// registry does not declare, with the unit file and program each one runs.
 ///
 /// This is the direction nothing in the product looked. `service list` walks
 /// the declaration and asks the host about each entry; `list --unowned` walks
-/// the processes and asks launchd who owns them. A unit launchd has loaded and
-/// the document has never heard of is in neither set, and so it was invisible
-/// to both.
+/// the processes and asks launchd who owns them — and on the always-on mac it
+/// correctly answered that nothing is unowned, because every duplicate IS
+/// owned, by a label the registry never heard of.
 ///
 /// charless-mac-mini was running three queue agents at once under that blind
 /// spot: `com.wisent.compute.service.stado-agent-mini`, the only one the
@@ -4462,7 +4489,7 @@ pub async fn undeclared_units(
         .stdout
         .lines()
         .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_LOADED", pid, status, label] => {
+            ["STADO_LOADED", pid, status, label, path, program] => {
                 let label = (*label).trim().to_string();
                 (label.starts_with(FLEET_LABEL_PREFIX) && !declared.contains(&label)).then(|| {
                     UndeclaredUnit {
@@ -4470,6 +4497,8 @@ pub async fn undeclared_units(
                         label,
                         pid: (*pid).trim().trim_matches('-').to_string(),
                         status: (*status).trim().to_string(),
+                        path: (*path).trim().trim_matches('-').to_string(),
+                        program: (*program).trim().to_string(),
                     }
                 })
             }
