@@ -1198,6 +1198,12 @@ struct RemoteComposeRequest<'a> {
 }
 
 #[derive(serde::Deserialize)]
+struct RemoteComposeResponse {
+    status: u16,
+    payload: Value,
+}
+
+#[derive(serde::Deserialize)]
 struct RemoteDeleteResponse {
     state: String,
     uri: String,
@@ -1567,7 +1573,22 @@ impl RemoteObjectApi {
             .json(&request)
             .send()
             .await?;
-        self.response_json(response, "object chunk composition").await
+        let response: RemoteComposeResponse = self
+            .response_json(response, "object chunk composition")
+            .await?;
+        let status = reqwest::StatusCode::from_u16(response.status)
+            .map_err(|_| CmdError::click("object composition returned an invalid HTTP status"))?;
+        if !status.is_success() {
+            return Err(CmdError::click(format!(
+                "Stado object API returned HTTP {status}: {}",
+                response.payload
+            )));
+        }
+        serde_json::from_value(response.payload).map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API returned an invalid object composition payload: {error}"
+            ))
+        })
     }
 
     async fn put_with_metadata(
