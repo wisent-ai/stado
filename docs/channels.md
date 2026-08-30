@@ -21,7 +21,13 @@ Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. 
 
 `host exec`'s allowlist takes no operator-supplied path, so it reads no files. A managed unit's owner-controlled env file — the one a launcher `.`-sources, not the one the unit file declares — is read with `stado service env-show <service> --host <target> --env-file <path>`, through the same channel and the same `$HOME` confinement `stado service env-set` writes through. Values whose key looks like a credential, and URLs carrying userinfo, are withheld on the target and never cross the channel; endpoints, ports and variable references are shown, because those are what an operator must verify. `stado service endpoint-check` reconciles the loopback endpoints that file declares against the target's own socket table and exits non-zero when a declared dependency is dead.
 
-A configuration surface Stado can write and cannot read is not a boundary, it is a blind spot: on 2026-08-30 a managed unit named a Skarbiec endpoint nothing served, two writes of the correct endpoint were reverted by a stale forward marker feeding the same file, and no command could show either fact.
+A configuration surface Stado can write and cannot read is not a boundary, it is a blind spot: on 2026-08-30 a managed unit named a Skarbiec endpoint nothing served, two writes of the correct endpoint were reverted, and no command could show either fact. `stado service env-set` therefore reads the key back through the same channel after writing it and exits non-zero unless the file's effective assignment holds what it wrote. The comparison happens on the target, so a secret is verified exactly without its value returning.
+
+### An env key can have an owner other than the operator
+
+A managed env file may be reconciled by something already running on the host, and a write to a key that something else owns does not survive. On charless-mac-mini `com.wisent.compute.service.weles-release-cutover` (`$HOME/.stado/bin/weles-release-cutover`) deletes `^WC_SKARBIEC_URL=` from `$HOME/.config/weles/worker.env` and appends `WC_SKARBIEC_URL='<contents of $HOME/.stado/forwards/skarbiec.url>'`, and it also deletes `STADO_RELEASE_API_URL` while writing `STADO_RELEASE_LOCAL_ROOT` in its place. Those keys are declared by the marker and by that script, not by whoever last ran `env-set`.
+
+This is why the read-back names the forward marker whose contents match what replaced the write: the repair is to correct the declaration, not to write the file again. `stado service list --undeclared` enumerates every unit a host has loaded and what each one runs, which is how such a writer is found when no marker explains it.
 
 ## Service directory
 
