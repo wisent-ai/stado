@@ -2383,7 +2383,7 @@ if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
     if /bin/cmp -s \"$rendered\" \"$unit_path\"; then
       # File is identical - nothing to do
       /bin/rm -f \"$staged\" \"$rendered\"
-      printf 'STADO_ENSURE\t%s\t%s\t%s\n' \"$domain\" \"$pid\" \"$unit_path\"
+      printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
       say 'already_correct' \"$domain/$unit pid $pid\"
       exit 0
     fi
@@ -2410,12 +2410,12 @@ if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
       exit 0
     fi
     pid=\"$pc_pid\"
-    printf 'STADO_ENSURE\t%s\t%s\t%s\n' \"$domain\" \"$pid\" \"$unit_path\"
+    printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
     say \"$action\" \"$unit_path\"
     exit 0
   fi
   # Non-Darwin or no existing unit - nothing to do
-  printf 'STADO_ENSURE\t%s\t%s\t%s\n' \"$domain\" \"$pid\" \"$unit_path\"
+  printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
   say 'already_correct' \"$domain/$unit pid $pid\"
   exit 0
 fi
