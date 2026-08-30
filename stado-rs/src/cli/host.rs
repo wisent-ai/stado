@@ -5089,6 +5089,113 @@ pub async fn weles_capture(
 /// row to read, not an error to retry. A batch nobody enqueued exits non-zero,
 /// after printing the report, because that is the one question the report
 /// cannot answer by being empty.
+/// What one `host weles-browser-task` invocation asks for.
+pub struct BrowserTaskRequest<'a> {
+    pub target: &'a str,
+    pub url: &'a str,
+    pub objective: &'a str,
+    pub session_label: &'a str,
+    pub action: &'a str,
+    pub env_file: &'a str,
+    pub allow_login: bool,
+    pub windowed: bool,
+    pub json: bool,
+}
+
+/// `stado host weles-browser-task` — the general Weles submission surface.
+///
+/// The allowlist check happens first and on its own round trip, because the
+/// point is to refuse before anything is enqueued: a name the worker will not
+/// run must produce a sentence here, not an accepted job that disappears.
+pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), CmdError> {
+    let BrowserTaskRequest {
+        target,
+        url,
+        objective,
+        session_label,
+        action,
+        env_file,
+        allow_login,
+        windowed,
+        json,
+    } = request;
+    let parsed = url::Url::parse(url)
+        .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.username() != "" {
+        return Err(CmdError::usage(
+            "--url must be an HTTP or HTTPS URL without embedded credentials",
+        ));
+    }
+    // `@path` keeps a long objective out of a shell history and out of argv.
+    let objective = match objective.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|error| CmdError::usage(format!("cannot read objective from {path}: {error}")))?
+            .trim()
+            .to_string(),
+        // Trimmed on both paths: an all-whitespace objective is not a task,
+        // and only trimming the `@file` path made that depend on how the
+        // objective was supplied.
+        None => objective.trim().to_string(),
+    };
+    if objective.is_empty() {
+        return Err(CmdError::usage("--objective is empty"));
+    }
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let allowlist =
+        crate::deploy::weles_browser_task::host_allowlist(&resolved, env_file, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let task = crate::deploy::weles_browser_task::BrowserTask {
+        action,
+        url: parsed.as_str(),
+        objective: &objective,
+        session_label,
+        allow_login,
+        headless: !windowed,
+    };
+    let outcome = crate::deploy::weles_browser_task::submit(target, &task)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&Value::Object(
+                outcome.to_report(&resolved.name, action)
+            ))?
+        );
+    } else {
+        println!("host:      {}", resolved.name);
+        println!("action:    {action}");
+        println!("run:       {}", outcome.run_id);
+        println!(
+            "outcome:   {}",
+            if outcome.ok { "ok" } else { "failed" }
+        );
+        if let Some(code) = outcome.exit_code {
+            println!("exit:      {code}");
+        }
+        if !outcome.result.is_null() {
+            println!("result:    {}", serde_json::to_string(&outcome.result)?);
+        }
+    }
+    if outcome.ok {
+        Ok(())
+    } else {
+        Err(CmdError::click(format!(
+            "{}: {action} run {} did not succeed",
+            resolved.name, outcome.run_id
+        )))
+    }
+}
+
 pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Result<(), CmdError> {
     let admission = crate::deploy::weles_capture::resolve_admission(target)
         .await

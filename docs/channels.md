@@ -69,6 +69,26 @@ One key had to come back rather than change. `launch-mac.sh` in release 0.5.21 g
 
 A newer archive, 0.5.22, is staged on that host and was left alone. It is absent from the release store, carries no sidecar digest, no manifest and no provenance, and is not installed. Pointing a production host at unprovenanced bytes no published coordinate attests is the failure the release doctrine exists to prevent, so the convergence stopped at the newest release the host has actually verified and installed.
 
+### A dead unit reported as running, and who owns the worker
+
+`service show` said `runs` whenever the unit FILE existed. It reads `ProgramArguments` out of the plist, reaches no process table and asks launchd nothing, so on 2026-08-30 it reported `com.wisent.always-on.weles` as `runs` while both pids the preceding restart had produced were already gone from `ps` and the unit's stderr ended in `EADDRINUSE 127.0.0.1:58101`. Its word is now `declares`, which is what it always meant, and `stado service serving <name> --host <target>` answers the question that was missing: is the DECLARED unit the process on its own port.
+
+Ownership there is decided by launchd label and never by argv, because two units on that host executed an identical argument vector and argv matching would credit the survivor to whichever one was asked about. The pid holding each port is walked up its own parent chain until a pid appears in `launchctl list`, since a launcher script is the job and the server it starts is the child that holds the socket. A label that cannot be read — a system LaunchDaemon is invisible to an unprivileged `launchctl list` — is `unknown`, never "nobody owns it". The ports judged come from the service directory's declared endpoint or from `--port`, and deliberately not from the unit's env file: that file names every endpoint the unit TOUCHES and most of them are ports it calls, so judging `STADO_API_URL` as a port this unit must own reported three healthy dependencies as stolen the first time it was tried. `endpoint-check` remains the command for dependencies.
+
+The two units were not a mistake anyone made. The Weles release deployer creates one of them: `auto-deploy.sh` copies `$INSTALL_DIR/scripts/worker/deploy/com.wisent.$label.plist` into `$HOME/Library/LaunchAgents` and bootstraps it, for `weles-worker`, `weles-api`, `weles-content-worker`, `weles-keyword-planner-api` and `weles-echo-api`. So the registry declared `com.wisent.always-on.weles` as a system LaunchDaemon while the release kept bootstrapping `com.wisent.weles-worker` in the per-login domain, and the two collided on 58101 with the declared one losing and dying.
+
+Stado is the fleet control plane, so the registry now describes what actually runs: `com.wisent.weles-worker` is adopted — with `--host-heuristic always-on` so the declarative placement carries, and its `weles` onboarding metadata re-attached field for field — and `com.wisent.always-on.weles` is retired. The next `auto-deploy.sh` run therefore re-creates a unit Stado already declares instead of a rival. `service serving com.wisent.weles-worker --host charless-mac-mini --port 58101` now answers `serving`, `served_by_unit`, owner declared `true`.
+
+Reversing it is two declarations and a restart, because the retired unit's plist is still on disk — `retire` removes a service from management and never deletes files:
+
+```console
+stado service adopt com.wisent.always-on.weles --host-heuristic always-on
+stado service onboarding com.wisent.always-on.weles --host charless-mac-mini --product-id weles --display-name Weles --repository wisent-ai/weles --surfaces web,worker,operator --first-success-fact authorized_browser_workflow_completed
+stado service restart com.wisent.always-on.weles --host charless-mac-mini
+```
+
+One gap is left named rather than papered over, and it is in Stado, not in Weles. `retire` boots out and disables only the two per-login spellings (`RETIRE_BODY`), so it cannot `launchctl disable system/<label>`. Retiring a system LaunchDaemon therefore needs `service stop` first — which does have the privileged path, through the host account credential the registry's `account_ref` names — and even then the label is only booted out, not disabled. `/Library/LaunchDaemons/com.wisent.always-on.weles.plist` remains, so launchd will load it again after a reboot and the rival returns. The durable fix is a privileged branch in `retire` mirroring `stop_service_with_password`: `sudo launchctl bootout system/<label>` followed by `sudo launchctl disable system/<label>`, gated on the same `account_ref` credential and refusing with the exact privileged command when no password is readable.
+
 ## Service directory
 
 The directory joins a producer, its endpoint, and declared consumers. `stado service directory show <service>` displays the resolved relationship. `stado service directory connect <service> --consumer <consumer>` establishes a declared connection. `stado service verify <service>` exercises reachability from the declared consumers instead of treating the producer's loopback listener as fleet reachability.

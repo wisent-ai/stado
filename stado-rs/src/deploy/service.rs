@@ -2036,9 +2036,18 @@ else
 fi
 ";
 
-/// Recovery fencing: stop the unit without disabling it or changing the
-/// registry. A later restart loads the same unit after its Stado config has
-/// been atomically cut over.
+/// `service show`: what the unit FILE declares — its program and argument
+/// vector — and nothing about whether any of it is running.
+///
+/// The status word is `declares`, not `runs`, and the difference is a
+/// multi-day outage. This body reaches no process table and asks launchd
+/// nothing; it read `ProgramArguments` out of the plist and then said `runs`,
+/// so on 2026-08-30 it reported `com.wisent.always-on.weles` as `runs` while
+/// both pids the preceding restart had reported were already gone and the
+/// unit's stderr ended in `EADDRINUSE`. A word that means "this file exists
+/// and declares this" must not be spelled like a word that means "this is
+/// serving". Whether the unit is the process on its own port is
+/// [`super::service_serving`]'s question.
 const SHOW_BODY: &str = "if [ ! -f \"$unit_path\" ]; then
   say 'missing' \"$unit_path\"
   exit 0
@@ -2063,9 +2072,9 @@ case \"$program\" in
     ;;
 esac
 if [ -n \"$resolved\" ]; then
-  say 'runs' \"$args(current -> $resolved)\"
+  say 'declares' \"$args(current -> $resolved)\"
 else
-  say 'runs' \"$args\"
+  say 'declares' \"$args\"
 fi
 ";
 
@@ -2893,6 +2902,18 @@ fn remote_script(
 ) -> Result<String, DeployError> {
     let prelude = remote_prelude(unit, linux_unit, path)?;
     Ok(format!("{prelude}{body}"))
+}
+
+/// The shared prelude with one unit spliced in, ahead of a caller's own body.
+///
+/// [`super::service_serving`] needs exactly the vocabulary every body here
+/// reads the host through — `$unit`, `$unit_path`, `$domain`, `$launch`,
+/// `stado_launchd_state` — and must not grow a second copy of it. A second
+/// resolver for "which domain is this unit in" is how two commands come to
+/// disagree about the same unit, which is the failure [`prelude_with`] exists
+/// to prevent.
+pub fn serving_script(unit: &str, path: &str, body: &str) -> Result<String, DeployError> {
+    remote_script(unit, "", path, body)
 }
 
 // ---------------------------------------------------------------------------

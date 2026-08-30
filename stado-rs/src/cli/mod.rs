@@ -1634,6 +1634,58 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Run one browser task on TARGET's Weles worker and report its result.
+    ///
+    /// The general submission surface. `weles-capture` hard-codes
+    /// `generic_capture`, which charless-mac-mini's worker does not accept, and
+    /// `weles-image-inspect` submits the allowlisted `generic_browser_task`
+    /// with its objective and constraints fixed in product code. So the only
+    /// action that host would run was reachable only through a command that
+    /// could not be told what to do, and every browser workflow this fleet
+    /// owns sat behind that.
+    ///
+    /// The action name is checked against TARGET's own
+    /// `WELES_ACTION_ALLOWLIST` before any channel is opened, and the
+    /// allowlist is read byte-exact rather than through `env-show`, which
+    /// clamps values at 400 characters and would silently truncate a
+    /// 4488-character list to its first 25 entries. An action the worker would
+    /// refuse is refused here, naming the action and the host.
+    ///
+    /// The request is held open for the run, so this reports what the run
+    /// produced rather than a queue receipt.
+    #[command(name = "weles-browser-task")]
+    WelesBrowserTask {
+        target: String,
+        /// Page the task starts on.
+        #[arg(long)]
+        url: String,
+        /// What the agent must accomplish. `@path` reads the objective from a
+        /// file, for the long ones that do not belong in a shell history.
+        #[arg(long)]
+        objective: String,
+        /// Stable session label, so a resumed flow reuses one browser profile.
+        #[arg(long)]
+        session_label: String,
+        /// Action to run; must be one TARGET's allowlist carries.
+        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ACTION)]
+        action: String,
+        /// Env file whose `WELES_ACTION_ALLOWLIST` decides what TARGET accepts.
+        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ENV_FILE)]
+        env_file: String,
+        /// Permit the run to sign in and change state. Off by default: the
+        /// same read-only, no-login, no-mutation constraints
+        /// `weles-image-inspect` fixes. Turning it on is an explicit decision,
+        /// because a browser task that may authenticate acts as the account it
+        /// signs in as.
+        #[arg(long)]
+        allow_login: bool,
+        /// Run with a visible window. Some sign-in flows refuse headless.
+        #[arg(long)]
+        windowed: bool,
+        /// Emit the complete result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's effective Stado configuration through its fleet channel.
     ConfigShow { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
@@ -2290,6 +2342,30 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 batch,
                 json,
             } => host::weles_capture_status(&target, &batch, json).await,
+            HostCommands::WelesBrowserTask {
+                target,
+                url,
+                objective,
+                session_label,
+                action,
+                env_file,
+                allow_login,
+                windowed,
+                json,
+            } => {
+                host::weles_browser_task(host::BrowserTaskRequest {
+                    target: &target,
+                    url: &url,
+                    objective: &objective,
+                    session_label: &session_label,
+                    action: &action,
+                    env_file: &env_file,
+                    allow_login,
+                    windowed,
+                    json,
+                })
+                .await
+            }
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,
