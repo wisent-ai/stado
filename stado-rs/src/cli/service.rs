@@ -1108,12 +1108,16 @@ async fn list(json: bool) -> Result<(), CmdError> {
 /// kind=local host, and a host that will not answer is named on stderr rather
 /// than dropped — "no unowned processes" and "nobody looked" are the fold this
 /// whole group refuses to make.
+/// One host's per-candidate ownership verdicts: the host, then
+/// `(pid, "owned"|"unowned", the ancestor pid launchd claimed)` for each.
+type HostVerdicts = (String, Vec<(String, String, String)>);
+
 async fn list_unowned(json: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
     let runner = production_runner();
     let mut found: Vec<service::UnownedProcess> = Vec::new();
     let mut accounts: Vec<String> = Vec::new();
-    let mut verdicts: Vec<(String, Vec<(String, String, String)>)> = Vec::new();
+    let mut verdicts: Vec<HostVerdicts> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
     for target in registry.local_targets() {
         match service::unowned_processes(target, &runner).await {
