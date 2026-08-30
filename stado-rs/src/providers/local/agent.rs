@@ -800,12 +800,23 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // gate stopped the host permanently and silently: 19.6 GiB free against
         // a 20 GiB watermark, a zero-capacity publish, `continue`, forever.
         //
-        // So pressure no longer suppresses the broadcast and no longer skips the
-        // claim loop. It is published as a fact. Admission keeps the gates that
-        // measure what a job would actually consume: the `$HOME` write probe and
-        // staging backpressure in `disk_gate`, and the per-job raw-disk reserve
-        // in the claim loop below, each of which refuses the specific work that
-        // would run the disk out rather than refusing the host.
+        // So pressure no longer suppresses the BROADCAST. It still suppresses
+        // claiming, and the first version of this change did not, which was
+        // wrong: within forty minutes of the same host being put back on the
+        // fleet store its free space fell 19.3 -> 17.0 -> 13.8 GiB, because the
+        // queue it had started draining is full of `cargo build` workloads and
+        // the jobs themselves are what consume the disk. The gates that measure
+        // actual consumption do not cover them -- the `$HOME` write probe only
+        // fails once the disk is already full, and the raw-disk reserve applies
+        // to activation-extraction jobs alone -- so removing the watermark from
+        // admission would have let the host claim its way to zero.
+        //
+        // The defect was never that pressure stops claiming. It was that a host
+        // which stops claiming says nothing at all: the broadcast went to zero
+        // and the row went stale, so the fleet could not distinguish "under its
+        // disk watermark" from "dead". Capacity is now published every loop with
+        // `disk_pressure_active` in the diagnostics, and `host gates` reports the
+        // numbers, so the operator gets a reason instead of a silence.
         let disk_policy_known = disk_low_bytes.is_some();
         let readings_incomplete = disk_low_bytes.is_none() || current_free_bytes.is_none();
         let pressure_active =
@@ -850,14 +861,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             });
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
-        }
-        if pressure_active {
-            log_fn(&format!(
-                "loop: disk-pressure-active: {} bytes free is below the {} byte low watermark; \
-                 the janitor reclaims, admission is unaffected, the broadcast continues",
-                current_free_bytes.unwrap_or_default(),
-                disk_low_bytes.unwrap_or_default()
-            ));
         }
         // The republish keep-alive below is unchanged from Python.
         if let Some(cap) = &last_cap {
@@ -1333,6 +1336,27 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 self_terminate(kind, log_fn).await;
                 return Ok(());
             }
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
+        }
+        // Disk pressure suppresses admission exactly the way a paused queue
+        // does, and for the same reason: everything above this point has already
+        // run, so live slots keep advancing, heartbeats keep going out, and the
+        // capacity broadcast above carries real numbers with
+        // `disk_pressure_active` beside them. What stops is starting new work on
+        // a host that is under its own low watermark. The job that would be
+        // claimed here is the thing consuming the disk -- on the always-on mac
+        // the queue drained 19.3 GiB down to 13.8 GiB in forty minutes of
+        // `cargo build` workloads -- and no later gate measures that, so this is
+        // where it belongs.
+        if pressure_active {
+            log_fn(&format!(
+                "loop: disk-pressure-active: {} bytes free is under the {} byte low watermark; \
+                 claiming nothing until the janitor or the operator frees space, and saying so \
+                 in the broadcast rather than going quiet",
+                current_free_bytes.unwrap_or_default(),
+                disk_low_bytes.unwrap_or_default()
+            ));
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
