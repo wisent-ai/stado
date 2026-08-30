@@ -4892,7 +4892,7 @@ pub async fn weles_image_inspect(
     let channel = crate::deploy::weles_capture::open_channel(&admission)
         .await
         .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let result = crate::deploy::weles_capture::run_action_payload(
+    let result = crate::deploy::weles_capture::observe_action_payload(
         &channel,
         "generic_browser_task",
         json!({
@@ -4911,6 +4911,21 @@ pub async fn weles_image_inspect(
     )
     .await
     .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let run_id = result
+        .get("run_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::click(format!("{target}: Weles returned no diagnostic run id")))?;
+    let diagnostics = crate::deploy::weles_capture::image_diagnostics(&channel, run_id)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let task_result = result.get("result").cloned().unwrap_or(Value::Null);
+    let browser_run = json!({
+        "run_id": run_id,
+        "trajectory_ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "exit_code": result.get("exitCode"),
+        "final_url": task_result.get("final_url"),
+        "trajectory_error": task_result.get("error"),
+    });
     let report = json!({
         "target": target,
         "source_url": source_url.as_str(),
@@ -4918,7 +4933,8 @@ pub async fn weles_image_inspect(
         "endpoint": admission.declared_url,
         "transport": channel.transport(),
         "admission_token": channel.token_state(),
-        "result": result,
+        "browser_run": browser_run,
+        "images": diagnostics,
     });
     if json {
         print_json(&report);
@@ -4928,7 +4944,7 @@ pub async fn weles_image_inspect(
             report["source_url"].as_str().unwrap_or(source_url.as_str()),
             admission.declared_url,
         );
-        print_json(&result);
+        print_json(&diagnostics);
     }
     Ok(())
 }

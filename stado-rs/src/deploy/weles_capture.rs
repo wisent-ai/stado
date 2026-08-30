@@ -643,13 +643,18 @@ impl Channel {
         }
     }
 
-    /// One Weles API call. Successful responses are returned in full because
-    /// the synchronous `/run` surface has no `{ data }` envelope.
-    async fn call(&self, route: &str, body: &Value) -> Result<Value, DeployError> {
+    async fn json_request(
+        &self,
+        method: reqwest::Method,
+        route: &str,
+        body: Option<&Value>,
+    ) -> Result<(reqwest::StatusCode, String, Value), DeployError> {
         let mut request = self
             .client
-            .post(format!("{}{route}", self.base_url))
-            .json(body);
+            .request(method, format!("{}{route}", self.base_url));
+        if let Some(body) = body {
+            request = request.json(body);
+        }
         if let Token::Present(token) = &self.token {
             request = request.bearer_auth(token);
         }
@@ -669,22 +674,99 @@ impl Channel {
                 self.token.describe()
             )));
         }
-        if !status.is_success() || payload.get("ok").and_then(Value::as_bool) != Some(true) {
-            let detail = payload
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    body.lines()
-                        .rfind(|line| !line.trim().is_empty())
-                        .unwrap_or("no reason given")
-                        .to_string()
-                });
+        Ok((status, body, payload))
+    }
+
+    fn require_success(
+        route: &str,
+        status: reqwest::StatusCode,
+        body: &str,
+        payload: Value,
+    ) -> Result<Value, DeployError> {
+        if status.is_success() && payload.get("ok").and_then(Value::as_bool) == Some(true) {
+            return Ok(payload);
+        }
+        let detail = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                body.lines()
+                    .rfind(|line| !line.trim().is_empty())
+                    .unwrap_or("no reason given")
+                    .to_string()
+            });
+        Err(DeployError(format!(
+            "the Weles API refused {route} with {status}: {detail}"
+        )))
+    }
+
+    /// One Weles API call. Successful responses are returned in full because
+    /// the synchronous `/run` surface has no `{ data }` envelope.
+    async fn call(&self, route: &str, body: &Value) -> Result<Value, DeployError> {
+        let (status, response_body, payload) = self
+            .json_request(reqwest::Method::POST, route, Some(body))
+            .await?;
+        Self::require_success(route, status, &response_body, payload)
+    }
+
+    /// Keep a completed `/run` envelope even when its trajectory failed. Weles
+    /// writes browser diagnostics before returning that 502; treating the HTTP
+    /// status as if no run happened discards the exact network record needed to
+    /// explain the failure.
+    async fn observe_run(&self, body: &Value) -> Result<Value, DeployError> {
+        let (status, response_body, payload) = self
+            .json_request(reqwest::Method::POST, RUN_ROUTE, Some(body))
+            .await?;
+        if payload
+            .get("run_id")
+            .and_then(Value::as_str)
+            .is_some_and(|run_id| !run_id.is_empty())
+        {
+            return Ok(payload);
+        }
+        Self::require_success(RUN_ROUTE, status, &response_body, payload)
+    }
+
+    async fn get_json(&self, route: &str) -> Result<Value, DeployError> {
+        let (status, response_body, payload) =
+            self.json_request(reqwest::Method::GET, route, None).await?;
+        Self::require_success(route, status, &response_body, payload)
+    }
+
+    async fn get_bytes(&self, route: &str) -> Result<Vec<u8>, DeployError> {
+        let mut request = self.client.get(format!("{}{route}", self.base_url));
+        if let Token::Present(token) = &self.token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.map_err(|error| {
+            DeployError(format!("the Weles API did not answer {route}: {error}"))
+        })?;
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(DeployError(format!(
+                "the Weles API requires a bearer token and {}",
+                self.token.describe()
+            )));
+        }
+        if !status.is_success() {
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no reason given".to_string());
             return Err(DeployError(format!(
                 "the Weles API refused {route} with {status}: {detail}"
             )));
         }
-        Ok(payload)
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| {
+                DeployError(format!(
+                    "the Weles API answered {route} unreadably: {error}"
+                ))
+            })
     }
 }
 
@@ -706,6 +788,263 @@ pub async fn run_action_payload(
             }),
         )
         .await
+}
+
+/// Run one fixed browser action and keep its run envelope even when the
+/// trajectory itself fails after navigation. The envelope carries the run id
+/// needed to read Weles's completed browser diagnostics.
+pub async fn observe_action_payload(
+    channel: &Channel,
+    action: &str,
+    params: Value,
+) -> Result<Value, DeployError> {
+    channel
+        .observe_run(&json!({
+            "action": action,
+            "params": params,
+            "creds": "redact",
+            "timeout_ms": REQUEST_TIMEOUT.as_millis(),
+        }))
+        .await
+}
+
+fn diagnostic_run_id(run_id: &str) -> Result<&str, DeployError> {
+    if run_id.is_empty()
+        || run_id.len() > 128
+        || !run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(DeployError(
+            "Weles diagnostic run id contains an unsafe character".to_string(),
+        ));
+    }
+    Ok(run_id)
+}
+
+fn public_resource_url(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut parsed) => {
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            parsed.to_string()
+        }
+        Err(_) => raw.split(['?', '#']).next().unwrap_or_default().to_string(),
+    }
+}
+
+fn resource_host(raw: &str) -> Option<String> {
+    url::Url::parse(raw)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+}
+
+fn is_stado_object_url(raw: &str) -> bool {
+    url::Url::parse(raw).is_ok_and(|parsed| parsed.path() == "/api/stado/object")
+}
+
+fn is_legacy_cloud_image_url(raw: &str) -> bool {
+    let Some(host) = resource_host(raw) else {
+        return false;
+    };
+    [
+        "amazonaws.com",
+        "blob.core.windows.net",
+        "cloudfront.net",
+        "googleapis.com",
+        "storage.cloud.google.com",
+    ]
+    .iter()
+    .any(|suffix| {
+        host == *suffix
+            || host
+                .strip_suffix(suffix)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
+}
+
+fn response_content_type(event: &Value) -> &str {
+    event
+        .get("headers")
+        .and_then(Value::as_object)
+        .and_then(|headers| {
+            headers
+                .get("content-type")
+                .or_else(|| headers.get("Content-Type"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+/// Summarize only image request metadata from one completed Weles browser run.
+///
+/// Signed query strings and response bodies stay on the worker. The report
+/// exposes host/path, status and counts only.
+pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value, DeployError> {
+    const MAX_DIAGNOSTIC_BYTES: u64 = 128 * 1024 * 1024;
+
+    let run_id = diagnostic_run_id(run_id)?;
+    let manifest_route = format!("/diagnostics/{run_id}");
+    let manifest = channel.get_json(&manifest_route).await?;
+    let files = manifest
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("Weles diagnostics returned no file inventory".to_string()))?;
+    let recording = files
+        .iter()
+        .filter(|file| {
+            file.get("path")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.ends_with(".inst.json"))
+        })
+        .max_by_key(|file| {
+            file.get("bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        })
+        .ok_or_else(|| {
+            DeployError("Weles diagnostics contain no browser network recording".to_string())
+        })?;
+    let recording_path = recording
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DeployError("Weles diagnostic recording has no path".to_string()))?;
+    let expected_bytes = recording
+        .get("bytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| DeployError("Weles diagnostic recording has no byte size".to_string()))?;
+    if expected_bytes > MAX_DIAGNOSTIC_BYTES {
+        return Err(DeployError(format!(
+            "Weles browser network recording is {expected_bytes} bytes; the read-only image inspector accepts at most {MAX_DIAGNOSTIC_BYTES}"
+        )));
+    }
+    let encoded_path =
+        url::form_urlencoded::byte_serialize(recording_path.as_bytes()).collect::<String>();
+    let recording_route = format!("/diagnostics/{run_id}/file?path={encoded_path}");
+    let recording_bytes = channel.get_bytes(&recording_route).await?;
+    if recording_bytes.len() as u64 != expected_bytes {
+        return Err(DeployError(format!(
+            "Weles diagnostic recording changed while it was read: manifest={expected_bytes} downloaded={}",
+            recording_bytes.len()
+        )));
+    }
+    let document: Value = serde_json::from_slice(&recording_bytes)
+        .map_err(|error| DeployError(format!("Weles browser recording is not JSON: {error}")))?;
+    let events = document
+        .get("requests")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("Weles browser recording has no request events".to_string()))?;
+
+    let mut image_urls = std::collections::BTreeSet::new();
+    for event in events {
+        let url = event.get("url").and_then(Value::as_str).unwrap_or_default();
+        if url.is_empty() {
+            continue;
+        }
+        let requested_image = event.get("phase").and_then(Value::as_str) == Some("req")
+            && event.get("resourceType").and_then(Value::as_str) == Some("image");
+        let returned_image = event.get("phase").and_then(Value::as_str) == Some("res")
+            && response_content_type(event)
+                .to_ascii_lowercase()
+                .starts_with("image/");
+        if requested_image || returned_image || is_stado_object_url(url) {
+            image_urls.insert(url.to_string());
+        }
+    }
+
+    let mut response_statuses = std::collections::BTreeMap::new();
+    let mut request_failures = std::collections::BTreeMap::new();
+    for event in events {
+        let url = event.get("url").and_then(Value::as_str).unwrap_or_default();
+        if !image_urls.contains(url) {
+            continue;
+        }
+        match event.get("phase").and_then(Value::as_str) {
+            Some("res") => {
+                if let Some(status) = event.get("status").and_then(Value::as_u64) {
+                    response_statuses.insert(url.to_string(), status);
+                }
+            }
+            Some("reqfailed") => {
+                let reason = event
+                    .get("failure")
+                    .and_then(|failure| {
+                        failure
+                            .get("errorText")
+                            .or_else(|| failure.get("error_text"))
+                    })
+                    .and_then(Value::as_str)
+                    .unwrap_or("request failed");
+                request_failures.insert(url.to_string(), reason.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    let mut hosts = std::collections::BTreeMap::<String, u64>::new();
+    let mut statuses = std::collections::BTreeMap::<String, u64>::new();
+    let mut stado_statuses = std::collections::BTreeMap::<String, u64>::new();
+    let mut failed_resources = Vec::new();
+    let mut loaded_images = 0_u64;
+    let mut unresolved_images = 0_u64;
+    let mut stado_object_images = 0_u64;
+    let mut legacy_cloud_images = 0_u64;
+    for url in &image_urls {
+        if let Some(host) = resource_host(url) {
+            *hosts.entry(host).or_default() += 1;
+        }
+        let stado_object = is_stado_object_url(url);
+        if stado_object {
+            stado_object_images += 1;
+        }
+        if is_legacy_cloud_image_url(url) {
+            legacy_cloud_images += 1;
+        }
+        if let Some(reason) = request_failures.get(url) {
+            failed_resources.push(json!({
+                "url": public_resource_url(url),
+                "failure": reason,
+            }));
+            continue;
+        }
+        match response_statuses.get(url).copied() {
+            Some(status) => {
+                *statuses.entry(status.to_string()).or_default() += 1;
+                if stado_object {
+                    *stado_statuses.entry(status.to_string()).or_default() += 1;
+                }
+                if (200..400).contains(&status) {
+                    loaded_images += 1;
+                } else {
+                    failed_resources.push(json!({
+                        "url": public_resource_url(url),
+                        "status": status,
+                    }));
+                }
+            }
+            None => unresolved_images += 1,
+        }
+    }
+
+    Ok(json!({
+        "run_id": run_id,
+        "recording_file": recording_path,
+        "network_events": events.len(),
+        "image_requests": image_urls.len(),
+        "loaded_images": loaded_images,
+        "failed_images": failed_resources.len(),
+        "unresolved_images": unresolved_images,
+        "stado_object_images": stado_object_images,
+        "legacy_cloud_images": legacy_cloud_images,
+        "image_hosts": hosts,
+        "status_counts": statuses,
+        "stado_status_counts": stado_statuses,
+        "failed_resources": failed_resources,
+        "page_errors": document
+            .get("pageerrors")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
+    }))
 }
 
 /// Run one non-capture action through Weles's synchronous API.
