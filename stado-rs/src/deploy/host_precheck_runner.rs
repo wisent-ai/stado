@@ -35,7 +35,11 @@ pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
 pub const MODEL_REVIEW_SECRET: &str = "BRAMA_MODEL_ROUTER_TOKEN";
 const MODEL_REVIEW_ALIAS: &str = "best";
+const MODEL_REVIEW_ORIGIN: &str = "https://brama.wisent.com";
 const MODEL_REVIEW_TOKEN_TTL_SECONDS: &str = "315360000";
+const BRAMA_INTROSPECTION_CONSUMER: &str = "brama-token-introspector";
+const BRAMA_INTROSPECTION_CAPABILITY: &str = "introspect:tokens";
+const BRAMA_INTROSPECTION_TOKEN_FILE: &str = "brama-token-introspector-skarbiec-token";
 
 struct ProbierzAgentCredential {
     item: String,
@@ -49,6 +53,7 @@ struct BramaSkarbiecContext {
     vault: String,
     routes: String,
     gnupg: String,
+    home: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -317,6 +322,7 @@ async fn brama_skarbiec_context(
         vault: format!("SKARBIEC_VAULT_FILE={vault_path}"),
         routes: format!("SKARBIEC_CAPABILITY_ROUTES_FILE={routes_path}"),
         gnupg: format!("GNUPGHOME={gnupg_path}"),
+        home,
     })
 }
 
@@ -507,6 +513,81 @@ fn model_review_client_id(repository: &str) -> String {
     client_id
 }
 
+async fn reconcile_brama_introspection_grant(
+    target: &ComputeTarget,
+    context: &BramaSkarbiecContext,
+) -> Result<(), DeployError> {
+    let token_file = format!("{}/.stado/{BRAMA_INTROSPECTION_TOKEN_FILE}", context.home);
+    let script = format!(
+        "set -eu\n\
+         PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH\n\
+         export {}\n\
+         export {}\n\
+         export {}\n\
+         token_file={}\n\
+         if [ -L \"$token_file\" ]; then\n\
+           printf '%s\\n' 'Brama introspection bearer must not be a symlink' >&2\n\
+           exit 40\n\
+         fi\n\
+         if [ -f \"$token_file\" ]; then\n\
+           /bin/chmod 600 \"$token_file\"\n\
+           {} token-mint {} --capabilities {} --replace-capabilities \
+             --token-file \"$token_file\" --ttl-seconds {} >/dev/null\n\
+         else\n\
+           staged=\"$token_file.stado-new.$$\"\n\
+           trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM\n\
+           umask 077\n\
+           /usr/bin/openssl rand -hex 32 > \"$staged\"\n\
+           {} token-mint {} --capabilities {} --replace-capabilities \
+             --token-file \"$staged\" --ttl-seconds {} >/dev/null\n\
+           /bin/mv -f \"$staged\" \"$token_file\"\n\
+           trap - EXIT HUP INT TERM\n\
+         fi\n",
+        super::shlex_quote(&context.vault),
+        super::shlex_quote(&context.routes),
+        super::shlex_quote(&context.gnupg),
+        super::shlex_quote(&token_file),
+        super::shlex_quote(&context.skarbiec),
+        BRAMA_INTROSPECTION_CONSUMER,
+        BRAMA_INTROSPECTION_CAPABILITY,
+        MODEL_REVIEW_TOKEN_TTL_SECONDS,
+        super::shlex_quote(&context.skarbiec),
+        BRAMA_INTROSPECTION_CONSUMER,
+        BRAMA_INTROSPECTION_CAPABILITY,
+        MODEL_REVIEW_TOKEN_TTL_SECONDS,
+    );
+    let reconciled = host_channel::run_script(target, &script, &context.runner).await?;
+    if !reconciled.ok() {
+        return Err(DeployError(format!(
+            "{}: Brama introspection grant reconciliation failed: {}",
+            target.name,
+            command_failure(&reconciled, "Skarbiec introspection grant failed")
+        )));
+    }
+    Ok(())
+}
+
+async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| DeployError(format!("Brama verification client failed: {error}")))?;
+    let response = client
+        .get(format!("{MODEL_REVIEW_ORIGIN}/v1/models"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| DeployError(format!("Brama bearer verification failed: {error}")))?;
+    if !response.status().is_success() {
+        return Err(DeployError(format!(
+            "Brama refused the newly minted model-review bearer with HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+    Ok(())
+}
+
 pub async fn reconcile_model_review_secret(
     target_name: &str,
     repository: &str,
@@ -514,6 +595,7 @@ pub async fn reconcile_model_review_secret(
     let repository = repository_name(repository)?;
     let target = host_channel::canonical_target(target_name).await?;
     let context = brama_skarbiec_context(&target).await?;
+    reconcile_brama_introspection_grant(&target, &context).await?;
     let github_token = github_credential().await?;
     let client_id = model_review_client_id(repository);
     let capability = format!("call:brama#{MODEL_REVIEW_ALIAS}");
@@ -531,6 +613,7 @@ pub async fn reconcile_model_review_secret(
             &client_id,
             "--capabilities",
             &capability,
+            "--replace-capabilities",
             "--ttl-seconds",
             MODEL_REVIEW_TOKEN_TTL_SECONDS,
         ],
@@ -551,6 +634,7 @@ pub async fn reconcile_model_review_secret(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
         .ok_or_else(|| DeployError("Skarbiec token response has no bearer".to_string()))?;
+    verify_model_review_bearer(token).await?;
     set_repository_secret(repository, MODEL_REVIEW_SECRET, token, &github_token)?;
     Ok(json!({
         "target": target.name,
