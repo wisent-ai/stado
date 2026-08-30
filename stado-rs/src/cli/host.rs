@@ -1304,9 +1304,10 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
     for note in &gates.notes {
         if note == crate::deploy::host_gates::LOCAL_SNAPSHOTS_UNRECLAIMABLE {
             println!(
-                "note:     {note} — {} local APFS snapshot(s) hold space no stado \
-                 command reclaims, and macOS reports no size for them. See stado \
-                 host disk {} for their names",
+                "note:     {note} — {} local APFS snapshot(s), which macOS reports no size \
+                 for. `stado host reclaim {}` names each one and why it refuses it; the \
+                 `com.apple.os.update-*` ones are OS-update snapshots rather than local Time \
+                 Machine snapshots, so no stado command deletes them and none should",
                 gates
                     .local_snapshots
                     .map_or_else(|| "-".to_string(), |count| count.to_string()),
