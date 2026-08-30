@@ -17,6 +17,7 @@
 pub mod build_caches;
 pub mod chromium_clones;
 pub mod hf;
+pub mod queue_workdirs;
 pub mod safefs;
 pub mod weles;
 
@@ -216,6 +217,7 @@ pub struct CleanupReport {
     pub weles: CleanerReport,
     pub builds: CleanerReport,
     pub clones: CleanerReport,
+    pub workdirs: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_slot_count: i64,
@@ -243,6 +245,7 @@ impl CleanupReport {
             weles: CleanerReport::default(),
             builds: CleanerReport::default(),
             clones: CleanerReport::default(),
+            workdirs: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
@@ -278,6 +281,10 @@ impl CleanupReport {
         *self.clones.skipped.entry(reason.to_string()).or_insert(0) += count;
     }
 
+    pub fn skip_workdirs(&mut self, reason: &str, count: i64) {
+        *self.workdirs.skipped.entry(reason.to_string()).or_insert(0) += count;
+    }
+
     /// The report as JSON (key order normalized at serialization sites
     /// with [`canonical_json`], matching Python `json.dumps(sort_keys=True)`).
     pub fn to_value(&self) -> Value {
@@ -311,6 +318,7 @@ impl CleanupReport {
                 "weles_recordings": cleaner(&self.weles),
                 "build_caches": cleaner(&self.builds),
                 chromium_clones::CLEANER: cleaner(&self.clones),
+                queue_workdirs::CLEANER: cleaner(&self.workdirs),
             },
             "caps": {
                 "bytes": self.caps.bytes,
@@ -785,6 +793,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             chromium_clones::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(chromium_clones::CLEANER)),
             ),
+            queue_workdirs::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(queue_workdirs::CLEANER)),
+            ),
         },
         "caps": {
             "bytes": cap("bytes"),
@@ -1046,6 +1057,31 @@ fn finish(
     value
 }
 
+/// Every job id currently in `queue` or `running`, or `None` when the queue
+/// store could not be read.
+///
+/// The keep-list for [`queue_workdirs`]. Read best-effort, exactly as
+/// [`crate::deploy::host_reclaim`] reads it for the same directories, and for
+/// the same reason: an unreadable store must not turn a disk repair into an
+/// outage. A partial read is discarded rather than narrowed, because a
+/// keep-list missing the running job's id authorizes deleting the tree that
+/// job is writing into.
+async fn fetch_live_job_ids() -> Option<Vec<String>> {
+    let store = crate::queue::JobStorage::new().await.ok()?;
+    let mut ids = Vec::new();
+    for state in ["queue", "running"] {
+        ids.extend(
+            store
+                .list_jobs(state, 0)
+                .await
+                .ok()?
+                .into_iter()
+                .map(|job| job.job_id),
+        );
+    }
+    Some(ids)
+}
+
 /// The post-lock half of `run_cleanup_once` (policy resolution through
 /// outcome selection). Split out so tests can inject the canonical
 /// registry document and a fabricated home without touching GCS or the
@@ -1057,6 +1093,11 @@ fn run_with_lock(
     state_dir: &Path,
     _lock: ExclusiveLock,
     registry: Result<Value, JanitorError>,
+    // Every job id in `queue` or `running`: the keep-list the
+    // `queue_workdirs` cleaner judges a workdir's job against. `None` means
+    // the queue store could not be read this pass, and that cleaner then
+    // removes nothing rather than deleting a live job's tree.
+    live_jobs: Option<Vec<String>>,
     mut report: CleanupReport,
     started: Instant,
     attempted_at: f64,
@@ -1220,10 +1261,33 @@ fn run_with_lock(
         deadline,
         &mut report,
     );
+    let remaining_after_clones = (policy.max_scan_items
+        - report.hf.scanned_items
+        - report.weles.scanned_items
+        - report.builds.scanned_items
+        - report.clones.scanned_items)
+        .max(0);
+    if remaining_after_clones == 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
+        report.caps.scan = true;
+    }
+    // The queue's own per-job scratch trees, scanned last on the budget the
+    // rest leave. They share the temporary root with the clones above and are
+    // judged by their job's state rather than by age, so nothing about the
+    // order above changes what this pass may take — only how much of it.
+    queue_workdirs::scan_queue_workdirs(
+        home,
+        &policy,
+        attempted_at,
+        remaining_after_clones,
+        deadline,
+        live_jobs.as_deref(),
+        &mut report,
+    );
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
-        + report.clones.scanned_items;
+        + report.clones.scanned_items
+        + report.workdirs.scanned_items;
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
@@ -1349,11 +1413,13 @@ async fn cleanup_once(
         return finish(report, started, Some(&home), None, attempted_at, log_fn);
     };
     let registry = fetch_canonical_registry().await;
+    let live_jobs = fetch_live_job_ids().await;
     run_with_lock(
         &home,
         &state_dir,
         lock,
         registry,
+        live_jobs,
         report,
         started,
         attempted_at,
