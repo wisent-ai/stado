@@ -2699,6 +2699,122 @@ struct EnvSetOptions<'a> {
     as_json: bool,
 }
 
+/// What the env file said about one key immediately after it was written.
+struct ReadBack {
+    /// [`service_env_file::EXPECT_MATCHED`], `_DIFFERS`, `_ABSENT` or
+    /// `_UNVERIFIED`.
+    state: &'static str,
+    /// The value the file actually holds now, when the host was willing to
+    /// show it. `None` for a withheld value, whose length is still reported.
+    effective: Option<String>,
+    /// How long that value is, shown or withheld.
+    chars: u32,
+    /// `name (path)` of the forward marker that holds exactly the value which
+    /// replaced ours, when one does. This is the declaration to correct.
+    marker: Option<String>,
+}
+
+impl ReadBack {
+    /// The `EFFECTIVE` column: the value, or its length when it is withheld.
+    fn effective_cell(&self) -> String {
+        match &self.effective {
+            Some(value) => value.clone(),
+            None if self.state == service_env_file::EXPECT_MATCHED => "-".to_string(),
+            None => format!("<withheld, {} chars>", self.chars),
+        }
+    }
+
+    /// The refusal for a write that did not survive, or `None` when it did.
+    ///
+    /// It names the marker whenever one holds exactly what came back, because
+    /// the operator's next move is to correct that declaration, not to write
+    /// this file again — which is what happened twice before this check
+    /// existed. With no marker to name it points at the command that
+    /// enumerates every unit that could be the writer, rather than shrugging.
+    fn failure(&self, host: &str, key: &str) -> Option<String> {
+        let observed = match &self.effective {
+            Some(value) => format!("{value:?}"),
+            None => format!("a withheld {}-character value", self.chars),
+        };
+        match self.state {
+            service_env_file::EXPECT_MATCHED => None,
+            service_env_file::EXPECT_DIFFERS => Some(match &self.marker {
+                Some(marker) => format!(
+                    "{host}: {key} was replaced after the write and now holds {observed}, \
+                     which is exactly what the forward marker {marker} declares — correct \
+                     that marker, not this file"
+                ),
+                None => format!(
+                    "{host}: {key} was replaced after the write and now holds {observed}; \
+                     something on the host owns this key. `stado service list --undeclared` \
+                     names every unit that could"
+                ),
+            }),
+            service_env_file::EXPECT_ABSENT => Some(format!(
+                "{host}: {key} is assigned nowhere in the file after the write; something \
+                 on the host removed it"
+            )),
+            _ => Some(format!(
+                "{host}: the write reported success and could not be read back, so whether \
+                 {key} survived is unknown"
+            )),
+        }
+    }
+}
+
+/// Read one key back through the channel that just wrote it.
+///
+/// The comparison happens on the host against the same unquoting a shell would
+/// apply, so `KEY='http://127.0.0.1:8895'` and `KEY=http://127.0.0.1:8895`
+/// are one value and a secret is verified exactly without its value returning.
+/// The forward markers are collected only when the write did not survive.
+async fn verify_env_write(
+    target: &targets::ComputeTarget,
+    env_file: &str,
+    key: &str,
+    value: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<ReadBack, CmdError> {
+    let request = service_env_file::EnvFileRequest {
+        env_path: env_file,
+        reveal: None,
+        expect: Some((key, value)),
+    };
+    let report = service_env_file::read_env_file(target, &request, runner)
+        .await
+        .map_err(click)?;
+    let state = match service_env_file::expectation(&report) {
+        service_env_file::EXPECT_MATCHED => service_env_file::EXPECT_MATCHED,
+        service_env_file::EXPECT_DIFFERS => service_env_file::EXPECT_DIFFERS,
+        service_env_file::EXPECT_ABSENT => service_env_file::EXPECT_ABSENT,
+        _ => service_env_file::EXPECT_UNVERIFIED,
+    };
+    let entry = service_env_file::effective_entry(&report, key);
+    let effective = entry.and_then(|entry| {
+        (entry.value_state != service_env_file::VALUE_REDACTED)
+            .then(|| service_env_file::effective_text(&entry.value).to_string())
+    });
+    let mut marker = None;
+    if state == service_env_file::EXPECT_DIFFERS {
+        if let Some(observed) = effective.as_deref() {
+            // Best effort: a channel that answered the read and not the
+            // inventory must not turn "your write was overwritten" into a
+            // failed command. The refusal below stands without attribution.
+            if let Ok(markers) = service_env_file::forward_markers(target, runner).await {
+                marker = service_env_file::marker_holding(&markers, observed).map(|found| {
+                    format!("{} ($HOME/.stado/forwards/{}.url)", found.name, found.name)
+                });
+            }
+        }
+    }
+    Ok(ReadBack {
+        state,
+        effective,
+        chars: entry.map_or(u32::MIN, |entry| entry.chars),
+        marker,
+    })
+}
+
 async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
     let EnvSetOptions {
         name,
@@ -2750,14 +2866,37 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         let updated = service::set_env_key_on_host(&target, env_file, key, value, &runner)
             .await
             .map_err(click)?;
-        if !updated.succeeded("env_set") {
+        let wrote = updated.succeeded("env_set");
+        if !wrote {
             failures.push(format!("{}: {}", declared.host, updated.failure()));
         }
+        // Read the key back through the same channel. A writer that cannot see
+        // its own write is not a writer, it is a hope: on 2026-08-30 this
+        // command reported `env_set` twice for a value a host-side reconciler
+        // restored within seconds, and nothing said so.
+        let verdict = if wrote {
+            let readback = verify_env_write(&target, env_file, key, value, &runner).await?;
+            if let Some(failure) = readback.failure(&declared.host, key) {
+                failures.push(failure);
+            }
+            Some(readback)
+        } else {
+            None
+        };
+        let state = verdict
+            .as_ref()
+            .map_or(service_env_file::EXPECT_UNVERIFIED, |readback| {
+                readback.state
+            });
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
             key.to_string(),
             dash(&updated.status),
+            state.to_string(),
+            verdict
+                .as_ref()
+                .map_or_else(|| "-".to_string(), ReadBack::effective_cell),
             dash(&updated.detail),
         ]);
         payload.push(json!({
@@ -2767,13 +2906,28 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
             "env_file": env_file,
             "value_file": value_file,
             "update": updated.to_json(),
+            "readback": state,
+            "effective_value": verdict.as_ref().and_then(|readback| readback.effective.clone()),
+            "effective_chars": verdict.as_ref().map(|readback| readback.chars),
+            "owning_marker": verdict.as_ref().and_then(|readback| readback.marker.clone()),
         }));
     }
 
     if as_json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "KEY", "UPDATE", "DETAIL"], &cells);
+        table::print(
+            &[
+                "HOST",
+                "UNIT",
+                "KEY",
+                "UPDATE",
+                "READBACK",
+                "EFFECTIVE",
+                "DETAIL",
+            ],
+            &cells,
+        );
     }
     fail_if_any(&failures, "environment update")
 }
@@ -2911,7 +3065,12 @@ async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let report = service_env_file::read_env_file(&target, env_file, reveal, &runner)
+        let request = service_env_file::EnvFileRequest {
+            env_path: env_file,
+            reveal,
+            expect: None,
+        };
+        let report = service_env_file::read_env_file(&target, &request, &runner)
             .await
             .map_err(click)?;
         if let Some(failure) = env_file_failure(&declared.host, &report) {
@@ -3021,7 +3180,8 @@ async fn endpoint_check(options: EndpointCheckOptions<'_>) -> Result<(), CmdErro
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let report = service_env_file::read_env_file(&target, env_file, None, &runner)
+        let request = service_env_file::EnvFileRequest::read(env_file);
+        let report = service_env_file::read_env_file(&target, &request, &runner)
             .await
             .map_err(click)?;
         if let Some(failure) = env_file_failure(&declared.host, &report) {

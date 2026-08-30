@@ -135,6 +135,103 @@ impl Fleet {
         args.extend_from_slice(extra);
         self.stado(&args)
     }
+    /// Write an owner-only value file and run `env-set` for one key.
+    fn env_set(&self, key: &str, env_file: &str, value: &str) -> Output {
+        let path = self.storage.path().join(format!("value-{key}"));
+        std::fs::write(&path, value).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        self.stado(&[
+            "service",
+            "env-set",
+            SERVICE,
+            "--host",
+            "here",
+            "--key",
+            key,
+            "--env-file",
+            env_file,
+            "--value-file",
+            path.to_str().unwrap(),
+        ])
+    }
+
+    /// Write a real forward marker, the way `host forward-local` leaves one.
+    fn marker(&self, name: &str, url: &str) -> PathBuf {
+        let directory = self.home.path().join(".stado/forwards");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("{name}.url"));
+        std::fs::write(&path, format!("{url}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        path
+    }
+}
+
+/// A real competing writer, shaped exactly like the one this check was built
+/// for.
+///
+/// `/Users/charles/.stado/bin/weles-release-cutover` on charless-mac-mini
+/// deletes `^WC_SKARBIEC_URL=` from the worker env file and appends
+/// `WC_SKARBIEC_URL='<contents of $HOME/.stado/forwards/skarbiec.url>'`. This
+/// is that, in a loop: a real process performing real atomic writes to the
+/// real file under test. Nothing about the component under test — `env-set`'s
+/// read-back — is faked; this is the condition it has to detect.
+struct Reconciler {
+    child: std::process::Child,
+    stop: PathBuf,
+}
+
+impl Reconciler {
+    fn start(fleet: &Fleet, env_file: &PathBuf) -> Self {
+        let stop = fleet.storage.path().join("reconciler.stop");
+        let script = fleet.storage.path().join("reconcile.sh");
+        std::fs::write(
+            &script,
+            r#"#!/bin/bash
+set -eu
+umask 077
+while [ ! -f "$STOP" ]; do
+  IFS= read -r url < "$HOME/.stado/forwards/skarbiec.url" || continue
+  body=""
+  while IFS= read -r line; do
+    case "$line" in WC_SKARBIEC_URL=*) continue ;; esac
+    body="$body$line
+"
+  done < "$ENV_FILE"
+  tmp="$ENV_FILE.reconcile"
+  printf '%s' "$body" > "$tmp"
+  printf "WC_SKARBIEC_URL='%s'\n" "$url" >> "$tmp"
+  /bin/mv -f "$tmp" "$ENV_FILE"
+done
+"#,
+        )
+        .unwrap();
+        let child = Command::new("bash")
+            .arg(&script)
+            .env("HOME", fleet.home.path())
+            .env("ENV_FILE", env_file)
+            .env("STOP", &stop)
+            .spawn()
+            .expect("reconciler starts");
+        // Let it take ownership of the file at least once before the write
+        // under test, so the test is measuring detection and not a startup race.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        Self { child, stop }
+    }
+}
+
+impl Drop for Reconciler {
+    fn drop(&mut self) {
+        std::fs::write(&self.stop, "stop").ok();
+        let _ = self.child.wait();
+    }
 }
 
 fn platform() -> &'static str {
@@ -530,5 +627,103 @@ fn endpoint_check_does_not_judge_a_remote_endpoint_against_this_host() {
             .any(|line| line.starts_with("WELES_UPSTREAM_URL") && line.contains("remote")),
         "got:\n{}",
         stdout(&out)
+    );
+}
+
+#[test]
+fn env_set_confirms_a_write_that_survived() {
+    let fleet = Fleet::new();
+    let path = fleet.env_file("WELES_QUEUE=default\nWC_SKARBIEC_URL=http://127.0.0.1:8785\n");
+
+    let out = fleet.env_set(
+        "WC_SKARBIEC_URL",
+        path.to_str().unwrap(),
+        "http://127.0.0.1:8895",
+    );
+    assert!(out.status.success(), "env-set failed: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("matched"),
+        "the write was not read back:\n{text}"
+    );
+    // The write is real: the file on disk holds it.
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        body.contains("WC_SKARBIEC_URL=http://127.0.0.1:8895"),
+        "got:\n{body}"
+    );
+}
+
+#[test]
+fn env_set_fails_and_names_the_marker_when_a_reconciler_reverts_the_key() {
+    let fleet = Fleet::new();
+    // The marker the host-side reconciler reads, and the value it will keep
+    // forcing back into the file.
+    fleet.marker("skarbiec", "http://127.0.0.1:8785");
+    let path = fleet.env_file("WELES_QUEUE=default\n");
+    let _reconciler = Reconciler::start(&fleet, &path);
+
+    let out = fleet.env_set(
+        "WC_SKARBIEC_URL",
+        path.to_str().unwrap(),
+        "http://127.0.0.1:8895",
+    );
+    assert!(
+        !out.status.success(),
+        "env-set reported success for a write that was reverted:\nstdout:\n{}\nstderr:\n{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    let error = stderr(&out);
+    assert!(
+        error.contains("WC_SKARBIEC_URL was replaced after the write"),
+        "the revert is not reported: {error}"
+    );
+    assert!(
+        error.contains("http://127.0.0.1:8785"),
+        "the value that won is not reported: {error}"
+    );
+    // The whole point: point the operator at the declaration, not the file.
+    assert!(
+        error.contains("forward marker skarbiec ($HOME/.stado/forwards/skarbiec.url)"),
+        "the owning marker is not named: {error}"
+    );
+    assert!(
+        error.contains("correct that marker, not this file"),
+        "the operator is not told what to do instead: {error}"
+    );
+    assert!(
+        stdout(&out).contains("differs"),
+        "the table does not carry the read-back verdict:\n{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn env_set_verifies_a_withheld_value_without_showing_it() {
+    let fleet = Fleet::new();
+    let path = fleet.env_file("WELES_QUEUE=default\n");
+
+    let out = fleet.env_set(
+        "WELES_API_TOKEN",
+        path.to_str().unwrap(),
+        "super-secret-bearer-value",
+    );
+    assert!(out.status.success(), "env-set failed: {}", stderr(&out));
+    let text = stdout(&out);
+    // Verified exactly — the comparison happened on the host — and the value
+    // never came back to be printed.
+    assert!(
+        text.contains("matched"),
+        "a secret write was not verified:\n{text}"
+    );
+    assert!(
+        !text.contains("super-secret-bearer-value"),
+        "the read-back printed a secret:\n{text}"
+    );
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        body.contains("WELES_API_TOKEN=super-secret-bearer-value"),
+        "the write did not land:\n{body}"
     );
 }
