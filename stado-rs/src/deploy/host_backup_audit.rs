@@ -44,6 +44,7 @@
 //! primary address is that path inside the configured namespace.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use crate::targets::ComputeTarget;
 
@@ -72,7 +73,7 @@ pub const ABSENT: &str = "absent";
 /// reclaimable. A size match is not identity.
 pub const SAME_SIZE_UNPROVEN: &str = "same_size_unproven";
 
-/// How long the remote program may spend hashing, in seconds.
+/// How long a READ-ONLY pass may spend hashing, in seconds.
 ///
 /// The fleet channel gives every script 120 seconds, and this replica is
 /// 48.5 GiB — far more than `shasum` can read in that window on a host that is
@@ -83,8 +84,23 @@ pub const SAME_SIZE_UNPROVEN: &str = "same_size_unproven";
 /// twin set shrinks under whatever the operator then reclaims.
 const HASH_DEADLINE_SECONDS: u64 = 70;
 
-/// The fixed remote program. Read-only: it walks the replica once, compares
-/// sizes, and hashes same-size pairs until its deadline.
+/// How long a RECLAIM pass may spend hashing, and how long the channel waits
+/// for it.
+///
+/// A reclaim proves every object it deletes inside the same pass, so it has to
+/// read both copies of everything it intends to drop — twice 38.47 GiB on this
+/// host. Under the read-only budget it would prove almost nothing and delete
+/// almost nothing, and the temptation would then be to delete against the
+/// previous run's recorded verdict, which is exactly the mistake that turns a
+/// replica into data loss. So the pass gets a budget that fits the work.
+const RECLAIM_HASH_DEADLINE_SECONDS: u64 = 1500;
+/// Wall clock for a reclaim pass on the channel, above its hashing deadline so
+/// the program's own deadline is what stops it and the totals still come back.
+const RECLAIM_TIMEOUT_SECONDS: u64 = 1800;
+
+/// The fixed remote program. It walks the replica once, compares sizes, hashes
+/// same-size pairs until its deadline, and — only under `@RECLAIM@` with
+/// `@APPLY@` — unlinks the ones it has just proven identical.
 ///
 /// One `python3` process rather than shell with per-file `stat`: the replica
 /// holds tens of thousands of objects, and a fork or three for each of them
@@ -103,16 +119,28 @@ if [ ! -d "$primary" ]; then
   printf 'STADO_BACKUP_AUDIT_UNAVAILABLE\t%s\n' 'primary store root is absent'
   exit 0
 fi
+# Free space as the host itself measures it, on both sides of the pass. The
+# whole point of a reclaim is this number, so it is read by the program that
+# changed it rather than by a second command an operator runs afterwards
+# against a disk the fleet is still writing to.
+free_kb() {
+  /bin/df -Pk "$HOME" 2>/dev/null | /usr/bin/awk 'NR == 2 { print $4 }'
+}
+printf 'STADO_BACKUP_FREE\t%s\t%s\n' 'before' "$(free_kb)"
 STADO_BACKUP_ROOT="$backup" \
 STADO_PRIMARY_ROOT="$primary" \
 STADO_NAMESPACE='@NAMESPACE@' \
 STADO_HASH_DEADLINE='@HASH_DEADLINE@' \
+STADO_RECLAIM='@RECLAIM@' \
+STADO_APPLY='@APPLY@' \
 /usr/bin/python3 - <<'STADO_AUDIT_EOF'
-import hashlib, os, sys, time
+import hashlib, os, stat, sys, time
 backup = os.environ["STADO_BACKUP_ROOT"]
 primary = os.environ["STADO_PRIMARY_ROOT"]
 namespace = os.environ["STADO_NAMESPACE"]
 deadline = time.monotonic() + float(os.environ["STADO_HASH_DEADLINE"])
+reclaim = os.environ["STADO_RECLAIM"] == "yes"
+apply = os.environ["STADO_APPLY"] == "yes"
 
 def digest(path):
     h = hashlib.sha256()
@@ -122,6 +150,9 @@ def digest(path):
     return h.hexdigest()
 
 out = sys.stdout
+deleted = 0
+deleted_bytes = 0
+refused = 0
 for root, _, files in os.walk(backup):
     for name in files:
         path = os.path.join(root, name)
@@ -131,15 +162,23 @@ for root, _, files in os.walk(backup):
         else:
             candidate = os.path.join(primary, "ecosystem", namespace, relative)
         try:
-            size = os.lstat(path).st_size
+            entry = os.lstat(path)
         except OSError:
             continue
+        size = entry.st_size
         try:
-            other = os.lstat(candidate).st_size
+            other = os.lstat(candidate)
         except OSError:
             out.write("STADO_BACKUP_AUDIT\tabsent\t%d\t%s\n" % (size, relative))
             continue
-        if other != size:
+        # Only a plain file on BOTH sides can be a twin. A symlink, a socket or
+        # a directory that happens to match a size is not the object, and the
+        # one thing this pass may never do is unlink something whose primary
+        # counterpart it did not actually read.
+        if not stat.S_ISREG(entry.st_mode) or not stat.S_ISREG(other.st_mode):
+            out.write("STADO_BACKUP_AUDIT\tdiffers\t%d\t%s\n" % (size, relative))
+            continue
+        if other.st_size != size:
             out.write("STADO_BACKUP_AUDIT\tdiffers\t%d\t%s\n" % (size, relative))
             continue
         if time.monotonic() >= deadline:
@@ -150,22 +189,92 @@ for root, _, files in os.walk(backup):
         except OSError:
             out.write("STADO_BACKUP_AUDIT\tsame_size_unproven\t%d\t%s\n" % (size, relative))
             continue
-        out.write(
-            "STADO_BACKUP_AUDIT\t%s\t%d\t%s\n"
-            % ("twin" if same else "differs", size, relative)
-        )
+        if not same:
+            out.write("STADO_BACKUP_AUDIT\tdiffers\t%d\t%s\n" % (size, relative))
+            continue
+        out.write("STADO_BACKUP_AUDIT\ttwin\t%d\t%s\n" % (size, relative))
+        # The proof and the deletion are the same event. Nothing here reads a
+        # verdict recorded by an earlier run: the two hashes above were computed
+        # from these two files moments ago, and only that proves this unlink.
+        if not reclaim:
+            continue
+        if not apply:
+            out.write("STADO_BACKUP_RECLAIM\twould_delete\t%d\t%s\n" % (size, relative))
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            refused += 1
+            out.write("STADO_BACKUP_RECLAIM\tdelete_failed\t%d\t%s\n" % (size, relative))
+            continue
+        deleted += 1
+        deleted_bytes += size
+        out.write("STADO_BACKUP_RECLAIM\tdeleted\t%d\t%s\n" % (size, relative))
+out.write(
+    "STADO_BACKUP_RECLAIM_END\t%d\t%d\t%d\n" % (deleted, deleted_bytes, refused)
+)
 out.write("STADO_BACKUP_AUDIT_END\tclassified\n")
 STADO_AUDIT_EOF
+pruned=0
+if [ '@APPLY@' = yes ] && [ '@RECLAIM@' = yes ]; then
+  # Counted as the difference the delete made rather than as the empty
+  # directories seen beforehand: `-delete` empties parents as it descends.
+  before=$(/usr/bin/find "$backup" -type d 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+  /usr/bin/find "$backup" -mindepth 1 -type d -empty -delete 2>/dev/null
+  after=$(/usr/bin/find "$backup" -type d 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+  pruned=$((before - after))
+fi
+printf 'STADO_BACKUP_PRUNED\t%s\n' "$pruned"
+printf 'STADO_BACKUP_FREE\t%s\t%s\n' 'after' "$(free_kb)"
 "#;
 
-/// The remote program with this host's roots, namespace and hashing deadline in
-/// place.
-pub fn remote_script(namespace: &str, backup_root: &str, primary_root: &str) -> String {
+/// One pass over one host's replica, as the operator asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditPlan {
+    /// Namespace a bare replica path maps into on the primary side.
+    pub namespace: String,
+    /// Replica root, relative to the remote login user's `$HOME`.
+    pub backup_root: String,
+    /// Primary store root, relative to the same `$HOME`.
+    pub primary_root: String,
+    /// Also delete the twins this pass proves.
+    pub reclaim: bool,
+    /// Actually delete. Without it a reclaim names what it would drop and
+    /// drops nothing.
+    pub apply: bool,
+}
+
+impl AuditPlan {
+    /// The hashing budget this pass needs: a reclaim must prove everything it
+    /// deletes, a read-only pass may stop early and label the rest.
+    fn hash_deadline_seconds(&self) -> u64 {
+        if self.reclaim {
+            RECLAIM_HASH_DEADLINE_SECONDS
+        } else {
+            HASH_DEADLINE_SECONDS
+        }
+    }
+}
+
+/// The remote program with this host's roots, namespace, hashing deadline and
+/// reclaim mode in place.
+pub fn remote_script(plan: &AuditPlan) -> String {
     REMOTE_SCRIPT_TEMPLATE
-        .replace(NAMESPACE_MARK, namespace)
-        .replace(BACKUP_ROOT_MARK, backup_root)
-        .replace(PRIMARY_ROOT_MARK, primary_root)
-        .replace("@HASH_DEADLINE@", &HASH_DEADLINE_SECONDS.to_string())
+        .replace(NAMESPACE_MARK, &plan.namespace)
+        .replace(BACKUP_ROOT_MARK, &plan.backup_root)
+        .replace(PRIMARY_ROOT_MARK, &plan.primary_root)
+        .replace("@HASH_DEADLINE@", &plan.hash_deadline_seconds().to_string())
+        .replace("@RECLAIM@", if plan.reclaim { "yes" } else { "no" })
+        // A pass that was not asked to reclaim cannot apply anything, whatever
+        // else it was handed.
+        .replace(
+            "@APPLY@",
+            if plan.reclaim && plan.apply {
+                "yes"
+            } else {
+                "no"
+            },
+        )
 }
 
 /// One class's totals.
@@ -189,6 +298,21 @@ pub struct BackupAudit {
     /// True once the remote program printed its end marker, so a truncated
     /// channel is never read as "nothing to reclaim".
     pub complete: bool,
+    /// What the pass deleted, and what it would have deleted without
+    /// `--apply`. Both are the pass's OWN proof: an object counted here was
+    /// hashed on both sides moments before the unlink.
+    pub deleted: ClassTotals,
+    pub would_delete: ClassTotals,
+    /// Deletions the host refused, which leave the replica object in place.
+    pub delete_failed: ClassTotals,
+    /// Emptied replica directories removed after the deletions.
+    pub pruned_directories: i64,
+    /// Free 1024-byte blocks on the replica's filesystem, read by this pass on
+    /// both sides of its own work.
+    pub free_kb_before: Option<i64>,
+    pub free_kb_after: Option<i64>,
+    /// True once the reclaim half printed its own end marker.
+    pub reclaim_complete: bool,
 }
 
 impl BackupAudit {
@@ -239,26 +363,72 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 audit.unavailable = fields.next().map(str::to_string);
             }
             Some("STADO_BACKUP_AUDIT_END") => audit.complete = true,
+            Some("STADO_BACKUP_RECLAIM") => {
+                let (Some(outcome), Some(size), Some(_path)) =
+                    (fields.next(), fields.next(), fields.next())
+                else {
+                    continue;
+                };
+                let bytes = size.trim().parse::<u64>().unwrap_or_default();
+                let totals = match outcome {
+                    "deleted" => &mut audit.deleted,
+                    "would_delete" => &mut audit.would_delete,
+                    "delete_failed" => &mut audit.delete_failed,
+                    _ => continue,
+                };
+                totals.objects += 1;
+                totals.bytes += bytes;
+            }
+            Some("STADO_BACKUP_RECLAIM_END") => audit.reclaim_complete = true,
+            Some("STADO_BACKUP_PRUNED") => {
+                audit.pruned_directories = fields
+                    .next()
+                    .and_then(|count| count.trim().parse::<i64>().ok())
+                    .unwrap_or_default();
+            }
+            Some("STADO_BACKUP_FREE") => {
+                let (Some(phase), Some(blocks)) = (fields.next(), fields.next()) else {
+                    continue;
+                };
+                let blocks = blocks.trim().parse::<i64>().ok();
+                match phase {
+                    "before" => audit.free_kb_before = blocks,
+                    "after" => audit.free_kb_after = blocks,
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
     audit
 }
 
-/// Classify `host`'s replica against its primary store.
+/// Classify `host`'s replica against its primary store, and — when the plan
+/// says so — delete the twins the same pass just proved.
 ///
-/// Read-only end to end: the remote program stats and hashes, and this function
-/// only counts what it printed.
+/// The proof and the deletion are one pass on purpose. An audit written to a
+/// file and a deletion run against it later is how a safety net becomes data
+/// loss: the addresses move, the primary changes, and the recorded verdict
+/// stops describing the disk. Nothing in this module can act on a verdict it
+/// did not compute in the same run.
 pub async fn audit_host(
     host: &str,
-    namespace: &str,
-    backup_root: &str,
-    primary_root: &str,
+    plan: &AuditPlan,
     runner: &Runner,
 ) -> Result<(ComputeTarget, BackupAudit), DeployError> {
     let target = host_channel::canonical_target(host).await?;
-    let script = remote_script(namespace, backup_root, primary_root);
-    let output = host_channel::run_script(&target, &script, runner).await?;
+    let script = remote_script(plan);
+    let output = if plan.reclaim {
+        host_channel::run_script_with_timeout(
+            &target,
+            &script,
+            Duration::from_secs(RECLAIM_TIMEOUT_SECONDS),
+            runner,
+        )
+        .await?
+    } else {
+        host_channel::run_script(&target, &script, runner).await?
+    };
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
