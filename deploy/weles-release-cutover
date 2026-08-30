@@ -1,0 +1,118 @@
+#!/bin/bash
+set -euo pipefail
+
+STATE_DIR="$HOME/.local/state/weles"
+MARKER="$STATE_DIR/release-cutover.complete"
+ENV_FILE="$HOME/.config/weles/worker.env"
+ACTIVATOR="$HOME/.stado/bin/weles-release-activate"
+BACKUP="$HOME/.local/share/weles-worker/legacy-checkout-pre-release-20260728"
+mkdir -p "$STATE_DIR"
+
+if [ -f "$MARKER" ]; then
+  echo "reconciling completed release cutover"
+fi
+LOCK="$STATE_DIR/release-cutover.lock"
+if ! mkdir "$LOCK"; then
+  echo "release cutover is already running" > /dev/stderr
+  false
+fi
+STAGE="configuration"
+trap 'rc=$?; rmdir "$LOCK" > /dev/null 2>&1 || true; if [ "$rc" -ne 0 ]; then echo "release cutover failed during $STAGE" > /dev/stderr; fi; exit "$rc"' EXIT
+
+
+if [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then
+  echo "missing regular deployment configuration: $ENV_FILE" > /dev/stderr
+  false
+fi
+if [ ! -x "$ACTIVATOR" ] || [ -L "$ACTIVATOR" ]; then
+  echo "missing regular release activator: $ACTIVATOR" > /dev/stderr
+  false
+fi
+
+umask u=rwx,go=
+SKARBIEC_URL=$(cat "$HOME/.stado/forwards/skarbiec.url")
+if [ -z "$SKARBIEC_URL" ]; then
+  echo "missing named Stado Skarbiec forwarding endpoint" > /dev/stderr
+  false
+fi
+ENV_TMP="$ENV_FILE.cutover.$$"
+/usr/bin/sed -E '/^(WC_SKARBIEC_URL|STADO_RELEASE_API_URL|STADO_RELEASE_LOCAL_ROOT|WELES_WORKER_RELEASE_VERSION|WELES_WORKER_RELEASE_SHA256|WELES_CHROMIUM_RELEASE_VERSION|WELES_CHROMIUM_RELEASE_SHA256|WELES_FIREFOX_RELEASE_VERSION|WELES_FIREFOX_RELEASE_SHA256)=/d' "$ENV_FILE" > "$ENV_TMP"
+printf '%s\n' \
+  'STADO_RELEASE_LOCAL_ROOT=$HOME/.stado/releases' \
+  'WELES_WORKER_RELEASE_VERSION=incident-20260728-gmail8' \
+  'WELES_WORKER_RELEASE_SHA256=0ef1e33a16c54c6ece9e94bd2df9d24829c58d0f4c71cd55accb794bda540557' \
+  'WELES_CHROMIUM_RELEASE_VERSION=147.0.7727.108-weles.1' \
+  'WELES_CHROMIUM_RELEASE_SHA256=2f5512135e3cccf9b498b69f260865afa522f35e8a7e38024f7848c6ce04fe24' \
+  'WELES_FIREFOX_RELEASE_VERSION=142.0a1-weles.5' \
+  'WELES_FIREFOX_RELEASE_SHA256=36073e4bbd64c569c613f9f38dfaf2ca757cea8004091648b2c1f27e71fc3356' \
+  >> "$ENV_TMP"
+printf "WC_SKARBIEC_URL='%s'\n" "$SKARBIEC_URL" >> "$ENV_TMP"
+bash -n "$ENV_TMP"
+chmod u=rw,go= "$ENV_TMP"
+mv "$ENV_TMP" "$ENV_FILE"
+STAGE="bootstrap grants"
+
+for consumer in \
+  weles-database-url-bootstrap \
+  weles-database-service-role-bootstrap \
+  weles-object-token-bootstrap \
+  weles-model-router-token-bootstrap \
+  weles-model-agent-id-bootstrap \
+  weles-model-agent-secret-bootstrap \
+  weles-artifact-delivery-token-bootstrap \
+  weles-artifact-signing-secret-bootstrap \
+  weles-subscriptions-token-bootstrap \
+  weles-content-diagnostics-token-bootstrap \
+  weles-trading-ingest-token-bootstrap \
+  weles-trading-ingest-hmac-bootstrap \
+  weles-operator-cdp-url-bootstrap \
+  weles-operator-cdp-token-bootstrap \
+  weles-echo-api-token-bootstrap \
+  weles-keyword-planner-router-bootstrap
+do
+  staged="$HOME/.stado/bin/$consumer.token"
+  destination="$HOME/.stado/$consumer-skarbiec-bootstrap-token"
+  if [ -f "$staged" ] && [ ! -L "$staged" ]; then
+    mv "$staged" "$destination"
+    chmod u=rw,go= "$destination"
+  elif [ ! -f "$destination" ] || [ -L "$destination" ]; then
+    echo "missing bootstrap grant for $consumer" > /dev/stderr
+    false
+  fi
+done
+STAGE="legacy checkout preservation"
+
+moved_legacy=false
+if [ -e "$HOME/weles" ] && [ ! -L "$HOME/weles" ]; then
+  if [ -e "$BACKUP" ]; then
+    echo "legacy checkout backup already exists: $BACKUP" > /dev/stderr
+    false
+  fi
+  mkdir -p "$(dirname "$BACKUP")"
+  mv "$HOME/weles" "$BACKUP"
+  moved_legacy=true
+  echo "preserved legacy checkout at $BACKUP"
+fi
+
+STAGE="immutable release activation"
+if ! WELES_WORKER_ENV_FILE="$ENV_FILE" "$ACTIVATOR"; then
+  if $moved_legacy; then
+    if [ -L "$HOME/weles" ]; then rm "$HOME/weles"; fi
+    if [ ! -e "$HOME/weles" ] && [ -d "$BACKUP" ]; then
+      mv "$BACKUP" "$HOME/weles"
+    fi
+    /bin/launchctl kickstart -k "user/$(id -u)/com.wisent.weles-worker" || true
+  fi
+  echo "release activation failed; legacy checkout restored" > /dev/stderr
+  false
+fi
+
+STAGE="completion receipt"
+printf '%s\n' \
+  'worker=incident-20260728-gmail8' \
+  'worker_sha256=0ef1e33a16c54c6ece9e94bd2df9d24829c58d0f4c71cd55accb794bda540557' \
+  'browser_primary=147.0.7727.108-weles.1' \
+  'browser_secondary=142.0a1-weles.5' \
+  > "$MARKER"
+chmod u=rw,go= "$MARKER"
+echo "immutable Weles release cutover complete"

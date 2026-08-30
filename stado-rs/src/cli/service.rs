@@ -31,7 +31,9 @@ use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, UnitDomain, SOURCE_RECOVERY,
     SOURCE_REGISTRY,
 };
-use crate::deploy::{host_channel, host_exec, production_runner, service_env_file, DeployError};
+use crate::deploy::{
+    host_channel, host_exec, production_runner, service_env_file, service_file_fetch, DeployError,
+};
 use crate::observations;
 use crate::queue::JobStorage;
 use crate::targets;
@@ -357,6 +359,42 @@ pub enum ServiceCommands {
         /// Install mode 0700 instead of 0600.
         #[arg(long)]
         executable: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Copy one file OUT of a managed service's target home, byte-exact.
+    ///
+    /// The opposite direction of `file-sync`, and the byte-exact counterpart
+    /// of `env-show`. `env-show` sanitizes every value it reports — printable
+    /// ASCII, quotes and backslashes replaced, long values clamped — because
+    /// its job is to let an operator judge a file without a secret crossing
+    /// the channel. The consequence is that it can diagnose a file and can
+    /// never reproduce one byte of it, so live operator tooling that exists
+    /// only on a host could not be put under version control without copying
+    /// it off by hand, outside the approved channel.
+    ///
+    /// The host hashes the file itself, the bytes travel base64 inside the
+    /// same encrypted channel's response, and the digest is recomputed HERE
+    /// over the decoded bytes: a payload that lost a chunk decodes into
+    /// something shorter and perfectly valid, so only two independently
+    /// computed SHA-256s catch it. A mismatch writes nothing and exits
+    /// non-zero. `$HOME` confinement and symlink refusal are `env-show`'s,
+    /// word for word.
+    FileFetch {
+        /// Service whose host-local process owns the file.
+        name: String,
+        /// The single registry host to read.
+        #[arg(long)]
+        host: String,
+        /// File on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        source_file: String,
+        /// Absolute local path to write the fetched bytes to. Replaced
+        /// atomically, owner-only. Omit to report on the file without
+        /// keeping a copy.
+        #[arg(long)]
+        dest_file: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -959,6 +997,22 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 source_file: &source_file,
                 target_file: &target_file,
                 executable,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::FileFetch {
+            name,
+            host,
+            source_file,
+            dest_file,
+            json,
+        } => {
+            file_fetch(FileFetchOptions {
+                name: &name,
+                host: &host,
+                source_file: &source_file,
+                dest_file: dest_file.as_deref(),
                 as_json: json,
             })
             .await
@@ -2671,6 +2725,102 @@ async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdError> {
         table::print(&["HOST", "UNIT", "SYNC", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "file sync")
+}
+
+struct FileFetchOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    source_file: &'a str,
+    dest_file: Option<&'a str>,
+    as_json: bool,
+}
+
+/// `service file-fetch`: the byte-exact read `env-show` deliberately is not.
+///
+/// The write happens only after both digests agree, and the destination is
+/// replaced by a rename from a sibling temporary file. A partially written
+/// destination is the one outcome that would make this command worse than the
+/// hand copy it replaces: an operator would commit it.
+async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdError> {
+    let FileFetchOptions {
+        name,
+        host,
+        source_file,
+        dest_file,
+        as_json,
+    } = options;
+    if let Some(destination) = dest_file {
+        if !std::path::Path::new(destination).is_absolute() {
+            return Err(CmdError::click("--dest-file must be absolute"));
+        }
+    }
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let fetched = service_file_fetch::fetch_file(&target, source_file, &runner)
+            .await
+            .map_err(click)?;
+        if let Some(failure) = fetched.failure(&declared.host) {
+            failures.push(failure);
+        }
+        let written = match dest_file {
+            Some(destination) if fetched.ok() => {
+                write_owner_only(destination, &fetched.content)?;
+                destination
+            }
+            _ => "-",
+        };
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&fetched.report.file_state),
+            fetched.report.bytes.to_string(),
+            dash(&fetched.report.mode),
+            fetched.integrity.to_string(),
+            fetched.local_digest.clone(),
+            written.to_string(),
+        ]);
+        let mut object = fetched.to_report(&target, declared.unit_id());
+        object.insert("dest_file".to_string(), json!(written));
+        payload.push(Value::Object(object));
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(
+            &[
+                "HOST", "UNIT", "FILE", "BYTES", "MODE", "INTEGRITY", "SHA256", "WROTE",
+            ],
+            &cells,
+        );
+    }
+    fail_if_any(&failures, "file fetch")
+}
+
+/// Replace one local path with these bytes, owner-only, through a rename.
+fn write_owner_only(destination: &str, content: &[u8]) -> Result<(), CmdError> {
+    let path = std::path::Path::new(destination);
+    let staged = path.with_extension("stado-file-fetch");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            CmdError::click(format!("cannot create {}: {error}", parent.display()))
+        })?;
+    }
+    std::fs::write(&staged, content)
+        .map_err(|error| CmdError::click(format!("cannot stage {destination}: {error}")))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| CmdError::click(format!("cannot protect {destination}: {error}")))?;
+    std::fs::rename(&staged, path)
+        .map_err(|error| CmdError::click(format!("cannot install {destination}: {error}")))
 }
 
 fn validate_env_key(key: &str) -> Result<(), CmdError> {
