@@ -34,6 +34,11 @@ use super::{
 
 /// Python `LABEL_PREFIX`.
 pub const LABEL_PREFIX: &str = "com.wisent.compute";
+/// The label prefix every unit this fleet installs carries, whichever writer
+/// installed it: [`LABEL_PREFIX`] mints `com.wisent.compute.<kind>.<name>` and
+/// the always-on set is `com.wisent.always-on.<name>`, so one prefix covers both.
+/// Deliberately broader than `LABEL_PREFIX` to match all fleet-produced labels.
+pub const FLEET_LABEL_PREFIX: &str = "com.wisent.";
 
 /// Fetches the central HF write token (Python `_hf_write_token`);
 /// injectable so tests never touch GCS.
@@ -249,9 +254,19 @@ async fn ensure_bins_at_version_with(
     Ok(())
 }
 
-/// Python: `f"{LABEL_PREFIX}.{kind}.{entry.name}"`.
+/// Mint a launchd label for a service unit, or return an already-full label unchanged.
+///
+/// If `name` is a bare product name like `"stado-agent-mini"` or `"disk-cleanup"`,
+/// returns `{LABEL_PREFIX}.{kind}.{name}` — e.g. `com.wisent.compute.service.stado-agent-mini`.
+/// If `name` is already a fleet label (starts with `com.wisent.`), returns it unchanged,
+/// preventing the double-prefix defect that occurred on charless-mac-mini and led to
+/// stale duplicate queue agents and a seven-day fleet stall.
 pub fn label(kind: &str, name: &str) -> String {
-    format!("{LABEL_PREFIX}.{kind}.{name}")
+    if name.starts_with(FLEET_LABEL_PREFIX) {
+        name.to_string()
+    } else {
+        format!("{LABEL_PREFIX}.{kind}.{name}")
+    }
 }
 
 fn local_control_plane_configured() -> bool {
