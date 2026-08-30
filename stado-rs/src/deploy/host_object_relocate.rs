@@ -135,6 +135,18 @@ meta_of() {
     *) printf '%s' "$root/.metadata/$relative.json" ;;
   esac
 }
+# The two spellings of the address that appear INSIDE a sidecar, which
+# records `stado-uri` as a whole `stado://<namespace>/<key>` string. The
+# substitution is prefix-level, so it is one pair of words for the entire
+# pass rather than a pair per object.
+old_marker="stado://@NAMESPACE@/@FROM@"
+new_marker="stado://@NAMESPACE@/@TO@"
+# `sed` takes any byte as its delimiter, and a store key may contain every
+# character that is not a slash or a newline — including `/`, `|` and `#`.
+# A control byte cannot reach here: `validate_prefix` refuses one before this
+# program is assembled.
+uri_delim=$(printf '\001')
+/bin/mkdir -p "$root/.locks" 2>/dev/null
 printf 'STADO_RELOCATE_ROOT\t%s\t%s\t%s\n' "$root" "$srcpfx" "$dstpfx"
 # The candidate list is taken WHOLE before anything moves, because a
 # destination prefix can be an ancestor of the source prefix — which is
@@ -150,7 +162,6 @@ if [ -d "$scan" ]; then
   # The list lives in the store's own `.locks/` directory, which
   # `LocalBackend::is_internal` excludes from every listing. A scratch file at
   # the store root would be an object as far as `list` is concerned.
-  /bin/mkdir -p "$root/.locks" 2>/dev/null
   candidates="$root/.locks/.stado-relocate-candidates.$$"
   /usr/bin/find "$scan" -type f 2>/dev/null | /usr/bin/sort > "$candidates"
   while IFS= read -r source; do
@@ -218,6 +229,13 @@ if [ -d "$scan" ]; then
         printf 'STADO_RELOCATE_META\t%s\t%s\n' 'link_failed' "$source_key"
       fi
     fi
+    # The address recorded INSIDE the sidecar is not corrected here. It is
+    # corrected by the reconcile stage below, which is the same substitution
+    # over the same two prefixes and also reaches sidecars whose bodies were
+    # relocated by something else — the 84 objects a one-off script had
+    # already moved when this command was written carried exactly that
+    # damage, and a fix that only ran on this pass's own moves would have
+    # left them stating the address they no longer have.
     /bin/rm -f "$source"
     moved=$((moved + 1))
     moved_bytes=$((moved_bytes + bytes))
@@ -239,6 +257,36 @@ if [ -d "$scan" ]; then
   fi
   printf 'STADO_RELOCATE_PRUNED\t%s\n' "$pruned"
 fi
+# Every sidecar under the destination that still records the address the
+# objects were moved OFF. `set_metadata` stores `stado-uri` verbatim, so a
+# body that arrived by any route other than a fresh PUT keeps the old
+# spelling, and `storage ls --long` then describes an address that resolves
+# to nothing. Located with one grep for the old prefix rather than by reading
+# every sidecar in the namespace: the stale ones are exactly the ones that
+# name it.
+stale=0
+repaired=0
+meta_scan="$root/.metadata/${dstpfx#"${root}/"}"
+if [ -d "$meta_scan" ]; then
+  stale_list="$root/.locks/.stado-relocate-stale.$$"
+  /usr/bin/grep -rlF "$old_marker" "$meta_scan" 2>/dev/null | /usr/bin/sort > "$stale_list"
+  while IFS= read -r sidecar; do
+    [ -f "$sidecar" ] || continue
+    stale=$((stale + 1))
+    if [ "$apply" != yes ]; then continue; fi
+    if /usr/bin/sed "s${uri_delim}${old_marker}${uri_delim}${new_marker}${uri_delim}g" \
+        < "$sidecar" > "$sidecar.stado-relocate.$$" 2>/dev/null &&
+       /bin/mv -f "$sidecar.stado-relocate.$$" "$sidecar"; then
+      repaired=$((repaired + 1))
+      printf 'STADO_RELOCATE_META\t%s\t%s\n' 'uri_repaired' "${sidecar#"${root}/"}"
+    else
+      /bin/rm -f "$sidecar.stado-relocate.$$"
+      printf 'STADO_RELOCATE_META\t%s\t%s\n' 'uri_repair_failed' "${sidecar#"${root}/"}"
+    fi
+  done < "$stale_list"
+  /bin/rm -f "$stale_list"
+fi
+printf 'STADO_RELOCATE_STALE_URI\t%s\t%s\n' "$stale" "$repaired"
 # Printed whether or not anything matched, so "nothing to relocate" is told
 # apart from a prefix that named a tree the host does not have.
 printf 'STADO_RELOCATE_END\t%s\t%s\t%s\t%s\t%s\n' \
@@ -265,6 +313,7 @@ pub fn remote_script(
         // the namespace root, and without it `ecosystem/probierz` and the
         // first prefix would join into one word.
         .replace("@KEYROOT@", &format!("{ROOT_PREFIX}{namespace}/"))
+        .replace("@NAMESPACE@", namespace)
         .replace("@FROM@", from)
         .replace("@TO@", to)
         .replace("@APPLY@", if apply { "yes" } else { "no" })
@@ -307,6 +356,10 @@ pub struct RelocateReading {
     pub moved_bytes: i64,
     pub refused: i64,
     pub pruned_directories: i64,
+    /// Sidecars under the destination whose recorded `stado-uri` still names
+    /// the source prefix, and how many of those this pass rewrote.
+    pub stale_uris: i64,
+    pub repaired_uris: i64,
     /// The closing marker arrived, so the totals are the host's own and not a
     /// truncated read.
     pub complete: bool,
@@ -344,6 +397,10 @@ pub fn parse_output(stdout: &str) -> RelocateReading {
             }
             ["STADO_RELOCATE_PRUNED", count] => {
                 reading.pruned_directories = count.parse::<i64>().unwrap_or_default();
+            }
+            ["STADO_RELOCATE_STALE_URI", stale, repaired] => {
+                reading.stale_uris = stale.parse::<i64>().unwrap_or_default();
+                reading.repaired_uris = repaired.parse::<i64>().unwrap_or_default();
             }
             ["STADO_RELOCATE_END", scanned, decided, moved, moved_bytes, refused] => {
                 reading.scanned = scanned.parse::<i64>().unwrap_or_default();
@@ -388,6 +445,8 @@ pub fn to_report(
             "moved_bytes": reading.moved_bytes,
             "refused": reading.refused,
             "pruned_directories": reading.pruned_directories,
+            "stale_uris": reading.stale_uris,
+            "repaired_uris": reading.repaired_uris,
             // A pass whose closing marker never arrived states so, because the
             // totals of a truncated read are a lower bound and reading them as
             // the answer is how a half-finished relocation looks finished.

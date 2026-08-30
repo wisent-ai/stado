@@ -1209,6 +1209,17 @@ pub async fn object_relocate(
         counted("refused"),
         counted("pruned_directories"),
     );
+    // Said as its own line rather than folded into the counts above, because
+    // it is a different repair: the body is at the right address and the
+    // sidecar beside it still records the wrong one, which is what
+    // `storage ls --long` reads out.
+    let stale = counted("stale_uris");
+    if stale > 0 {
+        println!(
+            "{stale} sidecars still record the old address, {} rewritten",
+            counted("repaired_uris"),
+        );
+    }
     if !apply {
         println!("nothing was changed: pass --apply to relocate what is listed above");
     }
