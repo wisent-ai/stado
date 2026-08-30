@@ -25,16 +25,17 @@ jobs:
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Build exact-head writer client
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Verify full immutable release object read-back
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
-          version="${version_line#*\"}"
-          version="${version%%\"*}"
-          test -n "$version"
+          published_tag="$(git tag --list 'stado-v*' --sort=-version:refname | sed -n '1p')"
+          test -n "$published_tag"
+          version="${published_tag#stado-v}"
 
           sums="$RUNNER_TEMP/stado-$version-SHA256SUMS"
           delivered="$RUNNER_TEMP/stado-$version-read-back"
@@ -50,5 +51,5 @@ jobs:
           bytes="$(/usr/bin/stat -f %z "$delivered")"
           test "$bytes" -ge 50000000
           test "$actual" = "$expected"
-          printf 'Verified %s bytes for immutable Stado %s writer read-back at %s\n' \
+          printf 'Verified %s bytes for immutable published Stado %s using writer %s\n' \
             "$bytes" "$version" "$GITHUB_SHA"
