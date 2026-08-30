@@ -255,6 +255,29 @@ impl Endpoint {
     /// Empty backend means there is no Stado-managed backup. The returned
     /// endpoint is never selected by `JobStorage`; callers must explicitly
     /// copy to it or inspect it.
+    ///
+    /// OUTSTANDING, and recorded here because it is a live gap rather than a
+    /// preference: `charless-mac-mini` has no disaster-recovery replica, and
+    /// there is currently no way to configure a correct one for it.
+    ///
+    /// Its primary is the object API, addressed by bare ecosystem keys. Its
+    /// backup was a directory, addressed by namespace-qualified store paths, so
+    /// every replication pass re-addressed what it copied and the replica grew
+    /// to 48.5 GiB against a 32.7 GiB primary without ever becoming a replica.
+    /// [`replicate_configured_backup`] now refuses that pairing outright, which
+    /// is correct and also leaves the host with nothing. On 2026-08-30 the
+    /// operator's decision was to stop the corruption first: the host's
+    /// `storage.backup.backend` was set from `local` to `stado`, which makes the
+    /// primary and the backup the same store, so the pre-existing same-store
+    /// guard refuses every tick and nothing is written.
+    ///
+    /// Two things have to happen and neither is done. A host whose primary is
+    /// the object API needs a backup that speaks the same addressing — a second
+    /// namespace on that API, or a bucket, not a co-located directory. And the
+    /// documented off state above is unreachable: `stado config set` validates
+    /// `storage.backup.backend` against `gcs|azure|s3|local|stado` and rejects
+    /// the empty string this function treats as "no backup", so an operator
+    /// cannot express a decision the code already implements.
     pub fn configured_backup() -> Option<Self> {
         let kind = crate::config::wc_backup_storage_backend();
         if kind.is_empty() {
