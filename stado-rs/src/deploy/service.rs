@@ -1141,13 +1141,16 @@ fn quote_unit_path(path: &str) -> Result<String, DeployError> {
     )))
 }
 
-/// Validate the remote environment file independently of shell quoting.
+/// Validate one remote destination file independently of shell quoting.
 ///
-/// The command deliberately supports only an absolute path or a path rooted
-/// at the target user's home. The value travels base64-encoded, but rejecting
-/// parent traversal keeps a typo from turning a credential sync into an
-/// unrelated file rewrite.
-fn validate_env_path(path: &str) -> Result<(), DeployError> {
+/// The commands that write a file on a managed host deliberately support only
+/// an absolute path or a path rooted at the target user's home. The value
+/// travels base64-encoded, but rejecting parent traversal keeps a typo from
+/// turning a credential sync into an unrelated file rewrite. `label` names the
+/// destination the way the operator asked for it -- an environment file for
+/// `service secret-sync`, a token file for `service token-file-sync` -- so a
+/// refusal says which of a command's paths was wrong.
+fn validate_home_rooted_file(path: &str, label: &str) -> Result<(), DeployError> {
     let local = path.strip_prefix("$HOME/").unwrap_or(path);
     let rooted = path.starts_with('/') || path.starts_with("$HOME/");
     let usable_file = Path::new(local).file_name().is_some();
@@ -1158,7 +1161,7 @@ fn validate_env_path(path: &str) -> Result<(), DeployError> {
         return Ok(());
     }
     Err(DeployError(format!(
-        "environment file {} must be an absolute or home-relative file path without parent traversal",
+        "{label} {} must be an absolute or home-relative file path without parent traversal",
         py_str_repr(path)
     )))
 }
@@ -3302,7 +3305,7 @@ pub async fn sync_service_secret(
     secret: &str,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
-    validate_env_path(env_path)?;
+    validate_home_rooted_file(env_path, "environment file")?;
     validate_env_variable(variable)?;
     validate_secret_value(secret)?;
 
@@ -3355,7 +3358,7 @@ pub async fn sync_service_item_secret(
     field: &str,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
-    validate_env_path(env_path)?;
+    validate_home_rooted_file(env_path, "environment file")?;
     validate_env_variable(variable)?;
     validate_vault_reference(item, field)?;
 
@@ -3426,7 +3429,7 @@ pub async fn check_service_env_bearer(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     validate_loopback_probe_url(probe_url)?;
-    validate_env_path(env_path)?;
+    validate_home_rooted_file(env_path, "environment file")?;
     validate_env_variable(variable)?;
     let body = AUTH_CHECK_BODY
         .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
@@ -4593,6 +4596,81 @@ printf 'STADO_SERVICE\tfile-sync\tfile_synced\t%s\n' "$target_path"
         )
         .replace("@CONTENT_B64@", &STANDARD.encode(content))
         .replace("@MODE@", &format!("{mode:04o}"));
+    let output = host_channel::run_script(target, &body, runner).await?;
+    Ok(report_from(output))
+}
+
+/// Create, or atomically replace, one owner-only raw bearer file on a managed
+/// host.
+///
+/// Binding a host's unit to the fleet object store needs
+/// `WC_STADO_STORAGE_TOKEN_FILE` to name a file whose entire content is the
+/// bearer: `queue/stado_object.rs::StadoObjectBackend::new` resolves a token
+/// file and nothing else. Nothing here could create that file.
+/// [`sync_service_secret`] writes an `env` assignment, and
+/// [`remint_consumer_grant_on_host`] reconciles a grant against a token file
+/// that is already on the host; between them the one remaining way to bind a
+/// host to the fleet store was to hand-copy a secret onto it, which is exactly
+/// what the fleet-wide "everything through Stado" rule exists to prevent. A
+/// host that never got that file kept its `JobStorage` on a device-local store
+/// instead, and a fleet claim written to a device store does not fail -- it
+/// succeeds, and every other host reports the object absent.
+///
+/// The bearer rides inside the approved channel's request body as base64,
+/// exactly the way [`sync_service_file`] carries file content: never an
+/// argument vector, never stdout, never the clear text of the remote program.
+/// The destination must resolve inside the target account's home and must not
+/// be a symlink, its resolved parent must still be inside that home, and the
+/// file is installed by renaming a mode-600 temporary file staged in the same
+/// directory, so a reader never sees a half-written bearer. Unlike
+/// [`set_env_key_on_host`] an absent destination is created -- that is the
+/// whole point of this command -- but an absent parent directory is refused
+/// rather than created: a bearer written into a directory this command invented
+/// is a bearer nothing reads, and the typo that put it there would be reported
+/// as a successful sync.
+pub async fn write_token_file_on_host(
+    target: &ComputeTarget,
+    token_path: &str,
+    secret: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_home_rooted_file(token_path, "token file")?;
+    validate_secret_value(secret)?;
+    let body = r#"set -eu
+fail() {
+  printf 'STADO_SERVICE\ttoken-file-sync\ttoken_file_sync_failed\t%s\n' "$1"
+  exit 0
+}
+decode=-D
+if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+home=$HOME
+token_path=$(printf '%s' '@TOKEN_PATH_B64@' | /usr/bin/base64 "$decode") || exit 1
+case "$token_path" in
+  '$HOME'/*) token_path="$home/${token_path#\$HOME/}" ;;
+  "$home"/*) ;;
+  *) fail 'token file must be inside the target home' ;;
+esac
+[ ! -L "$token_path" ] || fail 'token file cannot be a symlink'
+if [ -e "$token_path" ]; then
+  [ -f "$token_path" ] || fail 'token file is not a regular file'
+fi
+parent=$(/usr/bin/dirname "$token_path")
+[ -d "$parent" ] || fail 'token file parent directory must already exist'
+real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
+/usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent" || fail 'resolved token file leaves the target home'
+tmp="$parent/.stado-token-file-sync.$$"
+trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
+umask u=rw,go=
+printf '%s' '@TOKEN_B64@' | /usr/bin/base64 "$decode" > "$tmp" || fail 'cannot stage token file'
+[ -s "$tmp" ] || fail 'staged token file is empty'
+/bin/chmod 0600 "$tmp" || fail 'cannot protect token file'
+/bin/mv -f "$tmp" "$token_path" || fail 'cannot install token file'
+trap - EXIT HUP INT TERM
+printf 'STADO_SERVICE\ttoken-file-sync\ttoken_file_synced\t%s\n' "$token_path"
+"#;
+    let body = body
+        .replace("@TOKEN_PATH_B64@", &STANDARD.encode(token_path.as_bytes()))
+        .replace("@TOKEN_B64@", &STANDARD.encode(secret.as_bytes()));
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }
