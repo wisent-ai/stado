@@ -260,10 +260,11 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 4] = [
+    const ALLOWED: [&str; 5] = [
         "build_caches",
         "chromium_clones",
         "huggingface_cache",
+        "queue_workdirs",
         "weles_recordings",
     ];
     let mut unknown: Vec<&str> = cleaners
@@ -308,10 +309,20 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         // for the reason that floor exists at all: macOS makes the clone at
         // launch and records nothing about which process owns it, so age is
         // most of what says the launch is over.
-        let minimum = if name == "huggingface_cache" {
-            3600
-        } else {
-            86400
+        // `queue_workdirs` is the exception in the other direction, and it is
+        // not a weaker rule but a different one. A job workdir is safe to
+        // remove when its job is terminal, which the janitor establishes from
+        // the queue store's own `queue` and `running` listings, exactly as
+        // `host reclaim` does for the same directories. Age adds nothing to
+        // that and a floor would subtract: on the always-on mac the workdirs
+        // that took the host under its watermark were minutes old, 4.3 GiB of
+        // `cargo` build output from jobs that had already finished, so a
+        // day-long floor would have left the one cleaner written for that
+        // failure unable to touch it.
+        let minimum = match name.as_str() {
+            "huggingface_cache" => 3600,
+            "queue_workdirs" => 0,
+            _ => 86400,
         };
         require_int(
             min_age,

@@ -321,13 +321,30 @@ fn assemble(
         .as_ref()
         .and_then(|usage| usage.available_kb.parse::<f64>().ok());
     let free_gb = free_kb.map(host_disk::gib_from_blocks);
-    // The janitor's validated watermark first: that is the number the agent
-    // gated on, and it survives a registry the host could not read.
-    let low_watermark_gb = reading
-        .state
-        .low_bytes
-        .map(|bytes| bytes / disk_cleanup::GIB)
-        .or_else(|| policy.map(|policy| policy.low_free_gb));
+    // The registry's declared watermark first, and the janitor's state file
+    // only where the registry declares no policy at all.
+    //
+    // This was the other way round, on the reasoning that the state file holds
+    // the number the agent actually gated on and survives a registry the host
+    // cannot read. Both halves are true and it still reported a number that
+    // could not be acted on. That file is written by every cleanup pass, and on
+    // an always-on host several processes make them: the queue agent every ten
+    // seconds, a `disk-cleanup --watch` unit on its own timer, and any of them
+    // may be a long-running process still holding a configuration that resolves
+    // a superseded policy. On charless-mac-mini that produced `low watermark
+    // 20 GiB, target 18 GiB` — a floor above its own ceiling, from a stale
+    // 20/25 policy — alternating with the canonical 15/18 between one reading
+    // and the next, while the registry said 15 throughout.
+    //
+    // So the declaration wins. It is what the fleet decided, this command has
+    // just read it, and a watermark the operator cannot reconcile with the
+    // policy document is worse than no watermark at all.
+    let low_watermark_gb = policy.map(|policy| policy.low_free_gb).or_else(|| {
+        reading
+            .state
+            .low_bytes
+            .map(|bytes| bytes / disk_cleanup::GIB)
+    });
 
     let payload = publication.map(|row| &row.payload);
     let published_at = payload
