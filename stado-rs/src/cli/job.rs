@@ -1,4 +1,4 @@
-//! `stado job ...` — the per-job operator surface: rerun and watch.
+//! `stado job ...` — per-job rerun, priority and log controls.
 //!
 //! NO Python original: `stado/cli.py` has no `job` group at all. Items 18
 //! and 19 of `docs/missing-commands.md` are the gap this closes. Re-running
@@ -33,6 +33,7 @@ use crate::constants::POLL_INTERVAL_S;
 use crate::machine::{normalize_job, MachineError, MachineFacade};
 use crate::models::{job_state, Job};
 use crate::queue::submit::{submit_batch, SubmitOptions, CPU_MACHINE_TYPE};
+use crate::queue::JobStorage;
 
 use super::{table, CmdError};
 
@@ -63,6 +64,14 @@ pub enum JobCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Change a queued job's scheduling priority without resubmitting it.
+    SetPriority {
+        job_id: String,
+        /// New priority; higher jobs are claimed first, then FIFO.
+        priority: i64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Print a job's log, and with --follow tail it to a terminal state.
     Watch {
         job_id: String,
@@ -78,6 +87,11 @@ pub enum JobCommands {
 pub async fn dispatch(command: JobCommands) -> Result<(), CmdError> {
     match command {
         JobCommands::Rerun { job_id, json } => rerun(&job_id, json).await,
+        JobCommands::SetPriority {
+            job_id,
+            priority,
+            json,
+        } => set_priority(&job_id, priority, json).await,
         JobCommands::Watch {
             job_id,
             follow,
@@ -90,6 +104,41 @@ pub async fn dispatch(command: JobCommands) -> Result<(), CmdError> {
 /// message; [`CmdError`] is a flat click exception, so keep both.
 fn cmd_error(exc: MachineError) -> CmdError {
     CmdError::click(format!("{}: {}", exc.code, exc.message))
+}
+
+/// `stado job set-priority JOB_ID PRIORITY` — atomically update the queued
+/// document, its scheduler metadata and its priority marker.
+async fn set_priority(job_id: &str, priority: i64, as_json: bool) -> Result<(), CmdError> {
+    let store = JobStorage::new().await?;
+    let Some(job) = store.update_queued_priority(job_id, priority).await? else {
+        let current = MachineFacade::new()
+            .await
+            .map_err(cmd_error)?
+            .lookup_job(job_id)
+            .await
+            .map_err(cmd_error)?;
+        return Err(CmdError::click(format!(
+            "job {job_id} is {}, not queued; its priority was not changed",
+            current.state
+        )));
+    };
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "job_id": job.job_id,
+                "state": job.state,
+                "priority": job.priority,
+            }))?
+        );
+    } else {
+        table::print(
+            &["JOB", "STATE", "PRIORITY"],
+            &[vec![job.job_id, job.state, job.priority.to_string()]],
+        );
+    }
+    Ok(())
 }
 
 /// `stado job rerun JOB_ID [--json]` — resubmit an identical spec as a new

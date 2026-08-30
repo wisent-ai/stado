@@ -27,6 +27,9 @@ use crate::release_pipeline::{
 const OBJECT_API_SERVICE: &str = "stado-object-api";
 const OBJECT_API_REASON: &str =
     "release submission requires the canonical object store before its first write";
+/// Release qualification and delivery unblock declared fleet versions, so
+/// routine batch work must not leave them at the zero-priority FIFO tail.
+const RELEASE_JOB_PRIORITY: i64 = 90_000_000;
 
 #[derive(Args)]
 pub struct ReleaseSubmitArgs {
@@ -650,6 +653,7 @@ async fn enqueue(
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let options = SubmitOptions {
         pinned_host: consumer,
+        priority: RELEASE_JOB_PRIORITY,
         run_id: id.into(),
         output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
         input_artifacts: resolved.clone(),
@@ -1116,6 +1120,7 @@ async fn run_deliveries(
             };
             let options = SubmitOptions {
                 pinned_host: consumer,
+                priority: RELEASE_JOB_PRIORITY,
                 run_id: run.run_id.clone(),
                 output_uri: run_uri(
                     &run.product,
