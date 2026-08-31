@@ -4942,20 +4942,21 @@ pub async fn loaded_units(
         .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
             ["STADO_LOADED", pid, status, label, path, program, domains] => {
                 let label = (*label).trim().to_string();
-                label.starts_with(FLEET_LABEL_PREFIX).then(|| UndeclaredUnit {
-                    host: target.name.clone(),
-                    label,
-                    pid: (*pid).trim().trim_matches('-').to_string(),
-                    status: (*status).trim().to_string(),
-                    path: (*path).trim().trim_matches('-').to_string(),
-                    program: (*program).trim().to_string(),
-                    declaring_paths: (*domains)
-                        .trim()
-                        .split_whitespace()
-                        .filter(|path| *path != "-")
-                        .map(str::to_string)
-                        .collect(),
-                })
+                label
+                    .starts_with(FLEET_LABEL_PREFIX)
+                    .then(|| UndeclaredUnit {
+                        host: target.name.clone(),
+                        label,
+                        pid: (*pid).trim().trim_matches('-').to_string(),
+                        status: (*status).trim().to_string(),
+                        path: (*path).trim().trim_matches('-').to_string(),
+                        program: (*program).trim().to_string(),
+                        declaring_paths: (*domains)
+                            .split_whitespace()
+                            .filter(|path| *path != "-")
+                            .map(str::to_string)
+                            .collect(),
+                    })
             }
             _ => None,
         })
