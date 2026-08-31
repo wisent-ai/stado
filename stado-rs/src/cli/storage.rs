@@ -1620,6 +1620,33 @@ impl RemoteObjectApi {
             self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
         let bearer = self.release_bearer(uri).await?;
         let bytes = bytes::Bytes::from(bytes);
+        // The writer cannot answer until the backend has durably stored the body.
+        // Sending a large object as one request therefore spends the client's
+        // entire inactivity window waiting for response headers, then retries the
+        // same doomed transfer from byte zero. Chunk before that request: every
+        // piece stays below the progress deadline and composition remains the one
+        // atomic publication of the target object.
+        if bytes.len() > OBJECT_API_CHUNK_BYTES {
+            let payload = self
+                .put_chunked(
+                    uri,
+                    content_type,
+                    create_only,
+                    bytes,
+                    metadata,
+                    bearer.as_deref(),
+                )
+                .await?;
+            if payload.state != "stored"
+                || payload.uri != uri
+                || payload.content_type != content_type
+            {
+                return Err(CmdError::click(
+                    "Stado object API returned an inconsistent object composition response",
+                ));
+            }
+            return Ok(());
+        }
         let response = self
             .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
             .header(reqwest::header::CONTENT_TYPE, content_type)

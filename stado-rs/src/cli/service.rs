@@ -4204,7 +4204,12 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     }
 
     let runner = production_runner();
-    let report = service::retire_service(&target, found, &runner)
+    let sudo_password = if UnitDomain::from_path(&found.path).requires_privileged_bootstrap() {
+        host_sudo_password(&target).await?
+    } else {
+        None
+    };
+    let report = service::retire_service(&target, found, sudo_password.as_deref(), &runner)
         .await
         .map_err(click)?;
     if !report.succeeded("retired") {
@@ -4275,7 +4280,12 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     }
 
     let runner = production_runner();
-    let report = service::retire_service(&target, found, &runner)
+    let sudo_password = if UnitDomain::from_path(&found.path).requires_privileged_bootstrap() {
+        host_sudo_password(&target).await?
+    } else {
+        None
+    };
+    let report = service::retire_service(&target, found, sudo_password.as_deref(), &runner)
         .await
         .map_err(click)?;
     if !report.succeeded("retired") {

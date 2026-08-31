@@ -43,19 +43,36 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          published_tag="$(git tag --list 'stado-v*' --sort=-version:refname | sed -n '1p')"
-          test -n "$published_tag"
-          version="${published_tag#stado-v}"
+          version=""
+          sums=""
+          delivered=""
+          # A tag can exist before its immutable coordinate is complete: the
+          # release train may be cancelled before publication, or a failed
+          # writer may have stored only the small objects. This job proves the
+          # exact-head reader against complete published bytes, so walk the
+          # channel in version order and say which incomplete coordinates were
+          # skipped instead of treating the newest Git ref as a stored release.
+          while IFS= read -r published_tag; do
+            candidate_version="${published_tag#stado-v}"
+            candidate_sums="$RUNNER_TEMP/stado-$candidate_version-SHA256SUMS"
+            candidate_delivered="$RUNNER_TEMP/stado-$candidate_version-read-back"
+            if "$stado_bin" storage get \
+                 "stado://releases/stado/$candidate_version/linux-amd64/SHA256SUMS" \
+                 "$candidate_sums" &&
+               "$stado_bin" storage get \
+                 "stado://releases/stado/$candidate_version/linux-amd64/stado" \
+                 "$candidate_delivered"; then
+              version="$candidate_version"
+              sums="$candidate_sums"
+              delivered="$candidate_delivered"
+              break
+            fi
+            printf 'Skipping incomplete Stado coordinate %s\n' "$candidate_version"
+          done < <(git tag --list 'stado-v*' --sort=-version:refname)
+          test -n "$version"
 
-          sums="$RUNNER_TEMP/stado-$version-SHA256SUMS"
-          delivered="$RUNNER_TEMP/stado-$version-read-back"
-          "$stado_bin" storage get \
-            "stado://releases/stado/$version/linux-amd64/SHA256SUMS" "$sums"
           expected="$(sed -n 's/  stado$//p' "$sums")"
           test -n "$expected"
-
-          "$stado_bin" storage get \
-            "stado://releases/stado/$version/linux-amd64/stado" "$delivered"
           actual="$(openssl dgst -sha256 "$delivered")"
           actual="${actual##* }"
           bytes="$(/usr/bin/stat -f %z "$delivered")"
