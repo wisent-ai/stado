@@ -949,20 +949,16 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         if run.platforms.contains_key(p) {
             let base = release_control::release_base(&m.product, &args.version, p)
                 .map_err(CmdError::click)?;
-            let manifest_uri =
-                format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
+            let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
             // release.json is the coordinate's commit marker. A process may
             // publish it and lose the next status write; rebuilding then creates
             // a different qualification timestamp and collides with the
             // immutable coordinate. Recover only after the complete signed
             // coordinate verifies and names this exact source revision.
             if super::storage::release_object_present(&manifest_uri).await? {
-                let artifact = super::release_cmd::verified_artifact_for_submit(
-                    &m.product,
-                    &args.version,
-                    p,
-                )
-                .await?;
+                let artifact =
+                    super::release_cmd::verified_artifact_for_submit(&m.product, &args.version, p)
+                        .await?;
                 if artifact.source_revision != commit {
                     return Err(CmdError::click(format!(
                         "published release {p} names source revision {}, expected {commit}",

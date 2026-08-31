@@ -193,7 +193,10 @@ fn a_missing_allowlist_is_refused_rather_than_treated_as_permissive() {
     let out = fleet.task(&[]);
     assert!(!out.status.success());
     let text = said(&out);
-    assert!(text.contains("declares no WELES_ACTION_ALLOWLIST"), "{text}");
+    assert!(
+        text.contains("declares no WELES_ACTION_ALLOWLIST"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -219,7 +222,10 @@ fn an_allowed_action_passes_the_gate_and_fails_only_on_reaching_weles() {
     let text = said(&out);
     // The gate passed: the failure must not be about the allowlist.
     assert!(!text.contains("does not accept the action"), "{text}");
-    assert!(!text.contains("declares no WELES_ACTION_ALLOWLIST"), "{text}");
+    assert!(
+        !text.contains("declares no WELES_ACTION_ALLOWLIST"),
+        "{text}"
+    );
     // And it must be recognisably about reaching the service instead.
     assert!(
         text.contains("weles-admission")
