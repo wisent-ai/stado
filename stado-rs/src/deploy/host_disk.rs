@@ -149,6 +149,21 @@ pub struct CleanupState {
     pub last_pass_at: Option<String>,
     pub last_success_at: Option<String>,
     pub outcome: Option<String>,
+    /// Which process wrote the report this reading came from, and the version
+    /// of the binary that wrote it.
+    ///
+    /// The state file has several writers on an always-on host: the queue agent
+    /// every tick, and a `disk-cleanup --watch` unit on its own timer. On
+    /// 2026-08-31 the agent reported `interval_noop` with no errors at
+    /// 14:55:24Z and this command read `invalid_or_unavailable_policy` from the
+    /// same path 46 seconds later. Both readings were true about their own
+    /// writer and neither was true about the host, so `outcome` alone told an
+    /// operator whichever answer arrived last.
+    ///
+    /// Reporting it does not arbitrate. It makes the reading say whose verdict
+    /// it is, which is the difference between a fact and a coin toss.
+    pub writer: Option<String>,
+    pub writer_version: Option<String>,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,
     /// `free_bytes_after - free_bytes_before` of the recorded pass. Free
@@ -325,6 +340,8 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
         last_pass_at: text("started_at").or_else(|| last_attempt.and_then(iso_from_epoch)),
         last_success_at: text("last_success_at"),
         outcome: text("outcome"),
+        writer: text("writer"),
+        writer_version: text("writer_version"),
         free_bytes_before: free_before,
         free_bytes_after: free_after,
         freed_bytes: match (free_before, free_after) {
@@ -372,6 +389,8 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "last_pass_at": state.last_pass_at,
             "last_success_at": state.last_success_at,
             "outcome": state.outcome,
+            "writer": state.writer,
+            "writer_version": state.writer_version,
             "free_bytes_before": state.free_bytes_before,
             "free_bytes_after": state.free_bytes_after,
             "freed_bytes": state.freed_bytes,

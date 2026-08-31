@@ -779,8 +779,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // The janitor's bounded cleanup pass (Python `run_cleanup_once`,
         // wrapped there in try/except BaseException — the Rust port folds
         // every failure into the returned report by construction).
-        let cleanup_report =
-            disk_cleanup::run_cleanup_once(slots.len() as i64, false, log_fn).await;
+        let cleanup_report = disk_cleanup::run_cleanup_once(
+            slots.len() as i64,
+            false,
+            disk_cleanup::CleanupWriter::AgentTick,
+            log_fn,
+        )
+        .await;
         agent_diag.insert("disk_cleanup".into(), cleanup_report.clone());
         if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
             disk_low_bytes = Some(reported_low);

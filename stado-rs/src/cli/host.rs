@@ -1095,6 +1095,25 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
         if let Some(Value::String(detail)) = state.and_then(|value| value.get("error")) {
             println!("cleanup state unreadable: {detail}");
         }
+        // Whose verdict this is. Several processes write that one file on an
+        // always-on host -- the queue agent every tick, a `disk-cleanup
+        // --watch` unit on its own timer -- so OUTCOME above is the last pass
+        // by whoever made it, not a property of the host. On 2026-08-31 the
+        // agent recorded `interval_noop` with no errors and this command read
+        // `invalid_or_unavailable_policy` 46 seconds later from the same path.
+        // Naming the writer is what lets an operator tell those apart instead
+        // of believing whichever arrived last.
+        if let Some(Value::String(writer)) = state.and_then(|value| value.get("writer")) {
+            let version = state
+                .and_then(|value| value.get("writer_version"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown version");
+            println!(
+                "that pass was written by {writer} running {version}; this file \
+                 has more than one writer, so OUTCOME is the last pass rather \
+                 than the state of the host"
+            );
+        }
     } else {
         println!(
             "\ncleanup state: no state file at {} — the janitor has never \
