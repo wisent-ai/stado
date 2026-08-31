@@ -2799,6 +2799,72 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
     Ok(store.read_bytes(&object.storage_path()).await?.is_some())
 }
 
+/// Every `(version, platform)` coordinate the release channel actually holds
+/// for one product, newest version first.
+///
+/// Derived from the store's own listing rather than from git tags. A tag is
+/// created before publication and survives one that never completed, so a tag
+/// list answers "what did someone intend" while this answers "what is there" —
+/// and the gap between those two is where `stado/0.10.0/darwin-arm64` sat at 0
+/// objects of 9 from April until it was found by accident.
+pub(crate) async fn published_release_coordinates(
+    product: &str,
+) -> Result<Vec<(String, String)>, CmdError> {
+    let prefix = format!("{product}/");
+    // Keys, whichever store answers. The authenticated list route when the
+    // object API is configured; the backend's own listing otherwise, so the
+    // audit still runs on a host holding its releases locally rather than
+    // reporting that it could not look.
+    let keys: Vec<String> = match RemoteObjectApi::configured()? {
+        Some(remote) => remote
+            .list("releases", &prefix)
+            .await?
+            .into_iter()
+            .filter_map(|entry| entry.get("key").and_then(Value::as_str).map(str::to_string))
+            .collect(),
+        None => {
+            let store = JobStorage::new().await?;
+            let namespaced = crate::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
+            store
+                .backend()
+                .list_blobs_with_meta(&namespaced)
+                .await?
+                .into_iter()
+                .filter_map(|blob| {
+                    crate::object_store::ObjectRef::from_storage_path(&blob.name)
+                        .ok()
+                        .map(|object| object.key().to_string())
+                })
+                .collect()
+        }
+    };
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    for key in keys {
+        let key = key.as_str();
+        // `<product>/<version>/<platform>/<name>`; anything shorter is not a
+        // coordinate and is skipped rather than guessed at.
+        let parts: Vec<&str> = key.split('/').collect();
+        if parts.len() < 4 || parts[0] != product {
+            continue;
+        }
+        seen.insert((parts[1].to_string(), parts[2].to_string()));
+    }
+    let mut coordinates: Vec<(String, String)> = seen.into_iter().collect();
+    coordinates.sort_by(|left, right| {
+        if left.0 == right.0 {
+            return left.1.cmp(&right.1);
+        }
+        // `version_newer(a, b)` is "b is newer than a", so this asks whether
+        // `left` is the newer version and puts it first.
+        if crate::release::version_newer(&right.0, &left.0) {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    });
+    Ok(coordinates)
+}
+
 pub(crate) async fn fetch_object_versioned(
     uri: &str,
 ) -> Result<Option<(Vec<u8>, String)>, CmdError> {

@@ -436,6 +436,7 @@ pub async fn run() -> Report {
         providers_check,
         quota_check,
         release_check,
+        integrity_check,
         template_check,
         identity_check,
         registry_check,
@@ -484,6 +485,12 @@ pub async fn run() -> Report {
             RELEASE_TITLE,
             RELEASE_REMEDY,
             check_release_channel()
+        ),
+        bounded(
+            INTEGRITY_ID,
+            INTEGRITY_TITLE,
+            INTEGRITY_REMEDY,
+            check_release_integrity()
         ),
         bounded(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
             check_agent_template().await
@@ -545,6 +552,7 @@ pub async fn run() -> Report {
             providers_check,
             quota_check,
             release_check,
+            integrity_check,
             template_check,
             identity_check,
             registry_check,
@@ -1193,6 +1201,126 @@ async fn check_quota(store: Option<&JobStorage>, store_error: &str) -> Check {
         findings.remedy(QUOTA_REMEDY);
     }
     findings.into_check(QUOTA_ID, QUOTA_TITLE, QUOTA_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Release channel integrity
+// ---------------------------------------------------------------------------
+
+const INTEGRITY_ID: &str = "release_integrity";
+const INTEGRITY_TITLE: &str = "Published release integrity";
+const INTEGRITY_REMEDY: &str = "a PARTIAL coordinate can never be completed: release objects are \
+     create-only, so publish a new version rather than re-running the train for that one. Run \
+     `stado host release --dry-run` against any version before promoting it";
+
+/// How many published versions back this walks. The channel holds every
+/// version ever released, and an audit that re-reads all of them on every
+/// `doctor` would be slow enough that someone turns it off.
+const INTEGRITY_VERSIONS: usize = 6;
+
+/// Walk what the channel actually holds and say, per version and platform,
+/// whether the coordinate is whole, empty, or partial.
+///
+/// This exists because the only thing that ever audited the channel was the
+/// act of publishing to it or delivering from it. `stado/0.10.0/darwin-arm64`
+/// was half-published in April and found by accident in August, while hunting
+/// something else; `stado/0.11.0/darwin-arm64` sat at 4 objects of 9 and
+/// `stado/0.12.1/linux-amd64` at 2 of 9 for the same reason.
+///
+/// PARTIAL is the only status this reports, and that is deliberate. A version
+/// that published nothing has no keys in the store, so it never appears in
+/// this walk — correctly, because an empty coordinate holds nothing to be
+/// inconsistent with and the same tag can still publish cleanly. A coordinate
+/// that does appear and is short is permanent: release objects are create-only
+/// and the missing bytes can never be added. That distinction between empty
+/// and partial is the whole lesson of the incident this check comes from.
+///
+/// Presence comes from [`crate::deploy::host_release::missing_release_objects`],
+/// which reads the coordinate's own `SHA256SUMS` and probes every name it
+/// declares through `storage stat`. No second checksum parser, no second
+/// binary list, and an unreachable store propagates as an error instead of
+/// being counted as an absent object.
+async fn check_release_integrity() -> Check {
+    let mut findings = Findings::default();
+    findings.remedy(INTEGRITY_REMEDY);
+
+    let product = match crate::deploy::products::product("stado") {
+        Ok(product) => product,
+        Err(error) => {
+            findings.note(Status::Fail, format!("stado is not declared: {error}"));
+            return findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY);
+        }
+    };
+    let coordinates = match crate::cli::storage::published_release_coordinates("stado").await {
+        Ok(coordinates) => coordinates,
+        Err(error) => {
+            findings.note(
+                Status::Warn,
+                format!("the release channel could not be listed, so nothing was audited: {error}"),
+            );
+            return findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY);
+        }
+    };
+    if coordinates.is_empty() {
+        findings.note(
+            Status::Warn,
+            "the release channel holds no published coordinate".to_string(),
+        );
+        return findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY);
+    }
+
+    let mut versions: Vec<String> = Vec::new();
+    for (version, _) in &coordinates {
+        if !versions.contains(version) {
+            versions.push(version.clone());
+        }
+    }
+    versions.truncate(INTEGRITY_VERSIONS);
+
+    let mut whole = 0usize;
+    let mut audited = 0usize;
+    for (version, platform) in &coordinates {
+        if !versions.contains(version) {
+            continue;
+        }
+        audited += 1;
+        match crate::deploy::host_release::missing_release_objects(product, version, platform).await
+        {
+            Ok(missing) if missing.is_empty() => whole += 1,
+            Ok(missing) => {
+                // Everything this walk can see is partial, and that is not a
+                // simplification. The coordinates come from the store's own
+                // listing, so a version that published nothing has no keys and
+                // never appears here at all — which is the right outcome,
+                // because an empty coordinate holds nothing to be inconsistent
+                // with and the same tag can still publish cleanly. A
+                // coordinate that appears and is short has bytes that can
+                // never be completed: release objects are create-only.
+                //
+                // `stado/0.11.0/darwin-arm64` is the shape being caught here —
+                // archive, manifest and SHA256SUMS present, five binaries
+                // absent, permanently.
+                findings.note(
+                    Status::Fail,
+                    format!(
+                        "{version}/{platform} is PARTIAL and permanently so; absent: {}",
+                        missing.join(", ")
+                    ),
+                );
+            }
+            Err(error) => findings.note(
+                Status::Warn,
+                format!("{version}/{platform} could not be audited: {error}"),
+            ),
+        }
+    }
+    if whole == audited {
+        findings.note(
+            Status::Pass,
+            format!("{whole} of {audited} recent published coordinates are whole"),
+        );
+    }
+    findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY)
 }
 
 // ---------------------------------------------------------------------------
