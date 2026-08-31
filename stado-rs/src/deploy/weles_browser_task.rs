@@ -99,6 +99,67 @@ pub fn parse_allowlist(body: &str) -> Vec<String> {
     actions
 }
 
+/// The env file a Weles worker sources on this fleet, and the only place its
+/// redeeming identity is written down.
+pub const WORKER_ENV_FILE: &str = "$HOME/.config/weles/worker.env";
+
+/// The env key naming the identity a Weles worker redeems capabilities as.
+pub const WORKLOAD_ID_KEY: &str = "SKARBIEC_WORKLOAD_ID";
+
+/// The last assignment of one key in a sourced env file.
+///
+/// Last wins, because a sourced file assigns top to bottom — the same rule
+/// [`parse_allowlist`] applies to its own key.
+pub fn last_assignment(body: &str, key: &str) -> Option<String> {
+    let mut found: Option<&str> = None;
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        let assignment = trimmed
+            .strip_prefix("export ")
+            .map_or(trimmed, str::trim_start);
+        if let Some(value) = assignment.strip_prefix(&format!("{key}=")) {
+            found = Some(value);
+        }
+    }
+    found
+        .map(super::service_env_file::effective_text)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// The identity to issue a sign-in capability to, read from the host.
+///
+/// Skarbiec authorises a redemption by the live vault token registering that
+/// workload's Ed25519 key, so a capability issued to any other name is denied
+/// no matter how correct its purpose and resource are. This is read from the
+/// worker's own env file rather than assumed: the Apple sign-in issues to
+/// `weles-worker`, charless-mac-mini's worker redeems as
+/// `weles-credential-worker-local`, and run 18e7cc47 failed with `capability
+/// denied` on exactly that mismatch after the route and the reference were
+/// both correct.
+pub async fn host_sign_in_agent(
+    target: &ComputeTarget,
+    env_file: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let fetched = service_file_fetch::fetch_file(target, env_file, runner).await?;
+    if !fetched.ok() {
+        return Err(DeployError(format!(
+            "{}: could not read {env_file} to learn which identity its worker redeems as: {}",
+            target.name, fetched.report.file_state
+        )));
+    }
+    let body = String::from_utf8_lossy(&fetched.content).into_owned();
+    last_assignment(&body, WORKLOAD_ID_KEY).ok_or_else(|| {
+        DeployError(format!(
+            "{} declares no {WORKLOAD_ID_KEY} in {env_file}, so no capability can be issued to \
+             the identity its worker redeems as",
+            target.name
+        ))
+    })
+}
+
 /// Read one host's action allowlist byte-exactly.
 pub async fn host_allowlist(
     target: &ComputeTarget,
@@ -155,13 +216,6 @@ pub fn ensure_allowed(host: &str, action: &str, allowlist: &[String]) -> Result<
     }
     Err(DeployError(said))
 }
-/// The workload identity a Weles worker redeems capabilities as.
-///
-/// Same agent the Apple sign-in already issues to
-/// ([`super::host_precheck_runner`]): the worker's Ed25519 key is registered
-/// under this name by a live vault token, and redemption is authorised by that
-/// key — never by naming an item here.
-pub const SIGN_IN_AGENT: &str = "weles-worker";
 
 /// The capability purpose a browser field fill redeems under.
 ///
@@ -447,6 +501,7 @@ pub async fn issue_sign_in_prefill(
     target: &ComputeTarget,
     origin: &str,
     item: &str,
+    agent: &str,
     runner: &Runner,
 ) -> Result<SignInPrefill, DeployError> {
     let broker = super::host_capability::resolve(target, &weles_api_broker_files(), runner).await?;
@@ -458,7 +513,7 @@ pub async fn issue_sign_in_prefill(
             target,
             &broker,
             &super::host_capability::Issuance {
-                agent: SIGN_IN_AGENT,
+                agent,
                 purpose: FILL_PURPOSE,
                 resource: &resource,
                 capability_target: CAPABILITY_TARGET,
