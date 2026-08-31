@@ -27,8 +27,6 @@ on:
 jobs:
   submit:
     runs-on: [self-hosted, stado-control-plane]
-    env:
-      CARGO_HOME: ${{ runner.temp }}/cargo-home-${{ github.run_id }}-${{ github.job }}
     concurrency:
       group: product-release-${{ inputs.repository }}-${{ inputs.channel }}
       cancel-in-progress: false
