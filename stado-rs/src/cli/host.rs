@@ -5810,6 +5810,9 @@ pub struct BrowserTaskRequest<'a> {
     pub allow_login: bool,
     pub sign_in_origin: Option<&'a str>,
     pub sign_in_item: Option<&'a str>,
+    /// Give the agent every capability rather than prefilling the first: see
+    /// the flag's own help for the runtime version this exists for.
+    pub defer_fills: bool,
     pub windowed: bool,
     pub json: bool,
 }
@@ -5832,6 +5835,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         allow_login,
         sign_in_origin,
         sign_in_item,
+        defer_fills,
         windowed,
         json,
     } = request;
@@ -5920,8 +5924,8 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     // Only now: a capability is single-use and expires, so it is issued after
     // the action has been shown to be one this host accepts, never before.
     // Issued ON that host, because redemption is a socket there.
-    let credential_prefill = match &sign_in {
-        None => Vec::new(),
+    let (credential_prefill, credential_deferred) = match &sign_in {
+        None => (Vec::new(), Vec::new()),
         Some((origin, item)) => {
             // The identity comes from the catalog this host's vault was
             // registered from, never from a constant here: Skarbiec looks a
@@ -5944,6 +5948,12 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                     prefill.agents.join(", "),
                     resolved.name
                 );
+                if !prefill.deferred.is_empty() {
+                    println!(
+                        "deferred:  {} field(s) handed over unspent, for the page that has them",
+                        prefill.deferred.len()
+                    );
+                }
                 if !prefill.unconfirmed.is_empty() {
                     println!(
                         "note:      this channel could not open {} to confirm the field; the \
@@ -5954,7 +5964,17 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                     );
                 }
             }
-            prefill.entries
+            if defer_fills {
+                // Nothing is prefilled: on a runtime that fills at load without
+                // waiting, a capability is spent whether or not the input has
+                // rendered, and a spent one cannot be retried. The agent acts
+                // after the page is up, so it can see the field it fills.
+                let mut all = prefill.entries;
+                all.extend(prefill.deferred);
+                (Vec::new(), all)
+            } else {
+                (prefill.entries, prefill.deferred)
+            }
         }
     };
 
@@ -5969,6 +5989,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         allow_login,
         headless: !windowed,
         credential_prefill,
+        credential_deferred,
     };
     let outcome = crate::deploy::weles_browser_task::submit(target, &task)
         .await

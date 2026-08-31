@@ -1909,6 +1909,14 @@ enum HostCommands {
         /// rather than silently resolved in the route's favour.
         #[arg(long)]
         sign_in_item: Option<String>,
+        /// Hand every sign-in capability to the agent instead of prefilling the
+        /// first one. For hosts whose installed runtime fills at page load
+        /// without waiting for the field: weles before 0.5.41 spends a
+        /// capability whether or not the input has rendered, so a slow
+        /// identifier page silently costs the fill and cannot be retried. The
+        /// agent redeems each reference on the page that has the field.
+        #[arg(long)]
+        defer_fills: bool,
         /// Run with a visible window. Some sign-in flows refuse headless.
         #[arg(long)]
         windowed: bool,
@@ -2700,6 +2708,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 allow_login,
                 sign_in_origin,
                 sign_in_item,
+                defer_fills,
                 windowed,
                 json,
             } => {
@@ -2715,6 +2724,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     allow_login,
                     sign_in_origin: sign_in_origin.as_deref(),
                     sign_in_item: sign_in_item.as_deref(),
+                    defer_fills,
                     windowed,
                     json,
                 })
