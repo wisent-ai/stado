@@ -115,6 +115,39 @@ impl Boundary {
         Boundary::Integration,
     ];
 
+    /// Which route requires this boundary. Every entry here was verified by
+    /// reading the `boundaries_available` call sites, and the list is in the
+    /// type so the next reader checks it instead of re-deriving it:
+    ///
+    /// - `Object` — `/api/object` PUT, `/api/object`, `/api/object/list`,
+    ///   `/api/object/stat`, and the two POST object routes.
+    /// - `Release` — the same object routes when the coordinate resolves to a
+    ///   release policy, because `authorize_release` reads that verifier's
+    ///   material. It required NO route until 2026-08-31: enumerated,
+    ///   labelled, described, validated once at startup, reported in
+    ///   `/healthz`, and consulted nowhere — so it read `false` until a
+    ///   restart and no request could reopen it, because
+    ///   `boundaries_available` revalidates only what a request requires.
+    /// - `Machine` — `/api/machine/status`, `/api/machine/submit`,
+    ///   `/api/machine/cancel`.
+    /// - `Service` — `/api/service/status`, `/api/service/restart`.
+    /// - `RateLimitVerifier` and `RateLimitState` — `/api/rate-limit/consume`.
+    /// - `Integration` — the integration route group.
+    ///
+    /// A boundary that answers this question with "nothing" must not be
+    /// reported: an operator reading `/healthz` has to be able to conclude
+    /// something true from every field in it.
+    fn required_by(self) -> &'static str {
+        match self {
+            Boundary::Object => "/api/object, /api/object/list, /api/object/stat",
+            Boundary::Release => "the object routes for a release coordinate",
+            Boundary::Machine => "/api/machine/status, /api/machine/submit, /api/machine/cancel",
+            Boundary::Service => "/api/service/status, /api/service/restart",
+            Boundary::RateLimitVerifier | Boundary::RateLimitState => "/api/rate-limit/consume",
+            Boundary::Integration => "the integration routes",
+        }
+    }
+
     /// The key this boundary carries in `/healthz`.
     /// Unchanged from the flat booleans `/healthz` has always served.
     fn key(self) -> &'static str {
@@ -206,6 +239,30 @@ enum Recheck {
     CoolingDown,
 }
 
+/// Path of the live boundary-budget override, relative to `$HOME`.
+///
+/// Owner-controlled state beside `skarbiec.vault.json` and the token files this
+/// unit already reads out of `$HOME/.stado`. Its absence is the normal state.
+pub const BOUNDARY_TIMEOUT_OVERRIDE_PATH: &str = ".stado/dashboard-boundary-timeout-seconds";
+
+/// The override's current value, or nothing.
+///
+/// Read on every validation attempt on purpose: a budget that can only be
+/// changed by restarting the process is not an override for a stalled process.
+/// A missing file, an unreadable one, a non-numeric body and a zero all read as
+/// "no override", so a typo cannot disable the boundary by setting the budget
+/// to nothing.
+fn file_override_seconds() -> Option<u64> {
+    let home = std::env::var_os("HOME")?;
+    let path = std::path::Path::new(&home).join(BOUNDARY_TIMEOUT_OVERRIDE_PATH);
+    std::fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
 /// How long one boundary validation attempt may run, at startup and on an
 /// inline recheck alike.
 ///
@@ -215,6 +272,26 @@ enum Recheck {
 /// answered 503 to the entire fleet until someone restarted it -- a cold
 /// agent is a slow start, not a broken grant.
 fn boundary_timeout(boundary: Boundary) -> Duration {
+    // The override a stalled unit can actually be given, read at validation
+    // time from a file rather than from the environment.
+    //
+    // `WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS` below is honoured for a process
+    // that was launched with it, and it stays. What it cannot do is help in the
+    // situation it exists for: a boundary stalling in a RUNNING process. Rust
+    // reads env at exec, so the only way to apply it was to restart the very
+    // service whose stall was the problem — and on 2026-08-31 that service was
+    // the object store a release was publishing through, and its boundaries
+    // then recovered by themselves while a restart would have bought a fresh
+    // cold gpg-agent and destroyed the evidence. An escape hatch that requires
+    // restarting the thing it is escaping is decorative.
+    //
+    // A file is re-read on every attempt, so an operator raises the budget with
+    // one `echo` and lowers it by deleting the file, with nothing cycled. It is
+    // owner-controlled state beside the vault and the token files this unit
+    // already reads from `$HOME/.stado`.
+    if let Some(configured) = file_override_seconds() {
+        return Duration::from_secs(configured);
+    }
     if let Some(configured) = std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
@@ -621,8 +698,9 @@ impl Dashboard {
             Recheck::Claimed => {}
         }
         eprintln!(
-            "[dashboard] {} boundary is closed; revalidating inline",
-            boundary.label()
+            "[dashboard] {} boundary is closed; revalidating inline (required by {})",
+            boundary.label(),
+            boundary.required_by()
         );
         let outcome = self.validate_boundary(boundary).await;
         match &outcome {
@@ -870,8 +948,34 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return Some(response),
         };
+        // A release coordinate authorizes against the RELEASE verifier's
+        // material (`authorize_release` reads `release_token` for the mapped
+        // item), so that boundary is this request's precondition just as much
+        // as the object one. Requiring it here is what makes
+        // `Boundary::Release` mean something: it was enumerated, labelled,
+        // described as "release publication", validated once at startup and
+        // required by NO route, so it read `false` until someone restarted the
+        // unit and no request could ever reopen it — `boundaries_available`
+        // revalidates only what a request requires. On 2026-08-31 an operator
+        // read that field, believed its description, and held the quietest
+        // publication window of the night waiting for a value with no
+        // mechanism to change.
+        //
+        // Ordinary object traffic is deliberately unaffected: only a
+        // release-policy coordinate adds the requirement, because only it
+        // reads that material.
+        let required: &[Boundary] = if crate::object_store::release_policy_key(
+            object.namespace(),
+            object.key(),
+        )
+        .is_some()
+        {
+            &[Boundary::Object, Boundary::Release]
+        } else {
+            &[Boundary::Object]
+        };
         if requires_object_boundary(object.namespace(), object.key())
-            && !self.boundaries_available(&[Boundary::Object]).await
+            && !self.boundaries_available(required).await
         {
             return Some(send_json(
                 http_status("503"),
@@ -982,8 +1086,18 @@ impl Dashboard {
                 Ok(scope) => scope,
                 Err(response) => return response,
             };
+            // Same rule as the writer above: a release coordinate is
+            // authorized against the release verifier's material, so that
+            // boundary is its precondition and a request against it is what
+            // gives the boundary a way to reopen.
+            let required: &[Boundary] =
+                if crate::object_store::release_policy_key(&namespace, &key_or_prefix).is_some() {
+                    &[Boundary::Object, Boundary::Release]
+                } else {
+                    &[Boundary::Object]
+                };
             if requires_object_boundary(&namespace, &key_or_prefix)
-                && !self.boundaries_available(&[Boundary::Object]).await
+                && !self.boundaries_available(required).await
             {
                 return send_json(
                     http_status("503"),
