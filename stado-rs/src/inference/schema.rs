@@ -102,6 +102,10 @@ fn safe_reference(value: &str, extra: &str) -> bool {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || "._-".contains(ch) || extra.contains(ch))
 }
+pub fn gateway_selector(value: &str) -> bool {
+    value == "best"
+}
+
 fn tailscale_ipv4(value: &str) -> bool {
     let Ok(address) = value.parse::<std::net::Ipv4Addr>() else {
         return false;
@@ -363,7 +367,10 @@ pub fn validate(document: &Value) -> Result<(), String> {
                     .to_string(),
             );
         }
-        if !destination.contains('/') && !running_names.contains(destination.as_str()) {
+        if !destination.contains('/')
+            && !gateway_selector(destination)
+            && !running_names.contains(destination.as_str())
+        {
             return Err(format!(
                 "registry.inference.routes.{alias}: deployment '{destination}' is not running"
             ));
@@ -380,7 +387,10 @@ pub fn validate(document: &Value) -> Result<(), String> {
                     "registry.inference.fallbacks.{alias}: destinations must be non-empty"
                 ));
             }
-            if !destination.contains('/') && !running_names.contains(destination.as_str()) {
+            if !destination.contains('/')
+                && !gateway_selector(destination)
+                && !running_names.contains(destination.as_str())
+            {
                 return Err(format!(
                     "registry.inference.fallbacks.{alias}: deployment '{destination}' is not running"
                 ));

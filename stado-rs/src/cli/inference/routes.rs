@@ -21,6 +21,9 @@ async fn destination_ready(
     registry: &schema::Registry,
     destination: &str,
 ) -> Result<bool, CmdError> {
+    if schema::gateway_selector(destination) {
+        return Ok(true);
+    }
     let Some(deployment) = deployment(registry, destination) else {
         if destination.split_once('/').is_none() {
             return Err(CmdError::click(format!(
