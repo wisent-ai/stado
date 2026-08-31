@@ -2364,18 +2364,24 @@ async fn wait_for_service_readiness(
     }
 }
 
+/// Relink the previous release and bring the unit back.
+///
+/// Takes the release's own [`ServiceReleaseOptions`] rather than restating
+/// three of its fields: the sole caller already holds it, and the file
+/// carries the same shape for `secret-sync`, `file-sync` and `file-fetch`.
+/// Eight loose parameters also put the release quality gate over
+/// `clippy::too_many_arguments`, which is denied there, so no product release
+/// could be submitted.
 async fn rollback_service_release(
-    name: &str,
-    host: &str,
+    options: &ServiceReleaseOptions<'_>,
     previous: &str,
     target: &targets::ComputeTarget,
     declared: &ManagedService,
     sudo_password: Option<&str>,
-    reload_unit: bool,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
-    update(name, host, None, None, Some(previous), false).await?;
-    let report = if reload_unit {
+    update(options.name, options.host, None, None, Some(previous), false).await?;
+    let report = if options.reload_unit {
         service::reload_service_with_password(target, declared, sudo_password, runner).await
     } else {
         service::restart_service_with_password(target, declared, sudo_password, runner).await
@@ -2521,13 +2527,11 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     };
     if let Err(error) = activation {
         let rollback = rollback_service_release(
-            options.name,
-            options.host,
+            &options,
             &previous_directory,
             &target,
             declared,
             sudo_password.as_deref(),
-            options.reload_unit,
             &runner,
         )
         .await;
