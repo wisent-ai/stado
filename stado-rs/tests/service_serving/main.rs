@@ -111,22 +111,6 @@ impl Fleet {
         std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
     }
 
-    /// Write the env file whose effective assignments declare a port.
-    fn env_file(&self, body: &str) -> PathBuf {
-        let directory = self.home.path().join(".config/weles");
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("worker.env");
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(body.as_bytes()).unwrap();
-        drop(file);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        path
-    }
-
     fn stado(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(args)
