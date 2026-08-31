@@ -280,6 +280,24 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
             &format!("unknown cleaners {}", py_list_repr(&unknown)),
         ));
     }
+    // An armed policy with no cleaner is a declaration that cannot act. It
+    // passes every other check here: the mode is legal, the thresholds are
+    // legal, the cleaner map is a legal empty object — and the janitor then
+    // reports a healthy no-op on any disk, because there is nothing enabled
+    // to find anything. `lukasz-macbook` carried `cleaners: {}` while it
+    // filled to 1.8 GiB free of 1.8 TiB, and arming that policy would have
+    // changed nothing at all.
+    //
+    // `off` and `report` may legitimately name no cleaner: neither deletes,
+    // and both still measure free space and pressure. `enforce` claims it
+    // will act, so it has to name something it can act with.
+    if map["mode"].as_str() == Some("enforce") && cleaners.is_empty() {
+        return Err(verr(
+            &cleaners_location,
+            "must name at least one cleaner when mode is 'enforce'; an armed \
+             policy with no cleaner reports a healthy no-op on a full disk",
+        ));
+    }
     for (name, cleaner) in cleaners {
         let cleaner_location = format!("{cleaners_location}.{name}");
         let cleaner = cleaner
@@ -1074,6 +1092,57 @@ pub struct DiskCleanupPolicy {
     pub max_items_per_pass: i64,
     pub max_scan_items: i64,
     pub cleaners: BTreeMap<String, DiskCleanerPolicy>,
+}
+
+impl DiskCleanupPolicy {
+    /// What a `local` target that declares no `disk_cleanup` is measured
+    /// against.
+    ///
+    /// Before this existed, an undeclared host was not a host with a lenient
+    /// policy — it was a host the janitor refused to look at, because
+    /// `resolve_canonical_policy` treated a missing declaration as a lookup
+    /// failure. `lukasz-macbook` builds and publishes everything this fleet
+    /// ships and declared nothing, so nothing watched it: it reached 1.8 GiB
+    /// free of 1.8 TiB carrying ~305 GB of cargo target trees, builds started
+    /// dying with `No space left on device`, the CI runner could not write its
+    /// own `_diag` pages, and the first anyone knew was four dead release
+    /// trains later. The registry's silence was read as "nothing to do" rather
+    /// than "nobody has said".
+    ///
+    /// `report`, deliberately, and this is the whole judgement in this
+    /// function. A default that deleted would delete on hosts whose operator
+    /// never asked for a janitor, which is a worse failure than the one it
+    /// prevents. `report` performs the identical scan and counts every
+    /// eligible item without unlinking one, so an undeclared host becomes
+    /// VISIBLE — free space, pressure, and how much reclaimable cache it is
+    /// sitting on — and arming it stays an explicit registry declaration.
+    ///
+    /// `build_caches` is the cleaner named here because it is the one that
+    /// answers for this failure: it evicts only directories carrying a
+    /// `CACHEDIR.TAG` written by the build tool itself, which is what cargo
+    /// writes into every `target/`. Nothing else needs to be guessed at.
+    pub fn reporting_default() -> Self {
+        let mut cleaners = BTreeMap::new();
+        cleaners.insert(
+            "build_caches".to_string(),
+            DiskCleanerPolicy {
+                // A cache younger than a day may belong to a build in flight.
+                min_age_seconds: 86_400,
+                allow_missing_upload_proof: false,
+                root: None,
+            },
+        );
+        Self {
+            mode: "report".to_string(),
+            check_interval_seconds: 3_600,
+            low_free_gb: 100,
+            target_free_gb: 200,
+            max_bytes_per_pass: 64 * 1024_i64.pow(3),
+            max_items_per_pass: 512,
+            max_scan_items: 200_000,
+            cleaners,
+        }
+    }
 }
 
 /// One routable box. Unknown registry keys land in
