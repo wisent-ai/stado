@@ -4,13 +4,16 @@
 set -eu
 
 health_url="${SKARBIEC_READY_URL:-http://127.0.0.1:8895/readyz}"
-health=$(/usr/bin/curl --silent --show-error --max-time 70 "$health_url" || true)
-case "$health" in
-  *'"ok":true'*)
+set +e
+health=$(/usr/bin/curl --silent --show-error --connect-timeout 2 --max-time 70 "$health_url")
+health_status=$?
+set -e
+case "$health_status:$health" in
+  0:*'"ok":true'*)
     printf '%s\n' 'skarbiec cryptographic path is healthy; no recovery needed'
     exit 0
     ;;
-  *'gpg'*'timed out'*|*'GPG'*'timed out'*|*'keybox'*'lock'*) ;;
+  28:*|0:*'gpg'*'timed out'*|0:*'GPG'*'timed out'*|0:*'keybox'*'lock'*) ;;
   *)
     printf '%s\n' 'refusing recovery: Skarbiec did not report a GPG timeout or keybox lock' >&2
     exit 1
@@ -62,7 +65,7 @@ done
 "$gpgconf" --launch gpg-agent
 
 attempt=0
-while [ "$attempt" -lt 3 ]; do
+while [ "$attempt" -lt 2 ]; do
   health=$(/usr/bin/curl --silent --show-error --max-time 70 "$health_url" || true)
   case "$health" in
     *'"ok":true'*)
