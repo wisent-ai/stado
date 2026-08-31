@@ -31,8 +31,7 @@ use crate::deploy::service;
 use crate::monitor::host_health;
 use crate::queue::{capacity, JobStorage};
 use crate::targets::{
-    self, bundled_registry_path, validate_registry, validate_registry_file, ComputeTarget,
-    Registry, RegistryStore,
+    self, bundled_registry_path, validate_registry_file, ComputeTarget, Registry, RegistryStore,
 };
 
 use super::table;
@@ -196,8 +195,10 @@ async fn upload_payload(payload: &str, allow_removals: bool) -> Result<(String, 
 
 pub async fn push(path: Option<String>, force: bool) -> Result<(), CmdError> {
     let source = source_path(path);
-    validate_registry_file(&source).map_err(|exc| CmdError::click(exc.to_string()))?;
     let payload = std::fs::read_to_string(&source)?;
+    let document: Value = serde_json::from_str(&payload)
+        .map_err(|exc| CmdError::click(format!("{}: {exc}", source.display())))?;
+    warn_scoped_validation(validate_for_write(&document).await?);
     let (generation, previous_generation) = upload_payload(&payload, force).await?;
     println!(
         "pushed {} -> {} generation={generation} replaced={previous_generation}",
@@ -215,16 +216,50 @@ pub async fn push(path: Option<String>, force: bool) -> Result<(), CmdError> {
 /// [`host_add`] both land here. Validation runs BEFORE any store call, so
 /// a document that would not validate never reaches the registry.
 pub async fn push_document(document: &Value) -> Result<String, CmdError> {
-    validate_registry(document).map_err(|exc| CmdError::click(exc.to_string()))?;
+    warn_scoped_validation(validate_for_write(document).await?);
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
     let (generation, _) = upload_payload(&payload, false).await?;
     Ok(generation)
 }
+
+/// Validate a candidate against the document it would replace.
+///
+/// An `inference` fault that this write does not touch is returned rather than
+/// raised: see [`crate::targets::validate_registry_for_write`]. Reading the
+/// current document is best-effort, because a store that cannot be read is
+/// reported by the write itself a moment later, and failing here would just
+/// move the same error earlier with a less useful sentence.
+async fn validate_for_write(document: &Value) -> Result<Option<String>, CmdError> {
+    let current = match RegistryStore::open().await {
+        Ok(store) => store
+            .read_versioned()
+            .await
+            .ok()
+            .flatten()
+            .and_then(|blob| serde_json::from_str::<Value>(&blob.content).ok()),
+        Err(_) => None,
+    };
+    crate::targets::validate_registry_for_write(document, current.as_ref())
+        .map_err(|exc| CmdError::click(exc.to_string()))
+}
+
+/// Say out loud that a pre-existing fault was carried past, so a scoped write
+/// never looks like a clean one.
+fn warn_scoped_validation(pre_existing: Option<String>) {
+    if let Some(detail) = pre_existing {
+        eprintln!(
+            "[registry] proceeding: this write leaves `inference` byte-identical, but that \
+             section is already invalid and every write touching it will be refused until it \
+             is repaired: {detail}"
+        );
+    }
+}
+
 pub async fn push_document_if(
     document: &Value,
     expected_generation: &str,
 ) -> Result<String, CmdError> {
-    validate_registry(document).map_err(|exc| CmdError::click(exc.to_string()))?;
+    warn_scoped_validation(validate_for_write(document).await?);
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
     let store = RegistryStore::open().await?;
     let generation = store
