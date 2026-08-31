@@ -6,11 +6,31 @@ on:
       - "stado-v*"
 
 concurrency:
-  # A newer canonical tag supersedes every older release train, including one
-  # already waiting for the control-plane runner. Publication is create-only and
-  # every write below is followed by immutable read-back, so a cancelled attempt
-  # can be resumed safely by its successor without mutating published bytes.
-  group: wisent-compute-release-train
+  # Per TAG, not one group for every release. Two attempts at the SAME version
+  # should supersede each other -- a re-run of `stado-v1.2.3` replaces its own
+  # predecessor, which is what `cancel-in-progress` is for here. Two DIFFERENT
+  # versions have nothing to supersede: each publishes to its own immutable
+  # coordinate, and `stado/0.13.7/...` shares not one object with
+  # `stado/0.13.8/...`.
+  #
+  # The old shared group made a newer tag cancel an older tag's train, and the
+  # comment that justified it was wrong on its own terms: it said a cancelled
+  # attempt "can be resumed safely by its successor", but the successor is a
+  # DIFFERENT VERSION publishing elsewhere, so it resumes nothing. Create-only
+  # puts mean a cancelled train leaves an empty or partial coordinate that no
+  # later attempt can ever complete, because the objects are immutable.
+  #
+  # It cost eight version numbers on 2026-08-30. Tags arrived every 2-4 minutes
+  # while a train needs ~30 (about 6 to build, then an 80 MB archive per
+  # platform at roughly half a megabyte a second), so no train ever reached its
+  # publish step and 0.13.2/darwin-arm64 was left permanently at 1 object of 9.
+  #
+  # This is #172's argument one level up: independent immutable coordinates are
+  # independent work, and the pipeline must stop letting one destroy another.
+  # It also needs nobody else's agreement. A run's concurrency group is read
+  # from the workflow file in its own tree, so the moment a tag carries this,
+  # that train is in a group of one and no other tag can cancel it.
+  group: wisent-compute-release-train-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
