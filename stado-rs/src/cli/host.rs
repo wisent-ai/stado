@@ -5580,6 +5580,8 @@ pub struct BrowserTaskRequest<'a> {
     pub action: &'a str,
     pub env_file: &'a str,
     pub allow_login: bool,
+    pub sign_in_origin: Option<&'a str>,
+    pub sign_in_item: Option<&'a str>,
     pub windowed: bool,
     pub json: bool,
 }
@@ -5598,9 +5600,38 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         action,
         env_file,
         allow_login,
+        sign_in_origin,
+        sign_in_item,
         windowed,
         json,
     } = request;
+    // Both halves or neither, and only where the run says it may sign in.
+    // Checked before the host is resolved: a flag combination that cannot work
+    // should cost nothing.
+    let sign_in = match (sign_in_origin, sign_in_item) {
+        (None, None) => None,
+        (Some(_), None) => {
+            return Err(CmdError::usage(
+                "--sign-in-origin needs --sign-in-item: the vault item holding the account",
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(CmdError::usage(
+                "--sign-in-item needs --sign-in-origin: the page origin whose fields are filled",
+            ))
+        }
+        (Some(origin), Some(item)) => {
+            if !allow_login {
+                return Err(CmdError::usage(
+                    "--sign-in-origin requires --allow-login: a prefilled credential is a sign-in, \
+                     and the run's own instructions would otherwise tell the agent not to",
+                ));
+            }
+            let origin = crate::deploy::weles_browser_task::exact_origin(origin)
+                .map_err(|error| CmdError::usage(error.to_string()))?;
+            Some((origin, item))
+        }
+    };
     let parsed = url::Url::parse(url)
         .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.username() != "" {
@@ -5635,6 +5666,21 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
         .map_err(|error| CmdError::click(error.to_string()))?;
 
+    // Only now: a capability is single-use and expires, so it is minted after
+    // the action has been shown to be one this host accepts, never before.
+    let credential_prefill = match &sign_in {
+        None => Vec::new(),
+        Some((origin, item)) => {
+            let entries = crate::deploy::weles_browser_task::issue_sign_in_prefill(origin, item)
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            if !json {
+                println!("sign-in:   {origin} as the account in {item}");
+                println!("prefill:   {} field(s), single-use", entries.len());
+            }
+            entries
+        }
+    };
+
     let task = crate::deploy::weles_browser_task::BrowserTask {
         action,
         url: parsed.as_str(),
@@ -5642,6 +5688,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         session_label,
         allow_login,
         headless: !windowed,
+        credential_prefill,
     };
     let outcome = crate::deploy::weles_browser_task::submit(target, &task)
         .await

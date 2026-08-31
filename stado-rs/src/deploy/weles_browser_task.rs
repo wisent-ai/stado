@@ -137,6 +137,259 @@ pub fn ensure_allowed(host: &str, action: &str, allowlist: &[String]) -> Result<
     }
     Err(DeployError(said))
 }
+/// The workload identity a Weles worker redeems capabilities as.
+///
+/// Same agent the Apple sign-in already issues to
+/// ([`super::host_precheck_runner`]): the worker's Ed25519 key is registered
+/// under this name by a live vault token, and redemption is authorised by that
+/// key — never by naming an item here.
+pub const SIGN_IN_AGENT: &str = "weles-worker";
+
+/// The capability purpose a browser field fill redeems under.
+///
+/// Weles derives the expectation itself as
+/// `{ purpose: 'weles.browser.fill', resource: "origin:<page origin>/<field
+/// class>" }` and refuses anything else before it redeems, so these two
+/// constants are not a convention this module chose — they are the worker's.
+pub const FILL_PURPOSE: &str = "weles.browser.fill";
+
+/// The capability target Weles requires on a reference it will redeem.
+pub const CAPABILITY_TARGET: &str = "weles";
+
+/// Skarbiec's own maximum, and what the Apple sign-in asks for. A browser run
+/// is held open for its whole duration, so a shorter window would expire
+/// mid-flow; single use is what makes the exposure one fill.
+pub const SIGN_IN_TTL_SECONDS: &str = "3600";
+pub const SIGN_IN_MAX_USES: &str = "1";
+
+/// The pair a form sign-in needs: the fill target handed to Weles, and the
+/// field class that target must agree with.
+///
+/// The targets are not decoration. Weles refuses a fill whose target does not
+/// match the field class's own hint — `/email|e-mail/` and
+/// `/password|passcode|secret/` — before redeeming, so a pair that disagreed
+/// would burn a one-shot capability on `credential field class mismatch`.
+pub const SIGN_IN_FIELDS: [(&str, &str); 2] = [("email", "email"), ("password", "password")];
+
+/// One page origin, in the exact form Weles compares against.
+///
+/// Weles builds its expectation from `new URL(page.url()).origin`, so anything
+/// carrying a path, a query, a fragment or userinfo could never match and would
+/// be spent finding that out. The HTTP(S) sentence is the worker's own.
+pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
+    let parsed = url::Url::parse(raw)
+        .map_err(|error| DeployError(format!("--sign-in-origin is not a URL: {error}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(DeployError(
+            "credential fill requires an HTTP(S) origin".to_string(),
+        ));
+    }
+    if parsed.username() != "" || parsed.password().is_some() {
+        return Err(DeployError(
+            "--sign-in-origin must not carry embedded credentials".to_string(),
+        ));
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(DeployError(
+            "credential fill requires an HTTP(S) origin".to_string(),
+        ));
+    }
+    if !matches!(parsed.path(), "" | "/") || parsed.query().is_some() || parsed.fragment().is_some()
+    {
+        return Err(DeployError(format!(
+            "--sign-in-origin must be a bare origin such as https://accounts.google.com, \
+             with no path, query or fragment: {raw}"
+        )));
+    }
+    Ok(parsed.origin().ascii_serialization())
+}
+
+/// The resource string for one field class on one origin.
+pub fn fill_resource(origin: &str, field_class: &str) -> String {
+    format!("origin:{origin}/{field_class}")
+}
+
+/// Which vault item the broker would actually hand this resource to.
+///
+/// The caller names the item it believes holds the account; the route table
+/// decides which item is really read. Those two disagreeing is the failure
+/// Skarbiec's own route table was built for — a route pointing somewhere the
+/// operator did not mean is indistinguishable from a working one until a login
+/// needs it. So the claim is checked before a capability exists.
+pub fn routed_item(routes: &Value, resource: &str) -> Result<(String, String), DeployError> {
+    let rows = routes
+        .get("routes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("skarbiec routes list returned no routes".to_string()))?;
+    let row = rows
+        .iter()
+        .find(|row| row.get("resource").and_then(Value::as_str) == Some(resource))
+        .ok_or_else(|| {
+            DeployError(format!(
+                "no capability route maps {resource} to a vault field"
+            ))
+        })?;
+    let item = row
+        .get("item")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let field = row
+        .get("field")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if item.is_empty() || field.is_empty() {
+        return Err(DeployError(format!(
+            "capability route for {resource} must name an item and a field"
+        )));
+    }
+    if !row
+        .get("item_present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(DeployError(format!(
+            "{resource} routes to vault item {item}, which this host cannot read"
+        )));
+    }
+    if !row
+        .get("field_present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(DeployError(format!(
+            "{resource} routes to vault item {item} field {field}, which that item does not carry"
+        )));
+    }
+    Ok((item, field))
+}
+
+/// One `constraints.credential_prefill[]` entry, in the shape the trajectory
+/// destructures: a target, a field class, and a capability REFERENCE. No
+/// secret is here, and none can be: the worker redeems the reference against
+/// its own broker and zeroes the plaintext when the fill returns.
+pub fn prefill_entry(
+    target: &str,
+    field_class: &str,
+    capability_id: &str,
+    resource: &str,
+    authorization_id: &str,
+) -> Value {
+    json!({
+        "target": target,
+        "field_class": field_class,
+        "capability": {
+            "capability_id": capability_id,
+            "purpose": FILL_PURPOSE,
+            "resource": resource,
+            "target": CAPABILITY_TARGET,
+            "authorization_id": authorization_id,
+        },
+    })
+}
+
+/// Run one `skarbiec` subcommand and read its JSON answer.
+///
+/// Nothing secret is in `argv` on either side of this: issuing names a
+/// resource, and the answer is a capability id. Skarbiec's own sentence is
+/// carried through verbatim rather than restated, because it is the surface
+/// that knows why — "no capability route maps ... to a vault field" is a
+/// remedy, and "capability issuance failed" is not.
+fn skarbiec(args: &[&str]) -> Result<Value, DeployError> {
+    let output = std::process::Command::new("skarbiec")
+        .args(args)
+        .output()
+        .map_err(|error| {
+            DeployError(format!(
+                "cannot run `skarbiec {}`: {error}; the capability broker's CLI must be on PATH \
+                 to mint a sign-in capability",
+                args.join(" ")
+            ))
+        })?;
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.trim();
+        return Err(DeployError(format!(
+            "`skarbiec {}` failed: {}",
+            args.join(" "),
+            if said.is_empty() {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            } else {
+                said.to_string()
+            }
+        )));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        DeployError(format!(
+            "`skarbiec {}` did not answer with JSON: {error}",
+            args.join(" ")
+        ))
+    })
+}
+
+/// Confirm the caller's item is the one both resources really resolve to.
+pub fn confirm_routed_item(origin: &str, item: &str) -> Result<(), DeployError> {
+    let routes = skarbiec(&["routes", "list"])?;
+    for (_, field_class) in SIGN_IN_FIELDS {
+        let resource = fill_resource(origin, field_class);
+        let (routed, field) = routed_item(&routes, &resource)?;
+        if routed != item {
+            return Err(DeployError(format!(
+                "{resource} routes to vault item {routed} field {field}, not to {item}; \
+                 the item that would be read is the one the route names"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Mint the pair and return the prefill entries that carry them.
+///
+/// Issued only after the action has been shown to be one the host accepts:
+/// a capability is single-use and expires, so minting for a job that was about
+/// to be refused would spend it on nothing.
+pub fn issue_sign_in_prefill(origin: &str, item: &str) -> Result<Vec<Value>, DeployError> {
+    confirm_routed_item(origin, item)?;
+    let authorization_id = uuid::Uuid::new_v4().to_string();
+    let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
+    for (target, field_class) in SIGN_IN_FIELDS {
+        let resource = fill_resource(origin, field_class);
+        let issued = skarbiec(&[
+            "capability-issue",
+            "--agent",
+            SIGN_IN_AGENT,
+            "--purpose",
+            FILL_PURPOSE,
+            "--resource",
+            &resource,
+            "--target",
+            CAPABILITY_TARGET,
+            "--ttl",
+            SIGN_IN_TTL_SECONDS,
+            "--max-uses",
+            SIGN_IN_MAX_USES,
+            "--authorization-id",
+            &authorization_id,
+        ])?;
+        let capability_id = issued
+            .get("capability_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "skarbiec issued no capability id for {resource}, so nothing could be redeemed"
+                ))
+            })?;
+        entries.push(prefill_entry(
+            target,
+            field_class,
+            capability_id,
+            &resource,
+            &authorization_id,
+        ));
+    }
+    Ok(entries)
+}
 
 /// What one browser task asks Weles to do.
 pub struct BrowserTask<'a> {
@@ -149,20 +402,41 @@ pub struct BrowserTask<'a> {
     /// A stable label for the browser session, so a resumed flow reuses one
     /// profile instead of starting anonymous every time.
     pub session_label: &'a str,
-    /// Whether the run may sign in. `false` sends the same read-only,
-    /// no-login, no-mutation constraints `host weles-image-inspect` fixes;
-    /// `true` is for the flows whose whole purpose is authentication, and it
-    /// is the caller's explicit decision rather than a default.
+    /// Whether the run's instructions permit signing in.
+    ///
+    /// This is a HINT, not a gate: Weles appends the constraints to the
+    /// model's goal text and enforces none of them — `read_only`, `no_login`
+    /// and `no_mutation` appear nowhere else in that product, and the agent
+    /// holds fill, click, navigate and store_credential either way. The one
+    /// mechanical consequence is here: a vault-backed prefill is refused
+    /// unless the caller has said the run may sign in, because handing an
+    /// agent credentials while instructing it not to log in is two orders.
     pub allow_login: bool,
     /// Run without a visible window.
     pub headless: bool,
+    /// Vault-backed field prefills, each a capability REFERENCE the worker
+    /// redeems locally. Empty for a run that carries no sign-in.
+    pub credential_prefill: Vec<Value>,
 }
 
 impl BrowserTask<'_> {
     /// The parameter object, in the exact shape
     /// `host weles-image-inspect` already sends for this action — so the two
     /// callers of `generic_browser_task` cannot disagree about its schema.
+    ///
+    /// `credential_prefill` is added only when there is one, so a run without
+    /// a sign-in puts exactly the bytes on the wire it always did.
     pub fn params(&self) -> Value {
+        let mut constraints = Map::new();
+        constraints.insert("read_only".to_string(), json!(!self.allow_login));
+        constraints.insert("no_login".to_string(), json!(!self.allow_login));
+        constraints.insert("no_mutation".to_string(), json!(!self.allow_login));
+        if !self.credential_prefill.is_empty() {
+            constraints.insert(
+                "credential_prefill".to_string(),
+                Value::Array(self.credential_prefill.clone()),
+            );
+        }
         json!({
             "url": self.url,
             "objective": self.objective,
@@ -170,11 +444,7 @@ impl BrowserTask<'_> {
             "session_label": self.session_label,
             "proxy": "none",
             "headless": self.headless,
-            "constraints": {
-                "read_only": !self.allow_login,
-                "no_login": !self.allow_login,
-                "no_mutation": !self.allow_login,
-            },
+            "constraints": Value::Object(constraints),
         })
     }
 }
@@ -289,6 +559,7 @@ mod tests {
             session_label: "oko-calendar",
             allow_login: false,
             headless: true,
+            credential_prefill: Vec::new(),
         };
         let params = task.params();
         assert_eq!(params["constraints"]["no_login"], json!(true));
@@ -307,5 +578,204 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("oko-calendar"));
+    }
+
+    /// A run without a sign-in must put exactly the bytes on the wire it put
+    /// there before this feature existed: no empty `credential_prefill` key
+    /// for the trajectory to iterate.
+    #[test]
+    fn a_run_without_a_sign_in_carries_no_prefill_key_at_all() {
+        let task = BrowserTask {
+            action: DEFAULT_ACTION,
+            url: "https://example.com/",
+            objective: "count the images",
+            session_label: "plain",
+            allow_login: false,
+            headless: true,
+            credential_prefill: Vec::new(),
+        };
+        let params = task.params();
+        assert!(
+            params["constraints"].get("credential_prefill").is_none(),
+            "{params}"
+        );
+        assert_eq!(
+            params["constraints"].as_object().unwrap().len(),
+            3,
+            "{params}"
+        );
+    }
+
+    /// The exact JSON a prefill run submits. Every field here is one the
+    /// trajectory destructures or the worker validates:
+    /// `generic/browser_task.mjs` reads target/field_class/capability, and
+    /// `wsFillCredential` requires purpose `weles.browser.fill` with resource
+    /// `origin:<page origin>/<field class>` and target `weles`.
+    #[test]
+    fn a_prefill_run_puts_capability_references_on_the_wire_and_no_secret() {
+        let origin = exact_origin("https://accounts.google.com").unwrap();
+        let authorization_id = "6f1f1f2e-0000-4000-8000-abcdefabcdef";
+        let prefill: Vec<Value> = SIGN_IN_FIELDS
+            .iter()
+            .enumerate()
+            .map(|(index, (target, field_class))| {
+                prefill_entry(
+                    target,
+                    field_class,
+                    &format!("{:064x}", index + 1),
+                    &fill_resource(&origin, field_class),
+                    authorization_id,
+                )
+            })
+            .collect();
+        let task = BrowserTask {
+            action: DEFAULT_ACTION,
+            url: "https://accounts.google.com/",
+            objective: "sign in and report the account",
+            session_label: "oko-calendar",
+            allow_login: true,
+            headless: false,
+            credential_prefill: prefill,
+        };
+        let params = task.params();
+        let entries = params["constraints"]["credential_prefill"]
+            .as_array()
+            .expect("prefill entries travel inside constraints");
+        assert_eq!(entries.len(), 2, "{params}");
+
+        assert_eq!(entries[0]["target"], json!("email"));
+        assert_eq!(entries[0]["field_class"], json!("email"));
+        assert_eq!(
+            entries[0]["capability"]["resource"],
+            json!("origin:https://accounts.google.com/email")
+        );
+        assert_eq!(entries[1]["target"], json!("password"));
+        assert_eq!(entries[1]["field_class"], json!("password"));
+        assert_eq!(
+            entries[1]["capability"]["resource"],
+            json!("origin:https://accounts.google.com/password")
+        );
+        for entry in entries {
+            assert_eq!(entry["capability"]["purpose"], json!("weles.browser.fill"));
+            assert_eq!(entry["capability"]["target"], json!("weles"));
+            // One authorization id for the pair, the way the Apple sign-in
+            // issues its own.
+            assert_eq!(
+                entry["capability"]["authorization_id"],
+                json!(authorization_id)
+            );
+            // A reference and nothing else: four capability fields plus the
+            // authorization id, and no field that could hold a secret.
+            let capability = entry["capability"].as_object().unwrap();
+            assert_eq!(capability.len(), 5, "{entry}");
+            for forbidden in ["value", "secret", "password", "email", "username"] {
+                assert!(capability.get(forbidden).is_none(), "{entry}");
+            }
+        }
+        // The sign-in does not disturb the rest of the schema.
+        assert_eq!(params["constraints"]["no_login"], json!(false));
+        assert_eq!(params["url"], json!("https://accounts.google.com/"));
+    }
+
+    /// The fill targets must satisfy Weles's own field-class hints, or the
+    /// worker throws `credential field class mismatch` and the one-shot
+    /// capability is already spent.
+    #[test]
+    fn the_fill_targets_match_the_hints_weles_checks_before_redeeming() {
+        let hints = [("email", "email"), ("password", "password")];
+        for ((target, field_class), (expect_target, expect_class)) in
+            SIGN_IN_FIELDS.iter().zip(hints)
+        {
+            assert_eq!(*target, expect_target);
+            assert_eq!(*field_class, expect_class);
+            assert!(target.to_lowercase().contains(field_class));
+        }
+    }
+
+    #[test]
+    fn an_origin_that_weles_could_never_match_is_refused_before_anything_is_minted() {
+        // The worker's own sentence for a non-HTTP(S) page.
+        let said = exact_origin("ftp://accounts.google.com").unwrap_err().to_string();
+        assert_eq!(said, "credential fill requires an HTTP(S) origin");
+
+        // Weles compares `new URL(page.url()).origin`, which carries no path.
+        let said = exact_origin("https://accounts.google.com/signin")
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("bare origin"), "{said}");
+        assert!(said.contains("no path, query or fragment"), "{said}");
+
+        let said = exact_origin("https://user:pw@accounts.google.com")
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("embedded credentials"), "{said}");
+
+        // A trailing slash is the origin itself and is accepted.
+        assert_eq!(
+            exact_origin("https://accounts.google.com/").unwrap(),
+            "https://accounts.google.com"
+        );
+        // A non-default port belongs to the origin Weles would compute.
+        assert_eq!(
+            exact_origin("http://localhost:8080").unwrap(),
+            "http://localhost:8080"
+        );
+    }
+
+    #[test]
+    fn a_route_that_names_another_item_or_cannot_deliver_is_refused() {
+        let routes = json!({
+            "consumer": null,
+            "routes": [
+                {
+                    "resource": "origin:https://accounts.google.com/email",
+                    "item": "weles-google-sso-login",
+                    "field": "username",
+                    "item_present": true,
+                    "field_present": true,
+                },
+                {
+                    "resource": "origin:https://accounts.google.com/password",
+                    "item": "weles-google-sso-login",
+                    "field": "password",
+                    "item_present": true,
+                    "field_present": false,
+                },
+                {
+                    "resource": "origin:https://dash.cloudflare.com/email",
+                    "item": "platform-admin-cloudflare",
+                    "field": "username",
+                    "item_present": false,
+                    "field_present": false,
+                },
+            ],
+        });
+
+        let (item, field) =
+            routed_item(&routes, "origin:https://accounts.google.com/email").unwrap();
+        assert_eq!(item, "weles-google-sso-login");
+        assert_eq!(field, "username");
+
+        // A field the item does not carry: the Cloudflare failure shape, named
+        // rather than discovered at redemption.
+        let said = routed_item(&routes, "origin:https://accounts.google.com/password")
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("does not carry"), "{said}");
+        assert!(said.contains("password"), "{said}");
+
+        let said = routed_item(&routes, "origin:https://dash.cloudflare.com/email")
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("cannot read"), "{said}");
+
+        // Skarbiec's own sentence for a resource with no route at all.
+        let said = routed_item(&routes, "origin:https://example.com/email")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            said,
+            "no capability route maps origin:https://example.com/email to a vault field"
+        );
     }
 }

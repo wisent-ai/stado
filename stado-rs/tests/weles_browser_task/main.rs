@@ -93,6 +93,26 @@ impl Fleet {
             .expect("stado binary runs")
     }
 
+    /// The same invocation with an exact PATH, for the cases that turn on
+    /// which helper binaries the host really has.
+    fn stado_with_path(&self, path: &str, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_stado"))
+            .args(args)
+            .env_clear()
+            .env("HOME", self.home.path())
+            .env("PATH", path)
+            .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_LOCAL_STORAGE_PATH", self.storage.path())
+            .env(
+                "STADO_CONFIG",
+                self.storage.path().join("no-such-config.json"),
+            )
+            .env("WC_PROVIDERS", "local")
+            .env("WC_VAST_AUTO_LIST", "false")
+            .output()
+            .expect("stado binary runs")
+    }
+
     fn task(&self, extra: &[&str]) -> Output {
         let mut args = vec![
             "host",
@@ -282,5 +302,112 @@ fn an_empty_objective_is_refused() {
     assert!(
         text.contains("--objective is empty") || text.contains("objective"),
         "{text}"
+    );
+}
+
+/// A sign-in needs both halves: the origin whose fields are filled and the
+/// vault item that holds the account.
+#[test]
+fn half_a_sign_in_is_refused_naming_the_missing_half() {
+    let fleet = Fleet::new();
+    fleet.env_file(&long_allowlist(&["generic_browser_task"]));
+
+    let out = fleet.task(&["--allow-login", "--sign-in-origin", "https://accounts.google.com"]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("--sign-in-origin needs --sign-in-item"), "{text}");
+    assert!(text.contains("vault item"), "{text}");
+
+    let out = fleet.task(&["--allow-login", "--sign-in-item", "weles-google-sso-login"]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("--sign-in-item needs --sign-in-origin"), "{text}");
+}
+
+/// Handing an agent credentials while its own instructions say "do not log
+/// in" is two orders. This is the one mechanical consequence --allow-login
+/// has, and the help text now claims nothing more than that.
+#[test]
+fn a_sign_in_without_allow_login_is_refused() {
+    let fleet = Fleet::new();
+    fleet.env_file(&long_allowlist(&["generic_browser_task"]));
+    let out = fleet.task(&[
+        "--sign-in-origin",
+        "https://accounts.google.com",
+        "--sign-in-item",
+        "weles-google-sso-login",
+    ]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("requires --allow-login"), "{text}");
+}
+
+/// Weles builds its expectation from the live page's `origin`, so an origin
+/// carrying a path could never match it. Refused before a capability exists,
+/// because a minted one is single-use and would be spent finding that out.
+#[test]
+fn an_origin_weles_could_never_match_is_refused_before_any_host_is_touched() {
+    let fleet = Fleet::new();
+    fleet.env_file(&long_allowlist(&["generic_browser_task"]));
+
+    let out = fleet.task(&[
+        "--allow-login",
+        "--sign-in-origin",
+        "https://accounts.google.com/signin/v2",
+        "--sign-in-item",
+        "weles-google-sso-login",
+    ]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("bare origin"), "{text}");
+
+    let out = fleet.task(&[
+        "--allow-login",
+        "--sign-in-origin",
+        "ftp://accounts.google.com",
+        "--sign-in-item",
+        "weles-google-sso-login",
+    ]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(
+        text.contains("credential fill requires an HTTP(S) origin"),
+        "the refusal must be the worker's own sentence:\n{text}"
+    );
+}
+
+/// Without the capability broker's CLI there is no way to mint a reference,
+/// and the refusal has to say so rather than submit a run whose prefill
+/// cannot be redeemed. PATH here is the system one, which genuinely carries
+/// no `skarbiec` — nothing is stubbed.
+#[test]
+fn a_sign_in_is_refused_when_the_capability_broker_cannot_be_run() {
+    let fleet = Fleet::new();
+    fleet.env_file(&long_allowlist(&["generic_browser_task"]));
+    let out = fleet.stado_with_path(
+        "/usr/bin:/bin",
+        &[
+            "host",
+            "weles-browser-task",
+            "here",
+            "--url",
+            "https://accounts.google.com/",
+            "--objective",
+            "sign in and report the outcome",
+            "--session-label",
+            "oko-calendar",
+            "--allow-login",
+            "--sign-in-origin",
+            "https://accounts.google.com",
+            "--sign-in-item",
+            "weles-google-sso-login",
+        ],
+    );
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("skarbiec routes list"), "{text}");
+    assert!(
+        text.contains("must be on PATH"),
+        "the refusal must name the missing broker CLI:\n{text}"
     );
 }
