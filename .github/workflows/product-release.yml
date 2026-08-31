@@ -73,10 +73,16 @@ jobs:
           # channel, so a Skarbiec release does not depend on an already-healthy
           # Skarbiec authorization path.
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          "$stado_bin" resolver status --target lukasz-macbook --json \
-            > "$RUNNER_TEMP/product-release-resolver.json"
-          jq -e '
-            .verdict == "ready" and
+          resolver_report="$RUNNER_TEMP/product-release-resolver.json"
+          if ! "$stado_bin" resolver status --target lukasz-macbook --json \
+              > "$resolver_report"; then
+            echo "::notice::The resolver is globally degraded; checking the exact release adapter"
+          fi
+          # `resolver status` covers the directory authority and every adapter.
+          # Product publication consumes one adapter, and the authenticated
+          # write/read canary below proves its complete path. Do not block that
+          # path on an unrelated global blocker.
+          if ! jq -e '
             any(
               .adapters[];
               .service == "stado-object-api" and
@@ -84,7 +90,11 @@ jobs:
               .bind == "127.0.0.1:18776" and
               .listening == true
             )
-          ' "$RUNNER_TEMP/product-release-resolver.json" >/dev/null
+          ' "$resolver_report" >/dev/null; then
+            cat "$resolver_report"
+            echo "::error::the declared product-release adapter is not listening"
+            exit 1
+          fi
           retry_reconcile() {
             for attempt in $(seq 1 6); do
               if "$@"; then
