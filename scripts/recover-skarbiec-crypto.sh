@@ -2,6 +2,8 @@
 # Recover Skarbiec when stale per-user GnuPG daemons hold the keybox lock.
 # Invoked by `stado host recover-skarbiec-crypto`.
 set -eu
+PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 health_url="${SKARBIEC_READY_URL:-http://127.0.0.1:8895/readyz}"
 set +e
