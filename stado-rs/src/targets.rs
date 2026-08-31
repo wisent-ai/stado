@@ -260,7 +260,8 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 5] = [
+    const ALLOWED: [&str; 6] = [
+        "backup_twins",
         "build_caches",
         "chromium_clones",
         "huggingface_cache",
@@ -321,7 +322,15 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         // failure unable to touch it.
         let minimum = match name.as_str() {
             "huggingface_cache" => 3600,
-            "queue_workdirs" => 0,
+            // `backup_twins` is the second cleaner with no age floor, and for
+            // the same kind of reason as `queue_workdirs`: what makes a replica
+            // object safe to remove is that the primary holds those exact bytes
+            // right now, which the janitor proves by hashing both copies in the
+            // pass that deletes. Age says nothing about that, and a floor would
+            // subtract — the replica that took charless-mac-mini from 51.8 to
+            // 34.5 GiB free was written in the seven minutes before it was
+            // measured.
+            "queue_workdirs" | "backup_twins" => 0,
             _ => 86400,
         };
         require_int(

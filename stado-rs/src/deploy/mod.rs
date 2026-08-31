@@ -85,6 +85,7 @@ pub mod artifact_install;
 pub mod bootstrap;
 pub mod fleet_claim;
 pub mod fleet_vaults;
+pub mod host_backup_audit;
 pub mod host_build_caches;
 pub mod host_channel;
 pub mod host_cleanup;

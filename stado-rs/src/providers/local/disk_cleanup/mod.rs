@@ -14,6 +14,7 @@
 //! exclusive/shared lock file, the canonical-policy resolution, and the
 //! top-level [`run_cleanup_once`] orchestration.
 
+pub mod backup_twins;
 pub mod build_caches;
 pub mod chromium_clones;
 pub mod hf;
@@ -218,6 +219,7 @@ pub struct CleanupReport {
     pub builds: CleanerReport,
     pub clones: CleanerReport,
     pub workdirs: CleanerReport,
+    pub backup_twins: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_slot_count: i64,
@@ -246,6 +248,7 @@ impl CleanupReport {
             builds: CleanerReport::default(),
             clones: CleanerReport::default(),
             workdirs: CleanerReport::default(),
+            backup_twins: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
@@ -285,6 +288,14 @@ impl CleanupReport {
         *self.workdirs.skipped.entry(reason.to_string()).or_insert(0) += count;
     }
 
+    pub fn skip_backup_twins(&mut self, reason: &str, count: i64) {
+        *self
+            .backup_twins
+            .skipped
+            .entry(reason.to_string())
+            .or_insert(0) += count;
+    }
+
     /// The report as JSON (key order normalized at serialization sites
     /// with [`canonical_json`], matching Python `json.dumps(sort_keys=True)`).
     pub fn to_value(&self) -> Value {
@@ -319,6 +330,7 @@ impl CleanupReport {
                 "build_caches": cleaner(&self.builds),
                 chromium_clones::CLEANER: cleaner(&self.clones),
                 queue_workdirs::CLEANER: cleaner(&self.workdirs),
+                backup_twins::CLEANER: cleaner(&self.backup_twins),
             },
             "caps": {
                 "bytes": self.caps.bytes,
@@ -795,6 +807,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             ),
             queue_workdirs::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(queue_workdirs::CLEANER)),
+            ),
+            backup_twins::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
             ),
         },
         "caps": {
@@ -1378,11 +1393,35 @@ fn run_with_lock(
         live_jobs.as_deref(),
         &mut report,
     );
+    let remaining_after_workdirs = (policy.max_scan_items
+        - report.hf.scanned_items
+        - report.weles.scanned_items
+        - report.builds.scanned_items
+        - report.clones.scanned_items
+        - report.workdirs.scanned_items)
+        .max(0);
+    if remaining_after_workdirs == 0 && policy.cleaners.contains_key(backup_twins::CLEANER) {
+        report.caps.scan = true;
+    }
+    // The disaster-recovery replica's proven duplicates, scanned last because
+    // it is the only cleaner here that has to READ the bytes it deletes: every
+    // object it removes is hashed against the primary in this same pass, so it
+    // spends the budget the fixed-layout cleaners leave and stops on the shared
+    // deadline with whatever it has proven.
+    backup_twins::scan_backup_twins(
+        home,
+        &policy,
+        crate::config::wc_stado_storage_namespace(),
+        remaining_after_workdirs,
+        deadline,
+        &mut report,
+    );
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
         + report.clones.scanned_items
-        + report.workdirs.scanned_items;
+        + report.workdirs.scanned_items
+        + report.backup_twins.scanned_items;
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
@@ -1401,8 +1440,10 @@ fn run_with_lock(
     // stay faithful to, and a pass that removed 200 GB of tagged build trees
     // or 130 stale browser clones while the HF cache held nothing evictable
     // must not report `no_eligible_items`.
-    let deleted =
-        report.hf.deleted_items + report.builds.deleted_items + report.clones.deleted_items;
+    let deleted = report.hf.deleted_items
+        + report.builds.deleted_items
+        + report.clones.deleted_items
+        + report.backup_twins.deleted_items;
     if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
     } else if report.active_slot_count > 0 && policy.cleaners.contains_key("huggingface_cache") {

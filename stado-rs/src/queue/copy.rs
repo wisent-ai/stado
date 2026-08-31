@@ -210,6 +210,43 @@ impl Endpoint {
         self.adapter() != Some(StorageAdapter::StadoObject)
     }
 
+    /// Why this endpoint may not be `self`'s disaster-recovery replica, or
+    /// `None` when it may.
+    ///
+    /// One home for the rule, because there are TWO writers to the backup and
+    /// only one of them was ever checked. [`replicate_configured_backup`] runs
+    /// on the coordinator tick and refuses the cross-addressed pairing below.
+    /// The other writer is the inline mirror
+    /// [`crate::queue::storage::JobStorage`] builds out of
+    /// [`crate::queue::failover::ReadFailoverBackend`], which copies every
+    /// single `upload_*` to the backup as it happens and asked nothing at all.
+    /// So on charless-mac-mini, where replication had been switched off hours
+    /// earlier, `~/.stado/local-backup` still refilled at 2 GiB per minute
+    /// while the queue drained: primary `stado` names objects by bare key, the
+    /// backup directory stores whatever name it is handed, and every artifact
+    /// a job published landed at `local-backup/artifacts/...` where no reader
+    /// looks. 48.29 GiB of it was deleted, and it was back over 15 GiB seven
+    /// minutes later.
+    pub fn cannot_replicate(&self, other: &Self) -> Option<String> {
+        if self.describe() == other.describe() {
+            return Some(format!(
+                "primary and backup resolve to the same store ({})",
+                self.describe()
+            ));
+        }
+        if self.keys_are_namespace_qualified() != other.keys_are_namespace_qualified() {
+            return Some(format!(
+                "the primary {} and the backup {} name objects differently — one by bare \
+                 ecosystem key, the other by namespace-qualified store path — so every object \
+                 written to the backup lands at an address nothing resolves. Configure a backup \
+                 of the same kind as the primary.",
+                self.describe(),
+                other.describe()
+            ));
+        }
+        None
+    }
+
     /// The value behind one configuration key of this endpoint, for callers that
     /// check a backend is fully configured before using it.
     ///
@@ -740,31 +777,12 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
         return Ok(None);
     };
     let source_endpoint = Endpoint::configured_primary();
-    if source_endpoint.describe() == destination_endpoint.describe() {
-        return Err(StorageError::Other(format!(
-            "primary and backup resolve to the same store ({})",
-            source_endpoint.describe()
-        )));
-    }
-    // The replica must hold the same objects at the same addresses, and these
-    // two endpoints do not agree on what an address is: the object API answers
-    // in bare ecosystem keys, a directory or bucket in namespace-qualified
-    // store paths. Replicating across that boundary writes every object at a
-    // name nothing else resolves — the namespace dropped in one direction,
-    // doubled in the other — and it does it on every coordinator tick, so the
-    // replica grows without ever becoming a replica. charless-mac-mini's backup
-    // went from 32.3 GiB to 47.8 GiB this way, larger than the 32.7 GiB primary
-    // it was supposed to mirror.
-    if source_endpoint.keys_are_namespace_qualified()
-        != destination_endpoint.keys_are_namespace_qualified()
-    {
-        return Err(StorageError::Other(format!(
-            "the primary {} and the backup {} name objects differently — one by bare ecosystem \
-             key, the other by namespace-qualified store path — so replication would re-address \
-             every object it copied. Configure a backup of the same kind as the primary.",
-            source_endpoint.describe(),
-            destination_endpoint.describe()
-        )));
+    // Both refusals live on `Endpoint::cannot_replicate`, because the inline
+    // mirror in `JobStorage` has to make exactly the same judgement and a
+    // second copy of this rule is how one of the two writers ended up
+    // unchecked.
+    if let Some(refusal) = source_endpoint.cannot_replicate(&destination_endpoint) {
+        return Err(StorageError::Other(refusal));
     }
     let source = source_endpoint.build().await?;
     let destination = destination_endpoint.build().await?;

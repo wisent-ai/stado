@@ -1500,6 +1500,28 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Classify HOST's local replica against the store it mirrors, object by
+    /// object, and optionally reclaim the twins.
+    ///
+    /// Classifying deletes nothing. `--reclaim-twins --apply` deletes ONLY the
+    /// replica objects that same pass proved byte-identical to the primary, by
+    /// hashing both copies moments before the unlink — never a verdict an
+    /// earlier run recorded, because an audit written to a file and a deletion
+    /// run against it later is how a safety net becomes data loss.
+    #[command(name = "backup-audit")]
+    BackupAudit {
+        target: String,
+        /// Delete the twins this pass proves. Names them and deletes nothing
+        /// without --apply.
+        #[arg(long = "reclaim-twins")]
+        reclaim_twins: bool,
+        /// Actually delete what --reclaim-twins proved in this same pass.
+        #[arg(long, requires = "reclaim_twins")]
+        apply: bool,
+        /// Emit the classification as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -2427,6 +2449,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 revision,
                 json,
             } => host::verify_release_platform(&target, &repo, &revision, json).await,
+            HostCommands::BackupAudit {
+                target,
+                reclaim_twins,
+                apply,
+                json,
+            } => host::backup_audit(&target, reclaim_twins, apply, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
