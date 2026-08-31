@@ -628,6 +628,10 @@ pub struct BrowserTask<'a> {
     pub url: &'a str,
     /// What the agent is being asked to accomplish, in words.
     pub objective: &'a str,
+    /// The saved-trajectory key, when the caller needs one that differs from
+    /// the session label. Weles replays the flow saved under this name, so
+    /// resuming a profile whose last run failed needs a fresh one.
+    pub flow_name: Option<&'a str>,
     /// Stable recording label. `account_id` controls the browser profile when
     /// a caller explicitly requests a fresh one.
     pub session_label: &'a str,
@@ -685,7 +689,10 @@ impl BrowserTask<'_> {
         let mut params = json!({
             "url": self.url,
             "objective": self.objective,
-            "flow_name": format!("stado-browser-task:{}", self.session_label),
+            "flow_name": self.flow_name.map_or_else(
+                || format!("stado-browser-task:{}", self.session_label),
+                str::to_string,
+            ),
             "session_label": self.session_label,
             "proxy": "none",
             "headless": self.headless,

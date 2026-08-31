@@ -5813,6 +5813,8 @@ pub struct BrowserTaskRequest<'a> {
     /// Give the agent every capability rather than prefilling the first: see
     /// the flag's own help for the runtime version this exists for.
     pub defer_fills: bool,
+    /// The saved-trajectory key, when it must differ from the profile's label.
+    pub flow_name: Option<&'a str>,
     pub windowed: bool,
     pub json: bool,
 }
@@ -5836,6 +5838,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         sign_in_origin,
         sign_in_item,
         defer_fills,
+        flow_name,
         windowed,
         json,
     } = request;
@@ -5982,6 +5985,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         action,
         url: parsed.as_str(),
         objective: &objective,
+        flow_name,
         session_label,
         login_item,
         account_id: account_id.as_deref(),

@@ -1917,6 +1917,14 @@ enum HostCommands {
         /// agent redeems each reference on the page that has the field.
         #[arg(long)]
         defer_fills: bool,
+        /// The saved-trajectory key. Defaults to the session label, which is
+        /// also the browser profile's name - two different things that only
+        /// look alike. A run whose `done` carried an error is still codified
+        /// under that key and replayed verbatim on the next run, so resuming a
+        /// profile means inheriting the failure that last used it unless this
+        /// names a fresh flow.
+        #[arg(long)]
+        flow_name: Option<String>,
         /// Run with a visible window. Some sign-in flows refuse headless.
         #[arg(long)]
         windowed: bool,
@@ -2709,6 +2717,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 sign_in_origin,
                 sign_in_item,
                 defer_fills,
+                flow_name,
                 windowed,
                 json,
             } => {
@@ -2725,6 +2734,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     sign_in_origin: sign_in_origin.as_deref(),
                     sign_in_item: sign_in_item.as_deref(),
                     defer_fills,
+                    flow_name: flow_name.as_deref(),
                     windowed,
                     json,
                 })
