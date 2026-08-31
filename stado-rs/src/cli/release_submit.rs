@@ -568,6 +568,7 @@ fn input(uri: &str, path: &str, sha: &str) -> Value {
 // worker is required to receive, and each is already validated by the caller.
 #[allow(clippy::too_many_arguments)]
 async fn enqueue(
+    store: &JobStorage,
     id: &str,
     m: &ReleasePipelineManifest,
     version: &str,
@@ -578,6 +579,15 @@ async fn enqueue(
     manifest_sha: &str,
     manifest_uri: &str,
 ) -> Result<PlatformRun, CmdError> {
+    let queue_control = crate::queue::control::read(store)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if queue_control.paused {
+        return Err(CmdError::click(format!(
+            "release submission cannot enqueue {platform} while the queue is paused ({})",
+            queue_control.pause_summary()
+        )));
+    }
     let recipe = &m.platforms[platform];
     let (host, consumer) = builder(&recipe.runner_platform).await?;
     let mut resolved = Map::new();
@@ -683,6 +693,22 @@ async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
         for p in ["completed", "uploaded", "failed", "cancelled"] {
             if let Some(j) = store.read_job(p, id).await? {
                 return Ok(j);
+            }
+        }
+        if store.read_job("queue", id).await?.is_some() {
+            let queue_control = crate::queue::control::read(store)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            if queue_control.paused {
+                // A product release runs on the same publisher runner as a
+                // Stado release. Holding that runner while maintenance keeps
+                // this job queued prevents the release that can resume the
+                // fleet from ever starting.
+                super::cancel::cancel_in_store(store, id).await?;
+                return Err(CmdError::click(format!(
+                    "cancelled queued release job {id} because the queue is paused ({})",
+                    queue_control.pause_summary()
+                )));
             }
         }
         tokio::time::sleep(Duration::from_secs(3)).await
@@ -943,6 +969,12 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     }
     run.failure = None;
     save(&mut run).await?;
+    let store = match JobStorage::new().await {
+        Ok(store) => store,
+        Err(error) => {
+            return Err(persist_failure(&mut run, CmdError::click(error.to_string())).await)
+        }
+    };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     let mut enqueue_failure = None;
     for p in &platforms {
@@ -995,6 +1027,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         }
         if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
             let r = match enqueue(
+                &store,
                 &id,
                 &m,
                 &args.version,
@@ -1024,12 +1057,6 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         .collect();
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
-    let store = match JobStorage::new().await {
-        Ok(store) => store,
-        Err(error) => {
-            return Err(persist_failure(&mut run, CmdError::click(error.to_string())).await)
-        }
-    };
     let (key, private) = match signing(&run.product).await {
         Ok(signing) => signing,
         Err(error) => return Err(persist_failure(&mut run, error).await),
