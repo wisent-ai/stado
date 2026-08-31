@@ -180,19 +180,6 @@ pub async fn run_program(
     program: &[&str],
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    run_program_with_timeout(target, program, remote_timeout(), runner).await
-}
-
-/// Run one fixed program with an operation-specific wall-clock bound.
-///
-/// The arguments remain words rather than shell text. Long-running installed
-/// helpers therefore keep the same injection-free transport as short probes.
-pub async fn run_program_with_timeout(
-    target: &ComputeTarget,
-    program: &[&str],
-    timeout: Duration,
-    runner: &Runner,
-) -> Result<CommandOutput, DeployError> {
     let (argv, _key) = if target_is_this_host(target) {
         (program.iter().map(|word| word.to_string()).collect(), None)
     } else {
@@ -206,7 +193,7 @@ pub async fn run_program_with_timeout(
     runner(CommandSpec {
         argv,
         stdin: None,
-        timeout: Some(timeout),
+        timeout: Some(remote_timeout()),
     })
     .await
     .map_err(DeployError)
