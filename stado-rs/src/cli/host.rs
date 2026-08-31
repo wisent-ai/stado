@@ -2065,7 +2065,8 @@ pub async fn install_file(
         return Err(CmdError::usage("file source must be a regular file"));
     }
     let mode = if executable { "u=rwx,go=" } else { "u=rw,go=" };
-    let (path, byte_count) = stream_file(target, source, name, DELIVERED_FILES_DIR, mode).await?;
+    let (path, byte_count) =
+        stream_file(target, source, name, DELIVERED_FILES_DIR, mode, None).await?;
     if json {
         println!(
             "{}",
@@ -2107,7 +2108,7 @@ pub async fn install_secret(
     // instead of refused. Both paths land owner-only and are checksummed on the
     // far side before they take the name.
     let (path, byte_count) = if metadata.len() > u64::from(u16::MAX) {
-        stream_file(target, source, name, ".stado", "u=rw,go=").await?
+        stream_file(target, source, name, ".stado", "u=rw,go=", None).await?
     } else {
         let bytes = std::fs::read(source)?;
         transfer_secret(target, name, &bytes, None).await?
@@ -2191,7 +2192,15 @@ pub(crate) async fn deliver_file(
     source: &str,
     name: &str,
 ) -> Result<(String, usize), CmdError> {
-    stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
+    stream_file(
+        target,
+        source,
+        name,
+        DELIVERED_FILES_DIR,
+        "u=rw,go=",
+        None,
+    )
+    .await
 }
 
 async fn transfer_secret(
@@ -3308,7 +3317,7 @@ async fn finish_install(
     // would describe a binary that may never land, and a report printed first
     // would be the same one-line receipt that said `stado 0.7.1 -> stado
     // 0.7.0` and left nothing behind to check it against.
-    let manifest = deliver_provenance(target, provenance)
+    let manifest = deliver_provenance(target, provenance, resolved)
         .await
         .map_err(|error| {
             CmdError::click(format!(
@@ -3393,6 +3402,7 @@ fn unprovenanced_reason(
 async fn deliver_provenance(
     target: &str,
     provenance: &crate::provenance::Provenance,
+    resolved: &crate::targets::ComputeTarget,
 ) -> Result<String, CmdError> {
     let document = serde_json::to_vec_pretty(provenance)?;
     let staged = tempfile::Builder::new()
@@ -3405,7 +3415,15 @@ async fn deliver_provenance(
         .to_str()
         .ok_or_else(|| CmdError::click("provenance staging path is not valid UTF-8"))?;
     let name = format!("{}.json", provenance.artifact);
-    let (path, _) = stream_file(target, source, &name, PROVENANCE_DIR, "u=rw,go=").await?;
+    let (path, _) = stream_file(
+        target,
+        source,
+        &name,
+        PROVENANCE_DIR,
+        "u=rw,go=",
+        Some(resolved),
+    )
+    .await?;
     Ok(path)
 }
 
@@ -3535,6 +3553,7 @@ async fn stream_file(
     name: &str,
     subdir: &str,
     mode: &str,
+    resolved: Option<&crate::targets::ComputeTarget>,
 ) -> Result<(String, usize), CmdError> {
     release_component("delivered file name", name)?;
     let bytes = std::fs::metadata(source)?.len();
@@ -3542,9 +3561,12 @@ async fn stream_file(
     digest.update(std::fs::read(source)?);
     let expected_sha256 = hex::encode(digest.finalize());
 
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = match resolved {
+        Some(resolved) => resolved.clone(),
+        None => crate::deploy::host_channel::canonical_target(target)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?,
+    };
     let runner = crate::deploy::production_runner();
     let staged = format!("{subdir}/.{name}.stado-stream");
 
