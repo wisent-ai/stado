@@ -264,8 +264,8 @@ jobs:
             # This release owns only the Stado product prefix. Its authenticated
             # listing proves the exact stado-release-publisher/token dependency;
             # unrelated private namespaces and publishers are not prerequisites.
-            "$stado_bin" storage ls \
-              stado://releases/stado/__release_preflight__ --json \
+            "$stado_bin" storage objects releases \
+              stado/__release_preflight__ --json \
               > "$RUNNER_TEMP/release-preflight.json" \
               2> "$RUNNER_TEMP/release-preflight.err"
           }

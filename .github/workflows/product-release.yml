@@ -106,8 +106,8 @@ jobs:
             for attempt in $(seq 1 24); do
               stored="$RUNNER_TEMP/product-release-write-preflight.stored.json"
               rm -f "$stored"
-              if "$stado_bin" storage ls \
-                   "stado://releases/$release_product/__release_preflight__" --json >/dev/null 2>&1 &&
+              if "$stado_bin" storage objects releases \
+                   "$release_product/__release_preflight__" --json >/dev/null 2>&1 &&
                  { "$stado_bin" storage put "$canary_uri" "$canary" --if-absent \
                      >/dev/null 2>&1 || true; } &&
                  "$stado_bin" storage get "$canary_uri" "$stored" \
