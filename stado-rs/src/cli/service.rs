@@ -100,7 +100,7 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// End every product process on a host that no declared unit owns.
+    /// Boot one loaded launchd label out of its system or user domain.
     ///
     /// `stop` ends a declared unit and the processes launchd disowned from it.
     /// Nothing ended a process whose label the registry never declared, or
@@ -110,9 +110,6 @@ pub enum ServiceCommands {
     /// restarts, a `service stop` and a `service remove`, refusing 55 pinned
     /// jobs for a week — and why `service list --undeclared` could name the
     /// state while no command could end it.
-    ///
-    /// Reports without signalling anything unless `--apply` is given.
-    /// Boot one loaded launchd label out of the system domain.
     ///
     /// For a label the registry does not declare, which `stop` cannot resolve
     /// and `retire` cannot reach. `service list --undeclared` names them.
@@ -2857,7 +2854,14 @@ async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdError> {
     } else {
         table::print(
             &[
-                "HOST", "UNIT", "FILE", "BYTES", "MODE", "INTEGRITY", "SHA256", "WROTE",
+                "HOST",
+                "UNIT",
+                "FILE",
+                "BYTES",
+                "MODE",
+                "INTEGRITY",
+                "SHA256",
+                "WROTE",
             ],
             &cells,
         );
