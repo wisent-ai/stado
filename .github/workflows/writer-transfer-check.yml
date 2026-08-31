@@ -16,16 +16,12 @@ concurrency:
 jobs:
   release-sized-read-back:
     runs-on: [self-hosted, stado-control-plane]
-    # This gate and the release train both require the repository's only
-    # `stado-control-plane` runner. They now queue for it through one shared
-    # group that never cancels its holder, so this check waits behind a
-    # publication instead of contending with it. The workflow-level group above
-    # still supersedes this PR's own earlier runs; what it must never do is
-    # displace a release train, because a release that dies part-way can strand
-    # an immutable coordinate that no later attempt is able to complete.
-    concurrency:
-      group: stado-control-plane-runner
-      cancel-in-progress: false
+    # This gate shares the repository's only `stado-control-plane` runner with
+    # the release train. It deliberately does NOT share a concurrency group
+    # with it: GitHub permits one pending job per group and cancels the waiter
+    # when a second arrives, so a group here evicted a release platform that
+    # was queued behind the other one. The runner queues jobs by itself, and
+    # waiting on a busy runner is never a cancellation.
     timeout-minutes: 30
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
