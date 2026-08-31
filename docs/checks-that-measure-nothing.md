@@ -1,13 +1,13 @@
 # Checks that measure nothing
 
-One defect shape has now been found eleven times in this repository, in eleven
-different subsystems, inside about twelve hours. Every instance is the same
-thing: **a declaration checked against something narrower than the world.**
+One defect shape has now been found thirteen times in this repository, in
+thirteen different subsystems, inside about twelve hours. Every instance is
+the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The eleven
+## The thirteen
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -22,6 +22,8 @@ what is actually there.
 | 9 | `Presence`, `src/cli/storage.rs` (#174) | a failed `storage get` means the object is absent | that the store answered at all — "absent" and "unreachable" need opposite responses |
 | 10 | the object API's `/healthz` | the service is `"ok": true` | that any capability works. Measured 2026-08-31: `{"ok":true,"degraded":true,"boundaries":{"object":false,"release":false,"service":false,"machine":false,"integration":false,"rate_limit_verifier":false,...}}` while `/api/object` timed out and every authorized route returned 503. **Detected, not merely noticed:** check 3 of the fleet-shape detector (#181) reports this on the tick |
 | 11 | `boundary_timeout` in the object API's authorization validation (#181) | 90 seconds is enough to validate every boundary | anything about how much work that covers. The budget is flat; the work is not. `charless-mac-mini` declares 17 object namespaces, 14 release publishers and 4 service deployers, so the object boundary alone needs 18 sequential vault decrypt-and-audit operations — deliberately serial, because fanning out caused resets — and all six boundaries race one single-threaded vault inside the same flat 90 seconds. Every component was healthy; the fleet had simply outgrown the number. `doctor::object_auth_deadline` had already solved this arithmetic one module away by budgeting per declared item, and the boundary the whole fleet reads through never got it |
+| 12 | `host_inventory`'s listener collector (#185) | the table of listeners shows who holds a port | that it can represent more than one holder. It dropped every non-loopback address and kept only the first row per port — so a port with three servers on it looked like a port with one. **This is the sharpest instance in the table, because it is inside the detector built tonight to catch this pattern:** the fleet-shape check counted holders through an instrument that had already removed the evidence. A check built on a blind instrument is the same as no check |
+| 13 | `WC_BACKUP_STORAGE_BACKEND=local` in the object API unit (#168) | replication is the coordinator's tick, and it is off | that the store itself mirrors every object it accepts into a bare path beside itself. The replica had a second writer nobody was looking for, which is why the twins reappeared at almost exactly 15 GiB each time instead of growing — they were not left over, they were being remade |
 
 ## The property they share
 
@@ -29,7 +31,8 @@ In each case the system stored an *intent* and then re-read its own intent as
 evidence. A name assumed to lack a prefix. A watermark read from one place and
 enforced from another. A key assumed to be bare. Replication assumed off
 because config said off. A publish assumed complete because the loop exited. A
-tag assumed to mean bytes exist. A timeout assumed to be enough.
+tag assumed to mean bytes exist. A timeout assumed to be enough. A port
+assumed to have one holder, counted with a tool that could not show two.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
