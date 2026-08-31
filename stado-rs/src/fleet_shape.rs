@@ -394,6 +394,16 @@ async fn disk_headroom(target: &ComputeTarget, runner: &Runner, out: &mut Vec<Fi
 /// [`Endpoint::cannot_replicate`] is the same predicate the write path and the
 /// coordinator's replication both consult; this reports the condition standing
 /// rather than waiting for someone to notice 48 GiB of unresolvable objects.
+///
+/// **Reach: THIS control plane's configuration only.** The pairing that
+/// actually produced 48 GiB of unaddressable objects on 2026-08-30 was
+/// `charless-mac-mini`'s own — `wc_storage_backend: stado` with
+/// `wc_backup_storage_backend: local`, read from that host's config, not from
+/// here. This control plane declares `storage.backup: null` and so has nothing
+/// to disagree about, which is why this arm reports a note rather than a
+/// finding on the fleet it was written for. Extending it means reading each
+/// host's resolved config the way `stado host config-show` does, one call per
+/// host, and that is the next thing this check needs.
 fn replica_addressing(result: &mut Sweep) {
     let primary = Endpoint::configured_primary();
     result.measured += 1;
@@ -403,10 +413,44 @@ fn replica_addressing(result: &mut Sweep) {
     // first live sweep this arm produced no finding and no note, and there was
     // no way to tell from the output whether the pairing was sound or simply
     // never read.
+    // What the config FILE declares, beside what the resolver answers. These
+    // disagreed on this control plane on 2026-08-31: the file declares
+    // `storage.backup.backend = local` with a path, `stado config show`
+    // resolves `wc_backup_storage_backend` to empty, `stado doctor`'s backup
+    // row passes with "no mandatory S3 replica" — and a `storage ls` in the
+    // same worktree printed the mirror refusal naming
+    // `local://~/.stado/local-backup`, which requires that key to be set.
+    // Two readers, two answers, one declaration: components that believe the
+    // replica exists write 48 GiB into it while the diagnostics say there is
+    // nothing there and pass.
+    let declared_in_file = crate::config_file::load_config_file()
+        .ok()
+        .and_then(|file| file.get("storage").cloned())
+        .and_then(|storage| storage.get("backup").cloned())
+        .and_then(|backup| {
+            backup
+                .get("backend")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .filter(|backend| !backend.trim().is_empty());
     let Some(backup) = Endpoint::configured_backup() else {
-        result
-            .notes
-            .push(format!("{}: no replica declared", primary.describe()));
+        match declared_in_file {
+            Some(backend) => result.record(Finding {
+                check: REPLICA_CHECK,
+                subject: format!("{}: storage.backup.backend", primary.describe()),
+                declared: format!("the config file declares a {backend} replica"),
+                observed: "the resolver answers that no replica is configured, so one half of \
+                           this binary writes to a replica the other half says does not exist"
+                    .to_string(),
+                command: "compare `stado config show` against storage.backup in the config file; \
+                          the resolver is the half to fix"
+                    .to_string(),
+            }),
+            None => result
+                .notes
+                .push(format!("{}: no replica declared", primary.describe())),
+        }
         return;
     };
     match primary.cannot_replicate(&backup) {
