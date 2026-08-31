@@ -120,11 +120,7 @@ fn mutation_args(verb: &str, value: ProductMutation) -> Vec<String> {
 }
 
 fn sweep_args(value: ProductSweep) -> Vec<String> {
-    let mut args = vec![
-        "sync".to_string(),
-        "--surface".to_string(),
-        value.surface,
-    ];
+    let mut args = vec!["sync".to_string(), "--surface".to_string(), value.surface];
     if value.fetch {
         args.push("--fetch".to_string());
     }
