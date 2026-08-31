@@ -1,15 +1,16 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty-one times in this repository, in
-twenty-one different subsystems, inside about fifteen hours. The twentieth was
+One defect shape has now been found twenty-two times in this repository, in
+twenty-two different subsystems, inside about sixteen hours. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
-every reading of it was true. Every instance is
+every reading of it was true; and the twenty-second is the one where the fleet
+could rule out every mechanism it owns and still not name what had happened. Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty-one
+## The twenty-two
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -34,6 +35,7 @@ what is actually there.
 | 19 | `src/cli/mod.rs` and every `mod` declaration in the crate (#212) | the files in the tree are the code that runs | **that anything declares them.** A `.rs` file no `mod` declaration names is not a compile error - it is not compiled at all, and `cargo check`, `cargo clippy`, `git log` and a file listing all look untouched. On 2026-08-31 at 15:48:36Z a commit replaced `src/cli/mod.rs` with a six-day-old copy, deleting nine `pub mod` declarations - `builds`, `database`, `egress`, `fleet`, `product`, `release_evidence`, `release_quarantine`, `service_converge`, `stream` - while all nine files stayed on disk. `main` did stop compiling, but 27 errors away in unrelated callers, and **no diagnostic named a missing declaration**; the whole `cli/fleet/` subtree went dark and the symptom was `dashboard::run` being called with two of its three arguments. Fourteen seconds later a second commit added a 279-line `src/bin/stado_fleet/key/mod.rs` to fix `stado fleet key ls`, and nothing declares it: that fix has never been compiled, while the command it corrects still lists by item-name prefix at `src/cli/fleet/key/mod.rs:270` - against its own commit message's principle that behaviour must never be derived from item names. A third file, `src/queue/secrets.rs`, has been product code compiled into nothing since 2026-07-27. **Now checked:** `stado-rs/scripts/unreachable_modules.py` resolves every declaration from `src/lib.rs` and each `[[bin]]` path and fails on any file the walk never reached - 3 unreachable at the healthy tip, **23 at the clobbered one** - wired into `version-check` before anything is built, with a ratchet file recording the four known ones and their reasons |
 | 20 | **our own diagnosis**, and the guard I nearly shipped for it (`configured_object_base_url`) | a `*.ts.net` MagicDNS name resolving to a public address means the name has been hijacked | **that anything checked WHO answered.** On 2026-08-31 `charless-mac-mini.tail6443b3.ts.net` resolved to `208.111.34.11`, `208.111.35.209`, `2607:f740:0:3f::2f0`, `2607:f740:0:3f::3cc` — public addresses, on two workstations, through `getaddrinfo` and not just `host`. Two agents independently concluded that MagicDNS was answering for a stranger and that any caller on that name would leave the tailnet with its bearer token. I wrote the refusal into `configured_object_base_url`, the single gate every origin passes: any `.ts.net` name resolving outside `100.64.0.0/10` / `fd7a:115c:a1e0::/48` is refused. It compiled, and it correctly refused the name with all four addresses listed. Then the one check nobody had made: `openssl s_client` returns **`subject=CN=charless-mac-mini.tail6443b3.ts.net`, issuer Let's Encrypt**, and `whois 208.111.34.11` is **NetActuate, Inc** — the provider Tailscale runs Funnel ingress on. A `*.ts.net` name resolving to a public address is Funnel working exactly as designed: the ingress terminates for that exact name with that node's own certificate, which no stranger can present. **The guard would have refused every Funnel origin in the pipeline** — `STADO_PUBLIC_RELEASE_API_URL` at both publish legs, `deploy-existing-release.yml`, and `version-check.yml`'s `STADO_API_URL` — breaking publication entirely in the name of securing it. Deleted unpushed. `IP is in the tailnet range` is narrower than `the peer is the one named`; TLS already checks the second, and `configured_object_base_url` already requires HTTPS for every non-loopback origin. The first instance here where the suspected wrong answer was a live network peer, and the answer was the right machine all along |
 | 21 | `max_items_per_pass`, spent by `build_caches` before any other cleaner ran (#214) | the janitor scanned its budget and reported a healthy pass | **that the budget ever reached the cleaner that mattered.** `build_caches` walks all of `$HOME` and consumed the entire per-pass item budget, so `chromium_clones`, `queue_workdirs` and `backup_twins` were each handed **zero** and reported `scanned 0 eligible 0 deleted 0` — indistinguishable, in the report, from a clean disk. The outcome said `cap_reached`, which is true and names the wrong subject: the cap was reached, by the first cleaner in the list. Raising it does not help — measured by `store-reclaim` at 100,000, the schema maximum, successive passes scanned 46,853 then 50,040 then 67,777 then 88,440 and the twins still got nothing, because the walk is larger than any legal cap. **No configuration reached the end of the cleaner list**, so the janitor was silently doing nothing for the cleaner that mattered while reporting a healthy pass, and the acceptance criterion only passed once `build_caches` was removed from that host **by hand**. #214 gives each cleaner an equal share of what remains, counting only declared cleaners still behind it, rolling unspent budget forward, letting the last take the rest, and making `run_hf` take its share as an argument rather than reading the whole cap. This is the instance that hid longest: every reading of it was true |
+| 22 | `~/.stado/bin/stado` on an always-on host, and every reader of it (#240) | the installed binary is the version it reports | **whether anything delivered it.** At 21:25Z on 2026-08-31 a binary answering `stado 0.13.19` appeared on `charless-mac-mini`. `stado-v0.13.19` was tagged and its train ran, but the train died in step 3 before its publish loop, so the coordinate measured **0 present / 9 absent on both platforms**: those bytes cannot have come from the release channel, because the release channel never had them. The registry declared 0.13.13. `--version` attests nothing — the string is whatever `Cargo.toml` said when the binary was compiled, which is exactly why a local build can claim a version that was never published. Between two agents we could rule out the release channel (empty coordinate), `host release` (its dry run had reported the host at 0.13.13 minutes earlier, and it verifies the archive against the manifest before staging), this repository's automation (`deploy.yml`'s delivery step runs only after a publish that never happened), and both of our own sessions — **and still nobody could name what wrote it.** The cost was nearly concrete: `build_caches` was about to be re-armed on the strength of those bytes carrying #226, which they could not be shown to contain, and re-arming without #226 would have put the publish runner's cargo registry back inside the janitor's reach. **Now checked:** #240 makes `service converge` judge provenance *before* drift — `staged-match`, `no-staged-copy`, `staged-differs`, and a new `unattested` verdict — and `--apply` refuses to offer `declare-version` for a row it cannot attest. A delivery receipt written at install time gives the next such binary an author to name instead of an absence to argue about |
 
 ## The property they share
 
@@ -46,7 +48,8 @@ assumed to have one holder, counted with a tool that could not show two. A
 boundary assumed to gate what its name says. A binary assumed to be current. A
 state file assumed to have one writer. A file on disk assumed to be code. A
 name assumed to be hijacked because its address was public. A budget assumed
-to reach the cleaner it was declared for.
+to reach the cleaner it was declared for. A binary assumed to have been
+delivered because it reports a version.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
@@ -97,7 +100,17 @@ seven days by a process no report could name.
    module away from the boundary that needed it. When the diagnosis is written
    down and the repair is local, the next reader inherits the defect **and**
    the comment explaining it. Fix the artefact: make it say who wrote it.
-7. **A green build is not evidence the tree is wired up.** Rust reports a
+7. **Write the receipt at the moment of the act, not the report afterwards.**
+   A binary that reports a version proves only what its `Cargo.toml` said when
+   it compiled. `service converge` could rule out every delivery mechanism the
+   fleet owns and still not name what installed the 0.13.19 bytes, because
+   nothing recorded the installation as it happened. The delivery receipt
+   written at install time, and `writer_pid` stamped into every janitor pass,
+   are the same remedy: an actor named by the act rather than inferred from its
+   traces. Provenance judged before drift, which is what #240's `unattested`
+   verdict does - it refuses to call bytes it cannot attest a stale
+   declaration.
+8. **A green build is not evidence the tree is wired up.** Rust reports a
    missing `mod` declaration only where something references the module, so
    nine deleted declarations surfaced as 27 errors in unrelated callers, and an
    undeclared file that nobody references surfaces as nothing at all. The check
@@ -159,6 +172,17 @@ A record that quietly drops these is the thing it was written to prevent.
   covers it. Per-tag concurrency has **not** absorbed it. One residual
   canceller may still be real, though the 0.13.9 train surviving 62 minutes is
   the first evidence against a persistent one.
+- **`stado-v0.13.19`'s train was taken off the runner and nobody can say by
+  what.** Cancelled 2026-08-31 at 21:59:51Z inside step 3,
+  `Build native Rust control plane`, so steps 4 to 7 never ran and the
+  coordinate measured 0 of 9 on both platforms - empty, retriable, and the only
+  reason it cost nothing is archive-first ordering. It was NOT concurrency: the
+  workflow group is per-ref (`wisent-compute-release-train-${{ github.ref }}`)
+  and both product-release groups are `cancel-in-progress: false`. So something
+  is still removing jobs from the single `stado-control-plane` runner, and this
+  belongs beside `0.13.7` rather than being absorbed into the tag storm that
+  explained the others. Two unexplained cancellations, both on that runner, one
+  of them after per-tag concurrency was supposed to have settled the question.
 - **The four permanent partials above stay on the list.** They are not
   historical trivia; they are the reason every check in this document exists.
 - **Nothing in Stado can verify or repair a build host's cargo registry, and
