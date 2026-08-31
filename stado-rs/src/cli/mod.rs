@@ -1428,6 +1428,15 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Pull TARGET's Skarbiec mirror into its live vault without discarding
+    /// local-only items.
+    #[command(name = "sync-vault")]
+    SyncVault {
+        target: String,
+        /// Emit the Skarbiec pull report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
@@ -2429,6 +2438,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
+            HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
             }

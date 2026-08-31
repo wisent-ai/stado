@@ -3953,6 +3953,97 @@ pub async fn retag_vault_item(
     }
     Ok(())
 }
+/// Pull the encrypted Skarbiec mirror into TARGET's live vault.
+///
+/// Skarbiec performs the destructive comparison itself: a remote vault with
+/// local-only items is backed up and refused rather than overwritten. Stado
+/// supplies the managed host channel and reports that refusal without adding a
+/// force path.
+pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the Skarbiec environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables.next().unwrap_or_default();
+    let gnupg_home = variables.next().unwrap_or_default();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let pulled = crate::deploy::host_channel::run_program(
+        &resolved,
+        &[
+            "/usr/bin/env",
+            "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+            gnupg_environment.as_str(),
+            vault_environment.as_str(),
+            skarbiec.as_str(),
+            "sync-pull",
+        ],
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !pulled.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec sync-pull failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&pulled, "remote command failed")
+        )));
+    }
+    let report: Value = serde_json::from_str(pulled.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "{}: Skarbiec sync-pull returned unreadable JSON: {error}",
+            resolved.name
+        ))
+    })?;
+    if report.get("ok").and_then(Value::as_bool) != Some(true) {
+        let reason = report
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("sync_refused");
+        let detail = report
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or("Skarbiec refused to replace the live vault");
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec {reason}: {detail}",
+            resolved.name
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "vault_synced",
+                "skarbiec": report,
+            }))?
+        );
+    } else {
+        println!("{}: vault synced", resolved.name);
+    }
+    Ok(())
+}
+
 /// Reconcile the object verifier on TARGET to the exact configured namespace set.
 pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
