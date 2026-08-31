@@ -5985,7 +5985,6 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         action,
         url: parsed.as_str(),
         objective: &objective,
-        flow_name,
         session_label,
         login_item,
         account_id: account_id.as_deref(),
@@ -5993,11 +5992,11 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         allow_login,
         headless: !windowed,
         credential_prefill,
-        credential_deferred,
     };
-    let outcome = crate::deploy::weles_browser_task::submit(target, &task)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let outcome =
+        crate::deploy::weles_browser_task::submit(target, &task, flow_name, &credential_deferred)
+            .await
+            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
 
     if json {
         println!(

@@ -628,10 +628,6 @@ pub struct BrowserTask<'a> {
     pub url: &'a str,
     /// What the agent is being asked to accomplish, in words.
     pub objective: &'a str,
-    /// The saved-trajectory key, when the caller needs one that differs from
-    /// the session label. Weles replays the flow saved under this name, so
-    /// resuming a profile whose last run failed needs a fresh one.
-    pub flow_name: Option<&'a str>,
     /// Stable recording label. `account_id` controls the browser profile when
     /// a caller explicitly requests a fresh one.
     pub session_label: &'a str,
@@ -656,10 +652,6 @@ pub struct BrowserTask<'a> {
     /// Vault-backed field prefills, each a capability REFERENCE the worker
     /// redeems locally. Empty for a run that carries no sign-in.
     pub credential_prefill: Vec<Value>,
-    /// Capability REFERENCES for steps whose field is not on the opening page.
-    /// The trajectory does not fill these; it carries the constraints into the
-    /// agent's goal, and the agent redeems one when its page arrives.
-    pub credential_deferred: Vec<Value>,
 }
 
 impl BrowserTask<'_> {
@@ -670,6 +662,12 @@ impl BrowserTask<'_> {
     /// `credential_prefill` is added only when there is one, so a run without
     /// a sign-in puts exactly the bytes on the wire it always did.
     pub fn params(&self) -> Value {
+        self.params_with(None, &[])
+    }
+
+    /// The parameter object for a live submission carrying caller-specific
+    /// trajectory identity and capabilities for fields on later pages.
+    pub fn params_with(&self, flow_name: Option<&str>, credential_deferred: &[Value]) -> Value {
         let mut constraints = Map::new();
         constraints.insert("read_only".to_string(), json!(!self.allow_login));
         constraints.insert("no_login".to_string(), json!(!self.allow_login));
@@ -680,16 +678,16 @@ impl BrowserTask<'_> {
                 Value::Array(self.credential_prefill.clone()),
             );
         }
-        if !self.credential_deferred.is_empty() {
+        if !credential_deferred.is_empty() {
             constraints.insert(
                 "credential_capabilities".to_string(),
-                Value::Array(self.credential_deferred.clone()),
+                Value::Array(credential_deferred.to_vec()),
             );
         }
         let mut params = json!({
             "url": self.url,
             "objective": self.objective,
-            "flow_name": self.flow_name.map_or_else(
+            "flow_name": flow_name.map_or_else(
                 || format!("stado-browser-task:{}", self.session_label),
                 str::to_string,
             ),
@@ -737,13 +735,18 @@ impl TaskOutcome {
 /// this command reports an outcome rather than a queue receipt. A caller that
 /// only wanted a receipt would have to poll the action log, and a browser
 /// flow whose result nobody read is how a sign-in silently fails.
-pub async fn submit(target: &str, task: &BrowserTask<'_>) -> Result<TaskOutcome, DeployError> {
+pub async fn submit(
+    target: &str,
+    task: &BrowserTask<'_>,
+    flow_name: Option<&str>,
+    credential_deferred: &[Value],
+) -> Result<TaskOutcome, DeployError> {
     let admission = weles_capture::resolve_admission(target).await?;
     let channel = weles_capture::open_channel(&admission).await?;
     let payload = weles_capture::observe_action_payload(
         &channel,
         task.action,
-        task.params(),
+        task.params_with(flow_name, credential_deferred),
         task.account_id,
         task.fresh_profile,
     )
