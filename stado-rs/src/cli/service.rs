@@ -136,7 +136,10 @@ pub enum ServiceCommands {
         /// as undeclared.
         #[arg(long)]
         command: String,
-        /// Send SIGTERM. Without it every row is reported as `would_end`.
+        /// Send SIGTERM to the rows a declared label does not hold. Without it
+        /// those rows read `would_end`; a `kept` row is never signalled with
+        /// or without this flag, and is reported so the program a declared
+        /// label is running can be named.
         #[arg(long)]
         apply: bool,
         #[arg(long)]

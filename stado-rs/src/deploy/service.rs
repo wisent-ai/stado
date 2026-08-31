@@ -4843,9 +4843,20 @@ for root in \"$@\"; do
     # Weles API server, every one of them a live service, because their pids are
     # not the ones their labels hold. One named program cannot do that.
     case \"$command\" in *\"$match\"*) ;; *) continue ;; esac
-    if kept \"$pid\"; then continue; fi
     seen=\"$seen $pid\"
     started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    # A kept pid is never signalled, and it used to be dropped here - before
+    # its command was ever printed. That hid the one process an operator most
+    # needs to name: the program a DECLARED label is holding, which is where a
+    # stale binary survives a delivery. On charless-mac-mini the writer
+    # starving the janitor's interval was pid 78635 under
+    # `com.wisent.compute.service.stado-local-control-plane`, and every reap
+    # report could say only its number. Reporting is not signalling: the row
+    # reads `kept` and the loop still refuses to touch it.
+    if kept \"$pid\"; then
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'kept' \"$started\" \"$command\"
+      continue
+    fi
     if [ \"$apply\" != yes ]; then
       printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'would_end' \"$started\" \"$command\"
       continue
@@ -5146,7 +5157,13 @@ pub async fn delete_user_launchagent(
 pub struct ReapedProcess {
     pub host: String,
     pub pid: String,
-    /// `would_end`, `ended`, or `still_running`.
+    /// `would_end`, `ended`, `still_running`, or `kept`.
+    ///
+    /// `kept` is a row the reaper refuses to signal because a declared label
+    /// holds that pid or one of its ancestors. It is reported for the same
+    /// reason the others are: naming what a declared label is actually
+    /// running is how a stale binary that survived a delivery becomes
+    /// visible, and the keep-set is exactly where such a process hides.
     pub outcome: String,
     pub started_at: String,
     pub command: String,
