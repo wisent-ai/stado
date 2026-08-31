@@ -24,7 +24,8 @@ Give your AI the muscle it needs.
 
 [Quick start](#quick-start) · [Native builds](docs/builds.md) ·
 [CLI reference](https://stado.wisent.com/docs/cli) · [Architecture](https://stado.wisent.com/docs/architecture) ·
-[Operations](https://stado.wisent.com/docs/operations)
+[Operations](https://stado.wisent.com/docs/operations) ·
+[Checks that measure nothing](docs/checks-that-measure-nothing.md)
 
 Current proof boundary: the 0.5 contract has a stable local-filesystem execution
 scope for macOS arm64 and Linux amd64 release candidates. Cloud storage and VM
