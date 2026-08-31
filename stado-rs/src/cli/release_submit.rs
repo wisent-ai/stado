@@ -1241,6 +1241,8 @@ async fn run_deliveries(
 }
 
 async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
+    const MAX_ATTEMPTS: usize = 24;
+
     let (document, _) = super::registry::fetch_versioned_document().await?;
     let control = release_control::control(&document)?
         .ok_or_else(|| CmdError::click("release control disappeared"))?;
@@ -1248,6 +1250,16 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
         .products
         .get(&run.product)
         .ok_or_else(|| CmdError::click("release product has no rollout policy"))?;
+    let desired = policy
+        .desired
+        .as_ref()
+        .ok_or_else(|| CmdError::click("promoted release has no desired coordinate"))?;
+    if desired.version != run.version {
+        return Err(CmdError::click(format!(
+            "promoted release is {}, not {}",
+            desired.version, run.version
+        )));
+    }
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|e| CmdError::click(e.to_string()))?;
@@ -1270,37 +1282,88 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             crate::deploy::shlex_quote(name),
             crate::deploy::shlex_quote(name)
         );
-        let output = crate::deploy::host_channel::run_script(target, &script, &runner)
-            .await
-            .map_err(|e| CmdError::click(e.to_string()))?;
-        if !output.ok() {
-            return Err(CmdError::click(format!(
-                "reconciliation failed on {name}: {}",
-                output.detail()
-            )));
-        }
-        let states: Vec<crate::release_agent::HostReleaseState> =
-            serde_json::from_str(output.stdout.trim())?;
-        let state = states
-            .into_iter()
-            .find(|s| s.product == run.product)
-            .ok_or_else(|| CmdError::click(format!("target {name} omitted release state")))?;
-        let active = state
-            .active
-            .ok_or_else(|| CmdError::click(format!("target {name} has no active release")))?;
         let expected = run
             .platforms
             .get(&policy.targets[name].platform)
             .ok_or_else(|| CmdError::click("rollout platform was not built"))?;
-        if active.version != run.version
-            || Some(active.artifact_sha256.as_str()) != expected.artifact_sha256.as_deref()
-            || Some(active.manifest_sha256.as_str()) != expected.release_manifest_sha256.as_deref()
-        {
+        let mut last_observation = "product state was not returned".to_string();
+        let mut converged = false;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let output = crate::deploy::host_channel::run_script(target, &script, &runner)
+                .await
+                .map_err(|e| CmdError::click(e.to_string()))?;
+            if !output.ok() {
+                return Err(CmdError::click(format!(
+                    "reconciliation failed on {name}: {}",
+                    output.detail()
+                )));
+            }
+            let states: Vec<crate::release_agent::HostReleaseState> =
+                serde_json::from_str(output.stdout.trim())?;
+            if let Some(state) = states
+                .into_iter()
+                .find(|state| state.product == run.product)
+            {
+                if state.rollout_generation > desired.rollout_generation {
+                    return Err(CmdError::click(format!(
+                        "target {name} advanced to rollout generation {}, beyond {}",
+                        state.rollout_generation, desired.rollout_generation
+                    )));
+                }
+                let exact = state.rollout_generation == desired.rollout_generation
+                    && state.active.as_ref().is_some_and(|active| {
+                        active.version == run.version
+                            && Some(active.artifact_sha256.as_str())
+                                == expected.artifact_sha256.as_deref()
+                            && Some(active.manifest_sha256.as_str())
+                                == expected.release_manifest_sha256.as_deref()
+                    });
+                if exact {
+                    let active = state.active.as_ref().expect("checked above");
+                    observed.push(json!({
+                        "target": name,
+                        "version": active.version,
+                        "artifact_sha256": active.artifact_sha256,
+                        "manifest_sha256": active.manifest_sha256
+                    }));
+                    converged = true;
+                    break;
+                }
+                if state.rollout_generation == desired.rollout_generation
+                    && matches!(
+                        state.phase,
+                        crate::release_agent::RolloutPhase::RolledBack
+                            | crate::release_agent::RolloutPhase::Failed
+                            | crate::release_agent::RolloutPhase::Quarantined
+                    )
+                {
+                    return Err(CmdError::click(format!(
+                        "target {name} refused rollout generation {} in phase {:?}: {}",
+                        desired.rollout_generation, state.phase, state.detail
+                    )));
+                }
+                last_observation = format!(
+                    "generation={} phase={:?} active={} detail={}",
+                    state.rollout_generation,
+                    state.phase,
+                    state
+                        .active
+                        .as_ref()
+                        .map(|active| active.version.as_str())
+                        .unwrap_or("-"),
+                    state.detail
+                );
+            }
+            if attempt < MAX_ATTEMPTS {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+        if !converged {
             return Err(CmdError::click(format!(
-                "target {name} did not report exact promoted digests"
+                "target {name} did not converge to {} generation {} after {MAX_ATTEMPTS} attempts: {last_observation}",
+                run.version, desired.rollout_generation
             )));
         }
-        observed.push(json!({"target":name,"version":active.version,"artifact_sha256":active.artifact_sha256,"manifest_sha256":active.manifest_sha256}));
     }
     let receipt = serde_json::to_vec(
         &json!({"schema_version":1,"run_id":run.run_id,"product":run.product,"version":run.version,"targets":observed,"completed_at":Utc::now().to_rfc3339()}),
