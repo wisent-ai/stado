@@ -26,6 +26,8 @@ pub enum ProductCommands {
     Rollback(ProductMutation),
     /// Remove one product surface and its recorded files/service.
     Remove(ProductMutation),
+    /// Re-install every catalogued product on one surface that is behind `origin/main`.
+    Sync(ProductSweep),
 }
 
 #[derive(Debug, clap::Args)]
@@ -33,6 +35,23 @@ pub struct ProductMutation {
     product: String,
     #[arg(long, value_parser = ["cli", "desktop", "service"])]
     surface: String,
+    /// Required only for a service surface.
+    #[arg(long)]
+    host: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ProductSweep {
+    #[arg(long, value_parser = ["cli", "desktop", "service"])]
+    surface: String,
+    /// `git fetch origin` in each checkout first.
+    #[arg(long)]
+    fetch: bool,
+    /// Decide and report without installing.
+    #[arg(long)]
+    dry_run: bool,
     /// Required only for a service surface.
     #[arg(long)]
     host: Option<String>,
@@ -100,6 +119,27 @@ fn mutation_args(verb: &str, value: ProductMutation) -> Vec<String> {
     args
 }
 
+fn sweep_args(value: ProductSweep) -> Vec<String> {
+    let mut args = vec![
+        "sync".to_string(),
+        "--surface".to_string(),
+        value.surface,
+    ];
+    if value.fetch {
+        args.push("--fetch".to_string());
+    }
+    if value.dry_run {
+        args.push("--dry-run".to_string());
+    }
+    if let Some(host) = value.host {
+        args.extend(["--host".to_string(), host]);
+    }
+    if value.json {
+        args.push("--json".to_string());
+    }
+    args
+}
+
 pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     match command {
         ProductCommands::Catalog { json } => {
@@ -114,5 +154,6 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         ProductCommands::Update(value) => invoke(mutation_args("update", value)).await,
         ProductCommands::Rollback(value) => invoke(mutation_args("rollback", value)).await,
         ProductCommands::Remove(value) => invoke(mutation_args("remove", value)).await,
+        ProductCommands::Sync(value) => invoke(sweep_args(value)).await,
     }
 }
