@@ -93,26 +93,6 @@ impl Fleet {
             .expect("stado binary runs")
     }
 
-    /// The same invocation with an exact PATH, for the cases that turn on
-    /// which helper binaries the host really has.
-    fn stado_with_path(&self, path: &str, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(args)
-            .env_clear()
-            .env("HOME", self.home.path())
-            .env("PATH", path)
-            .env("WC_STORAGE_BACKEND", "local")
-            .env("WC_LOCAL_STORAGE_PATH", self.storage.path())
-            .env(
-                "STADO_CONFIG",
-                self.storage.path().join("no-such-config.json"),
-            )
-            .env("WC_PROVIDERS", "local")
-            .env("WC_VAST_AUTO_LIST", "false")
-            .output()
-            .expect("stado binary runs")
-    }
-
     fn task(&self, extra: &[&str]) -> Output {
         let mut args = vec![
             "host",
@@ -376,38 +356,28 @@ fn an_origin_weles_could_never_match_is_refused_before_any_host_is_touched() {
     );
 }
 
-/// Without the capability broker's CLI there is no way to mint a reference,
-/// and the refusal has to say so rather than submit a run whose prefill
-/// cannot be redeemed. PATH here is the system one, which genuinely carries
-/// no `skarbiec` — nothing is stubbed.
+/// Without an installed capability broker there is no way to mint a reference,
+/// and the refusal has to say so rather than submit a run whose prefill cannot
+/// be redeemed. HOME here is the tempdir this test made, which genuinely holds
+/// no `.stado/bin/skarbiec` — nothing is stubbed, and PATH is irrelevant
+/// because the binary and the vault are resolved the way every other
+/// credential operation in this product resolves them.
 #[test]
-fn a_sign_in_is_refused_when_the_capability_broker_cannot_be_run() {
+fn a_sign_in_is_refused_when_the_capability_broker_is_not_installed() {
     let fleet = Fleet::new();
     fleet.env_file(&long_allowlist(&["generic_browser_task"]));
-    let out = fleet.stado_with_path(
-        "/usr/bin:/bin",
-        &[
-            "host",
-            "weles-browser-task",
-            "here",
-            "--url",
-            "https://accounts.google.com/",
-            "--objective",
-            "sign in and report the outcome",
-            "--session-label",
-            "oko-calendar",
-            "--allow-login",
-            "--sign-in-origin",
-            "https://accounts.google.com",
-            "--sign-in-item",
-            "weles-google-sso-login",
-        ],
-    );
+    let out = fleet.task(&[
+        "--allow-login",
+        "--sign-in-origin",
+        "https://accounts.google.com",
+        "--sign-in-item",
+        "weles-google-sso-login",
+    ]);
     assert!(!out.status.success(), "{}", said(&out));
     let text = said(&out);
-    assert!(text.contains("skarbiec routes list"), "{text}");
     assert!(
-        text.contains("must be on PATH"),
-        "the refusal must name the missing broker CLI:\n{text}"
+        text.contains("no installed skarbiec binary at"),
+        "the refusal must name the broker it looked for:\n{text}"
     );
+    assert!(text.contains(".stado/bin/skarbiec"), "{text}");
 }

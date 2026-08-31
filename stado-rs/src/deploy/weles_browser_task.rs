@@ -289,21 +289,40 @@ pub fn prefill_entry(
     })
 }
 
-/// Run one `skarbiec` subcommand and read its JSON answer.
+/// Run one `skarbiec` subcommand against THIS host's owner vault, and read its
+/// JSON answer.
 ///
 /// Nothing secret is in `argv` on either side of this: issuing names a
 /// resource, and the answer is a capability id. Skarbiec's own sentence is
 /// carried through verbatim rather than restated, because it is the surface
 /// that knows why — "no capability route maps ... to a vault field" is a
 /// remedy, and "capability issuance failed" is not.
+///
+/// The binary and the vault are resolved the way every other credential
+/// operation in this product resolves them
+/// ([`crate::credential_store::owner`]), not left to whatever the operator's
+/// shell happens to export. Inheriting the environment is how the first real
+/// run of this command read `~/.local/share/skarbiec/skarbiec.vault.json` —
+/// uninitialized on a fleet whose vault is `~/.stado/skarbiec.vault.json` —
+/// and reported a missing route table for a vault nobody uses. The unlock
+/// phrase is removed for the child for the reason
+/// [`crate::credential_store::owner::store_json`] removes it: an inherited
+/// phrase would choose a vault key no caller asked for.
 fn skarbiec(args: &[&str]) -> Result<Value, DeployError> {
-    let output = std::process::Command::new("skarbiec")
+    let binary =
+        crate::credential_store::owner::binary().map_err(|error| DeployError(error.to_string()))?;
+    let vault =
+        crate::credential_store::owner::vault().map_err(|error| DeployError(error.to_string()))?;
+    let output = std::process::Command::new(&binary)
         .args(args)
+        .env("SKARBIEC_VAULT_FILE", &vault)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
         .output()
         .map_err(|error| {
             DeployError(format!(
-                "cannot run `skarbiec {}`: {error}; the capability broker's CLI must be on PATH \
-                 to mint a sign-in capability",
+                "cannot run `{} {}`: {error}",
+                binary.display(),
                 args.join(" ")
             ))
         })?;
@@ -311,8 +330,9 @@ fn skarbiec(args: &[&str]) -> Result<Value, DeployError> {
         let said = String::from_utf8_lossy(&output.stderr);
         let said = said.trim();
         return Err(DeployError(format!(
-            "`skarbiec {}` failed: {}",
+            "`skarbiec {}` failed against {}: {}",
             args.join(" "),
+            vault.display(),
             if said.is_empty() {
                 String::from_utf8_lossy(&output.stdout).trim().to_string()
             } else {
