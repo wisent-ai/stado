@@ -1170,6 +1170,11 @@ pub fn run_hf(
     policy: &DiskCleanupPolicy,
     active_slot_count: i64,
     now: f64,
+    // This cleaner's share of the pass's scan budget, not the whole cap. It
+    // runs first, and taking `policy.max_scan_items` here is how a
+    // first-in-line cleaner spends an entire pass on behalf of every cleaner
+    // behind it — see `cleaner_budget` in the parent module.
+    scan_limit: i64,
     deadline: Instant,
     report: &mut CleanupReport,
 ) -> Result<(i64, i64), JanitorError> {
@@ -1181,7 +1186,7 @@ pub fn run_hf(
         return Ok((0, 0));
     }
 
-    let mut budget = ScanBudget::new(policy.max_scan_items, deadline);
+    let mut budget = ScanBudget::new(scan_limit, deadline);
     let scan_phase = (|budget: &mut ScanBudget, report: &mut CleanupReport| {
         let parts = [
             OsString::from(".cache"),
