@@ -182,6 +182,36 @@ pub async fn route_add(
     .await
 }
 
+/// The target's own verification of its route table.
+///
+/// `routes list` reports two booleans per route and `routes verify` reports
+/// the SENTENCE behind a false one — which item would not open, and why. That
+/// distinction matters over a channel: a non-interactive session may be unable
+/// to open a vault the broker service on that host opens perfectly well, and
+/// without the sentence the two are indistinguishable.
+///
+/// Skarbiec prints the report and THEN exits non-zero when any route is
+/// broken, so a non-zero exit carrying a JSON report is the documented success
+/// shape here, not a failure.
+pub async fn verify_routes(
+    target: &ComputeTarget,
+    broker: &RemoteBroker,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let output =
+        host_channel::run_command(target, &broker.command(&["routes", "verify"]), runner).await?;
+    let said = output.stdout.trim();
+    if let Ok(report) = serde_json::from_str::<Value>(said) {
+        return Ok(report);
+    }
+    Err(DeployError(format!(
+        "{}: `skarbiec routes verify` gave no report against {}: {}",
+        target.name,
+        broker.vault,
+        host_channel::last_error_line(&output, "the host gave no reason")
+    )))
+}
+
 /// What one capability asks for, in Skarbiec's own vocabulary.
 pub struct Issuance<'a> {
     pub agent: &'a str,

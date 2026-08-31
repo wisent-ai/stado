@@ -216,7 +216,7 @@ pub fn fill_resource(origin: &str, field_class: &str) -> String {
 /// Skarbiec's own route table was built for — a route pointing somewhere the
 /// operator did not mean is indistinguishable from a working one until a login
 /// needs it. So the claim is checked before a capability exists.
-pub fn routed_item(routes: &Value, resource: &str) -> Result<(String, String), DeployError> {
+pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, DeployError> {
     let rows = routes
         .get("routes")
         .and_then(Value::as_array)
@@ -244,25 +244,34 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<(String, String), D
             "capability route for {resource} must name an item and a field"
         )));
     }
-    if !row
-        .get("item_present")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(DeployError(format!(
-            "{resource} routes to vault item {item}, which this host cannot read"
-        )));
-    }
-    if !row
-        .get("field_present")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(DeployError(format!(
-            "{resource} routes to vault item {item} field {field}, which that item does not carry"
-        )));
-    }
-    Ok((item, field))
+    Ok(RoutedField {
+        item,
+        field,
+        // Advisory, NOT a gate. `routes list` answers these as the process
+        // that asked, and over a host channel that process has no gpg: every
+        // route on charless-mac-mini reports `does not open: spawn gpg` while
+        // the broker service on that same host reads those items fine.
+        // Refusing on them would refuse every real sign-in for the wrong
+        // reason, and redemption is where the item is actually read.
+        readable: row
+            .get("item_present")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && row
+                .get("field_present")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+    })
+}
+
+/// One route as the target answered it.
+#[derive(Debug)]
+pub struct RoutedField {
+    pub item: String,
+    pub field: String,
+    /// Whether the ASKING process could open the item and find the field.
+    /// Advisory only — see [`routed_item`].
+    pub readable: bool,
 }
 
 /// One `constraints.credential_prefill[]` entry, in the shape the trajectory
@@ -334,18 +343,24 @@ pub fn vault_field_for(field_class: &str) -> &'static str {
 }
 
 /// Confirm the redeeming host routes both resources to the item the caller
-/// named, and that the item and field are ones that host can actually read.
+/// named.
+///
+/// Returns the routes it could not confirm readable, for the caller to say out
+/// loud. Whether the broker can open the item is the broker's business at
+/// redemption; whether the route points at the item the operator named is this
+/// command's business, and that is what is enforced here.
 pub async fn confirm_routed_item(
     target: &ComputeTarget,
     broker: &super::host_capability::RemoteBroker,
     origin: &str,
     item: &str,
     runner: &Runner,
-) -> Result<(), DeployError> {
+) -> Result<Vec<String>, DeployError> {
     let routes = super::host_capability::routes(target, broker, runner).await?;
+    let mut unconfirmed = Vec::new();
     for (_, field_class) in SIGN_IN_FIELDS {
         let resource = fill_resource(origin, field_class);
-        let (routed, field) = routed_item(&routes, &resource).map_err(|error| {
+        let routed = routed_item(&routes, &resource).map_err(|error| {
             DeployError(missing_route_sentence(
                 &target.name,
                 origin,
@@ -353,15 +368,18 @@ pub async fn confirm_routed_item(
                 &error.to_string(),
             ))
         })?;
-        if routed != item {
+        if routed.item != item {
             return Err(DeployError(format!(
-                "{}: {resource} routes to vault item {routed} field {field}, not to {item}; \
+                "{}: {resource} routes to vault item {} field {}, not to {item}; \
                  the item that would be read is the one the route names",
-                target.name
+                target.name, routed.item, routed.field
             )));
         }
+        if !routed.readable {
+            unconfirmed.push(format!("{}/{}", routed.item, routed.field));
+        }
     }
-    Ok(())
+    Ok(unconfirmed)
 }
 
 /// Issue the pair ON the redeeming host and return the prefill entries that
@@ -378,9 +396,9 @@ pub async fn issue_sign_in_prefill(
     origin: &str,
     item: &str,
     runner: &Runner,
-) -> Result<Vec<Value>, DeployError> {
+) -> Result<SignInPrefill, DeployError> {
     let broker = super::host_capability::resolve(target, runner).await?;
-    confirm_routed_item(target, &broker, origin, item, runner).await?;
+    let unconfirmed = confirm_routed_item(target, &broker, origin, item, runner).await?;
     let authorization_id = uuid::Uuid::new_v4().to_string();
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
     for (fill_target, field_class) in SIGN_IN_FIELDS {
@@ -408,7 +426,19 @@ pub async fn issue_sign_in_prefill(
             &authorization_id,
         ));
     }
-    Ok(entries)
+    Ok(SignInPrefill {
+        entries,
+        unconfirmed,
+    })
+}
+
+/// The references, and what the target could not confirm about them.
+pub struct SignInPrefill {
+    pub entries: Vec<Value>,
+    /// `item/field` coordinates the target's own listing could not open. Said
+    /// out loud rather than treated as a refusal: the broker reads the item at
+    /// redemption, and a channel session without gpg cannot answer for it.
+    pub unconfirmed: Vec<String>,
 }
 
 /// What one browser task asks Weles to do.
@@ -742,8 +772,14 @@ mod tests {
         );
     }
 
+    /// A route that does not exist is refused; a route whose readability the
+    /// ASKING process could not confirm is reported, not refused. Over a host
+    /// channel every route on charless-mac-mini answers `does not open: spawn
+    /// gpg` because that session has no gpg, while the broker service on the
+    /// same host reads those items fine — so refusing on that boolean would
+    /// refuse every real sign-in for a reason that is about the wrong process.
     #[test]
-    fn a_route_that_names_another_item_or_cannot_deliver_is_refused() {
+    fn a_missing_route_is_refused_and_an_unconfirmable_one_is_only_reported() {
         let routes = json!({
             "consumer": null,
             "routes": [
@@ -758,36 +794,36 @@ mod tests {
                     "resource": "origin:https://accounts.google.com/password",
                     "item": "weles-google-sso-login",
                     "field": "password",
-                    "item_present": true,
+                    "item_present": false,
                     "field_present": false,
                 },
                 {
                     "resource": "origin:https://dash.cloudflare.com/email",
-                    "item": "platform-admin-cloudflare",
-                    "field": "username",
+                    "item": "",
+                    "field": "",
                     "item_present": false,
                     "field_present": false,
                 },
             ],
         });
 
-        let (item, field) =
-            routed_item(&routes, "origin:https://accounts.google.com/email").unwrap();
-        assert_eq!(item, "weles-google-sso-login");
-        assert_eq!(field, "username");
+        let routed = routed_item(&routes, "origin:https://accounts.google.com/email").unwrap();
+        assert_eq!(routed.item, "weles-google-sso-login");
+        assert_eq!(routed.field, "username");
+        assert!(routed.readable);
 
-        // A field the item does not carry: the Cloudflare failure shape, named
-        // rather than discovered at redemption.
-        let said = routed_item(&routes, "origin:https://accounts.google.com/password")
-            .unwrap_err()
-            .to_string();
-        assert!(said.contains("does not carry"), "{said}");
-        assert!(said.contains("password"), "{said}");
+        // The `spawn gpg` shape: mapped, but this process could not open it.
+        // Still Ok, with readable false for the caller to say out loud.
+        let routed = routed_item(&routes, "origin:https://accounts.google.com/password").unwrap();
+        assert_eq!(routed.item, "weles-google-sso-login");
+        assert_eq!(routed.field, "password");
+        assert!(!routed.readable);
 
+        // A table entry that names no coordinates is broken, not advisory.
         let said = routed_item(&routes, "origin:https://dash.cloudflare.com/email")
             .unwrap_err()
             .to_string();
-        assert!(said.contains("cannot read"), "{said}");
+        assert!(said.contains("must name an item and a field"), "{said}");
 
         // Skarbiec's own sentence for a resource with no route at all.
         let said = routed_item(&routes, "origin:https://example.com/email")

@@ -1818,6 +1818,13 @@ enum HostCommands {
         /// credential a form receives is never self-explanatory later.
         #[arg(long)]
         reason: Option<String>,
+        /// Ask TARGET to verify its whole table and report the SENTENCE behind
+        /// every route that cannot deliver, instead of the two booleans the
+        /// listing prints. A non-interactive channel may be unable to open a
+        /// vault the broker service on that host opens fine, and only the
+        /// sentence tells those apart.
+        #[arg(long)]
+        verify: bool,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -2647,6 +2654,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 item,
                 field,
                 reason,
+                verify,
                 json,
             } => {
                 host::capability_route(host::CapabilityRouteRequest {
@@ -2655,6 +2663,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     item: item.as_deref(),
                     field: field.as_deref(),
                     reason: reason.as_deref(),
+                    verify,
                     json,
                 })
                 .await

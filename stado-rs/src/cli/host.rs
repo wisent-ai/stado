@@ -5578,6 +5578,7 @@ pub struct CapabilityRouteRequest<'a> {
     pub item: Option<&'a str>,
     pub field: Option<&'a str>,
     pub reason: Option<&'a str>,
+    pub verify: bool,
     pub json: bool,
 }
 
@@ -5595,6 +5596,7 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
         item,
         field,
         reason,
+        verify,
         json,
     } = request;
     // Declaring takes all four or none of them. A partial declaration is the
@@ -5632,6 +5634,11 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
 
+    if verify && declaration.is_some() {
+        return Err(CmdError::usage(
+            "--verify is a read; it does not combine with declaring a route",
+        ));
+    }
     let report = match declaration {
         Some((resource, item, field, reason)) => {
             crate::deploy::host_capability::route_add(
@@ -5639,6 +5646,11 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
             )
             .await
             .map_err(|error| CmdError::click(error.to_string()))?
+        }
+        None if verify => {
+            crate::deploy::host_capability::verify_routes(&resolved, &broker, &runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?
         }
         None => crate::deploy::host_capability::routes(&resolved, &broker, &runner)
             .await
@@ -5672,6 +5684,27 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
             report["item"].as_str().unwrap_or_default(),
             report["field"].as_str().unwrap_or_default(),
         ),
+        None if verify => {
+            // `checked` plus one line per route that cannot deliver, in the
+            // host's own words. An empty `broken` list is the whole point.
+            println!(
+                "checked:   {}",
+                report.get("checked").and_then(Value::as_u64).unwrap_or(0)
+            );
+            let broken = report
+                .get("broken")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            println!("broken:    {}", broken.len());
+            for row in broken {
+                println!(
+                    "  {:<52} {}",
+                    row["resource"].as_str().unwrap_or_default(),
+                    row["problem"].as_str().unwrap_or_default(),
+                );
+            }
+        }
         None => {
             let rows = report
                 .get("routes")
@@ -5795,7 +5828,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     let credential_prefill = match &sign_in {
         None => Vec::new(),
         Some((origin, item)) => {
-            let entries = crate::deploy::weles_browser_task::issue_sign_in_prefill(
+            let prefill = crate::deploy::weles_browser_task::issue_sign_in_prefill(
                 &resolved, origin, item, &runner,
             )
             .await
@@ -5804,11 +5837,20 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                 println!("sign-in:   {origin} as the account in {item}");
                 println!(
                     "prefill:   {} field(s), issued on {}, single-use",
-                    entries.len(),
+                    prefill.entries.len(),
                     resolved.name
                 );
+                if !prefill.unconfirmed.is_empty() {
+                    println!(
+                        "note:      this channel could not open {} to confirm the field; the \
+                         worker's own broker reads it at fill time (`host capability-route {} \
+                         --verify` says why)",
+                        prefill.unconfirmed.join(", "),
+                        resolved.name
+                    );
+                }
             }
-            entries
+            prefill.entries
         }
     };
 
