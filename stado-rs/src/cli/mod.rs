@@ -1910,6 +1910,15 @@ enum HostCommands {
         /// Exact Weles login item for a named credential trajectory.
         #[arg(long)]
         login_item: Option<String>,
+        /// Bind this run to one account identity, which is what keys the
+        /// browser profile. Weles hashes it into a profile directory and the
+        /// API puts it in the trajectory's `ACCOUNT_ID`, so two runs sharing it
+        /// share cookies and a signed-in session. Without it every run is a
+        /// brand-new device to the site being driven, which is how a sign-in
+        /// that succeeded once cannot be built on and why each attempt draws a
+        /// first-visit risk check.
+        #[arg(long)]
+        account_id: Option<String>,
         /// Give the run a new account identity, which makes Weles create a new
         /// browser profile directory instead of clearing or reusing one.
         #[arg(long)]
@@ -2750,6 +2759,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 action,
                 allowlist_file,
                 login_item,
+                account_id,
                 fresh_profile,
                 allow_login,
                 sign_in_origin,
@@ -2767,6 +2777,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     action: &action,
                     allowlist_file: &allowlist_file,
                     login_item: login_item.as_deref(),
+                    account_id: account_id.as_deref(),
                     fresh_profile,
                     allow_login,
                     sign_in_origin: sign_in_origin.as_deref(),

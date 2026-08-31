@@ -5879,6 +5879,9 @@ pub struct BrowserTaskRequest<'a> {
     pub action: &'a str,
     pub allowlist_file: &'a str,
     pub login_item: Option<&'a str>,
+    /// The account identity that keys the browser profile, when the caller
+    /// pins one so a later run can reuse its session.
+    pub account_id: Option<&'a str>,
     pub fresh_profile: bool,
     pub allow_login: bool,
     pub sign_in_origin: Option<&'a str>,
@@ -5906,6 +5909,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         action,
         allowlist_file,
         login_item,
+        account_id,
         fresh_profile,
         allow_login,
         sign_in_origin,
@@ -5984,7 +5988,17 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
             return Err(CmdError::usage("--login-item requires --allow-login"));
         }
     }
-    let account_id = fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4()));
+    // A pinned identity is the caller's; otherwise a fresh profile still needs
+    // one, because the API refuses `fresh_profile` without an account to bind
+    // the new directory to.
+    let account_id = match account_id {
+        Some(pinned) => Some(
+            crate::deploy::weles_capture::checked_account_id(pinned)
+                .map_err(|error| CmdError::click(error.to_string()))?
+                .to_string(),
+        ),
+        None => fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4())),
+    };
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
