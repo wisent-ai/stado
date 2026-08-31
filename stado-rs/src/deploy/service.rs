@@ -4707,6 +4707,24 @@ pub struct UndeclaredUnit {
     /// was; this is the list, because more than one entry means one label is
     /// declared in more than one domain and launchd will happily run both.
     pub declaring_paths: Vec<String>,
+    /// The argument vector the pid launchd holds is ACTUALLY executing, as the
+    /// process table reports it, or empty when the label holds no pid.
+    ///
+    /// The declaration and the process are two different facts and this fleet
+    /// has had them disagree: `com.wisent.compute.service.stado-local-control-plane`
+    /// declares `stado coordinator` and launchd was holding a five-day-old
+    /// `stado dashboard` under it — a command the product deleted on
+    /// 2026-08-19, whose refresh loop still forced a disk-cleanup pass every
+    /// two minutes and stamped the janitor's shared interval out from under
+    /// the queue agent. Every report that read the unit file agreed with
+    /// itself and none of them was looking at the process.
+    pub running_program: String,
+    /// When that process started, and when the binary it is executing was
+    /// last written. A process older than its own binary is running code
+    /// nobody shipped: the delivery landed, the unit was never restarted, and
+    /// the label keeps answering with the previous version.
+    pub started_epoch: Option<i64>,
+    pub binary_written_epoch: Option<i64>,
 }
 
 impl UndeclaredUnit {
@@ -4719,7 +4737,103 @@ impl UndeclaredUnit {
             "path": self.path,
             "program": self.program,
             "declaring_paths": self.declaring_paths,
+            "running_program": self.running_program,
+            "started_epoch": self.started_epoch,
+            "binary_written_epoch": self.binary_written_epoch,
         })
+    }
+
+    /// The first word of an argument vector: the program, without its flags.
+    fn head(vector: &str) -> Option<&str> {
+        vector.split_whitespace().next()
+    }
+
+    /// `plutil -extract ... json` escapes every path separator, so a declared
+    /// program arrives as `\/Users\/charles\/...`. Comparing that against a
+    /// process table entry is comparing two spellings of the same path.
+    fn unescape(vector: &str) -> String {
+        vector.replace("\\/", "/")
+    }
+
+    /// The first argument after `binary` that is not a flag: the subcommand.
+    ///
+    /// Anchored on the binary rather than on argv[0], because an interpreter
+    /// is a legitimate argv[0]: `python3 .../uvicorn app.main:app` declares
+    /// `uvicorn` as its program and the process table shows the interpreter
+    /// first. Reading position 1 there compares `app.main:app` against the
+    /// path of uvicorn itself and calls three healthy services broken.
+    fn subcommand<'a>(vector: &'a str, binary: &str) -> Option<&'a str> {
+        let mut words = vector.split_whitespace().skip_while(|word| *word != binary);
+        words.next()?;
+        words.find(|word| !word.starts_with('-'))
+    }
+
+    /// Is the label's live process executing the program its own unit file
+    /// declares?
+    ///
+    /// `None` wherever the answer would be a guess, which is most of a real
+    /// host: a label with no pid, an unreadable unit file, and — deliberately
+    /// — every case where the declared binary does not appear in the running
+    /// argv at all. That last one is the launcher shape, and it is legitimate
+    /// and everywhere: `launch-mac.sh` execs `node`, a `.venv/bin/uvicorn`
+    /// declaration runs as `/opt/homebrew/.../Python`, `mac-mini-web-launch.sh`
+    /// becomes `npm start`. An exec chain and a wrong program are
+    /// indistinguishable from the outside, so this check says nothing there
+    /// rather than reporting fourteen healthy services to bury one real
+    /// finding.
+    ///
+    /// What it does answer is the one case where the evidence is complete: the
+    /// process IS running the declared binary, and the subcommand differs.
+    /// Every stado unit on a host executes the same binary, so the subcommand
+    /// is the entire difference between the coordinator, the agent and a
+    /// dashboard the product deleted in August.
+    pub fn runs_declared_program(&self) -> Option<bool> {
+        if self.running_program.is_empty() || self.program.is_empty() {
+            return None;
+        }
+        let declared = Self::unescape(&self.program);
+        let binary = Self::head(&declared)?;
+        if !self
+            .running_program
+            .split_whitespace()
+            .any(|word| word == binary)
+        {
+            return None;
+        }
+        match (
+            Self::subcommand(&declared, binary),
+            Self::subcommand(&self.running_program, binary),
+        ) {
+            (Some(declared_word), Some(running_word)) => Some(declared_word == running_word),
+            (None, None) => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Is it executing the binary that is on disk now? `None` when either
+    /// timestamp is missing, for the same reason.
+    pub fn runs_current_binary(&self) -> Option<bool> {
+        let started = self.started_epoch?;
+        let written = self.binary_written_epoch?;
+        Some(written <= started)
+    }
+
+    /// The binary the live process is executing, for a report that has to name
+    /// it.
+    pub fn running_binary(&self) -> Option<&str> {
+        Self::head(&self.running_program)
+    }
+
+    /// The program the unit file declares, in the spelling a process table
+    /// uses, so a report can print the two side by side.
+    pub fn declared_program(&self) -> String {
+        Self::unescape(&self.program)
+    }
+
+    /// How long after this process started its binary was replaced, in
+    /// seconds. `None` unless both facts were read.
+    pub fn binary_written_after_start(&self) -> Option<i64> {
+        Some(self.binary_written_epoch? - self.started_epoch?)
     }
 }
 
@@ -4775,7 +4889,26 @@ for label in $labels; do
     program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \
       | /usr/bin/tr -d '[]\"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\\t\\r\\n' ' ')
   fi
-  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\"
+  # What the label's process is ACTUALLY executing, beside what its file
+  # declares. Reading only the declaration is how a deleted command kept
+  # running for five days under a label that declares a different one: every
+  # reader agreed with the plist, and the plist was not the process. `comm` is
+  # not enough here, because every stado unit executes the same binary and the
+  # subcommand is the whole difference between the agent and a dashboard.
+  running=''
+  started=''
+  written=''
+  case \"$pid\" in
+    ''|*[!0-9]*) ;;
+    *)
+      running=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+      lstart=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null)
+      started=$(/bin/date -j -f '%a %b %d %T %Y' \"$lstart\" +%s 2>/dev/null)
+      binary=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+      if [ -f \"$binary\" ]; then written=$(/usr/bin/stat -f %m \"$binary\" 2>/dev/null); fi
+      ;;
+  esac
+  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\" \"${running:--}\" \"${started:--}\" \"${written:--}\"
 done
 ";
 
@@ -5293,7 +5426,18 @@ pub async fn loaded_units(
         .stdout
         .lines()
         .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_LOADED", pid, status, label, path, program, domains] => {
+            [
+                "STADO_LOADED",
+                pid,
+                status,
+                label,
+                path,
+                program,
+                domains,
+                running,
+                started,
+                written,
+            ] => {
                 let label = (*label).trim().to_string();
                 label
                     .starts_with(FLEET_LABEL_PREFIX)
@@ -5309,6 +5453,9 @@ pub async fn loaded_units(
                             .filter(|path| *path != "-")
                             .map(str::to_string)
                             .collect(),
+                        running_program: (*running).trim().trim_matches('-').trim().to_string(),
+                        started_epoch: started.trim().parse().ok(),
+                        binary_written_epoch: written.trim().parse().ok(),
                     })
             }
             _ => None,
