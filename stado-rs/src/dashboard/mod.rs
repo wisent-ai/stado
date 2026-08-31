@@ -8,6 +8,7 @@
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
 //! GET /api/object/list?namespace=...&prefix=... - product object listing
 //! GET /api/object/stat?uri=stado://... - product object metadata
+//! POST /api/object/compose - atomically publish verified object chunks
 //! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
@@ -62,6 +63,7 @@ use crate::config;
 use crate::deploy::{host_channel, production_runner, service};
 use crate::machine::{MachineError, MachineFacade, SCHEMA_VERSION as MACHINE_SCHEMA_VERSION};
 use crate::models::isoformat_utc;
+use crate::object_store::{ObjectRef, OBJECT_API_CHUNK_BYTES};
 use crate::queue::submit::json_dumps_sorted_compact;
 use crate::queue::{JobStorage, StorageError};
 use crate::rate_limit::{self, ConsumeRequest, RateLimitError, RateLimiter};
@@ -294,6 +296,27 @@ const OBJECT_TOKEN_STALE_FOR: Duration = Duration::from_secs(10 * 60);
 struct CachedObjectToken {
     value: Option<String>,
     loaded_at: Instant,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObjectComposeChunk {
+    uri: String,
+    size: usize,
+    sha256: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObjectComposeRequest {
+    uri: String,
+    content_type: String,
+    if_absent: bool,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    upload_id: String,
+    size: usize,
+    chunks: Vec<ObjectComposeChunk>,
 }
 
 #[derive(Clone)]
@@ -1546,6 +1569,26 @@ impl Dashboard {
                 }),
             ));
         }
+        let content_type = request
+            .header("content-type")
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let extra = match request.header("x-stado-object-metadata") {
+            Some(raw) => match serde_json::from_str(raw) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Ok(send_json(
+                        http_status("400"),
+                        &json!({"error": format!("invalid object metadata: {error}")}),
+                    ))
+                }
+            },
+            None => BTreeMap::new(),
+        };
+        let metadata = match merged_object_metadata(object, &content_type, &extra) {
+            Ok(metadata) => metadata,
+            Err(error) => return Ok(send_json(http_status("400"), &json!({"error": error}))),
+        };
         if if_absent {
             let mut source = tempfile::NamedTempFile::new()?;
             source.write_all(&request.body)?;
@@ -1561,37 +1604,6 @@ impl Dashboard {
             }
         } else {
             self.store.upload_bytes(&path, &request.body).await?;
-        }
-        let content_type = request
-            .header("content-type")
-            .unwrap_or("application/octet-stream")
-            .to_string();
-        let mut metadata = crate::object_store::metadata(object, &content_type);
-        if let Some(raw) = request.header("x-stado-object-metadata") {
-            let extra: std::collections::BTreeMap<String, String> = match serde_json::from_str(raw)
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(send_json(
-                        http_status("400"),
-                        &json!({"error": format!("invalid object metadata: {error}")}),
-                    ))
-                }
-            };
-            for (name, value) in extra {
-                if !name.starts_with("stado-")
-                    || metadata.contains_key(&name)
-                    || value.is_empty()
-                    || name.chars().any(char::is_control)
-                    || value.chars().any(char::is_control)
-                {
-                    return Ok(send_json(
-                        http_status("400"),
-                        &json!({"error": "custom object metadata must use unique non-empty stado-* fields"}),
-                    ));
-                }
-                metadata.insert(name, value);
-            }
         }
         self.store.backend().set_metadata(&path, &metadata).await?;
         let landed = self.store.backend().list_blobs_with_meta(&path).await?;
@@ -1617,6 +1629,340 @@ impl Dashboard {
                 "content_type": content_type,
             }),
         ))
+    }
+
+    async fn post_object_compose(&self, request: &Request) -> Response {
+        let request_content_type = request
+            .header("content-type")
+            .and_then(|value| value.split(';').next())
+            .map(str::trim);
+        if request_content_type != Some("application/json") {
+            return object_compose_error(
+                http_status("415"),
+                "content-type must be application/json",
+            );
+        }
+        let payload = match serde_json::from_slice::<ObjectComposeRequest>(&request.body) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return object_compose_error(
+                    http_status("400"),
+                    format!("invalid object composition request: {error}"),
+                )
+            }
+        };
+        let object = match ObjectRef::parse(&payload.uri) {
+            Ok(object) => object,
+            Err(error) => return object_compose_error(http_status("400"), error.to_string()),
+        };
+        if object.to_string() != payload.uri {
+            return object_compose_error(
+                http_status("400"),
+                "composition uri must use the canonical stado:// form",
+            );
+        }
+        if object.key().contains(".__stado_upload/") {
+            return object_compose_error(
+                http_status("400"),
+                "a staged upload cannot be a composition target",
+            );
+        }
+        if payload.content_type.is_empty()
+            || payload.content_type.len() > MAX_HEAD_BYTES
+            || payload.content_type.chars().any(char::is_control)
+        {
+            return object_compose_error(http_status("400"), "invalid object content type");
+        }
+        let expected_upload_digest = match parse_sha256(&payload.upload_id) {
+            Some(digest) => digest,
+            None => {
+                return object_compose_error(
+                    http_status("400"),
+                    "upload_id must be a lowercase SHA-256 digest",
+                )
+            }
+        };
+        if payload.size == 0 || payload.size > crate::object_store::max_object_bytes() {
+            return object_compose_error(
+                http_status("400"),
+                "composition size is outside the object API limit",
+            );
+        }
+        let expected_chunk_count = payload.size.div_ceil(OBJECT_API_CHUNK_BYTES);
+        if payload.chunks.len() != expected_chunk_count {
+            return object_compose_error(
+                http_status("400"),
+                format!(
+                    "composition requires {expected_chunk_count} contiguous chunks for {} bytes",
+                    payload.size
+                ),
+            );
+        }
+
+        let mut declared_total = 0usize;
+        let mut chunks = Vec::with_capacity(payload.chunks.len());
+        for (index, chunk) in payload.chunks.iter().enumerate() {
+            let expected_size = payload
+                .size
+                .saturating_sub(declared_total)
+                .min(OBJECT_API_CHUNK_BYTES);
+            if chunk.size != expected_size {
+                return object_compose_error(
+                    http_status("400"),
+                    format!("chunk {index} must declare exactly {expected_size} bytes"),
+                );
+            }
+            declared_total = match declared_total.checked_add(chunk.size) {
+                Some(total) => total,
+                None => {
+                    return object_compose_error(
+                        http_status("400"),
+                        "composition chunk sizes overflow",
+                    )
+                }
+            };
+            let expected_digest = match parse_sha256(&chunk.sha256) {
+                Some(digest) => digest,
+                None => {
+                    return object_compose_error(
+                        http_status("400"),
+                        format!("chunk {index} sha256 must be a lowercase SHA-256 digest"),
+                    )
+                }
+            };
+            let chunk_object = match ObjectRef::parse(&chunk.uri) {
+                Ok(object) => object,
+                Err(error) => {
+                    return object_compose_error(
+                        http_status("400"),
+                        format!("invalid chunk {index} uri: {error}"),
+                    )
+                }
+            };
+            let expected_key = format!(
+                "{}.__stado_upload/{}/{index:08}",
+                object.key(),
+                payload.upload_id
+            );
+            if chunk_object.to_string() != chunk.uri
+                || chunk_object.namespace() != object.namespace()
+                || chunk_object.key() != expected_key
+            {
+                return object_compose_error(
+                    http_status("400"),
+                    format!("chunk {index} is outside the target upload"),
+                );
+            }
+            chunks.push((chunk_object, expected_digest));
+        }
+        if declared_total != payload.size {
+            return object_compose_error(
+                http_status("400"),
+                "composition chunk sizes do not equal the declared object size",
+            );
+        }
+        let metadata =
+            match merged_object_metadata(&object, &payload.content_type, &payload.metadata) {
+                Ok(metadata) => metadata,
+                Err(error) => return object_compose_error(http_status("400"), error),
+            };
+
+        if requires_object_boundary(object.namespace(), object.key())
+            && !self.boundaries_available(&[Boundary::Object]).await
+        {
+            return object_compose_error(http_status("503"), "object authorization unavailable");
+        }
+        let authorized = if let Some(policy_key) =
+            crate::object_store::release_policy_key(object.namespace(), object.key())
+        {
+            if object.namespace() == "releases" && !payload.if_absent {
+                Ok(false)
+            } else {
+                authorize_release(self, request, &policy_key, false).await
+            }
+        } else {
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
+        };
+        match authorized {
+            Ok(true) => {}
+            Ok(false) => {
+                return object_compose_error(
+                    http_status("401"),
+                    "unauthorized or non-immutable release write",
+                )
+            }
+            Err(()) => {
+                return object_compose_error(http_status("503"), "object authorization unavailable")
+            }
+        }
+
+        let mut staged = match tempfile::NamedTempFile::new() {
+            Ok(staged) => staged,
+            Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+        };
+        let mut object_digest = Sha256::new();
+        let mut assembled_size = 0usize;
+        for ((chunk_object, expected_digest), declared) in chunks.iter().zip(&payload.chunks) {
+            let bytes = match self.store.read_bytes(&chunk_object.storage_path()).await {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => {
+                    return object_compose_response(
+                        http_status("404"),
+                        json!({"state": "absent", "uri": chunk_object.to_string()}),
+                    )
+                }
+                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+            };
+            let actual_digest: [u8; 32] = Sha256::digest(&bytes).into();
+            if bytes.len() != declared.size || actual_digest != *expected_digest {
+                return object_compose_error(
+                    http_status("422"),
+                    format!("stored chunk does not match {}", chunk_object),
+                );
+            }
+            if let Err(error) = staged.write_all(&bytes) {
+                return object_compose_error(http_status("500"), error.to_string());
+            }
+            object_digest.update(&bytes);
+            assembled_size += bytes.len();
+        }
+        if assembled_size != payload.size {
+            return object_compose_error(
+                http_status("422"),
+                "assembled object size differs from the composition request",
+            );
+        }
+        let assembled_digest: [u8; 32] = object_digest.finalize().into();
+        if assembled_digest != expected_upload_digest {
+            return object_compose_error(
+                http_status("422"),
+                "assembled object SHA-256 differs from upload_id",
+            );
+        }
+        if let Err(error) = staged.flush() {
+            return object_compose_error(http_status("500"), error.to_string());
+        }
+
+        let target_path = object.storage_path();
+        if payload.if_absent {
+            let created = match self
+                .store
+                .upload_file_if_absent(&target_path, staged.path())
+                .await
+            {
+                Ok(created) => created,
+                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+            };
+            if !created {
+                let existing = match self.store.read_bytes(&target_path).await {
+                    Ok(Some(existing)) => existing,
+                    Ok(None) => {
+                        return object_compose_error(
+                            http_status("500"),
+                            "object disappeared after create-only conflict",
+                        )
+                    }
+                    Err(error) => {
+                        return object_compose_error(http_status("500"), error.to_string())
+                    }
+                };
+                let existing_digest: [u8; 32] = Sha256::digest(&existing).into();
+                if existing.len() != payload.size || existing_digest != expected_upload_digest {
+                    return object_compose_response(
+                        http_status("409"),
+                        json!({
+                            "error": "object exists with different content",
+                            "uri": object.to_string(),
+                        }),
+                    );
+                }
+            }
+        } else {
+            let bytes = match std::fs::read(staged.path()) {
+                Ok(bytes) => bytes,
+                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+            };
+            if let Err(error) = self.store.upload_bytes(&target_path, &bytes).await {
+                return object_compose_error(http_status("500"), error.to_string());
+            }
+        }
+
+        if let Err(error) = self
+            .store
+            .backend()
+            .set_metadata(&target_path, &metadata)
+            .await
+        {
+            return object_compose_error(http_status("500"), error.to_string());
+        }
+        let landed = match self
+            .store
+            .backend()
+            .list_blobs_with_meta(&target_path)
+            .await
+        {
+            Ok(landed) => landed,
+            Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+        };
+        let Some(blob) = landed.into_iter().find(|blob| blob.name == target_path) else {
+            return object_compose_error(
+                http_status("500"),
+                format!("object metadata verification could not find {object}"),
+            );
+        };
+        if metadata
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .any(|(key, value)| blob.metadata.get(key) != Some(value))
+        {
+            return object_compose_error(
+                http_status("500"),
+                format!("object metadata verification failed for {object}"),
+            );
+        }
+
+        let cleanup_paths = if payload.if_absent {
+            let prefix = format!("{target_path}.__stado_upload/");
+            match self.store.list_paths(&prefix, usize::default()).await {
+                Ok(paths) => paths
+                    .into_iter()
+                    .filter(|path| {
+                        ObjectRef::from_storage_path(path).is_ok_and(|candidate| {
+                            candidate.namespace() == object.namespace()
+                                && release_upload_target_key(candidate.key()) == Some(object.key())
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+            }
+        } else {
+            chunks
+                .iter()
+                .map(|(chunk, _)| chunk.storage_path())
+                .collect::<Vec<_>>()
+        };
+        for chunk_path in cleanup_paths {
+            if let Err(error) = self.store.delete_blob(&chunk_path).await {
+                return object_compose_error(http_status("500"), error.to_string());
+            }
+        }
+
+        object_compose_response(
+            http_status("200"),
+            json!({
+                "state": "stored",
+                "uri": object.to_string(),
+                "content_type": payload.content_type,
+            }),
+        )
     }
 
     async fn post_rate_limit_consume(&self, request: &Request) -> Response {
@@ -1684,6 +2030,9 @@ impl Dashboard {
         // any operator authorization is reached, and never by it.
         if path == "/api/fleet/join" {
             return fleet_join::join(&self.store, request).await;
+        }
+        if path == "/api/object/compose" {
+            return self.post_object_compose(request).await;
         }
         let required: &[Boundary] = match path {
             "/api/rate-limit/consume" => &[Boundary::RateLimitVerifier, Boundary::RateLimitState],
@@ -2418,6 +2767,53 @@ fn object_list_from_query(query: &str) -> Result<(String, String), Response> {
     crate::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)
         .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))?;
     Ok((namespace, prefix))
+}
+
+fn merged_object_metadata(
+    object: &ObjectRef,
+    content_type: &str,
+    extra: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, &'static str> {
+    let mut metadata = crate::object_store::metadata(object, content_type);
+    for (name, value) in extra {
+        if !name.starts_with("stado-")
+            || metadata.contains_key(name)
+            || value.is_empty()
+            || name.chars().any(char::is_control)
+            || value.chars().any(char::is_control)
+        {
+            return Err("custom object metadata must use unique non-empty stado-* fields");
+        }
+        metadata.insert(name.clone(), value.clone());
+    }
+    Ok(metadata)
+}
+
+fn parse_sha256(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let mut digest = [0u8; 32];
+    hex::decode_to_slice(value, &mut digest).ok()?;
+    Some(digest)
+}
+
+/// Composition has a transport envelope because the client has already
+/// uploaded every chunk before this request. A failed composition must carry
+/// its exact retriable status without an intermediary replacing the JSON body.
+fn object_compose_response(status: u16, payload: Value) -> Response {
+    send_json(
+        http_status("200"),
+        &json!({"status": status, "payload": payload}),
+    )
+}
+
+fn object_compose_error(status: u16, message: impl Into<String>) -> Response {
+    object_compose_response(status, json!({"error": message.into()}))
 }
 
 fn url_decode(input: &str) -> String {

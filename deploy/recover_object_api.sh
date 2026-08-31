@@ -143,6 +143,7 @@ if not declared:
     raise SystemExit
 routes = (
     "/api/object",
+    "/api/object/compose",
     "/api/object/list",
     "/api/object/stat",
     "/api/release/object",
@@ -164,7 +165,7 @@ PY
     return 0
   fi
   if [ "$route_state" = drifted ]; then
-    for route in /api/object /api/object/list /api/object/stat /api/release/object; do
+    for route in /api/object /api/object/compose /api/object/list /api/object/stat /api/release/object; do
       "$tailscale_bin" funnel --bg --yes --https=443 \
         --set-path "$route" "http://127.0.0.1:8765$route"
     done
@@ -177,6 +178,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
 routes = (
     "/api/object",
+    "/api/object/compose",
     "/api/object/list",
     "/api/object/stat",
     "/api/release/object",
