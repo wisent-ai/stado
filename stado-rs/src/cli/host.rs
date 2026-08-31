@@ -4503,6 +4503,43 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
     Ok(())
 }
 
+/// Recover stale per-user GnuPG daemons after Skarbiec reports a keybox stall.
+pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-crypto.sh"),
+        std::time::Duration::from_secs(240),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec cryptographic recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    let detail = recovered.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// Restore the core object API without depending on the API being available.
 ///
 /// The checked-in host helper only mutates an unavailable listener. It pins the
@@ -5370,7 +5407,9 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     // `@path` keeps a long objective out of a shell history and out of argv.
     let objective = match objective.strip_prefix('@') {
         Some(path) => std::fs::read_to_string(path)
-            .map_err(|error| CmdError::usage(format!("cannot read objective from {path}: {error}")))?
+            .map_err(|error| {
+                CmdError::usage(format!("cannot read objective from {path}: {error}"))
+            })?
             .trim()
             .to_string(),
         // Trimmed on both paths: an all-whitespace objective is not a task,
@@ -5386,10 +5425,9 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let allowlist =
-        crate::deploy::weles_browser_task::host_allowlist(&resolved, env_file, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+    let allowlist = crate::deploy::weles_browser_task::host_allowlist(&resolved, env_file, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
         .map_err(|error| CmdError::click(error.to_string()))?;
 
@@ -5416,10 +5454,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         println!("host:      {}", resolved.name);
         println!("action:    {action}");
         println!("run:       {}", outcome.run_id);
-        println!(
-            "outcome:   {}",
-            if outcome.ok { "ok" } else { "failed" }
-        );
+        println!("outcome:   {}", if outcome.ok { "ok" } else { "failed" });
         if let Some(code) = outcome.exit_code {
             println!("exit:      {code}");
         }
@@ -5593,14 +5628,20 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             if !command.contains(&spec) || !command.contains("ssh") {
                 continue;
             }
-            let Ok(parsed) = pid.parse::<i32>() else { continue };
+            let Ok(parsed) = pid.parse::<i32>() else {
+                continue;
+            };
             let killed = tokio::process::Command::new("/bin/kill")
                 .args(["-TERM", &parsed.to_string()])
                 .output()
                 .await?;
             ended.push(format!(
                 "pid {parsed}{}",
-                if killed.status.success() { "" } else { " (signal refused)" }
+                if killed.status.success() {
+                    ""
+                } else {
+                    " (signal refused)"
+                }
             ));
         }
     }
@@ -5618,7 +5659,10 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             return Err(CmdError::click(format!(
                 "{target}: the channel was ended and its host marker could not be removed, so \
                  the host still advertises an endpoint: {}",
-                crate::deploy::host_channel::last_error_line(&removed, "remote marker removal failed")
+                crate::deploy::host_channel::last_error_line(
+                    &removed,
+                    "remote marker removal failed"
+                )
             )));
         }
         true

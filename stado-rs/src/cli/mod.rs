@@ -1473,6 +1473,13 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Recover stale per-user GnuPG daemons blocking Skarbiec decryption.
+    #[command(name = "recover-skarbiec-crypto")]
+    RecoverSkarbiecCrypto {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -2436,6 +2443,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::RecoverSkarbiecAudit { target, json } => {
                 host::recover_skarbiec_audit(&target, json).await
+            }
+            HostCommands::RecoverSkarbiecCrypto { target, json } => {
+                host::recover_skarbiec_crypto(&target, json).await
             }
             HostCommands::UnitLog {
                 target,
