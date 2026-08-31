@@ -7095,6 +7095,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         // Not drift, and not nothing. Helpers are delivered one at a time to
         // solve one incident and are never removed, so the population only
         // grows; naming the count is what makes an operator notice that a
+
         // directory of them accumulated while nobody decided to keep any.
         println!(
             "{target}: {helpers} installed helper script(s) alongside, which carry no release \
