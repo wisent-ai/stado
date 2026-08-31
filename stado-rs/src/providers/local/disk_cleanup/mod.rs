@@ -39,6 +39,17 @@ use crate::targets::{self, ComputeTarget, DiskCleanupPolicy};
 pub(crate) const GIB: i64 = 1024 * 1024 * 1024;
 /// Python `_STATE_VERSION`.
 pub const STATE_VERSION: i64 = 1;
+
+/// Per-writer attempt stamps in the state file: `{writer: epoch_seconds}`.
+///
+/// A KEY and not a version bump, deliberately. `persisted_disk_low_bytes_in`
+/// requires `version == STATE_VERSION` exactly, and that value feeds
+/// `disk_pressure_unresolved`, which fails admission CLOSED when the low
+/// watermark is unknown. Bumping the version would therefore make every
+/// binary older than this one treat the state file as unreadable and stop
+/// admitting work, on a fleet that demonstrably runs several versions at
+/// once. An unknown key is ignored by those readers instead.
+const WRITER_ATTEMPTS: &str = "last_attempt_by_writer";
 /// Python `_STATE_DIR` (`~/.cache/wisent-compute`).
 const STATE_DIR_PARTS: [&str; 2] = [".cache", "wisent-compute"];
 /// Python `_LOCK_NAME`.
@@ -614,6 +625,20 @@ fn read_state(state_dir: &Path) -> Result<Value, JanitorError> {
     })
 }
 
+/// One writer's own last attempt, or `None` when it has never recorded one.
+///
+/// `None` means run: a writer that has never stamped the file has no interval
+/// to be inside. That is also the upgrade path - the first pass by each writer
+/// after this change runs once immediately, because the old file carries only
+/// the shared `last_attempt_at`.
+fn writer_last_attempt(state: &Value, writer: &str) -> Option<f64> {
+    state
+        .get(WRITER_ATTEMPTS)
+        .and_then(Value::as_object)
+        .and_then(|stamps| stamps.get(writer))
+        .and_then(Value::as_f64)
+}
+
 /// Python `_write_state`: lstat the destination (refuse symlink / foreign
 /// owner), write to a sibling tempfile (O_EXCL, 0600), fsync, atomic
 /// rename, fsync the directory.
@@ -629,11 +654,37 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
         Err(exc) if exc.kind() == io::ErrorKind::NotFound => {}
         Err(exc) => return Err(exc.into()),
     }
-    let payload = canonical_json(&serde_json::json!({
-        "version": STATE_VERSION,
-        "last_attempt_at": attempted_at,
-        "report": report,
-    }));
+    // Every writer's stamp is carried forward and only this one is updated.
+    // The interval gate reads the stamp belonging to the writer about to run,
+    // so dropping the others here would restore the starvation this exists to
+    // end: one process's pass would clear the record another gates on.
+    let previous = read_state(state_dir).unwrap_or_else(|_| Value::Object(Map::new()));
+    let mut by_writer = previous
+        .get(WRITER_ATTEMPTS)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(writer) = report.get("writer").and_then(Value::as_str) {
+        by_writer.insert(writer.to_string(), serde_json::json!(attempted_at));
+    }
+    // `last_attempt_at` keeps its meaning - the last attempt by ANYONE, which
+    // is what `host disk` reports and what `next_pass_at` is computed from -
+    // and never moves backwards. An `interval_noop` anchors on its own older
+    // stamp, and writing that verbatim would rewind a newer pass by another
+    // writer.
+    let last_attempt_at = previous
+        .get("last_attempt_at")
+        .and_then(Value::as_f64)
+        .map_or(attempted_at, |recorded| recorded.max(attempted_at));
+    let mut state = Map::new();
+    state.insert("version".to_string(), serde_json::json!(STATE_VERSION));
+    state.insert(
+        "last_attempt_at".to_string(),
+        serde_json::json!(last_attempt_at),
+    );
+    state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
+    state.insert("report".to_string(), report.clone());
+    let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -1250,7 +1301,7 @@ fn run_with_lock(
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     // A preview leaves no trace. The state file is the janitor's record of
-    // REAL passes: writing it would advance `last_attempt_at`, so an
+    // REAL passes: writing it would advance this writer's attempt stamp, so an
     // operator asking what a cleanup WOULD delete would have silently
     // delayed the cleanup that does.
     let persist = if preview { None } else { Some(state_dir) };
@@ -1295,7 +1346,27 @@ fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("last_success_at"))
         .and_then(|v| v.as_str().map(str::to_string));
-    let last_attempt = previous.get("last_attempt_at").and_then(Value::as_f64);
+    // THIS writer's last attempt, not the file's.
+    //
+    // This read used to be `previous["last_attempt_at"]` - the last attempt by
+    // anyone - so any writer's stamp gated every writer. On 2026-08-31
+    // charless-mac-mini had two janitors: the queue agent's in-process pass and
+    // a standalone `disk-cleanup` unit on its own timer. With the thresholds
+    // raised to 40/42 GiB against 31.2 GiB free, the agent reported
+    // `disk_pressure_active: true`, `errors: []`, policy resolved, and all six
+    // cleaners `scanned 0` - because the other process had stamped the file
+    // within the interval. Pressure active, policy resolved, nothing scanned.
+    //
+    // The gate returns before the first scanner AND before `run_with_lock`
+    // reaches the lock, so the lock cannot mediate it: the lock makes two
+    // janitors take turns deleting, while this made the working one never try.
+    // Both are real and only this one silences a pass.
+    //
+    // Removing a redundant unit does not fix this. `stado disk-cleanup --once`
+    // is a supported operator command that writes the same file, so one manual
+    // run would otherwise silence the agent's janitor for a full interval on
+    // any host.
+    let last_attempt = writer_last_attempt(&previous, report.writer);
     if !force
         && last_attempt.is_some()
         && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64
