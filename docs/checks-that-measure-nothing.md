@@ -11,7 +11,7 @@ what is actually there.
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
-| 1 | `FLEET_LABEL_PREFIX`, `src/deploy/service.rs:4538` **and** `src/deploy/local_install.rs:41` | a unit label is built by prefixing a name | that the name did not already carry the prefix — and the constant itself is defined twice |
+| 1 | `FLEET_LABEL_PREFIX`, `src/deploy/service.rs:4538` **and** `src/deploy/local_install.rs:41` | a unit label is built by prefixing a name | that the name did not already carry the prefix. Read the fix: `67a5d995` repaired `label()` and, in the same diff, **added the second definition of the constant** — so the repair for a duplicated prefix created a duplicated source of truth for the prefix. Both are still `"com.wisent."` at `main`, one `const`, one `pub const` |
 | 2 | `src/deploy/host_disk.rs`, `src/deploy/host_gates.rs`, `src/providers/local/disk_cleanup/mod.rs` | a host is above its disk watermark | that the janitor and `host gates` read the same source; they did not |
 | 3 | `mirror_to_output_uri`, `src/providers/local/slots.rs:625` (#161, #169) | an output URI is a key | qualified store path and bare key are both `String`, so callers guessed — 417 objects landed at `ecosystem/<ns>/ecosystem/<ns>/…` |
 | 4 | backup backend config (#166, #168) | replication is off for this host | that a second, never-audited writer kept filling the replica — it reached 48.5 GiB |
@@ -20,7 +20,7 @@ what is actually there.
 | 7 | `scripts/surface.py` + AutoVersion (**open, unfiled**) | the declared version matches the change | that the *tree* changed; the gate measures the advertised command surface only |
 | 8 | `.github/workflows/writer-transfer-check.yml` (#173, #174) | the newest `stado-v*` tag names published bytes | that the coordinate exists — a tag is created before publication and survives one that never completed |
 | 9 | `Presence`, `src/cli/storage.rs` (#174) | a failed `storage get` means the object is absent | that the store answered at all — "absent" and "unreachable" need opposite responses |
-| 10 | the object API's `/healthz` (**open**) | the service is `"ok": true` | that any capability works. Measured 2026-08-31: `{"ok":true,"degraded":true,"boundaries":{"object":false,"release":false,"service":false,"machine":false,"integration":false,"rate_limit_verifier":false,...}}` while `/api/object` timed out and every authorized route returned 503. A health check that answers ok with every boundary false is the purest form of this defect |
+| 10 | the object API's `/healthz` | the service is `"ok": true` | that any capability works. Measured 2026-08-31: `{"ok":true,"degraded":true,"boundaries":{"object":false,"release":false,"service":false,"machine":false,"integration":false,"rate_limit_verifier":false,...}}` while `/api/object` timed out and every authorized route returned 503. **Detected, not merely noticed:** check 3 of the fleet-shape detector (#181) reports this on the tick |
 
 ## The property they share
 
