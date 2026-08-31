@@ -973,6 +973,15 @@ async fn rollback(
     reason: String,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
+    if let Some(record) = &failed {
+        state.quarantined.insert(
+            record.artifact_sha256.clone(),
+            QuarantineRecord {
+                reason: reason.clone(),
+                quarantined_at: Utc::now(),
+            },
+        );
+    }
     if let Some(previous) = state.previous.take() {
         if proxy_alive(state) {
             write_proxy_target(
@@ -1043,7 +1052,25 @@ async fn reconcile_product(
         .artifacts
         .get(&target.platform)
         .ok_or_else(|| format!("desired release has no {} artifact", target.platform))?;
+    let repeats_failed_rollout = state.phase == RolloutPhase::RolledBack
+        && state.rollout_generation == desired.rollout_generation
+        && state.active.is_none()
+        && state.previous.is_none();
     state.rollout_generation = desired.rollout_generation;
+    if repeats_failed_rollout {
+        state.quarantined.insert(
+            artifact.artifact_sha256.clone(),
+            QuarantineRecord {
+                reason: state.detail.clone(),
+                quarantined_at: Utc::now(),
+            },
+        );
+        state.phase = RolloutPhase::Quarantined;
+        state.detail =
+            "desired release digest is quarantined after its previous rollback".to_string();
+        save_state(target, &mut state)?;
+        return Ok(state);
+    }
 
     if state.quarantined.contains_key(&artifact.artifact_sha256) {
         state.phase = RolloutPhase::Quarantined;
