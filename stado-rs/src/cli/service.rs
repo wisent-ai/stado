@@ -119,6 +119,12 @@ pub enum ServiceCommands {
         /// Registry host that has it loaded.
         #[arg(long)]
         host: String,
+        /// Which launchd domain to act in: `system`, `user`, or unset for the
+        /// historical order (system first, user domains only if the system
+        /// domain holds nothing). A label loaded in BOTH domains has two jobs
+        /// and the unset order can only ever reach the system one.
+        #[arg(long)]
+        domain: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -136,7 +142,10 @@ pub enum ServiceCommands {
         /// as undeclared.
         #[arg(long)]
         command: String,
-        /// Send SIGTERM. Without it every row is reported as `would_end`.
+        /// Send SIGTERM to the rows a declared label does not hold. Without it
+        /// those rows read `would_end`; a `kept` row is never signalled with
+        /// or without this flag, and is reported so the program a declared
+        /// label is running can be named.
         #[arg(long)]
         apply: bool,
         #[arg(long)]
@@ -951,7 +960,12 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 list(json).await
             }
         }
-        ServiceCommands::Bootout { label, host, json } => bootout(&label, &host, json).await,
+        ServiceCommands::Bootout {
+            label,
+            host,
+            domain,
+            json,
+        } => bootout(&label, &host, domain.as_deref(), json).await,
         ServiceCommands::Reap {
             host,
             command,
@@ -1573,12 +1587,23 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     fail_if_any(&failures, "scan for undeclared units")
 }
 
-/// `service bootout LABEL --host HOST` — take one loaded label out of launchd's
-/// system domain, declared or not.
-async fn bootout(label: &str, host: &str, json: bool) -> Result<(), CmdError> {
+/// `service bootout LABEL --host HOST [--domain system|user]` — take one loaded
+/// label out of launchd, declared or not.
+///
+/// Without `--domain` the system domain is tried first and the user domains
+/// only if it holds nothing, which is right for the usual single job and cannot
+/// reach the second job of a label loaded in both. `--domain user` is what ends
+/// a stale LaunchAgent copy while leaving the declared system daemon running.
+async fn bootout(
+    label: &str,
+    host: &str,
+    domain: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let scope = service::BootoutScope::parse(domain).map_err(click)?;
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let runner = production_runner();
-    let (state, detail) = service::bootout_label(&target, label, &runner)
+    let (state, detail) = service::bootout_label(&target, label, scope, &runner)
         .await
         .map_err(click)?;
     if json {
@@ -2489,9 +2514,13 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     let previous_directory = current_service_version(&target, directory, &runner).await?;
 
     let superseded_was_running = if let Some(label) = options.supersede_unit {
-        let (state, detail) = service::bootout_label(&target, label, &runner)
-            .await
-            .map_err(click)?;
+        // `--supersede-unit` names a user LaunchAgent by definition, and the
+        // unscoped call would have taken out a system job of the same label
+        // first, which is the opposite of superseding.
+        let (state, detail) =
+            service::bootout_label(&target, label, service::BootoutScope::User, &runner)
+                .await
+                .map_err(click)?;
         match state.as_str() {
             "booted_out" => true,
             "absent" => false,
