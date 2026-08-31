@@ -1,14 +1,15 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty times in this repository, in
-twenty different subsystems, inside about fourteen hours. The twentieth was
-mine, in the diagnosis of the nineteen. Every instance is
+One defect shape has now been found twenty-one times in this repository, in
+twenty-one different subsystems, inside about fifteen hours. The twentieth was
+mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
+every reading of it was true. Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty
+## The twenty-one
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -32,6 +33,7 @@ what is actually there.
 | 18 | `host disk`'s `outcome`, read from `~/.cache/wisent-compute/disk-cleanup-state.json` (#206) | the janitor's state file says whether disk maintenance is working, and when it last ran | **which janitor wrote it.** Two processes write that path on an always-on host — the queue agent in-process every tick (`providers/local/agent.rs:783`) and the standalone launchd unit `com.wisent.compute.disk-cleanup.disk-cleanup` on its own timer (`cli/disk_cleanup.rs:48`) — and `host disk` reported whichever wrote last as the state of the host. Measured 46 seconds apart: `interval_noop`, `errors: []`, all six cleaners scanned, then `invalid_or_unavailable_policy` from the same path. Both true about their own writer, neither true about the host. **The codebase already knew.** `deploy/host_gates.rs:324-341` documents this exact file's multiple writers — "the queue agent every ten seconds, a `disk-cleanup --watch` unit on its own timer" — because it had already been bitten by it, reading `low watermark 20 GiB, target 18 GiB`, a floor above its own ceiling, alternating with the canonical 15/18 between one reading and the next. It fixed *itself* by preferring the registry declaration and left the other reader of the same file unfixed. **And the cost is not only reporting.** `run_with_lock`'s interval gate reads `last_attempt_at` from that same shared file (`disk_cleanup/mod.rs:1289-1303`) and returns `interval_noop` *before* scanning a single cleaner and *before* the lock is reached — so the redundant unit's stamp starves the real janitor. Proven under manufactured pressure by `store-reclaim`: thresholds raised to 40/42 GiB with 31.2 GiB free, and at 15:26:03.9Z the agent reported `disk_pressure_active: true`, `errors: []`, and every cleaner `scanned 0`; 27 seconds later the other janitor stamped the file `invalid_or_unavailable_policy`, `next_pass 15:31:31Z`. Pressure active, policy resolved, nothing scanned. Not a check that missed something: two instruments reporting on one subject with no arbitration — so the operator's verdict depends on timing, and the redundant one disables the real one |
 | 19 | `src/cli/mod.rs` and every `mod` declaration in the crate (#212) | the files in the tree are the code that runs | **that anything declares them.** A `.rs` file no `mod` declaration names is not a compile error - it is not compiled at all, and `cargo check`, `cargo clippy`, `git log` and a file listing all look untouched. On 2026-08-31 at 15:48:36Z a commit replaced `src/cli/mod.rs` with a six-day-old copy, deleting nine `pub mod` declarations - `builds`, `database`, `egress`, `fleet`, `product`, `release_evidence`, `release_quarantine`, `service_converge`, `stream` - while all nine files stayed on disk. `main` did stop compiling, but 27 errors away in unrelated callers, and **no diagnostic named a missing declaration**; the whole `cli/fleet/` subtree went dark and the symptom was `dashboard::run` being called with two of its three arguments. Fourteen seconds later a second commit added a 279-line `src/bin/stado_fleet/key/mod.rs` to fix `stado fleet key ls`, and nothing declares it: that fix has never been compiled, while the command it corrects still lists by item-name prefix at `src/cli/fleet/key/mod.rs:270` - against its own commit message's principle that behaviour must never be derived from item names. A third file, `src/queue/secrets.rs`, has been product code compiled into nothing since 2026-07-27. **Now checked:** `stado-rs/scripts/unreachable_modules.py` resolves every declaration from `src/lib.rs` and each `[[bin]]` path and fails on any file the walk never reached - 3 unreachable at the healthy tip, **23 at the clobbered one** - wired into `version-check` before anything is built, with a ratchet file recording the four known ones and their reasons |
 | 20 | **our own diagnosis**, and the guard I nearly shipped for it (`configured_object_base_url`) | a `*.ts.net` MagicDNS name resolving to a public address means the name has been hijacked | **that anything checked WHO answered.** On 2026-08-31 `charless-mac-mini.tail6443b3.ts.net` resolved to `208.111.34.11`, `208.111.35.209`, `2607:f740:0:3f::2f0`, `2607:f740:0:3f::3cc` — public addresses, on two workstations, through `getaddrinfo` and not just `host`. Two agents independently concluded that MagicDNS was answering for a stranger and that any caller on that name would leave the tailnet with its bearer token. I wrote the refusal into `configured_object_base_url`, the single gate every origin passes: any `.ts.net` name resolving outside `100.64.0.0/10` / `fd7a:115c:a1e0::/48` is refused. It compiled, and it correctly refused the name with all four addresses listed. Then the one check nobody had made: `openssl s_client` returns **`subject=CN=charless-mac-mini.tail6443b3.ts.net`, issuer Let's Encrypt**, and `whois 208.111.34.11` is **NetActuate, Inc** — the provider Tailscale runs Funnel ingress on. A `*.ts.net` name resolving to a public address is Funnel working exactly as designed: the ingress terminates for that exact name with that node's own certificate, which no stranger can present. **The guard would have refused every Funnel origin in the pipeline** — `STADO_PUBLIC_RELEASE_API_URL` at both publish legs, `deploy-existing-release.yml`, and `version-check.yml`'s `STADO_API_URL` — breaking publication entirely in the name of securing it. Deleted unpushed. `IP is in the tailnet range` is narrower than `the peer is the one named`; TLS already checks the second, and `configured_object_base_url` already requires HTTPS for every non-loopback origin. The first instance here where the suspected wrong answer was a live network peer, and the answer was the right machine all along |
+| 21 | `max_items_per_pass`, spent by `build_caches` before any other cleaner ran (#214) | the janitor scanned its budget and reported a healthy pass | **that the budget ever reached the cleaner that mattered.** `build_caches` walks all of `$HOME` and consumed the entire per-pass item budget, so `chromium_clones`, `queue_workdirs` and `backup_twins` were each handed **zero** and reported `scanned 0 eligible 0 deleted 0` — indistinguishable, in the report, from a clean disk. The outcome said `cap_reached`, which is true and names the wrong subject: the cap was reached, by the first cleaner in the list. Raising it does not help — measured by `store-reclaim` at 100,000, the schema maximum, successive passes scanned 46,853 then 50,040 then 67,777 then 88,440 and the twins still got nothing, because the walk is larger than any legal cap. **No configuration reached the end of the cleaner list**, so the janitor was silently doing nothing for the cleaner that mattered while reporting a healthy pass, and the acceptance criterion only passed once `build_caches` was removed from that host **by hand**. #214 gives each cleaner an equal share of what remains, counting only declared cleaners still behind it, rolling unspent budget forward, letting the last take the rest, and making `run_hf` take its share as an argument rather than reading the whole cap. This is the instance that hid longest: every reading of it was true |
 
 ## The property they share
 
@@ -43,7 +45,8 @@ tag assumed to mean bytes exist. A timeout assumed to be enough. A port
 assumed to have one holder, counted with a tool that could not show two. A
 boundary assumed to gate what its name says. A binary assumed to be current. A
 state file assumed to have one writer. A file on disk assumed to be code. A
-name assumed to be hijacked because its address was public.
+name assumed to be hijacked because its address was public. A budget assumed
+to reach the cleaner it was declared for.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
@@ -169,11 +172,26 @@ A record that quietly drops these is the thing it was written to prevent.
   the registry counted under `reserved_or_hidden` and `target/` still eligible.
   Everything else this cleaner removes is output that the next build
   reproduces; the registry is input, shared by every build, and it returns only
-  by re-fetching from a network that has to answer. The gap that remains: the
-  integrity check that established the `0.13.14` failure was NOT a corrupt
-  extraction - comparing all 2010 files in the crate against the `.crate`
-  archive - was written by hand for one crate. No `stado` command does it, and
-  `build_caches` covers target trees, not registries.
+  by re-fetching from a network that has to answer.
+
+  **On the cause of `0.13.14`'s build failure, corrected.** That step died with
+  `aws-lc-sys` reporting `no such file or directory` for two vendored C files
+  inside this registry, and the extraction verified complete afterwards - all
+  2010 files present with matching sizes against the `.crate` archive - so
+  nothing was cleared. It was first recorded here as transient. The likelier
+  reading, and the one the operator named, is that the janitor armed on that
+  runner deleted registry files under a running build and cargo restored them
+  afterwards: an eviction followed by a re-fetch is indistinguishable from a
+  transient once both have finished. The causal chain runs back to arming
+  `enforce` on a build host without first checking what the cleaner's signature
+  actually matched - `~/.cargo/registry` carries cargo's own `CACHEDIR.TAG`,
+  and nobody read it before declaring the policy. "Transient" was the
+  comfortable reading of an absence of evidence.
+
+  The gap that remains: the integrity check that established the extraction was
+  intact - comparing all 2010 files against the `.crate` archive - was written
+  by hand for one crate. No `stado` command does it, and `build_caches` covers
+  target trees, not registries.
 - **No write path in the pipeline depends on a MagicDNS name**, established by
   audit rather than assumed: every publish write goes to
   `http://127.0.0.1:18776`, and the four `*.ts.net` sites
