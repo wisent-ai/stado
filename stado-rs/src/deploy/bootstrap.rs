@@ -191,6 +191,65 @@ pub fn install_spec(ssh_target: &str) -> CommandSpec {
         ),
     ))
 }
+/// Resolve an already installed Stado binary when it is exactly the version
+/// declared for this host. `host release` owns artifact verification and
+/// activation; bootstrap owns the persistent units that run those bytes.
+pub fn installed_spec(ssh_target: &str, expected_version: &str) -> CommandSpec {
+    let script = format!(
+        "set -eu\n\
+         expected_version={}\n\
+         stado_bin=\"$HOME/.stado/bin/stado\"\n\
+         [ -x \"$stado_bin\" ] || {{ echo \"installed stado is missing\" >&2; exit 1; }}\n\
+         actual_version=\"$(\"$stado_bin\" --version)\"\n\
+         [ \"$actual_version\" = \"stado $expected_version\" ] || {{ \
+           echo \"installed stado version mismatch: $actual_version\" >&2; exit 1; }}\n\
+         case \"$(uname -s)-$(uname -m)\" in\n\
+           Linux-x86_64) platform=linux-amd64 ;;\n\
+           Darwin-arm64) platform=darwin-arm64 ;;\n\
+           *) echo \"unsupported platform: $(uname -s) $(uname -m)\" >&2; exit 1 ;;\n\
+         esac\n\
+         echo \"$platform\"\n\
+         python3 -c 'import sys; sys.stdout.write(sys.executable + \"\\n\")'\n\
+         echo \"$stado_bin\"",
+        shlex_quote(expected_version)
+    );
+    CommandSpec::new(ssh_argv(ssh_target, &script))
+}
+/// End superseded Linux queue agents in the system domain and every live user
+/// domain before enabling the canonical system unit. Remote bootstrap may run
+/// as root while the old units belong to a login user, so using only the
+/// caller's user manager leaves duplicate agents publishing one consumer id.
+pub fn retire_superseded_agent_units_spec(ssh_target: &str) -> CommandSpec {
+    let script = "set -eu
+for unit in wisent-agent.service stado-agent.service; do
+  if sudo systemctl is-active --quiet \"$unit\"; then
+    sudo systemctl disable --now \"$unit\"
+  else
+    sudo systemctl disable \"$unit\" >/dev/null 2>&1 || true
+  fi
+done
+for runtime in /run/user/[0-9]*; do
+  [ -S \"$runtime/bus\" ] || continue
+  uid=${runtime##*/}
+  for unit in wisent-agent.service stado-agent.service wisent-compute-agent.service \
+    com.wisent.compute.service.stado-agent.service \
+    com.wisent.compute.service.stado-agent.service.service \
+    com.wisent.compute.service.stado-agent.service.service.service; do
+    if sudo -u \"#$uid\" env XDG_RUNTIME_DIR=\"$runtime\" \
+      DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+      systemctl --user is-active --quiet \"$unit\"; then
+      sudo -u \"#$uid\" env XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        systemctl --user disable --now \"$unit\"
+    else
+      sudo -u \"#$uid\" env XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        systemctl --user disable \"$unit\" >/dev/null 2>&1 || true
+    fi
+  done
+done";
+    CommandSpec::new(ssh_argv(ssh_target, script))
+}
 
 /// Parse the remote install script's trailing output: platform, job-runtime
 /// Python, then installed Stado path.
@@ -202,14 +261,15 @@ pub fn parse_remote_install(stdout: &str) -> (String, String, String) {
     (platform, wc_python, stado_bin)
 }
 
-/// Python `_write_unit` remote command: payload-escaped `echo ... | sudo
-/// tee`, daemon-reload, enable --now.
+/// Python `_write_unit` remote command: unmask before writing, then
+/// payload-escaped `echo ... | sudo tee`, daemon-reload, enable and restart.
+/// Writing before `unmask` follows a `/dev/null` mask and loses the unit.
 pub fn write_unit_command(unit_name: &str, unit_text: &str) -> String {
     let payload = unit_text.replace('\\', "\\\\").replace('\'', "'\\''");
     let unit_path = shlex_quote(&format!("/etc/systemd/system/{unit_name}"));
     let unit_arg = shlex_quote(unit_name);
     format!(
-        "echo '{payload}' | sudo tee {unit_path} >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable --now {unit_arg}"
+        "sudo systemctl unmask {unit_arg} && echo '{payload}' | sudo tee {unit_path} >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable {unit_arg} && sudo systemctl restart {unit_arg}"
     )
 }
 
@@ -286,13 +346,38 @@ pub async fn provision_target(
             WC_BIN_FALLBACK.to_string(),
         )
     } else {
-        echo(&format!(
-            "[install] {}: download stado release binaries on {ssh_target}",
-            target.name
-        ));
-        let output = runner(install_spec(&ssh_target))
-            .await
-            .map_err(DeployError)?;
+        let output = if let Some(expected_version) = target.declared_version("stado") {
+            echo(&format!(
+                "[probe] {}: verify installed stado {expected_version} on {ssh_target}",
+                target.name
+            ));
+            let installed = runner(installed_spec(&ssh_target, expected_version))
+                .await
+                .map_err(DeployError)?;
+            if installed.ok() {
+                echo(&format!(
+                    "[reuse] {}: installed stado matches the host declaration",
+                    target.name
+                ));
+                installed
+            } else {
+                echo(&format!(
+                    "[install] {}: installed stado does not match; download release binaries",
+                    target.name
+                ));
+                runner(install_spec(&ssh_target))
+                    .await
+                    .map_err(DeployError)?
+            }
+        } else {
+            echo(&format!(
+                "[install] {}: no stado version is declared; download release binaries",
+                target.name
+            ));
+            runner(install_spec(&ssh_target))
+                .await
+                .map_err(DeployError)?
+        };
         if !output.ok() {
             return Err(DeployError(format!("install failed: {}", output.detail())));
         }
@@ -464,6 +549,19 @@ pub async fn provision_target(
             shlex_quote(&ssh_target)
         ));
         return Ok(());
+    }
+    echo(&format!(
+        "[retire] {}: disabling superseded system and per-user queue agents",
+        target.name
+    ));
+    let retired = runner(retire_superseded_agent_units_spec(&ssh_target))
+        .await
+        .map_err(DeployError)?;
+    if !retired.ok() {
+        return Err(DeployError(format!(
+            "superseded agent retirement failed: {}",
+            retired.detail()
+        )));
     }
 
     echo(&format!(
