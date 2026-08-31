@@ -1295,17 +1295,17 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             as_launch_agent,
             json,
         } => {
-            deploy(
-                &name,
-                host.as_deref(),
-                host_heuristic.as_deref(),
+            deploy(DeployOptions {
+                name: &name,
+                host: host.as_deref(),
+                host_heuristic: host_heuristic.as_deref(),
                 from,
                 from_artifact,
-                &args,
-                launchd_label.as_deref(),
+                args: &args,
+                launchd_label: launchd_label.as_deref(),
                 as_launch_agent,
-                json,
-            )
+                as_json: json,
+            })
             .await
         }
         ServiceCommands::Declare { file, json } => declare(&file, json).await,
@@ -4722,17 +4722,30 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn deploy(
-    name: &str,
-    host: Option<&str>,
-    host_heuristic: Option<&str>,
+struct DeployOptions<'a> {
+    name: &'a str,
+    host: Option<&'a str>,
+    host_heuristic: Option<&'a str>,
     from: Option<String>,
     from_artifact: Option<String>,
-    args: &[String],
-    launchd_label: Option<&str>,
+    args: &'a [String],
+    launchd_label: Option<&'a str>,
     as_launch_agent: bool,
-    json: bool,
-) -> Result<(), CmdError> {
+    as_json: bool,
+}
+
+async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
+    let DeployOptions {
+        name,
+        host,
+        host_heuristic,
+        from,
+        from_artifact,
+        args,
+        launchd_label,
+        as_launch_agent,
+        as_json,
+    } = options;
     let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
     if (launchd_label.is_some() || as_launch_agent)
         && !target.release_platform.starts_with("darwin")
@@ -4852,7 +4865,7 @@ async fn deploy(
     // the unit rather than inside the remote report, which describes the host
     // action and not what was installed.
     if let Some(installed) = installed.as_ref() {
-        if !json {
+        if !as_json {
             println!(
                 "installed {name} version {} (sha256 {})",
                 installed.version, installed.sha256
@@ -4864,7 +4877,7 @@ async fn deploy(
         &record,
         &generation,
         Some(&report.to_json()),
-        json,
+        as_json,
     )
 }
 
