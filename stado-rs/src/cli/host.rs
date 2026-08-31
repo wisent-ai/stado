@@ -3953,13 +3953,19 @@ pub async fn retag_vault_item(
     }
     Ok(())
 }
-/// Pull the encrypted Skarbiec mirror into TARGET's live vault.
+/// Run one Skarbiec command on TARGET and parse its JSON answer.
 ///
-/// Skarbiec performs the destructive comparison itself: a remote vault with
-/// local-only items is backed up and refused rather than overwritten. Stado
-/// supplies the managed host channel and reports that refusal without adding a
-/// force path.
-pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// The vault and GnuPG paths are resolved by the target itself. Arguments stay
+/// separate all the way through the host channel, so neither bearer material
+/// nor an operator-supplied capability enters a remote shell command.
+async fn remote_skarbiec_json(
+    target: &str,
+    arguments: &[String],
+) -> Result<(ComputeTarget, Value), CmdError> {
+    let command = arguments
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CmdError::usage("a Skarbiec command is required"))?;
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -3983,38 +3989,51 @@ pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError>
         )));
     }
     let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default();
-    let gnupg_home = variables.next().unwrap_or_default();
+    let vault = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
+    let gnupg_home = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
-    let pulled = crate::deploy::host_channel::run_program(
-        &resolved,
-        &[
-            "/usr/bin/env",
-            "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
-            gnupg_environment.as_str(),
-            vault_environment.as_str(),
-            skarbiec.as_str(),
-            "sync-pull",
-        ],
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !pulled.ok() {
+    let mut invocation = vec![
+        "/usr/bin/env",
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        gnupg_environment.as_str(),
+        vault_environment.as_str(),
+        skarbiec.as_str(),
+    ];
+    invocation.extend(arguments.iter().map(String::as_str));
+    let output = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
         return Err(CmdError::click(format!(
-            "{}: Skarbiec sync-pull failed: {}",
+            "{}: Skarbiec {command} failed: {}",
             resolved.name,
-            crate::deploy::host_channel::last_error_line(&pulled, "remote command failed")
+            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
         )));
     }
-    let report: Value = serde_json::from_str(pulled.stdout.trim()).map_err(|error| {
+    let report = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
-            "{}: Skarbiec sync-pull returned unreadable JSON: {error}",
+            "{}: Skarbiec {command} returned unreadable JSON: {error}",
             resolved.name
         ))
     })?;
+    Ok((resolved, report))
+}
+
+/// Pull the encrypted Skarbiec mirror into TARGET's live vault.
+///
+/// Skarbiec performs the destructive comparison itself: a remote vault with
+/// local-only items is backed up and refused rather than overwritten. Stado
+/// supplies the managed host channel and deliberately exposes no force path.
+pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-pull")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         let reason = report
             .get("reason")
@@ -4024,8 +4043,21 @@ pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError>
             .get("detail")
             .and_then(Value::as_str)
             .unwrap_or("Skarbiec refused to replace the live vault");
+        let local_only = report
+            .get("local_only_items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        let local_only = if local_only.is_empty() {
+            String::new()
+        } else {
+            format!("; local-only items: {local_only}")
+        };
         return Err(CmdError::click(format!(
-            "{}: Skarbiec {reason}: {detail}",
+            "{}: Skarbiec {reason}: {detail}{local_only}",
             resolved.name
         )));
     }
@@ -4040,6 +4072,87 @@ pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError>
         );
     } else {
         println!("{}: vault synced", resolved.name);
+    }
+    Ok(())
+}
+
+/// Mint a least-privilege bearer inside TARGET's live Skarbiec vault.
+///
+/// Metadata is the default output. `raw_token` exists only for a direct pipe
+/// into another secret store; Stado never writes that bearer to disk or argv.
+#[allow(clippy::too_many_arguments)]
+pub async fn vault_token_mint(
+    target: &str,
+    consumer: &str,
+    capabilities: &str,
+    audience: &str,
+    ttl_seconds: u64,
+    replace_capabilities: bool,
+    raw_token: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("consumer", consumer)?;
+    vault_word("audience", audience)?;
+    if raw_token && json_output {
+        return Err(CmdError::usage(
+            "--raw-token and --json cannot be used together",
+        ));
+    }
+    if capabilities.is_empty()
+        || !capabilities
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-/,:#".contains(&byte))
+    {
+        return Err(CmdError::usage(
+            "capabilities must be a comma-separated list of exact action:item[#field] values",
+        ));
+    }
+    let mut arguments = vec![
+        String::from("token-mint"),
+        consumer.to_string(),
+        String::from("--capabilities"),
+        capabilities.to_string(),
+        String::from("--audience"),
+        audience.to_string(),
+        String::from("--ttl-seconds"),
+        ttl_seconds.to_string(),
+    ];
+    if replace_capabilities {
+        arguments.push(String::from("--replace-capabilities"));
+    }
+    let (resolved, mut report) = remote_skarbiec_json(target, &arguments).await?;
+    let token = report
+        .get("token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: Skarbiec token-mint returned no bearer",
+                resolved.name
+            ))
+        })?
+        .to_string();
+    if raw_token {
+        println!("{token}");
+        return Ok(());
+    }
+    if let Some(object) = report.as_object_mut() {
+        object.remove("token");
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "token_minted",
+                "skarbiec": report,
+            }))?
+        );
+    } else {
+        println!(
+            "{}: token minted for {consumer} with audience {audience}",
+            resolved.name
+        );
     }
     Ok(())
 }
