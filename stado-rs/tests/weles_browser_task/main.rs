@@ -292,16 +292,26 @@ fn half_a_sign_in_is_refused_naming_the_missing_half() {
     let fleet = Fleet::new();
     fleet.env_file(&long_allowlist(&["generic_browser_task"]));
 
-    let out = fleet.task(&["--allow-login", "--sign-in-origin", "https://accounts.google.com"]);
+    let out = fleet.task(&[
+        "--allow-login",
+        "--sign-in-origin",
+        "https://accounts.google.com",
+    ]);
     assert!(!out.status.success(), "{}", said(&out));
     let text = said(&out);
-    assert!(text.contains("--sign-in-origin needs --sign-in-item"), "{text}");
+    assert!(
+        text.contains("--sign-in-origin needs --sign-in-item"),
+        "{text}"
+    );
     assert!(text.contains("vault item"), "{text}");
 
     let out = fleet.task(&["--allow-login", "--sign-in-item", "weles-google-sso-login"]);
     assert!(!out.status.success(), "{}", said(&out));
     let text = said(&out);
-    assert!(text.contains("--sign-in-item needs --sign-in-origin"), "{text}");
+    assert!(
+        text.contains("--sign-in-item needs --sign-in-origin"),
+        "{text}"
+    );
 }
 
 /// Handing an agent credentials while its own instructions say "do not log
@@ -384,7 +394,10 @@ fn a_sign_in_is_refused_when_the_target_has_no_capability_broker() {
         text.contains("where it would be redeemed"),
         "the refusal must say why the target is the host that matters:\n{text}"
     );
-    assert!(text.contains("here"), "the refusal must name the host:\n{text}");
+    assert!(
+        text.contains("here"),
+        "the refusal must name the host:\n{text}"
+    );
 }
 
 /// The new verb's own input rules: reading takes only TARGET, declaring takes
@@ -403,7 +416,10 @@ fn declaring_a_capability_route_takes_all_four_flags_or_none() {
     ]);
     assert!(!out.status.success(), "{}", said(&out));
     let text = said(&out);
-    assert!(text.contains("--resource, --item, --field and --reason"), "{text}");
+    assert!(
+        text.contains("--resource, --item, --field and --reason"),
+        "{text}"
+    );
 
     let out = fleet.stado(&[
         "host",

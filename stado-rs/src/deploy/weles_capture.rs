@@ -797,15 +797,22 @@ pub async fn observe_action_payload(
     channel: &Channel,
     action: &str,
     params: Value,
+    account_id: Option<&str>,
+    fresh_profile: bool,
 ) -> Result<Value, DeployError> {
-    channel
-        .observe_run(&json!({
-            "action": action,
-            "params": params,
-            "creds": "redact",
-            "timeout_ms": REQUEST_TIMEOUT.as_millis(),
-        }))
-        .await
+    let mut request = json!({
+        "action": action,
+        "params": params,
+        "creds": "redact",
+        "timeout_ms": REQUEST_TIMEOUT.as_millis(),
+    });
+    if let Some(account_id) = account_id {
+        request["account_id"] = json!(account_id);
+    }
+    if fresh_profile {
+        request["fresh_profile"] = json!(true);
+    }
+    channel.observe_run(&request).await
 }
 
 fn diagnostic_run_id(run_id: &str) -> Result<&str, DeployError> {

@@ -1867,15 +1867,22 @@ enum HostCommands {
         /// file, for the long ones that do not belong in a shell history.
         #[arg(long)]
         objective: String,
-        /// Stable session label, so a resumed flow reuses one browser profile.
+        /// Stable recording label. `--fresh-profile` controls profile identity.
         #[arg(long)]
         session_label: String,
         /// Action to run; must be one TARGET's allowlist carries.
         #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ACTION)]
         action: String,
-        /// Env file whose `WELES_ACTION_ALLOWLIST` decides what TARGET accepts.
-        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ENV_FILE)]
-        env_file: String,
+        /// Exact action catalog shipped by the active Weles release.
+        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ALLOWLIST_FILE)]
+        allowlist_file: String,
+        /// Exact Weles login item for a named credential trajectory.
+        #[arg(long)]
+        login_item: Option<String>,
+        /// Give the run a new account identity, which makes Weles create a new
+        /// browser profile directory instead of clearing or reusing one.
+        #[arg(long)]
+        fresh_profile: bool,
         /// Carry "this run may sign in" into the agent's instructions. This is
         /// a HINT, not an enforced restriction: Weles appends the
         /// read_only/no_login/no_mutation constraints to the model's goal text
@@ -2687,7 +2694,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 objective,
                 session_label,
                 action,
-                env_file,
+                allowlist_file,
+                login_item,
+                fresh_profile,
                 allow_login,
                 sign_in_origin,
                 sign_in_item,
@@ -2700,7 +2709,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     objective: &objective,
                     session_label: &session_label,
                     action: &action,
-                    env_file: &env_file,
+                    allowlist_file: &allowlist_file,
+                    login_item: login_item.as_deref(),
+                    fresh_profile,
                     allow_login,
                     sign_in_origin: sign_in_origin.as_deref(),
                     sign_in_item: sign_in_item.as_deref(),

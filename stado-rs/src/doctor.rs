@@ -285,10 +285,7 @@ impl RunScope {
         match self {
             Self::Full => true,
             Self::DeploymentPreflight => {
-                id != RELEASE_ID
-                    && id != INTEGRITY_ID
-                    && id != PLACEMENT_ID
-                    && id != SHAPE_ID
+                id != RELEASE_ID && id != INTEGRITY_ID && id != PLACEMENT_ID && id != SHAPE_ID
             }
             Self::ReleaseVerification => id == RELEASE_ID,
         }
@@ -384,7 +381,6 @@ async fn check_placement() -> Check {
         )
     }
 }
-
 
 /// Run a probe under an explicit deadline. A row whose work grows with the
 /// deployment cannot share one flat budget with a row that makes a single
@@ -560,20 +556,12 @@ pub async fn run(scope: RunScope) -> Report {
             INTEGRITY_REMEDY,
             check_release_integrity(),
         ),
-        selected(
-            scope,
-            TEMPLATE_ID,
-            TEMPLATE_TITLE,
-            TEMPLATE_REMEDY,
-            async { check_agent_template().await },
-        ),
-        selected(
-            scope,
-            IDENTITY_ID,
-            IDENTITY_TITLE,
-            IDENTITY_REMEDY,
-            async { check_vm_identity() },
-        ),
+        selected(scope, TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
+            check_agent_template().await
+        },),
+        selected(scope, IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
+            check_vm_identity()
+        },),
         selected(
             scope,
             REGISTRY_ID,
