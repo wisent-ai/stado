@@ -243,22 +243,33 @@ impl SnapshotSource {
     pub(crate) async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), String> {
         match self {
             Self::Local(store) => read_local_snapshot(store).await,
-            // Unconditional on every failed authority read, not only on
-            // startup. A control master outlives the process that opened it by
+            // A control master outlives the process that opened it by
             // `ControlPersist`, and one whose connection has already died
-            // answers nothing while looking perfectly alive: this resolver
-            // spent 2026-08-19 in a launchd restart loop reading the registry
-            // through a socket that could not succeed again, and only repeated
-            // `launchctl kickstart` cleared it. Dropping it costs one TCP
-            // connect and one authentication on the next attempt; keeping it
-            // costs every attempt for as long as the process lives.
+            // answers nothing while looking perfectly alive. Drop its socket
+            // after the first failed authority read and retry once in this
+            // invocation. The old implementation left recovery to a future
+            // call, so one-shot commands failed while printing that they had
+            // already repaired the cause.
             Self::Authority {
                 target,
                 ssh,
                 command,
-            } => Self::fetch_authority(target, ssh, command, reader)
-                .await
-                .inspect_err(|_| drop_stale_ssh_sockets()),
+            } => {
+                let first = Self::fetch_authority(target, ssh, command, reader).await;
+                let first_error = match first {
+                    Ok(snapshot) => return Ok(snapshot),
+                    Err(error) => error,
+                };
+                drop_stale_ssh_sockets();
+                Self::fetch_authority(target, ssh, command, reader)
+                    .await
+                    .map_err(|retry_error| {
+                        format!(
+                            "{first_error}; retry after dropping stale SSH control sockets failed: \
+                             {retry_error}"
+                        )
+                    })
+            }
         }
     }
 

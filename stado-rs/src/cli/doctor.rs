@@ -44,14 +44,14 @@ pub struct DoctorArgs {
 }
 
 pub async fn dispatch(args: DoctorArgs) -> Result<(), CmdError> {
-    let mut report = doctor::run().await;
-    if args.deployment_preflight {
-        report
-            .checks
-            .retain(|check| check.id != "placement" && check.id != "release");
+    let scope = if args.deployment_preflight {
+        doctor::RunScope::DeploymentPreflight
     } else if args.release_verification {
-        report.checks.retain(|check| check.id == "release");
-    }
+        doctor::RunScope::ReleaseVerification
+    } else {
+        doctor::RunScope::Full
+    };
+    let report = doctor::run(scope).await;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report.to_json())?);
     } else {

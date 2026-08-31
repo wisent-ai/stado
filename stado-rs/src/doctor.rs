@@ -268,6 +268,33 @@ impl Report {
     }
 }
 
+/// Which probes `stado doctor` executes. Reduced modes select work before
+/// futures are polled; filtering a completed full report would still run the
+/// unrelated storage and fleet sweeps and could make the selected check fail
+/// under load from work its caller did not request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RunScope {
+    #[default]
+    Full,
+    DeploymentPreflight,
+    ReleaseVerification,
+}
+
+impl RunScope {
+    fn includes(self, id: &str) -> bool {
+        match self {
+            Self::Full => true,
+            Self::DeploymentPreflight => {
+                id != RELEASE_ID
+                    && id != INTEGRITY_ID
+                    && id != PLACEMENT_ID
+                    && id != SHAPE_ID
+            }
+            Self::ReleaseVerification => id == RELEASE_ID,
+        }
+    }
+}
+
 /// Run a probe under [`PROBE_TIMEOUT`]. An elapsed probe becomes a FAIL
 /// row rather than a hung command, so the remaining probes still report.
 /// Nothing serving here that is placed somewhere else.
@@ -358,14 +385,6 @@ async fn check_placement() -> Check {
     }
 }
 
-async fn bounded(
-    id: &'static str,
-    title: &'static str,
-    remedy: &str,
-    probe: impl Future<Output = Check>,
-) -> Check {
-    bounded_within(PROBE_TIMEOUT, id, title, remedy, probe).await
-}
 
 /// Run a probe under an explicit deadline. A row whose work grows with the
 /// deployment cannot share one flat budget with a row that makes a single
@@ -390,6 +409,40 @@ async fn bounded_within(
     }
 }
 
+/// Run a selected probe under the shared deadline. An unselected future is
+/// dropped without being polled, so scoped doctor modes do not load unrelated
+/// dependencies.
+async fn selected(
+    scope: RunScope,
+    id: &'static str,
+    title: &'static str,
+    remedy: &str,
+    probe: impl Future<Output = Check>,
+) -> Check {
+    selected_within(scope, PROBE_TIMEOUT, id, title, remedy, probe).await
+}
+
+async fn selected_within(
+    scope: RunScope,
+    deadline: Duration,
+    id: &'static str,
+    title: &'static str,
+    remedy: &str,
+    probe: impl Future<Output = Check>,
+) -> Check {
+    if !scope.includes(id) {
+        return Check::pass(id, title, String::new(), remedy);
+    }
+    bounded_within(deadline, id, title, remedy, probe).await
+}
+
+/// The storage probe performs write, read, and unconditional cleanup
+/// sequentially. Give each network operation one ordinary probe allowance plus
+/// one allowance for scheduling behind the other preflight storage readers.
+fn storage_round_trip_deadline() -> Duration {
+    PROBE_TIMEOUT * 4
+}
+
 /// Per-item allowance for the gateway-auth sweep, multiplied by the number of
 /// items the four verifier mappings actually declare.
 fn object_auth_deadline() -> Duration {
@@ -410,20 +463,27 @@ fn alerts_deadline() -> Duration {
     PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(channels).unwrap_or_default()
 }
 
-/// Run the whole preflight. Never returns an error: an unreachable
+/// Run the selected preflight probes. Never returns an error: an unreachable
 /// dependency is a FAIL row, not an aborted command.
-pub async fn run() -> Report {
-    // One facade for every store-backed probe. Its construction failure is
-    // itself diagnostic — on the azure backend with an empty account
-    // `JobStorage::with_bucket` hard-errors — so each dependent check
-    // reports it instead of the whole command dying here.
-    let store = JobStorage::new().await;
-    let store_error = store
+pub async fn run(scope: RunScope) -> Report {
+    // One facade for every selected store-backed probe. Its construction
+    // failure is itself diagnostic — on the azure backend with an empty
+    // account `JobStorage::with_bucket` hard-errors — so each dependent check
+    // reports it instead of the whole command dying here. Exact release
+    // verification does not construct storage at all.
+    let store_result = if scope == RunScope::ReleaseVerification {
+        None
+    } else {
+        Some(JobStorage::new().await)
+    };
+    let store_error = store_result
         .as_ref()
-        .err()
+        .and_then(|result| result.as_ref().err())
         .map(ToString::to_string)
         .unwrap_or_default();
-    let store = store.as_ref().ok();
+    let store = store_result
+        .as_ref()
+        .and_then(|result| result.as_ref().ok());
 
     // Concurrent, like the two sections of
     // `monitor::billing::live_snapshot`; the fixed assembly order below is
@@ -446,90 +506,112 @@ pub async fn run() -> Report {
         placement_check,
         shape_check,
     ) = tokio::join!(
-        bounded(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
+        selected(scope, CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
             check_config()
         }),
-        bounded(
+        selected_within(
+            scope,
+            storage_round_trip_deadline(),
             STORAGE_ID,
             STORAGE_TITLE,
             STORAGE_REMEDY,
-            check_storage_round_trip(store, &store_error)
+            check_storage_round_trip(store, &store_error),
         ),
-        bounded(
+        selected(
+            scope,
             BACKUP_ID,
             BACKUP_TITLE,
             BACKUP_REMEDY,
-            check_backup(&store_error)
+            check_backup(&store_error),
         ),
-        bounded_within(
+        selected_within(
+            scope,
             object_auth_deadline(),
             OBJECT_AUTH_ID,
             OBJECT_AUTH_TITLE,
             OBJECT_AUTH_REMEDY,
-            check_object_auth()
+            check_object_auth(),
         ),
-        bounded(
+        selected(
+            scope,
             PROVIDERS_ID,
             PROVIDERS_TITLE,
             PROVIDERS_REMEDY,
-            check_provider_auth()
+            check_provider_auth(),
         ),
-        bounded(
+        selected(
+            scope,
             QUOTA_ID,
             QUOTA_TITLE,
             QUOTA_REMEDY,
-            check_quota(store, &store_error)
+            check_quota(store, &store_error),
         ),
-        bounded(
+        selected(
+            scope,
             RELEASE_ID,
             RELEASE_TITLE,
             RELEASE_REMEDY,
-            check_release_channel()
+            check_release_channel(),
         ),
-        bounded(
+        selected(
+            scope,
             INTEGRITY_ID,
             INTEGRITY_TITLE,
             INTEGRITY_REMEDY,
-            check_release_integrity()
+            check_release_integrity(),
         ),
-        bounded(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
-            check_agent_template().await
-        }),
-        bounded(IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
-            check_vm_identity()
-        }),
-        bounded(
+        selected(
+            scope,
+            TEMPLATE_ID,
+            TEMPLATE_TITLE,
+            TEMPLATE_REMEDY,
+            async { check_agent_template().await },
+        ),
+        selected(
+            scope,
+            IDENTITY_ID,
+            IDENTITY_TITLE,
+            IDENTITY_REMEDY,
+            async { check_vm_identity() },
+        ),
+        selected(
+            scope,
             REGISTRY_ID,
             REGISTRY_TITLE,
             REGISTRY_REMEDY,
-            check_registry()
+            check_registry(),
         ),
-        bounded(
+        selected(
+            scope,
             CONTROL_ID,
             CONTROL_TITLE,
             CONTROL_REMEDY,
-            check_queue_control(store, &store_error)
+            check_queue_control(store, &store_error),
         ),
-        bounded_within(
+        selected_within(
+            scope,
             alerts_deadline(),
             ALERTS_ID,
             ALERTS_TITLE,
             ALERTS_REMEDY,
-            check_alerts()
+            check_alerts(),
         ),
-        bounded(
+        selected(
+            scope,
             CONTRACT_ID,
             CONTRACT_TITLE,
             CONTRACT_REMEDY,
-            skarbiec_contract_check()
+            skarbiec_contract_check(),
         ),
-        bounded(
+        selected(
+            scope,
             PLACEMENT_ID,
             PLACEMENT_TITLE,
             PLACEMENT_REMEDY,
             check_placement(),
         ),
-        bounded_within(
+        selected_within(
+            scope,
             FLEET_SHAPE_DEADLINE,
             SHAPE_ID,
             SHAPE_TITLE,
@@ -538,30 +620,33 @@ pub async fn run() -> Report {
         ),
     );
 
+    let mut checks = vec![
+        config_check,
+        storage_check,
+        backup_check,
+        object_auth_check,
+        providers_check,
+        quota_check,
+        release_check,
+        integrity_check,
+        template_check,
+        identity_check,
+        registry_check,
+        control_check,
+        alerts_check,
+        contract_check,
+        placement_check,
+        shape_check,
+    ];
+    checks.retain(|check| scope.includes(check.id));
+
     Report {
         generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
         // Preflight order: configuration, then the store everything else
         // reads, then credentials, then capacity, then the two things an
         // agent VM needs in order to exist at all, then fleet identity,
         // then the switches that explain an idle-but-healthy deployment.
-        checks: vec![
-            config_check,
-            storage_check,
-            backup_check,
-            object_auth_check,
-            providers_check,
-            quota_check,
-            release_check,
-            integrity_check,
-            template_check,
-            identity_check,
-            registry_check,
-            control_check,
-            alerts_check,
-            contract_check,
-            placement_check,
-            shape_check,
-        ],
+        checks,
     }
 }
 
