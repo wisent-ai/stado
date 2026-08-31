@@ -19,6 +19,7 @@ jobs:
   deploy:
     runs-on: [self-hosted, stado-control-plane]
     env:
+      CARGO_HOME: ${{ runner.temp }}/cargo-home-${{ github.run_id }}-${{ github.job }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       STADO_WRITER_API_URL: http://127.0.0.1:18776
       STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net

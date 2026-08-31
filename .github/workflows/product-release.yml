@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: read
     env:
+      CARGO_HOME: ${{ runner.temp }}/cargo-home-${{ github.run_id }}-${{ github.job }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       # The release writer is the declared local resolver adapter. It owns
       # authenticated transport to the host-local object API; workflows never
