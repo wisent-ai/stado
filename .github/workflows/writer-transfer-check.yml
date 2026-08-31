@@ -16,16 +16,12 @@ concurrency:
 jobs:
   release-sized-read-back:
     runs-on: [self-hosted, stado-control-plane]
-    # This gate and the release train both require the repository's only
-    # `stado-control-plane` runner. They now queue for it through one shared
-    # group that never cancels its holder, so this check waits behind a
-    # publication instead of contending with it. The workflow-level group above
-    # still supersedes this PR's own earlier runs; what it must never do is
-    # displace a release train, because a release that dies part-way can strand
-    # an immutable coordinate that no later attempt is able to complete.
-    concurrency:
-      group: stado-control-plane-runner
-      cancel-in-progress: false
+    # This gate shares the repository's only `stado-control-plane` runner with
+    # the release train. It deliberately does NOT share a concurrency group
+    # with it: GitHub permits one pending job per group and cancels the waiter
+    # when a second arrives, so a group here evicted a release platform that
+    # was queued behind the other one. The runner queues jobs by itself, and
+    # waiting on a busy runner is never a cancellation.
     timeout-minutes: 30
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
@@ -52,24 +48,57 @@ jobs:
           # exact-head reader against complete published bytes, so walk the
           # channel in version order and say which incomplete coordinates were
           # skipped instead of treating the newest Git ref as a stored release.
+          # Presence is decided by `storage stat`, not by whether a download
+          # succeeded. `storage get` failing cannot tell "this coordinate is
+          # incomplete" apart from "the writer did not answer", and those need
+          # opposite responses: skip the first, stop on the second. On 2026-08-31
+          # the writer was unreachable for thirteen minutes; a get-based walk
+          # would have skipped every coordinate in the channel, printed a tidy
+          # list of them, and then failed as though no release had ever been
+          # published. `storage stat` answers present or absent with exit status
+          # zero and reserves non-zero for a store that did not answer, which is
+          # the whole reason that contract exists.
+          #
+          # It is also cheaper: a stat is a question, while a get on this link
+          # moves 62 MB at roughly half a megabyte a second before it can tell
+          # you the coordinate was no good.
           while IFS= read -r published_tag; do
             candidate_version="${published_tag#stado-v}"
-            candidate_sums="$RUNNER_TEMP/stado-$candidate_version-SHA256SUMS"
-            candidate_delivered="$RUNNER_TEMP/stado-$candidate_version-read-back"
-            if "$stado_bin" storage get \
-                 "stado://releases/stado/$candidate_version/linux-amd64/SHA256SUMS" \
-                 "$candidate_sums" &&
-               "$stado_bin" storage get \
-                 "stado://releases/stado/$candidate_version/linux-amd64/stado" \
-                 "$candidate_delivered"; then
-              version="$candidate_version"
-              sums="$candidate_sums"
-              delivered="$candidate_delivered"
-              break
+            candidate_base="stado://releases/stado/$candidate_version/linux-amd64"
+            candidate_complete=yes
+            for candidate_name in SHA256SUMS stado; do
+              candidate_state="$(
+                "$stado_bin" storage stat "$candidate_base/$candidate_name" --json |
+                  jq -r '.state'
+              )"
+              case "$candidate_state" in
+                present) ;;
+                absent) candidate_complete=no; break ;;
+                *)
+                  echo "::error::the writer could not say whether" \
+                    "$candidate_base/$candidate_name exists (state" \
+                    "$candidate_state); this check will not guess a baseline" \
+                    "from a store that is not answering"
+                  false ;;
+              esac
+            done
+            if [ "$candidate_complete" = no ]; then
+              printf 'Skipping incomplete Stado coordinate %s\n' "$candidate_version"
+              continue
             fi
-            printf 'Skipping incomplete Stado coordinate %s\n' "$candidate_version"
+            version="$candidate_version"
+            sums="$RUNNER_TEMP/stado-$version-SHA256SUMS"
+            delivered="$RUNNER_TEMP/stado-$version-read-back"
+            "$stado_bin" storage get "$candidate_base/SHA256SUMS" "$sums"
+            "$stado_bin" storage get "$candidate_base/stado" "$delivered"
+            break
           done < <(git tag --list 'stado-v*' --sort=-version:refname)
-          test -n "$version"
+          if [ -z "$version" ]; then
+            echo "::error::no complete published linux-amd64 coordinate exists in the channel," \
+                 "so there is no immutable baseline for this check to transfer"
+            false
+          fi
+          echo "Newest complete published linux-amd64 baseline: $version"
 
           expected="$(sed -n 's/  stado$//p' "$sums")"
           test -n "$expected"

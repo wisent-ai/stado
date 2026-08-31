@@ -130,15 +130,25 @@ jobs:
   publish-linux:
     needs: identity
     runs-on: [self-hosted, stado-control-plane]
-    # There is exactly one `stado-control-plane` runner, and PR gates want it
-    # too. Queue for it instead of competing for it: this group serializes
-    # every runner-bound job in the repository and never cancels the holder,
-    # so a PR check waits behind a release train rather than displacing it.
-    # Seven pushes from one branch churned this runner during the window in
-    # which two release attempts died.
-    concurrency:
-      group: stado-control-plane-runner
-      cancel-in-progress: false
+    # NO shared concurrency group here, deliberately, and this is the second
+    # thing to know about this job after `needs: identity`.
+    #
+    # I added `group: stado-control-plane-runner` with cancel-in-progress
+    # false in #172, meaning to make PR gates queue for the single runner
+    # instead of competing for it. It did the opposite. GitHub allows exactly
+    # ONE pending job per concurrency group: when a second job becomes
+    # pending in the group, the one already waiting is CANCELLED. So on the
+    # 0.13.0 train this job sat pending behind the darwin job from 00:18:56Z,
+    # a `writer-transfer-check` for another branch entered the group at
+    # 00:35:12Z, and this job was cancelled one second later at 00:35:13Z
+    # having executed zero steps. The group converted "wait your turn" into
+    # "be evicted by the next PR push", which is strictly worse than no group
+    # at all.
+    #
+    # A self-hosted runner already queues jobs natively, and GitHub does not
+    # cancel a job for waiting on a busy runner. Contention here costs time,
+    # never a platform. Do not re-add a concurrency group to make runner
+    # sharing orderly: it cannot express "queue" for more than one waiter.
     permissions:
       contents: read
     env:
@@ -462,10 +472,9 @@ jobs:
     needs: identity
     if: needs.identity.outputs.channel == 'stable'
     runs-on: [self-hosted, stado-control-plane]
-    # Same single runner as publish-linux; queue for it, never displace it.
-    concurrency:
-      group: stado-control-plane-runner
-      cancel-in-progress: false
+    # No shared concurrency group, for the reason written out on publish-linux:
+    # one pending job per group means the next PR push evicts whichever
+    # platform is waiting.
     permissions:
       contents: read
     env:
