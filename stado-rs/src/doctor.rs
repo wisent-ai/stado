@@ -443,6 +443,7 @@ pub async fn run() -> Report {
         alerts_check,
         contract_check,
         placement_check,
+        shape_check,
     ) = tokio::join!(
         bounded(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
             check_config()
@@ -521,6 +522,13 @@ pub async fn run() -> Report {
             PLACEMENT_REMEDY,
             check_placement(),
         ),
+        bounded_within(
+            FLEET_SHAPE_DEADLINE,
+            SHAPE_ID,
+            SHAPE_TITLE,
+            SHAPE_REMEDY,
+            check_fleet_shape(),
+        ),
     );
 
     Report {
@@ -544,8 +552,53 @@ pub async fn run() -> Report {
             alerts_check,
             contract_check,
             placement_check,
+            shape_check,
         ],
     }
+}
+
+// ---------------------------------------------------------------------------
+// 11. Fleet shape
+// ---------------------------------------------------------------------------
+
+const SHAPE_ID: &str = "fleet-shape";
+const SHAPE_TITLE: &str = "Fleet shape: declared against running";
+const SHAPE_REMEDY: &str =
+    "each finding names the command that resolves it; the same sweep runs on every coordinator \
+     tick, so a finding here is not waiting on anyone typing this";
+
+/// Per-host work times the fleet, so this row cannot share the flat probe
+/// budget: it reads listeners, loaded units and disk from every host with
+/// slots.
+const FLEET_SHAPE_DEADLINE: Duration = Duration::from_secs(600);
+
+/// The standing checks in [`crate::fleet_shape`], as one doctor row.
+///
+/// A sweep that measured nothing is a FAIL and not a PASS. That distinction is
+/// the entire reason this check exists: the fleet spent a night full of
+/// declarations that nothing compared against reality, and a green row on an
+/// unmeasured fleet would be one more of them.
+async fn check_fleet_shape() -> Check {
+    let runner = crate::deploy::production_runner();
+    let mut sweep = crate::fleet_shape::sweep(&runner).await;
+    if let Some(finding) = crate::fleet_shape::health_disagreement().await {
+        sweep.measured += 1;
+        sweep.findings.push(finding);
+    }
+    let mut findings = Findings::default();
+    for (host, reason) in &sweep.unreachable {
+        findings.note(Status::Warn, format!("{host}: not measured — {reason}"));
+    }
+    for finding in &sweep.findings {
+        findings.note(Status::Fail, finding.line());
+        findings.remedy(finding.command.clone());
+    }
+    if sweep.measured == 0 {
+        findings.note(Status::Fail, sweep.summary());
+    } else {
+        findings.note(Status::Pass, sweep.summary());
+    }
+    findings.into_check(SHAPE_ID, SHAPE_TITLE, SHAPE_REMEDY)
 }
 
 // ---------------------------------------------------------------------------

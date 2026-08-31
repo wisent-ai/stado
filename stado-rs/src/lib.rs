@@ -23,6 +23,7 @@ pub mod declaration;
 pub mod deploy;
 pub mod doctor;
 pub mod failure;
+pub mod fleet_shape;
 pub mod failure_fixer;
 pub mod host_software;
 pub mod inference;
