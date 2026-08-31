@@ -1784,6 +1784,60 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read, or declare, one Skarbiec capability route ON TARGET.
+    ///
+    /// A capability route maps a resource the broker is asked to resolve —
+    /// `origin:<page origin>/<field class>` for a browser fill — onto one
+    /// vault item and field. The table decides which credential a login form
+    /// receives, and it is per-host: charless-mac-mini holds its own, so a
+    /// route declared on an operator's laptop makes nothing resolvable there.
+    /// `capability-issue` refuses a resource with no route at issue time,
+    /// which is why this exists as its own verb rather than as a side effect
+    /// of some flow that needed one.
+    ///
+    /// Without `--resource` this is a READ: every route on TARGET with that
+    /// host's own answer for it — whether the item is one it can open and
+    /// whether the field is one that item carries. With all four flags it
+    /// declares one route. Skarbiec keeps the previous table beside the new
+    /// one, records the reason in its journal, reports an identical route as
+    /// unchanged, and refuses to repoint a live route.
+    #[command(name = "capability-route")]
+    CapabilityRoute {
+        target: String,
+        /// The resource to map, e.g. `origin:https://accounts.google.com/email`.
+        #[arg(long)]
+        resource: Option<String>,
+        /// The vault item on TARGET that holds the credential.
+        #[arg(long)]
+        item: Option<String>,
+        /// The field of that item, e.g. `username` or `password`.
+        #[arg(long)]
+        field: Option<String>,
+        /// Why this route exists. Required by Skarbiec for a declaration, and
+        /// carried into its journal beside the table: a change to which
+        /// credential a form receives is never self-explanatory later.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Ask TARGET to verify its whole table and report the SENTENCE behind
+        /// every route that cannot deliver, instead of the two booleans the
+        /// listing prints. A non-interactive channel may be unable to open a
+        /// vault the broker service on that host opens fine, and only the
+        /// sentence tells those apart.
+        #[arg(long)]
+        verify: bool,
+        /// Address one broker instance's capability state instead of the
+        /// host's vault-adjacent default. `capability-serve` is started with
+        /// whatever its launcher exports, and only that instance can redeem
+        /// what is issued into it. A leading `$HOME/` expands on the host.
+        #[arg(long)]
+        capability_file: Option<String>,
+        /// The route table that same instance resolves against.
+        #[arg(long)]
+        routes_file: Option<String>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run one browser task on TARGET's Weles worker and report its result.
     ///
     /// The general submission surface. `weles-capture` hard-codes
@@ -1822,13 +1876,32 @@ enum HostCommands {
         /// Env file whose `WELES_ACTION_ALLOWLIST` decides what TARGET accepts.
         #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ENV_FILE)]
         env_file: String,
-        /// Permit the run to sign in and change state. Off by default: the
-        /// same read-only, no-login, no-mutation constraints
-        /// `weles-image-inspect` fixes. Turning it on is an explicit decision,
-        /// because a browser task that may authenticate acts as the account it
-        /// signs in as.
+        /// Carry "this run may sign in" into the agent's instructions. This is
+        /// a HINT, not an enforced restriction: Weles appends the
+        /// read_only/no_login/no_mutation constraints to the model's goal text
+        /// and checks them nowhere, and the agent holds fill, click, navigate
+        /// and store_credential whether or not this is set. Its one mechanical
+        /// effect is that --sign-in-origin is refused without it.
         #[arg(long)]
         allow_login: bool,
+        /// Sign in on this page origin with the account Skarbiec holds, e.g.
+        /// `https://accounts.google.com`. Stado mints one single-use,
+        /// one-hour `weles.browser.fill` capability per field — email and
+        /// password — under one authorization id, and sends only those
+        /// references: no secret enters argv, the objective, a log line or the
+        /// report. The worker redeems each against its own broker at fill time
+        /// and zeroes the plaintext. Requires --sign-in-item and
+        /// --allow-login. A bare origin only: Weles compares it against the
+        /// live page's own origin, so a run that redirects elsewhere before the
+        /// prefill is refused there rather than filled.
+        #[arg(long)]
+        sign_in_origin: Option<String>,
+        /// The vault item holding that account. Checked against Skarbiec's
+        /// capability route table before anything is minted: the item a route
+        /// names is the item that would be read, and a disagreement is refused
+        /// rather than silently resolved in the route's favour.
+        #[arg(long)]
+        sign_in_item: Option<String>,
         /// Run with a visible window. Some sign-in flows refuse headless.
         #[arg(long)]
         windowed: bool,
@@ -2584,6 +2657,30 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 batch,
                 json,
             } => host::weles_capture_status(&target, &batch, json).await,
+            HostCommands::CapabilityRoute {
+                target,
+                resource,
+                item,
+                field,
+                reason,
+                verify,
+                capability_file,
+                routes_file,
+                json,
+            } => {
+                host::capability_route(host::CapabilityRouteRequest {
+                    target: &target,
+                    resource: resource.as_deref(),
+                    item: item.as_deref(),
+                    field: field.as_deref(),
+                    reason: reason.as_deref(),
+                    verify,
+                    capability_file: capability_file.as_deref(),
+                    routes_file: routes_file.as_deref(),
+                    json,
+                })
+                .await
+            }
             HostCommands::WelesBrowserTask {
                 target,
                 url,
@@ -2592,6 +2689,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 action,
                 env_file,
                 allow_login,
+                sign_in_origin,
+                sign_in_item,
                 windowed,
                 json,
             } => {
@@ -2603,6 +2702,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     action: &action,
                     env_file: &env_file,
                     allow_login,
+                    sign_in_origin: sign_in_origin.as_deref(),
+                    sign_in_item: sign_in_item.as_deref(),
                     windowed,
                     json,
                 })
