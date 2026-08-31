@@ -35,10 +35,11 @@ permissions:
   contents: read
 
 concurrency:
-  # Only the newest revision of a ref can become qualified. deploy.yml waits on
-  # this exact SHA's completed verdict on a hosted runner before it allocates the
-  # publisher runner, and a newer canonical tag supersedes older publication.
-  group: wisent-compute-version-check-${{ github.ref }}
+  # An immutable tag waits for this exact SHA's verdict. Group by that source
+  # revision so a newer main push cannot cancel the verdict beneath a release
+  # that is already waiting for it. Duplicate events for one SHA may still
+  # replace each other.
+  group: wisent-compute-version-check-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:

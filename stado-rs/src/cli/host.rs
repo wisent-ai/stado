@@ -5565,14 +5565,18 @@ pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Resu
 fn reverse_forward_spec(remote_port: u16, local_port: u16) -> String {
     format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}")
 }
+fn local_forward_spec_prefix(local_port: u16) -> String {
+    format!("127.0.0.1:{local_port}:127.0.0.1:")
+}
 
-/// `stado host forward-close TARGET NAME` — end a channel `forward-local`
-/// opened and reconcile both of its markers.
+
+/// `stado host forward-close TARGET NAME` — end a channel opened by either
+/// `forward-local` or `forward-remote` and reconcile its markers.
 ///
 /// Order matters. The process is ended first, then the markers are removed,
-/// then the host is re-read: a marker deleted while the tunnel still carried
-/// traffic would leave a live port nothing describes, which is worse than the
-/// stale marker it was trying to fix.
+/// then the exposed port is re-read: a marker deleted while the tunnel still
+/// carried traffic would leave a live port nothing describes, which is worse
+/// than the stale marker it was trying to fix.
 pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
     release_component("forward name", name)?;
     let resolved = crate::deploy::host_channel::canonical_target(target)
@@ -5584,6 +5588,11 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
         .join(".stado")
         .join("forwards")
         .join(format!("{name}.local"));
+    let local_forward_marker = std::path::Path::new(&home)
+        .join(".stado")
+        .join("forwards")
+        .join(format!("{name}.url"));
+
 
     // The ports come from the markers the open wrote, so a close addresses the
     // exact channel that was opened rather than a port an operator remembers.
@@ -5604,8 +5613,20 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
         .as_deref()
         .and_then(|body| url::Url::parse(body).ok())
         .and_then(|parsed| parsed.port());
+    // `forward-remote` has no marker on TARGET. Its local `.url` marker is
+    // considered only when neither half of a reverse forward exists, so the
+    // same name can never make this close the wrong direction.
+    let local_forward_port = if local_port.is_none() && remote_port.is_none() {
+        std::fs::read_to_string(&local_forward_marker)
+            .ok()
+            .and_then(|body| url::Url::parse(body.trim()).ok())
+            .and_then(|parsed| parsed.port())
+    } else {
+        None
+    };
 
-    if local_port.is_none() && remote_port.is_none() {
+
+    if local_port.is_none() && remote_port.is_none() && local_forward_port.is_none() {
         return Err(CmdError::click(format!(
             "{target}: no forward named {name:?} is recorded here or on the host, so there is \
              nothing to close; `stado host inventory {target}` lists the markers that exist"
@@ -5645,8 +5666,56 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             ));
         }
     }
+    // A local forward is identified by the complete local half of its `-L`
+    // specification and the registry target's exact SSH destination. Matching
+    // either one alone could end an unrelated channel.
+    if let Some(local) = local_forward_port {
+        let ssh = resolved
+            .ssh
+            .as_deref()
+            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+        let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+        let destination = argv
+            .pop()
+            .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+        let spec_prefix = local_forward_spec_prefix(local);
+        let listing = tokio::process::Command::new("/bin/ps")
+            .args(["ax", "-o", "pid=", "-o", "command="])
+            .output()
+            .await?;
+        for line in String::from_utf8_lossy(&listing.stdout).lines() {
+            let trimmed = line.trim_start();
+            let Some((pid, command)) = trimmed.split_once(char::is_whitespace) else {
+                continue;
+            };
+            if !command.contains("ssh")
+                || !command.contains(" -L ")
+                || !command.contains(&spec_prefix)
+                || !command.contains(&destination)
+            {
+                continue;
+            }
+            let Ok(parsed) = pid.parse::<i32>() else {
+                continue;
+            };
+            let killed = tokio::process::Command::new("/bin/kill")
+                .args(["-TERM", &parsed.to_string()])
+                .output()
+                .await?;
+            ended.push(format!(
+                "pid {parsed}{}",
+                if killed.status.success() {
+                    ""
+                } else {
+                    " (signal refused)"
+                }
+            ));
+        }
+    }
 
-    // Then the markers, remote first: it is the one other machines read.
+
+    // Then the markers, remote first for a reverse forward: it is the one
+    // another machine reads.
     let remote_removed = if remote_marker_body.is_some() {
         let script = format!(
             "set -eu\n/bin/rm -f \"$HOME/.stado/forwards/\"{name}\".url\"\n",
@@ -5669,28 +5738,51 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
     } else {
         false
     };
-    let local_removed = std::fs::remove_file(&local_marker).is_ok();
+    let local_removed = if local_forward_port.is_some() {
+        std::fs::remove_file(&local_forward_marker).is_ok()
+    } else {
+        std::fs::remove_file(&local_marker).is_ok()
+    };
 
-    // Re-read: the host's own answer decides whether the port is reclaimed.
-    let still_listening = match remote_port {
-        Some(port) => {
-            let report = crate::deploy::service_serving::read_serving(
-                &resolved,
-                "com.wisent.host-health-beacon",
-                "",
-                &[port],
-                &runner,
+    // Re-read the side that was exposed. The endpoint itself, not a process
+    // lookup, decides whether the port was reclaimed.
+    let still_listening = if let Some(port) = local_forward_port {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        Some(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                tokio::net::TcpStream::connect(("127.0.0.1", port)),
             )
             .await
-            .ok();
-            report.map(|report| {
-                report
-                    .ports
-                    .first()
-                    .is_some_and(|entry| !entry.holders.is_empty())
-            })
+            .map_or(true, |result| result.is_ok()),
+        )
+    } else {
+        match remote_port {
+            Some(port) => {
+                let report = crate::deploy::service_serving::read_serving(
+                    &resolved,
+                    "com.wisent.host-health-beacon",
+                    "",
+                    &[port],
+                    &runner,
+                )
+                .await
+                .ok();
+                report.map(|report| {
+                    report
+                        .ports
+                        .first()
+                        .is_some_and(|entry| !entry.holders.is_empty())
+                })
+            }
+            None => None,
         }
-        None => None,
+    };
+    let effective_local_port = local_forward_port.or(local_port);
+    let direction = if local_forward_port.is_some() {
+        "local"
+    } else {
+        "reverse"
     };
 
     if json {
@@ -5699,21 +5791,25 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             serde_json::to_string_pretty(&json!({
                 "target": resolved.name,
                 "name": name,
+                "direction": direction,
                 "remote_port": remote_port,
-                "local_port": local_port,
+                "local_port": effective_local_port,
                 "ended": ended,
                 "remote_marker_removed": remote_removed,
                 "local_marker_removed": local_removed,
-                "remote_port_still_listening": still_listening,
+                "port_still_listening": still_listening,
+                "remote_port_still_listening": if local_forward_port.is_none() { still_listening } else { None },
+                "local_port_still_listening": if local_forward_port.is_some() { still_listening } else { None },
             }))?
         );
     } else {
-        println!("host:     {}", resolved.name);
-        println!("forward:  {name}");
+        println!("host:      {}", resolved.name);
+        println!("forward:   {name}");
+        println!("direction: {direction}");
         println!(
-            "ports:    remote {} local {}",
+            "ports:     remote {} local {}",
             remote_port.map_or_else(|| "-".to_string(), |port| port.to_string()),
-            local_port.map_or_else(|| "-".to_string(), |port| port.to_string())
+            effective_local_port.map_or_else(|| "-".to_string(), |port| port.to_string())
         );
         println!(
             "ended:    {}",
@@ -5731,6 +5827,7 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
         println!(
             "port:     {}",
             match still_listening {
+                Some(true) if local_forward_port.is_some() => "STILL LISTENING locally",
                 Some(true) => "STILL LISTENING on the host",
                 Some(false) => "reclaimed",
                 None => "unverified",
@@ -5739,9 +5836,14 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
     }
     match still_listening {
         Some(true) => Err(CmdError::click(format!(
-            "{}: {name} was closed and its remote port is still listening, so something else \
-             holds it; the markers are gone and the port is not this forward's any more",
-            resolved.name
+            "{}: {name} was closed and its {} port is still listening, so something else holds \
+             it; the markers are gone and the port is not this forward's any more",
+            resolved.name,
+            if local_forward_port.is_some() {
+                "local"
+            } else {
+                "remote"
+            }
         ))),
         _ => Ok(()),
     }
