@@ -1428,6 +1428,39 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Pull TARGET's Skarbiec mirror into its live vault without discarding
+    /// local-only items.
+    #[command(name = "sync-vault")]
+    SyncVault {
+        target: String,
+        /// Emit the Skarbiec pull report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mint one bounded Skarbiec bearer on TARGET's live vault.
+    #[command(name = "vault-token-mint")]
+    VaultTokenMint {
+        target: String,
+        consumer: String,
+        /// Comma-separated Skarbiec capabilities.
+        #[arg(long)]
+        capabilities: String,
+        /// Exact audience bound into the bearer.
+        #[arg(long)]
+        audience: String,
+        /// Bearer lifetime in seconds.
+        #[arg(long, default_value_t = 31_536_000)]
+        ttl_seconds: u64,
+        /// Replace an existing consumer's capability set.
+        #[arg(long)]
+        replace_capabilities: bool,
+        /// Print only the bearer, for piping directly into a secret store.
+        #[arg(long)]
+        raw_token: bool,
+        /// Emit nonsecret bearer metadata as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
@@ -2429,6 +2462,29 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
+            HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::VaultTokenMint {
+                target,
+                consumer,
+                capabilities,
+                audience,
+                ttl_seconds,
+                replace_capabilities,
+                raw_token,
+                json,
+            } => {
+                host::vault_token_mint(
+                    &target,
+                    &consumer,
+                    &capabilities,
+                    &audience,
+                    ttl_seconds,
+                    replace_capabilities,
+                    raw_token,
+                    json,
+                )
+                .await
+            }
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
             }
