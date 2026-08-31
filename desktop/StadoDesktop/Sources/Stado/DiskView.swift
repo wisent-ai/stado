@@ -86,8 +86,7 @@ struct DiskView: View {
             WisentAlertPanel(
                 tone: presentation.severity == .critical ? .danger : .warning,
                 title: presentation.title,
-                detail: report.errors.first ?? presentation.detail,
-                command: "curl \(store.dashboardURLString)/api/cleanup.json"
+                detail: report.errors.first ?? presentation.detail
             )
         }
 

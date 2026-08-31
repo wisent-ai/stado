@@ -298,15 +298,6 @@ struct QueueView: View {
                     value: model.counts.failed.formatted(.number),
                     tone: model.counts.failed > 0 ? .danger : .neutral
                 )
-                WisentCapabilityList(
-                    title: "Not published for this group",
-                    items: [
-                        "Individual queued job records",
-                        "Per-job placement decisions",
-                        "Submitted job payloads",
-                    ],
-                    isAvailable: false
-                )
             }
         } else if let record = records(snapshot).first(where: { $0.id == selection }) {
             WisentInspector(
@@ -326,8 +317,7 @@ struct QueueView: View {
                     WisentAlertPanel(
                         tone: .danger,
                         title: "Backend failure",
-                        detail: record.error ?? "The dashboard published this failure without a sanitized reason.",
-                        command: "stado job watch \(record.jobID)"
+                        detail: record.error ?? "The dashboard published this failure without a sanitized reason."
                     )
                     WisentActionButton(
                         action: WisentAction(

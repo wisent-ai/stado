@@ -205,7 +205,6 @@ struct ServicesView: View {
                     detail: fleetStore.failedServices
                         .map { "\($0.host) \($0.unitID.isEmpty ? $0.name : $0.unitID)" }
                         .joined(separator: "\n"),
-                    command: "stado service status \(fleetStore.failedServices.first?.name ?? "NAME") --json",
                     actions: [
                         WisentAction("Show them", symbol: "arrow.down.right") {
                             facet = .fleet
@@ -221,7 +220,6 @@ struct ServicesView: View {
                         ? "One process is not running the code on disk"
                         : "\(store.mismatched.count.formatted(.number)) processes are not running the code on disk",
                     detail: mismatchDetail,
-                    command: "stado service converge \(store.mismatched.first?.host ?? "HOST") --json",
                     actions: [
                         WisentAction("Show them", symbol: "arrow.down.right") {
                             facet = .replaced
@@ -235,7 +233,6 @@ struct ServicesView: View {
                     tone: .warning,
                     title: "Unowned processes were not listed",
                     detail: problem,
-                    command: "stado service list --unowned --json",
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                             Task { await store.refresh(hosts: hosts) }
@@ -253,7 +250,6 @@ struct ServicesView: View {
                         .sorted { $0.key < $1.key }
                         .map { "\($0.key): \($0.value)" }
                         .joined(separator: "\n"),
-                    command: "stado service list --json",
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
                             Task { await refresh() }
@@ -270,8 +266,7 @@ struct ServicesView: View {
                     detail: store.failures
                         .sorted { $0.key < $1.key }
                         .map { "\($0.key): \($0.value)" }
-                        .joined(separator: "\n"),
-                    command: "stado service converge \(store.failures.keys.sorted().first ?? "HOST") --json"
+                        .joined(separator: "\n")
                 )
             }
         }
@@ -709,7 +704,6 @@ struct ServicesView: View {
                     tone: .warning,
                     title: "This host's services could not be read",
                     detail: problem,
-                    command: "stado service list --json",
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
                             Task { await refresh() }
@@ -734,8 +728,7 @@ struct ServicesView: View {
                 WisentAlertPanel(
                     tone: .danger,
                     title: "The beacon reports this unit as failed",
-                    detail: fleetFailureDetail(entry),
-                    command: "stado service status \(entry.name) --json"
+                    detail: fleetFailureDetail(entry)
                 )
             }
             if let finding = entry.misdeclaredDomain {
@@ -748,8 +741,7 @@ struct ServicesView: View {
                 WisentAlertPanel(
                     tone: .warning,
                     title: "Nobody is logged in on \(finding.host), so this unit cannot start there",
-                    detail: finding.detail,
-                    command: "stado service list --json"
+                    detail: finding.detail
                 )
             }
             WisentField(label: "Host", value: entry.host)
@@ -965,15 +957,13 @@ struct ServicesView: View {
                 WisentAlertPanel(
                     tone: .danger,
                     title: "The process is not executing the program on disk",
-                    detail: "The unit runs, and the binary the process is executing is not the one under the directory this unit declares. Whatever was fixed in the program on disk is not what this host is serving, and nothing will change that until the unit restarts.",
-                    command: "stado service converge \(row.host) --json"
+                    detail: "The unit runs, and the binary the process is executing is not the one under the directory this unit declares. Whatever was fixed in the program on disk is not what this host is serving, and nothing will change that until the unit restarts."
                 )
             } else if unit.binaryMatchesProcess == nil {
                 WisentAlertPanel(
                     tone: .warning,
                     title: "The host did not say which binary the process runs",
-                    detail: "This host reported no running-binary comparison, so whether the process is executing the program on disk is unknown here. It is not a claim that they match.",
-                    command: "stado service converge \(row.host) --json"
+                    detail: "This host reported no running-binary comparison, so whether the process is executing the program on disk is unknown here. It is not a claim that they match."
                 )
             }
             WisentField(label: "Host", value: row.host)
@@ -1008,8 +998,7 @@ struct ServicesView: View {
             WisentAlertPanel(
                 tone: .warning,
                 title: "Nothing supervises this process",
-                detail: "No declared unit owns it, so no release updates it, nothing restarts it if it dies, and nothing stops it. Two processes in this state ran for four days before anybody looked. Ending it is a decision for whoever knows what it is doing, and this console does not make it.",
-                command: "stado service list --unowned --json"
+                detail: "No declared unit owns it, so no release updates it, nothing restarts it if it dies, and nothing stops it. Two processes in this state ran for four days before anybody looked. Ending it is a decision for whoever knows what it is doing, and this console does not make it."
             )
             WisentField(label: "Host", value: process.host)
             WisentField(label: "PID", value: value(process.pid))

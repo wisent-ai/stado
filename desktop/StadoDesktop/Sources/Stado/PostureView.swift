@@ -262,8 +262,7 @@ struct PostureView: View {
                     WisentAlertPanel(
                         tone: .warning,
                         title: "The dashboard has not published its first snapshot",
-                        detail: "The endpoint answered, but its background scan has not produced queue state yet. Nothing on this screen is estimated while that scan is incomplete.",
-                        command: "curl \(store.dashboardURLString)/api/state.json"
+                        detail: "The endpoint answered, but its background scan has not produced queue state yet. Nothing on this screen is estimated while that scan is incomplete."
                     )
                 }
             } else if store.isRefreshing {
@@ -300,7 +299,6 @@ struct PostureView: View {
                 tone: .danger,
                 title: "The queue is blocked",
                 detail: "\(snapshot.counts.queue.formatted(.number)) jobs are queued and no host reports live capacity. Until one host publishes a current capacity report, nothing in this queue can start.",
-                command: "curl \(store.dashboardURLString)/api/state.json",
                 actions: [
                     WisentAction("Open Hosts", symbol: "server.rack", kind: .primary) { route(.hosts) }
                 ]
@@ -312,7 +310,6 @@ struct PostureView: View {
                 tone: .danger,
                 title: "Job \(failure.jobID) failed",
                 detail: failure.error ?? "The dashboard published this failure without a sanitized reason.",
-                command: "stado job watch \(failure.jobID)",
                 actions: [
                     WisentAction("Open Queue", symbol: "list.bullet.rectangle", kind: .primary) { route(.queue) }
                 ]
@@ -324,7 +321,6 @@ struct PostureView: View {
                 tone: .danger,
                 title: report.outcomePresentation.title,
                 detail: report.errors.first ?? report.outcomePresentation.detail,
-                command: "curl \(store.dashboardURLString)/api/cleanup.json",
                 actions: [
                     WisentAction("Open Disk", symbol: "externaldrive", kind: .primary) { route(.disk) }
                 ]
@@ -336,7 +332,6 @@ struct PostureView: View {
                 tone: .danger,
                 title: "Canonical fleet policy unavailable",
                 detail: message,
-                command: "curl \(store.dashboardURLString)/api/registry.json",
                 actions: [
                     WisentAction("Open Registry", symbol: "book.closed") { route(.registry) }
                 ]

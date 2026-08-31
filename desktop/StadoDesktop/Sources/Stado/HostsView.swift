@@ -421,8 +421,7 @@ struct HostsView: View {
                     WisentAlertPanel(
                         tone: tone(for: host.status),
                         title: host.status == .unavailable ? "No current capacity report" : "Capacity report is stale",
-                        detail: host.availabilityReason,
-                        command: "stado host health \(host.targetName ?? host.displayName) --json"
+                        detail: host.availabilityReason
                     )
                 }
                 WisentField(label: "Consumer identity", value: host.consumerID ?? "Not reported")
@@ -617,7 +616,6 @@ struct HostsView: View {
                         ? "\(notClaiming[0].host) is claiming no work"
                         : "\(notClaiming.count.formatted(.number)) hosts are claiming no work",
                     detail: silentDetail(notClaiming),
-                    command: "stado host gates \(notClaiming[0].host) --json",
                     actions: [
                         WisentAction("Show them", symbol: "arrow.down.right") {
                             facet = .notClaiming
@@ -633,7 +631,6 @@ struct HostsView: View {
                         ? linkAlarmTitle(worst)
                         : "\(quiet.count.formatted(.number)) hosts have a link the fleet cannot vouch for",
                     detail: quietDetail(quiet),
-                    command: HostLinkStore.commandLine(host: worst.host),
                     actions: [
                         WisentAction("Show them", symbol: "arrow.down.right") {
                             facet = worst.verdict == .degraded ? .degradedLink : .silentLink
@@ -652,7 +649,6 @@ struct HostsView: View {
                         .sorted { $0.key < $1.key }
                         .map { "\($0.key): \($0.value)" }
                         .joined(separator: "\n"),
-                    command: "stado host gates \(unreadableGates.keys.sorted()[0]) --json",
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !gatesStore.isRefreshing) {
                             Task { await gatesStore.refresh(hosts: gateHostNames) }
@@ -670,7 +666,6 @@ struct HostsView: View {
                         .sorted { $0.key < $1.key }
                         .map { "\($0.key): \($0.value)" }
                         .joined(separator: "\n"),
-                    command: HostLinkStore.commandLine(host: unreadableLinks.keys.sorted()[0]),
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !linkStore.isRefreshing) {
                             Task { await linkStore.refresh(hosts: gateHostNames) }
@@ -766,8 +761,7 @@ struct HostsView: View {
                     title: "This host is claiming no work",
                     detail: gates.blockers.isEmpty
                         ? "The host reports that it is not claiming and named no blocker. Nothing downstream will report this either."
-                        : gates.blockers.joined(separator: "\n"),
-                    command: "stado host gates \(gates.host) --json"
+                        : gates.blockers.joined(separator: "\n")
                 )
             }
             WisentField(
@@ -842,7 +836,6 @@ struct HostsView: View {
                 tone: .warning,
                 title: "Claiming gates could not be read",
                 detail: failure,
-                command: "stado host gates \(host.targetName ?? host.displayName) --json",
                 actions: [
                     WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !gatesStore.isRefreshing) {
                         Task { await gatesStore.refresh(hosts: gateHostNames) }
@@ -878,7 +871,6 @@ struct HostsView: View {
     /// is one line and no card: absence of an incident is not an incident.
     @ViewBuilder
     private func linkSection(for host: WorkerNode) -> some View {
-        let name = host.targetName ?? host.displayName
         if let link = hostLink(host) {
             if link.verdict.needsAttention {
                 WisentAlertPanel(
@@ -886,8 +878,7 @@ struct HostsView: View {
                     title: linkAlarmTitle(link),
                     detail: link.blockers.isEmpty
                         ? "The command called this link \(link.verdict.word) and named no blocker. Nothing downstream reports it either, so the next reader to refuse will be the only trace."
-                        : link.blockers.joined(separator: "\n"),
-                    command: HostLinkStore.commandLine(host: link.host)
+                        : link.blockers.joined(separator: "\n")
                 )
             } else {
                 WisentField(
@@ -959,7 +950,6 @@ struct HostsView: View {
                 tone: .warning,
                 title: "This host's link could not be read",
                 detail: failure,
-                command: HostLinkStore.commandLine(host: name),
                 actions: [
                     WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !linkStore.isRefreshing) {
                         Task { await linkStore.refresh(hosts: gateHostNames) }

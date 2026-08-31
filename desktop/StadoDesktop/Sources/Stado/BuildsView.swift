@@ -119,7 +119,6 @@ struct BuildsView: View {
                     tone: .warning,
                     title: "Build recipes could not be read",
                     detail: problem,
-                    command: "stado builds list --json",
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                             Task { await store.refresh() }

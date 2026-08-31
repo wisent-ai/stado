@@ -8,8 +8,12 @@ let package = Package(
         .executable(name: "Stado", targets: ["Stado"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/wisent-ai/wisent-components.git", revision: "63aab577abc78c4d1993a711236479dbc2c2571a"),
-        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", revision: "3fa84dc99e2a470c06655882de0c536874e4c8c3"),
+        // The revision that ships `WisentSkeleton` and the skeleton rows
+        // `WisentLoadingPanel` now stands content in place with, and the auth
+        // package that names the same one: SwiftPM admits exactly one revision
+        // of a package per resolution, so a mixed pair does not resolve.
+        .package(url: "https://github.com/wisent-ai/wisent-components.git", revision: "e52cdda9036b8d44c7ebf51626fcde606e6859b6"),
+        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", revision: "b47177c97fe93b44ec72c74dedde23f3e1abb090"),
         // By url, not by sibling path: CI checks out this repository alone, and
         // a missing sibling makes the whole graph unresolvable there.
         .package(url: "https://github.com/wisent-ai/echo.git", from: "0.1.2"),

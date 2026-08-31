@@ -148,8 +148,7 @@ struct MachineHandKeyEnrollmentView: View {
                 WisentAlertPanel(
                     tone: .warning,
                     title: "The name is fixed once a key exists for it",
-                    detail: "The credential item is \(store.draft.credentialItem), named after this machine. To use a different name, start another attempt; the key already minted stays in the credential store until it is removed with stado fleet key rm.",
-                    command: "stado fleet key rm \(store.draft.machineName)"
+                    detail: "The credential item is \(store.draft.credentialItem), named after this machine. To use a different name, start another attempt; the key already minted stays in the credential store until it is removed with stado fleet key rm."
                 )
             }
 

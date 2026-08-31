@@ -73,8 +73,13 @@ struct EnrollmentChrome<Content: View, Rail: View>: View {
                             WisentAlertPanel(
                                 tone: .danger,
                                 title: failure.title,
-                                detail: failure.detail,
-                                command: failure.backendMessage.isEmpty ? nil : failure.backendMessage
+                                // The backend's own sentence sits in the detail
+                                // now that the panel has no separate slot for
+                                // it. Dropping it would leave the operator with
+                                // our paraphrase of a refusal we did not write.
+                                detail: failure.backendMessage.isEmpty
+                                    ? failure.detail
+                                    : "\(failure.detail)\n\n\(failure.backendMessage)"
                             )
                         }
                         content
@@ -1375,9 +1380,14 @@ struct EnrollmentCheckpointPanel: View {
             WisentAlertPanel(
                 tone: .warning,
                 title: title,
-                detail: checkpoint.headline,
-                command: quoted
+                detail: checkpoint.headline
             )
+            // The quoted words go in the same transcript the other branch
+            // uses: the panel no longer renders them, and a paraphrase loses
+            // which of the three refusals this was.
+            if let quoted {
+                EnrollmentTranscript(text: quoted)
+            }
         } else {
             WisentPanel {
                 HStack(alignment: .top, spacing: WisentDesign.Space.x4) {

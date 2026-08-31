@@ -432,9 +432,6 @@ struct ReleasesView: View {
                     tone: .danger,
                     title: "This rollout could not be diagnosed",
                     detail: problem,
-                    command: StadoCLI.commandLine(
-                        ReleaseEvidenceStore.doctorArguments(pair: row.pair)
-                    ),
                     actions: [
                         WisentAction("Diagnose again", symbol: "arrow.clockwise") {
                             Task { await store.diagnose(row.pair) }
@@ -565,8 +562,7 @@ struct ReleasesView: View {
                 WisentAlertPanel(
                     tone: .warning,
                     title: "This console read no software report",
-                    detail: "`stado release status --json` answered without the software block, so nothing here states what \(row.target) is running. That is an unanswered question, not a passing one.",
-                    command: StadoCLI.commandLine(["host", "software", row.target])
+                    detail: "`stado release status --json` answered without the software block, so nothing here states what \(row.target) is running. That is an unanswered question, not a passing one."
                 )
             }
         }
@@ -691,8 +687,10 @@ struct ReleasesView: View {
                 .frame(width: 120)
 
                 if store.isLoadingLogs {
-                    ProgressView()
-                        .controlSize(.small)
+                    // The pickers keep their place and the bar sits where a
+                    // stream label lands, so the header says the read is in
+                    // flight without a spinning circle.
+                    WisentSkeleton(.pill, width: 120, height: 14)
                 }
                 Spacer(minLength: 0)
             }
@@ -728,9 +726,17 @@ struct ReleasesView: View {
                     }
                 }
             } else if store.isLoadingLogs {
-                Text("Reading the tail off \(row.target)…")
-                    .font(WisentTypeScale.body())
-                    .foregroundStyle(WisentDesign.secondary)
+                // A tail is a block of monospaced rows, so the wait is that
+                // block: bars in the pane the lines are about to fill.
+                WisentSkeletonGroup(
+                    label: "Reading the tail off \(row.target)",
+                    spacing: WisentDesign.Space.x2
+                ) {
+                    ForEach(0 ..< 8, id: \.self) { _ in
+                        WisentSkeleton(.line)
+                    }
+                }
+                .padding(WisentDesign.Space.x3)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -857,9 +863,12 @@ struct ReleasesView: View {
                     }
                 }
             } else if store.isLoadingQuarantine, store.quarantine == nil {
-                Text("Reading the host's quarantine map…")
-                    .font(WisentTypeScale.body())
-                    .foregroundStyle(WisentDesign.secondary)
+                WisentSkeletonList(
+                    rows: 2,
+                    lines: 2,
+                    media: false,
+                    label: "Reading the host's quarantine map"
+                )
             } else if let report = store.quarantine, store.quarantinePair == row.pair {
                 if report.entries.isEmpty {
                     Text("Nothing is quarantined for \(report.product) on \(report.target). No digest is being skipped here.")
