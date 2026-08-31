@@ -288,6 +288,7 @@ fn client() -> Result<crate::skarbiec::Client, CmdError> {
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|err| CmdError::click(err.to_string()))
 }
@@ -300,6 +301,7 @@ async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .await
     .map_err(|err| CmdError::click(err.to_string()))?;

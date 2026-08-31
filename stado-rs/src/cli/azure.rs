@@ -347,6 +347,7 @@ fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|error| CmdError::click(error.to_string()))
 }

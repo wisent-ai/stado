@@ -304,8 +304,16 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     let token_file = crate::config_file::expand_tilde(raw.trim())
         .to_string_lossy()
         .into_owned();
-    let client = crate::skarbiec::Client::new(url.trim(), &consumer, &token_file)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    // The beacon's grant is an operator-provisioned file that stays where it is:
+    // this runs on a schedule for the life of the host, so it must re-read and
+    // pick up a rotated grant, and it must never erase the file it depends on.
+    let client = crate::skarbiec::Client::new(
+        url.trim(),
+        &consumer,
+        &token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
+    )
+    .map_err(|error| CmdError::click(error.to_string()))?;
     // One field, named. The whole-item read this used to do is exactly what
     // the broker stopped answering, and the beacon died with it: the host
     // published nothing for twenty-one hours while `stado service list` went

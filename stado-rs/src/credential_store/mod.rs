@@ -188,11 +188,18 @@ fn file_backend(path: &str) -> Result<Backend, SkarbiecError> {
     })
 }
 
+/// The store-side client for this host's configured Stado grant.
+///
+/// Same statement as `Client::configured` and for the same reason: the only
+/// thing this site knows about the grant is the path the platform configured,
+/// and on an agent VM that path is the platform's own one-shot handoff.
 fn configured_client(url: Option<&str>) -> Result<Client, SkarbiecError> {
+    let token_file = crate::config::skarbiec_token_file();
     Client::direct(
         url.unwrap_or_else(|| crate::config::skarbiec_url()),
         crate::config::skarbiec_consumer(),
-        crate::config::skarbiec_token_file(),
+        token_file,
+        crate::skarbiec::GrantMode::for_grant_file(token_file),
     )
 }
 
@@ -223,17 +230,27 @@ pub async fn read_string(id: &str, field: &str) -> Result<Option<String>, Skarbi
 /// their own Skarbiec coordinates. Under the skarbiec backend the supplied
 /// triple is used exactly as before; under the file backend the item comes
 /// from the store file instead.
+///
+/// The mode travels with the coordinates because this function cannot know it:
+/// it is handed someone else's grant file and has no basis to decide whether
+/// that file is a one-shot handoff.
 pub async fn read_item_with(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
     id: &str,
 ) -> Result<Value, SkarbiecError> {
     match selected()? {
         Backend::Skarbiec { url: store_url } => {
-            Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)?
-                .read_item(id)
-                .await
+            Client::direct(
+                store_url.as_deref().unwrap_or(url),
+                consumer,
+                token_file,
+                grant_mode,
+            )?
+            .read_item(id)
+            .await
         }
         Backend::File { path } => file::file_read_item(&path, id),
     }
@@ -251,14 +268,20 @@ pub async fn read_string_with(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
     id: &str,
     field: &str,
 ) -> Result<Option<String>, SkarbiecError> {
     match selected()? {
         Backend::Skarbiec { url: store_url } => {
-            Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)?
-                .read_string(id, field)
-                .await
+            Client::direct(
+                store_url.as_deref().unwrap_or(url),
+                consumer,
+                token_file,
+                grant_mode,
+            )?
+            .read_string(id, field)
+            .await
         }
         Backend::File { path } => file::file_read_string(&path, id, field),
     }

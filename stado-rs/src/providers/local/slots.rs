@@ -428,14 +428,19 @@ async fn resolve_job_secret_environment(
             url,
             crate::config::agent_skarbiec_consumer(),
             agent_token_file,
+            crate::skarbiec::GrantMode::for_grant_file(agent_token_file),
         )
     } else if crate::config::skarbiec_consumer() == crate::config::agent_skarbiec_consumer()
         && crate::config::skarbiec_token_file() == agent_token_file
-        && crate::config::skarbiec_consumer().ends_with("-agent")
+        && crate::skarbiec::GrantMode::for_grant_file(agent_token_file)
+            == crate::skarbiec::GrantMode::TransientHandoff
     {
-        // Azure's protected-settings file is erased after first read. The
-        // configured client is safe only when it is byte-for-byte the same
-        // dedicated consumer/path, so it can reuse the in-process cache.
+        // The grant file is already gone, so the only bearer left is the one
+        // cached in this process. That cache is keyed by consumer and path, so
+        // the configured client reaches it only when it is byte-for-byte the
+        // same grant — and only when that grant is a transient handoff, which is
+        // what put the bearer in the cache and unlinked the file. Asking for the
+        // mode is asking exactly that; the consumer's name never established it.
         crate::skarbiec::Client::configured()
     } else {
         return Err(StorageError::Other(

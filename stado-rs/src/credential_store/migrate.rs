@@ -149,13 +149,14 @@ async fn snapshot(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
 ) -> Result<Vec<SnapshotItem>, SkarbiecError> {
     let mut snapshot = Vec::new();
-    for info in list_items_at(backend, url, consumer, token_file).await? {
+    for info in list_items_at(backend, url, consumer, token_file, grant_mode).await? {
         if info.deleted == Some(true) {
             continue;
         }
-        let value = read_item_at(backend, url, consumer, token_file, &info.id).await?;
+        let value = read_item_at(backend, url, consumer, token_file, grant_mode, &info.id).await?;
         snapshot.push(SnapshotItem {
             id: info.id,
             item_type: info.item_type.unwrap_or_else(|| "stado-secret".to_string()),
@@ -203,6 +204,7 @@ pub async fn migrate(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
 ) -> Result<MigrationReport, SkarbiecError> {
     let source_raw = configured_selector()?;
     let requested_raw = requested_selector()?;
@@ -234,8 +236,9 @@ pub async fn migrate(
         });
     }
 
-    let items = snapshot(&source, url, consumer, token_file).await?;
-    let destination_items = list_items_at(&destination, url, consumer, token_file).await?;
+    let items = snapshot(&source, url, consumer, token_file, grant_mode).await?;
+    let destination_items =
+        list_items_at(&destination, url, consumer, token_file, grant_mode).await?;
     if destination_items
         .iter()
         .any(|item| item.deleted != Some(true))
@@ -250,7 +253,7 @@ pub async fn migrate(
         let _ = clear_items(&destination, &items).await;
         return Err(copy_error);
     }
-    let copied = match snapshot(&destination, url, consumer, token_file).await {
+    let copied = match snapshot(&destination, url, consumer, token_file, grant_mode).await {
         Ok(copied) => copied,
         Err(verification_error) => {
             let _ = clear_items(&destination, &items).await;

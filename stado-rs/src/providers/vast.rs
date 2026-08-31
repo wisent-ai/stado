@@ -110,10 +110,14 @@ pub async fn resolve_vast_api_key() -> String {
         );
         return String::new();
     }
+    // This host reads its own grant, whose placement is the only thing known
+    // about it here: the platform's handoff directory on an agent VM, an
+    // operator-provisioned file anywhere else.
     match crate::credential_store::read_string_with(
         url,
         consumer,
         token_file,
+        crate::skarbiec::GrantMode::for_grant_file(token_file),
         "stado-vast",
         "api_key",
     )

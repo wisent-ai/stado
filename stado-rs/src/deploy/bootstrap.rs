@@ -337,12 +337,20 @@ pub async fn provision_target(
                     .to_string(),
             ));
         }
-        let agent_vault = crate::skarbiec::Client::new(agent_url, agent_consumer, grant_path)
-            .map_err(|error| {
-                DeployError(format!(
-                    "cannot configure dedicated remote agent grant: {error}"
-                ))
-            })?;
+        // This validates the grant from wherever bootstrap runs, so the grant
+        // file's placement is the fact available: an owner-only provisioned file
+        // on the control plane, the platform's handoff on an agent host.
+        let agent_vault = crate::skarbiec::Client::new(
+            agent_url,
+            agent_consumer,
+            grant_path,
+            crate::skarbiec::GrantMode::for_grant_file(grant_path),
+        )
+        .map_err(|error| {
+            DeployError(format!(
+                "cannot configure dedicated remote agent grant: {error}"
+            ))
+        })?;
         let mut visible = agent_vault
             .list_items()
             .await
