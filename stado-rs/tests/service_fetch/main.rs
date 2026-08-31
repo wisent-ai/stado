@@ -193,7 +193,11 @@ fn a_fetched_file_is_byte_exact_where_env_show_of_the_same_file_is_not() {
     let fleet = Fleet::new();
     // 0700: live operator tooling, exactly the mode
     // `$HOME/.stado/bin/weles-release-cutover` carries on charless-mac-mini.
-    let source = fleet.file(".stado/bin/weles-release-cutover", AWKWARD.as_bytes(), 0o700);
+    let source = fleet.file(
+        ".stado/bin/weles-release-cutover",
+        AWKWARD.as_bytes(),
+        0o700,
+    );
     let destination = fleet.destination("weles-release-cutover");
 
     let fetched = fleet.file_fetch(

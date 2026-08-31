@@ -703,8 +703,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     // operator when the store itself is the thing that is wrong.
     let storage_backend = crate::config::wc_storage_backend();
     let store_reach = crate::capabilities::storage_reach(storage_backend);
-    let store_answers_for_fleet =
-        store_reach == Some(crate::capabilities::StorageReach::Fleet);
+    let store_answers_for_fleet = store_reach == Some(crate::capabilities::StorageReach::Fleet);
     log_fn(&format!(
         "init: capacity broadcasts go to the {storage_backend:?} store, which answers for {}",
         match store_reach {

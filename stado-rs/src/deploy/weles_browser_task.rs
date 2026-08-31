@@ -207,10 +207,7 @@ impl TaskOutcome {
 /// this command reports an outcome rather than a queue receipt. A caller that
 /// only wanted a receipt would have to poll the action log, and a browser
 /// flow whose result nobody read is how a sign-in silently fails.
-pub async fn submit(
-    target: &str,
-    task: &BrowserTask<'_>,
-) -> Result<TaskOutcome, DeployError> {
+pub async fn submit(target: &str, task: &BrowserTask<'_>) -> Result<TaskOutcome, DeployError> {
     let admission = weles_capture::resolve_admission(target).await?;
     let channel = weles_capture::open_channel(&admission).await?;
     let payload =
@@ -278,7 +275,9 @@ mod tests {
     #[test]
     fn an_absent_allowlist_is_refused_rather_than_treated_as_permissive() {
         let error = ensure_allowed("h", "generic_browser_task", &[]).unwrap_err();
-        assert!(error.to_string().contains("declares no WELES_ACTION_ALLOWLIST"));
+        assert!(error
+            .to_string()
+            .contains("declares no WELES_ACTION_ALLOWLIST"));
     }
 
     #[test]
@@ -304,6 +303,9 @@ mod tests {
         assert_eq!(params["constraints"]["no_mutation"], json!(false));
         // The schema stays the one `weles-image-inspect` already sends.
         assert_eq!(params["proxy"], json!("none"));
-        assert!(params["flow_name"].as_str().unwrap().contains("oko-calendar"));
+        assert!(params["flow_name"]
+            .as_str()
+            .unwrap()
+            .contains("oko-calendar"));
     }
 }

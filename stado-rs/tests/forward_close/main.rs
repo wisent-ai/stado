@@ -124,7 +124,9 @@ fn said(out: &Output) -> String {
 
 fn report(out: &Output) -> serde_json::Value {
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let start = text.find('{').unwrap_or_else(|| panic!("no JSON in:\n{text}"));
+    let start = text
+        .find('{')
+        .unwrap_or_else(|| panic!("no JSON in:\n{text}"));
     let end = text.rfind('}').unwrap();
     serde_json::from_str(&text[start..=end])
         .unwrap_or_else(|error| panic!("bad JSON ({error}):\n{text}"))
@@ -151,8 +153,16 @@ fn closing_a_recorded_forward_removes_both_markers_so_inventory_stops_reporting_
     assert_eq!(row["name"], "oko-oauth");
     assert_eq!(row["remote_port"], serde_json::json!(port));
     assert_eq!(row["local_port"], serde_json::json!(port));
-    assert_eq!(row["remote_marker_removed"], serde_json::json!(true), "{row}");
-    assert_eq!(row["local_marker_removed"], serde_json::json!(true), "{row}");
+    assert_eq!(
+        row["remote_marker_removed"],
+        serde_json::json!(true),
+        "{row}"
+    );
+    assert_eq!(
+        row["local_marker_removed"],
+        serde_json::json!(true),
+        "{row}"
+    );
     // The whole point: nothing is left asserting an endpoint.
     assert!(!remote.exists(), "the host marker survived the close");
     assert!(!local.exists(), "the local marker survived the close");
@@ -212,11 +222,7 @@ fn a_port_still_held_after_the_markers_go_fails_loudly() {
         !out.status.success(),
         "a port still listening must not exit zero"
     );
-    assert!(
-        said(&out).contains("still listening"),
-        "{}",
-        said(&out)
-    );
+    assert!(said(&out).contains("still listening"), "{}", said(&out));
     // The markers are still reconciled: leaving them would keep asserting an
     // endpoint this forward no longer owns.
     assert!(!remote.exists(), "{row}");
@@ -236,6 +242,12 @@ fn the_close_does_not_signal_forwards_it_was_not_asked_about() {
     fleet.record("close-me", first, first);
 
     assert!(fleet.close("close-me", &[]).status.success());
-    assert!(remote_a.exists(), "another forward's host marker was removed");
-    assert!(local_a.exists(), "another forward's local marker was removed");
+    assert!(
+        remote_a.exists(),
+        "another forward's host marker was removed"
+    );
+    assert!(
+        local_a.exists(),
+        "another forward's local marker was removed"
+    );
 }

@@ -421,14 +421,17 @@ pub async fn repair(
             )));
         }
     }
-    let script = REMOTE_REPAIR_BODY
-        .replace("@COMPONENTS_B64@", &STANDARD.encode(components.join(" ")));
+    let script =
+        REMOTE_REPAIR_BODY.replace("@COMPONENTS_B64@", &STANDARD.encode(components.join(" ")));
     let output = host_channel::run_script(target, &script, runner).await?;
     let lines: Vec<String> = output
         .stdout
         .lines()
         .filter(|line| line.starts_with("STADO_RUNTIME\t"))
-        .map(|line| line.trim_start_matches("STADO_RUNTIME\t").replace('\t', ": "))
+        .map(|line| {
+            line.trim_start_matches("STADO_RUNTIME\t")
+                .replace('\t', ": ")
+        })
         .collect();
     if lines.is_empty() {
         return Err(DeployError(format!(
@@ -532,10 +535,7 @@ mod tests {
             required: vec!["ffmpeg".to_string()],
         };
         assert_eq!(report.verdict(), RUNTIME_UNKNOWN);
-        assert!(report
-            .failure("h")
-            .unwrap()
-            .contains("could not be judged"));
+        assert!(report.failure("h").unwrap().contains("could not be judged"));
     }
 
     #[test]
@@ -548,7 +548,8 @@ mod tests {
             .map(|c| format!("{}|{}", c.name, c.marker()))
             .collect::<Vec<String>>()
             .join("\n");
-        let script = REMOTE_VERIFY_BODY.replace("@MARKERS_B64@", &STANDARD.encode(payload.as_bytes()));
+        let script =
+            REMOTE_VERIFY_BODY.replace("@MARKERS_B64@", &STANDARD.encode(payload.as_bytes()));
         assert!(!script.contains("ffmpeg-1011"), "{script}");
         assert!(script.contains(&STANDARD.encode(payload.as_bytes())));
     }

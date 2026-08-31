@@ -393,10 +393,7 @@ pub fn to_report(
     object.insert("status".to_string(), json!(OK_STATUS));
     object.insert("loaded".to_string(), json!(report.loaded));
     object.insert("launchd_pid".to_string(), json!(report.launchd_pid));
-    object.insert(
-        "listeners_state".to_string(),
-        json!(report.listeners_state),
-    );
+    object.insert("listeners_state".to_string(), json!(report.listeners_state));
     object.insert("serving".to_string(), json!(verdict(report, ports)));
     object.insert(
         "ports".to_string(),

@@ -2857,7 +2857,14 @@ async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdError> {
     } else {
         table::print(
             &[
-                "HOST", "UNIT", "FILE", "BYTES", "MODE", "INTEGRITY", "SHA256", "WROTE",
+                "HOST",
+                "UNIT",
+                "FILE",
+                "BYTES",
+                "MODE",
+                "INTEGRITY",
+                "SHA256",
+                "WROTE",
             ],
             &cells,
         );
