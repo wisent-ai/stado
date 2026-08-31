@@ -204,6 +204,10 @@ pub struct CleanupReport {
     pub hostname: String,
     pub target_name: Option<String>,
     pub policy_digest: Option<String>,
+    /// True when this host declares no `disk_cleanup` and the reporting
+    /// default is in force. An operator reading `mode: report` otherwise
+    /// cannot tell a deliberate choice from an absent declaration.
+    pub policy_defaulted: bool,
     pub mode: Option<String>,
     pub check_interval_seconds: Option<i64>,
     pub started_at: String,
@@ -233,6 +237,7 @@ impl CleanupReport {
             hostname: targets::normalize_hostname(hostname),
             target_name: None,
             policy_digest: None,
+            policy_defaulted: false,
             mode: None,
             check_interval_seconds: None,
             started_at: utc_now(),
@@ -314,6 +319,7 @@ impl CleanupReport {
             "hostname": self.hostname,
             "target_name": self.target_name,
             "policy_digest": self.policy_digest,
+            "policy_defaulted": self.policy_defaulted,
             "mode": self.mode,
             "check_interval_seconds": self.check_interval_seconds,
             "started_at": self.started_at,
@@ -1058,13 +1064,17 @@ fn raw_identities(target: &Map<String, Value>) -> Vec<String> {
 
 /// Resolve the unique local policy from validated canonical data.
 ///
-/// No package registry fallback is permitted. Any fetch, schema,
-/// identity, or typing failure is propagated to the caller, which must
-/// fail closed. Python `resolve_canonical_policy`.
+/// No package registry fallback is permitted. Any fetch, schema, identity, or
+/// typing failure is propagated to the caller, which must fail closed.
+///
+/// The fourth element is true when the host declared no policy and
+/// [`DiskCleanupPolicy::reporting_default`] is in force, so a report can say
+/// which of the two an operator is looking at. Python
+/// `resolve_canonical_policy`.
 pub fn resolve_canonical_policy(
     data: &Value,
     hostname: &str,
-) -> Result<(ComputeTarget, DiskCleanupPolicy, String), JanitorError> {
+) -> Result<(ComputeTarget, DiskCleanupPolicy, String, bool), JanitorError> {
     targets::validate_registry(data).map_err(|exc| JanitorError::value(&exc.to_string()))?;
     let identity = targets::normalize_hostname(hostname);
     let targets_arr = data
@@ -1082,20 +1092,35 @@ pub fn resolve_canonical_policy(
         ));
     }
     let raw = matches[0];
-    if raw.get("kind").and_then(Value::as_str) != Some("local") || !raw.contains_key("disk_cleanup")
-    {
+    if raw.get("kind").and_then(Value::as_str) != Some("local") {
         return Err(JanitorError::lookup(
-            "matched target has no local cleanup policy",
+            "matched target is not a local host, so it has no local cleanup policy",
         ));
     }
     let target: ComputeTarget = serde_json::from_value(Value::Object(raw.clone()))
         .map_err(|_| JanitorError::lookup("cleanup policy could not be parsed"))?;
-    let Some(policy) = target.disk_cleanup.clone() else {
-        return Err(JanitorError::lookup("cleanup policy could not be parsed"));
+    // A declared policy wins. A local host that declares none is measured
+    // against `DiskCleanupPolicy::reporting_default` rather than refused:
+    // returning an error here meant an undeclared host was never scanned and
+    // its report carried a `policy` error instead of a free-space number, so
+    // the one host that builds every release filled to 1.8 GiB free with
+    // nobody watching. Silence in the registry is "nobody has said", not
+    // "nothing to do".
+    //
+    // The digest still comes from whatever policy is in force, so the state
+    // file's fencing is unchanged; `defaulted` is what tells the report, and
+    // an operator, that no declaration exists.
+    let (policy, canonical, defaulted) = match target.disk_cleanup.clone() {
+        Some(policy) => (policy, canonical_json(&raw["disk_cleanup"]), false),
+        None => {
+            let policy = crate::targets::DiskCleanupPolicy::reporting_default();
+            let rendered = serde_json::to_value(&policy)
+                .map_err(|_| JanitorError::lookup("default cleanup policy could not be built"))?;
+            (policy, canonical_json(&rendered), true)
+        }
     };
-    let canonical = canonical_json(&raw["disk_cleanup"]);
     let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
-    Ok((target, policy, digest))
+    Ok((target, policy, digest, defaulted))
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,7 +1245,7 @@ fn run_with_lock(
     // operator asking what a cleanup WOULD delete would have silently
     // delayed the cleanup that does.
     let persist = if preview { None } else { Some(state_dir) };
-    let (target, mut policy, digest) =
+    let (target, mut policy, digest, policy_defaulted) =
         match registry.and_then(|data| resolve_canonical_policy(&data, &report.hostname)) {
             Ok(value) => value,
             Err(exc) => {
@@ -1247,6 +1272,7 @@ fn run_with_lock(
     report.check_interval_seconds = Some(policy.check_interval_seconds);
     report.low_bytes = Some(policy.low_free_gb * GIB);
     report.target_bytes = Some(policy.target_free_gb * GIB);
+    report.policy_defaulted = policy_defaulted;
 
     let previous = match read_state(state_dir) {
         Ok(value) => value,
