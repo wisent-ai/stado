@@ -1784,6 +1784,44 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read, or declare, one Skarbiec capability route ON TARGET.
+    ///
+    /// A capability route maps a resource the broker is asked to resolve —
+    /// `origin:<page origin>/<field class>` for a browser fill — onto one
+    /// vault item and field. The table decides which credential a login form
+    /// receives, and it is per-host: charless-mac-mini holds its own, so a
+    /// route declared on an operator's laptop makes nothing resolvable there.
+    /// `capability-issue` refuses a resource with no route at issue time,
+    /// which is why this exists as its own verb rather than as a side effect
+    /// of some flow that needed one.
+    ///
+    /// Without `--resource` this is a READ: every route on TARGET with that
+    /// host's own answer for it — whether the item is one it can open and
+    /// whether the field is one that item carries. With all four flags it
+    /// declares one route. Skarbiec keeps the previous table beside the new
+    /// one, records the reason in its journal, reports an identical route as
+    /// unchanged, and refuses to repoint a live route.
+    #[command(name = "capability-route")]
+    CapabilityRoute {
+        target: String,
+        /// The resource to map, e.g. `origin:https://accounts.google.com/email`.
+        #[arg(long)]
+        resource: Option<String>,
+        /// The vault item on TARGET that holds the credential.
+        #[arg(long)]
+        item: Option<String>,
+        /// The field of that item, e.g. `username` or `password`.
+        #[arg(long)]
+        field: Option<String>,
+        /// Why this route exists. Required by Skarbiec for a declaration, and
+        /// carried into its journal beside the table: a change to which
+        /// credential a form receives is never self-explanatory later.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run one browser task on TARGET's Weles worker and report its result.
     ///
     /// The general submission surface. `weles-capture` hard-codes
@@ -2603,6 +2641,24 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 batch,
                 json,
             } => host::weles_capture_status(&target, &batch, json).await,
+            HostCommands::CapabilityRoute {
+                target,
+                resource,
+                item,
+                field,
+                reason,
+                json,
+            } => {
+                host::capability_route(host::CapabilityRouteRequest {
+                    target: &target,
+                    resource: resource.as_deref(),
+                    item: item.as_deref(),
+                    field: field.as_deref(),
+                    reason: reason.as_deref(),
+                    json,
+                })
+                .await
+            }
             HostCommands::WelesBrowserTask {
                 target,
                 url,

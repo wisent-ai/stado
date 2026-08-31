@@ -289,121 +289,121 @@ pub fn prefill_entry(
     })
 }
 
-/// Run one `skarbiec` subcommand against THIS host's owner vault, and read its
-/// JSON answer.
+/// The sentence a caller reads when the redeeming host has no route for the
+/// origin they asked to sign in on.
 ///
-/// Nothing secret is in `argv` on either side of this: issuing names a
-/// resource, and the answer is a capability id. Skarbiec's own sentence is
-/// carried through verbatim rather than restated, because it is the surface
-/// that knows why — "no capability route maps ... to a vault field" is a
-/// remedy, and "capability issuance failed" is not.
-///
-/// The binary and the vault are resolved the way every other credential
-/// operation in this product resolves them
-/// ([`crate::credential_store::owner`]), not left to whatever the operator's
-/// shell happens to export. Inheriting the environment is how the first real
-/// run of this command read `~/.local/share/skarbiec/skarbiec.vault.json` —
-/// uninitialized on a fleet whose vault is `~/.stado/skarbiec.vault.json` —
-/// and reported a missing route table for a vault nobody uses. The unlock
-/// phrase is removed for the child for the reason
-/// [`crate::credential_store::owner::store_json`] removes it: an inherited
-/// phrase would choose a vault key no caller asked for.
-fn skarbiec(args: &[&str]) -> Result<Value, DeployError> {
-    let binary =
-        crate::credential_store::owner::binary().map_err(|error| DeployError(error.to_string()))?;
-    let vault =
-        crate::credential_store::owner::vault().map_err(|error| DeployError(error.to_string()))?;
-    let output = std::process::Command::new(&binary)
-        .args(args)
-        .env("SKARBIEC_VAULT_FILE", &vault)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .output()
-        .map_err(|error| {
-            DeployError(format!(
-                "cannot run `{} {}`: {error}",
-                binary.display(),
-                args.join(" ")
-            ))
-        })?;
-    if !output.status.success() {
-        let said = String::from_utf8_lossy(&output.stderr);
-        let said = said.trim();
-        return Err(DeployError(format!(
-            "`skarbiec {}` failed against {}: {}",
-            args.join(" "),
-            vault.display(),
-            if said.is_empty() {
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
-            } else {
-                said.to_string()
-            }
-        )));
-    }
-    serde_json::from_slice(&output.stdout).map_err(|error| {
-        DeployError(format!(
-            "`skarbiec {}` did not answer with JSON: {error}",
-            args.join(" ")
-        ))
-    })
+/// It names both exact resources, the item they must map to, and the command
+/// that declares them. Declaring which credential a login form receives is a
+/// decision that belongs in a command someone ran on purpose, so this refuses
+/// rather than creating them.
+pub fn missing_route_sentence(host: &str, origin: &str, item: &str, detail: &str) -> String {
+    let declarations: Vec<String> = SIGN_IN_FIELDS
+        .iter()
+        .map(|(_, field_class)| {
+            format!(
+                "stado host capability-route {host} --resource {} --item {item} --field {} \
+                 --reason <why>",
+                fill_resource(origin, field_class),
+                vault_field_for(field_class),
+            )
+        })
+        .collect();
+    format!(
+        "{host} cannot fill a sign-in on {origin}: {detail}. It needs both of \
+         {} and {}, mapped to vault item {item} fields {} and {}. Declare them there, on \
+         purpose, then run this again:\n  {}",
+        fill_resource(origin, SIGN_IN_FIELDS[0].1),
+        fill_resource(origin, SIGN_IN_FIELDS[1].1),
+        vault_field_for(SIGN_IN_FIELDS[0].1),
+        vault_field_for(SIGN_IN_FIELDS[1].1),
+        declarations.join("\n  "),
+    )
 }
 
-/// Confirm the caller's item is the one both resources really resolve to.
-pub fn confirm_routed_item(origin: &str, item: &str) -> Result<(), DeployError> {
-    let routes = skarbiec(&["routes", "list"])?;
+/// The vault field a Weles login contract keeps each class in.
+///
+/// Skarbiec's own login shape, and the one every `origin:` route in the fleet
+/// already uses: `platform-admin-cloudflare/username` and `/password`,
+/// `platform-admin-appstore/username` and `/password`. An email field class
+/// reads the item's `username`.
+pub fn vault_field_for(field_class: &str) -> &'static str {
+    match field_class {
+        "email" => "username",
+        _ => "password",
+    }
+}
+
+/// Confirm the redeeming host routes both resources to the item the caller
+/// named, and that the item and field are ones that host can actually read.
+pub async fn confirm_routed_item(
+    target: &ComputeTarget,
+    broker: &super::host_capability::RemoteBroker,
+    origin: &str,
+    item: &str,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    let routes = super::host_capability::routes(target, broker, runner).await?;
     for (_, field_class) in SIGN_IN_FIELDS {
         let resource = fill_resource(origin, field_class);
-        let (routed, field) = routed_item(&routes, &resource)?;
+        let (routed, field) = routed_item(&routes, &resource).map_err(|error| {
+            DeployError(missing_route_sentence(
+                &target.name,
+                origin,
+                item,
+                &error.to_string(),
+            ))
+        })?;
         if routed != item {
             return Err(DeployError(format!(
-                "{resource} routes to vault item {routed} field {field}, not to {item}; \
-                 the item that would be read is the one the route names"
+                "{}: {resource} routes to vault item {routed} field {field}, not to {item}; \
+                 the item that would be read is the one the route names",
+                target.name
             )));
         }
     }
     Ok(())
 }
 
-/// Mint the pair and return the prefill entries that carry them.
+/// Issue the pair ON the redeeming host and return the prefill entries that
+/// carry them.
 ///
-/// Issued only after the action has been shown to be one the host accepts:
-/// a capability is single-use and expires, so minting for a job that was about
-/// to be refused would spend it on nothing.
-pub fn issue_sign_in_prefill(origin: &str, item: &str) -> Result<Vec<Value>, DeployError> {
-    confirm_routed_item(origin, item)?;
+/// Issued only after the action has been shown to be one the host accepts: a
+/// capability is single-use and expires, so minting for a job that was about
+/// to be refused would spend it on nothing. Issued on the TARGET because
+/// redemption is a socket on the target: see
+/// [`super::host_capability`] for why the local precedent could not work
+/// across hosts.
+pub async fn issue_sign_in_prefill(
+    target: &ComputeTarget,
+    origin: &str,
+    item: &str,
+    runner: &Runner,
+) -> Result<Vec<Value>, DeployError> {
+    let broker = super::host_capability::resolve(target, runner).await?;
+    confirm_routed_item(target, &broker, origin, item, runner).await?;
     let authorization_id = uuid::Uuid::new_v4().to_string();
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
-    for (target, field_class) in SIGN_IN_FIELDS {
+    for (fill_target, field_class) in SIGN_IN_FIELDS {
         let resource = fill_resource(origin, field_class);
-        let issued = skarbiec(&[
-            "capability-issue",
-            "--agent",
-            SIGN_IN_AGENT,
-            "--purpose",
-            FILL_PURPOSE,
-            "--resource",
-            &resource,
-            "--target",
-            CAPABILITY_TARGET,
-            "--ttl",
-            SIGN_IN_TTL_SECONDS,
-            "--max-uses",
-            SIGN_IN_MAX_USES,
-            "--authorization-id",
-            &authorization_id,
-        ])?;
-        let capability_id = issued
-            .get("capability_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                DeployError(format!(
-                    "skarbiec issued no capability id for {resource}, so nothing could be redeemed"
-                ))
-            })?;
-        entries.push(prefill_entry(
+        let capability_id = super::host_capability::issue(
             target,
+            &broker,
+            &super::host_capability::Issuance {
+                agent: SIGN_IN_AGENT,
+                purpose: FILL_PURPOSE,
+                resource: &resource,
+                capability_target: CAPABILITY_TARGET,
+                ttl_seconds: SIGN_IN_TTL_SECONDS,
+                max_uses: SIGN_IN_MAX_USES,
+                authorization_id: &authorization_id,
+            },
+            runner,
+        )
+        .await?;
+        entries.push(prefill_entry(
+            fill_target,
             field_class,
-            capability_id,
+            &capability_id,
             &resource,
             &authorization_id,
         ));
@@ -797,5 +797,45 @@ mod tests {
             said,
             "no capability route maps origin:https://example.com/email to a vault field"
         );
+    }
+
+    /// A host with no route for the origin must be told exactly what to
+    /// declare, on which host, against which item — and must NOT have it
+    /// declared for it. This sentence is the whole interface between "the run
+    /// cannot work" and "an operator decided which credential this form gets".
+    #[test]
+    fn a_host_without_the_routes_is_told_exactly_what_to_declare() {
+        let said = missing_route_sentence(
+            "charless-mac-mini",
+            "https://accounts.google.com",
+            "weles-google-sso-login",
+            "no capability route maps origin:https://accounts.google.com/email to a vault field",
+        );
+        assert!(said.contains("charless-mac-mini"), "{said}");
+        assert!(
+            said.contains("origin:https://accounts.google.com/email"),
+            "{said}"
+        );
+        assert!(
+            said.contains("origin:https://accounts.google.com/password"),
+            "{said}"
+        );
+        assert!(said.contains("weles-google-sso-login"), "{said}");
+        // The vault field names a Weles login contract actually uses, the same
+        // ones every existing `origin:` route in the fleet maps to.
+        assert!(said.contains("username"), "{said}");
+        assert!(said.contains("password"), "{said}");
+        // And the command that declares them, on that host, with a reason.
+        assert!(
+            said.contains("stado host capability-route charless-mac-mini --resource"),
+            "{said}"
+        );
+        assert!(said.contains("--reason"), "{said}");
+    }
+
+    #[test]
+    fn an_email_field_class_reads_the_items_username() {
+        assert_eq!(vault_field_for("email"), "username");
+        assert_eq!(vault_field_for("password"), "password");
     }
 }

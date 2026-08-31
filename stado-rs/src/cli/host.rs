@@ -5571,6 +5571,129 @@ pub async fn weles_browser_runtime(
     }
 }
 
+/// What one `host capability-route` invocation asks for.
+pub struct CapabilityRouteRequest<'a> {
+    pub target: &'a str,
+    pub resource: Option<&'a str>,
+    pub item: Option<&'a str>,
+    pub field: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub json: bool,
+}
+
+/// `stado host capability-route` — the fleet's own surface for the table that
+/// decides which credential a login form receives, on the host that holds it.
+///
+/// Read without `--resource`, declare with all four flags: the same shape
+/// `retag-vault-item` uses, so an operator about to change a route can first
+/// see what they would be changing. Nothing secret crosses either way: a
+/// route names coordinates, never a value.
+pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(), CmdError> {
+    let CapabilityRouteRequest {
+        target,
+        resource,
+        item,
+        field,
+        reason,
+        json,
+    } = request;
+    // Declaring takes all four or none of them. A partial declaration is the
+    // one input that could look like a read and write something.
+    let declaration = match (resource, item, field, reason) {
+        (None, None, None, None) => None,
+        (Some(resource), Some(item), Some(field), Some(reason)) => {
+            if reason.trim().is_empty() {
+                return Err(CmdError::usage(
+                    "--reason must say why this route exists; it travels into Skarbiec's journal \
+                     beside the table",
+                ));
+            }
+            Some((resource, item, field, reason))
+        }
+        (None, _, _, _) => {
+            return Err(CmdError::usage(
+                "reading takes only TARGET; declaring takes --resource, --item, --field and \
+                 --reason together",
+            ))
+        }
+        _ => {
+            return Err(CmdError::usage(
+                "declaring one capability route takes --resource, --item, --field and --reason \
+                 together",
+            ))
+        }
+    };
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let broker = crate::deploy::host_capability::resolve(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let report = match declaration {
+        Some((resource, item, field, reason)) => {
+            crate::deploy::host_capability::route_add(
+                &resolved, &broker, resource, item, field, reason, &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+        }
+        None => crate::deploy::host_capability::routes(&resolved, &broker, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?,
+    };
+
+    if json {
+        let mut object = crate::deploy::host_channel::base_report(&resolved);
+        object.insert("vault".to_string(), json!(broker.vault));
+        object.insert("report".to_string(), report);
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+        return Ok(());
+    }
+    println!("host:      {}", resolved.name);
+    println!("vault:     {}", broker.vault);
+    match report.get("added").and_then(Value::as_bool) {
+        Some(true) => {
+            println!(
+                "declared:  {} -> {}/{}",
+                report["resource"].as_str().unwrap_or_default(),
+                report["item"].as_str().unwrap_or_default(),
+                report["field"].as_str().unwrap_or_default(),
+            );
+            if let Some(backup) = report.get("backup").and_then(Value::as_str) {
+                println!("backup:    {backup}");
+            }
+        }
+        Some(false) => println!(
+            "unchanged: {} already maps {}/{}",
+            report["resource"].as_str().unwrap_or_default(),
+            report["item"].as_str().unwrap_or_default(),
+            report["field"].as_str().unwrap_or_default(),
+        ),
+        None => {
+            let rows = report
+                .get("routes")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            println!("routes:    {}", rows.len());
+            for row in rows {
+                println!(
+                    "  {:<52} {}/{} item={} field={}",
+                    row["resource"].as_str().unwrap_or_default(),
+                    row["item"].as_str().unwrap_or_default(),
+                    row["field"].as_str().unwrap_or_default(),
+                    row["item_present"].as_bool().unwrap_or(false),
+                    row["field_present"].as_bool().unwrap_or(false),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// What one `host weles-browser-task` invocation asks for.
 pub struct BrowserTaskRequest<'a> {
     pub target: &'a str,
@@ -5666,16 +5789,24 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    // Only now: a capability is single-use and expires, so it is minted after
+    // Only now: a capability is single-use and expires, so it is issued after
     // the action has been shown to be one this host accepts, never before.
+    // Issued ON that host, because redemption is a socket there.
     let credential_prefill = match &sign_in {
         None => Vec::new(),
         Some((origin, item)) => {
-            let entries = crate::deploy::weles_browser_task::issue_sign_in_prefill(origin, item)
-                .map_err(|error| CmdError::click(error.to_string()))?;
+            let entries = crate::deploy::weles_browser_task::issue_sign_in_prefill(
+                &resolved, origin, item, &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
             if !json {
                 println!("sign-in:   {origin} as the account in {item}");
-                println!("prefill:   {} field(s), single-use", entries.len());
+                println!(
+                    "prefill:   {} field(s), issued on {}, single-use",
+                    entries.len(),
+                    resolved.name
+                );
             }
             entries
         }

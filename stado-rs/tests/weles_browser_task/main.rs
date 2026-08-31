@@ -356,14 +356,14 @@ fn an_origin_weles_could_never_match_is_refused_before_any_host_is_touched() {
     );
 }
 
-/// Without an installed capability broker there is no way to mint a reference,
-/// and the refusal has to say so rather than submit a run whose prefill cannot
-/// be redeemed. HOME here is the tempdir this test made, which genuinely holds
-/// no `.stado/bin/skarbiec` — nothing is stubbed, and PATH is irrelevant
-/// because the binary and the vault are resolved the way every other
-/// credential operation in this product resolves them.
+/// The capability must exist in the broker the WORKER talks to, so it is
+/// issued on the target over the audited channel. The registry target here
+/// names this machine, so that channel runs locally against a tempdir HOME
+/// which genuinely holds no `.stado/bin/skarbiec` — nothing is stubbed, and
+/// the refusal has to name the host and the path rather than submit a run
+/// whose prefill could never be redeemed.
 #[test]
-fn a_sign_in_is_refused_when_the_capability_broker_is_not_installed() {
+fn a_sign_in_is_refused_when_the_target_has_no_capability_broker() {
     let fleet = Fleet::new();
     fleet.env_file(&long_allowlist(&["generic_browser_task"]));
     let out = fleet.task(&[
@@ -376,8 +376,74 @@ fn a_sign_in_is_refused_when_the_capability_broker_is_not_installed() {
     assert!(!out.status.success(), "{}", said(&out));
     let text = said(&out);
     assert!(
-        text.contains("no installed skarbiec binary at"),
+        text.contains("no Skarbiec binary at"),
         "the refusal must name the broker it looked for:\n{text}"
     );
+    assert!(text.contains(".stado/bin/skarbiec"), "{text}");
+    assert!(
+        text.contains("where it would be redeemed"),
+        "the refusal must say why the target is the host that matters:\n{text}"
+    );
+    assert!(text.contains("here"), "the refusal must name the host:\n{text}");
+}
+
+/// The new verb's own input rules: reading takes only TARGET, declaring takes
+/// all four flags. A partial declaration is the one input that could look like
+/// a read and write something.
+#[test]
+fn declaring_a_capability_route_takes_all_four_flags_or_none() {
+    let fleet = Fleet::new();
+
+    let out = fleet.stado(&[
+        "host",
+        "capability-route",
+        "here",
+        "--resource",
+        "origin:https://accounts.google.com/email",
+    ]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("--resource, --item, --field and --reason"), "{text}");
+
+    let out = fleet.stado(&[
+        "host",
+        "capability-route",
+        "here",
+        "--item",
+        "weles-google-sso-login",
+        "--field",
+        "username",
+    ]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("reading takes only TARGET"), "{text}");
+
+    let out = fleet.stado(&[
+        "host",
+        "capability-route",
+        "here",
+        "--resource",
+        "origin:https://accounts.google.com/email",
+        "--item",
+        "weles-google-sso-login",
+        "--field",
+        "username",
+        "--reason",
+        "   ",
+    ]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("--reason must say why"), "{text}");
+}
+
+/// And its read path reaches the target's own broker, refusing in the same
+/// words when that host carries none.
+#[test]
+fn reading_capability_routes_names_the_targets_own_broker() {
+    let fleet = Fleet::new();
+    let out = fleet.stado(&["host", "capability-route", "here"]);
+    assert!(!out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(text.contains("no Skarbiec binary at"), "{text}");
     assert!(text.contains(".stado/bin/skarbiec"), "{text}");
 }
