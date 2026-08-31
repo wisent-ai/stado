@@ -188,6 +188,8 @@ pub struct ReleaseAgentArgs {
     #[arg(long)]
     target: String,
     #[arg(long)]
+    product: Option<String>,
+    #[arg(long)]
     once: bool,
     #[arg(long, default_value_t = 15)]
     interval_seconds: u64,
@@ -717,12 +719,13 @@ pub(crate) async fn promote_for_submit(
 }
 
 async fn agent(args: &ReleaseAgentArgs) -> Result<(), CmdError> {
+    let product = args.product.as_deref();
     let states = if args.once {
-        crate::release_agent::reconcile_once(&args.target)
+        crate::release_agent::reconcile_once(&args.target, product)
             .await
             .map_err(CmdError::click)?
     } else {
-        return crate::release_agent::agent(&args.target, false, args.interval_seconds)
+        return crate::release_agent::agent(&args.target, product, false, args.interval_seconds)
             .await
             .map_err(CmdError::click);
     };

@@ -1309,12 +1309,14 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             "set -eu\n\
              if [ -x /bin/systemctl ] && /bin/systemctl is-active --quiet wisent-agent.service; then\n\
                environment=$(/bin/systemctl show wisent-agent.service --property=Environment --value)\n\
-               /usr/bin/env -S \"$environment\" \"$HOME/.stado/bin/stado\" release agent --target {} --once --json\n\
+               /usr/bin/env -S \"$environment\" \"$HOME/.stado/bin/stado\" release agent --target {} --product {} --once --json\n\
              else\n\
-               \"$HOME/.stado/bin/stado\" release agent --target {} --once --json\n\
+               \"$HOME/.stado/bin/stado\" release agent --target {} --product {} --once --json\n\
              fi\n",
             crate::deploy::shlex_quote(name),
-            crate::deploy::shlex_quote(name)
+            crate::deploy::shlex_quote(&run.product),
+            crate::deploy::shlex_quote(name),
+            crate::deploy::shlex_quote(&run.product)
         );
         let expected = run
             .platforms
