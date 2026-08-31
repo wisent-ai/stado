@@ -204,6 +204,11 @@ pub struct CleanupReport {
     pub hostname: String,
     pub target_name: Option<String>,
     pub policy_digest: Option<String>,
+    /// Which process made this pass, and the version of the binary that made
+    /// it. The state file has several writers on an always-on host; see
+    /// [`CleanupWriter`] for why attribution rather than arbitration.
+    pub writer: &'static str,
+    pub writer_version: &'static str,
     /// True when this host declares no `disk_cleanup` and the reporting
     /// default is in force. An operator reading `mode: report` otherwise
     /// cannot tell a deliberate choice from an absent declaration.
@@ -237,6 +242,8 @@ impl CleanupReport {
             hostname: targets::normalize_hostname(hostname),
             target_name: None,
             policy_digest: None,
+            writer: "unknown",
+            writer_version: env!("CARGO_PKG_VERSION"),
             policy_defaulted: false,
             mode: None,
             check_interval_seconds: None,
@@ -319,6 +326,8 @@ impl CleanupReport {
             "hostname": self.hostname,
             "target_name": self.target_name,
             "policy_digest": self.policy_digest,
+            "writer": self.writer,
+            "writer_version": self.writer_version,
             "policy_defaulted": self.policy_defaulted,
             "mode": self.mode,
             "check_interval_seconds": self.check_interval_seconds,
@@ -1491,15 +1500,56 @@ fn run_with_lock(
     finish(report, started, Some(home), persist, attempted_at, log_fn)
 }
 
+/// Which process made a pass.
+///
+/// The state file has more than one writer on an always-on host: the queue
+/// agent runs a pass every tick, and a `disk-cleanup --watch` unit runs one on
+/// its own timer. [`crate::deploy::host_gates`] already documents what that
+/// costs — it read a `low watermark 20 GiB, target 18 GiB` from a stale policy
+/// alternating with the canonical 15/18 between one reading and the next — and
+/// solved it for watermarks by preferring the registry declaration.
+///
+/// An `outcome` cannot be solved that way, because it is an event and not a
+/// declaration. On 2026-08-31 the agent's pass at 14:55:24Z reported
+/// `interval_noop` with no errors and all six cleaners scanned, and 46 seconds
+/// later `stado host disk` read `invalid_or_unavailable_policy` from the same
+/// path: two processes, opposite verdicts, and the operator's answer decided by
+/// which wrote last. A long-running writer holding a superseded configuration —
+/// or an older binary that rejects a cleaner the registry now declares, which
+/// makes it reject the whole document and resolve no policy at all — loses
+/// nothing by overwriting a healthy report.
+///
+/// So every pass now says who made it and with which version. That does not
+/// arbitrate between writers, and deliberately so: the file is the last pass by
+/// whoever made it, which is a true thing to be. What changes is that a reader
+/// can say so instead of presenting one process's verdict as the host's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupWriter {
+    /// The queue agent's per-tick pass.
+    AgentTick,
+    /// `stado disk-cleanup`, whether `--once` or under a `--watch` unit.
+    Cli,
+}
+
+impl CleanupWriter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentTick => "agent-tick",
+            Self::Cli => "disk-cleanup-cli",
+        }
+    }
+}
+
 /// Resolve canonical policy and execute at most one bounded cleanup pass.
 /// Python `run_cleanup_once`. Never fails: every failure mode lands in
 /// the returned report (the agent mirrors Python's outcome handling).
 pub async fn run_cleanup_once(
     active_slot_count: i64,
     force: bool,
+    writer: CleanupWriter,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
-    cleanup_once(active_slot_count, force, false, log_fn).await
+    cleanup_once(active_slot_count, force, false, writer, log_fn).await
 }
 
 /// Resolve canonical policy, plan one bounded pass, and delete NOTHING.
@@ -1523,7 +1573,9 @@ pub async fn run_cleanup_once(
 /// ([`crate::deploy::host_cleanup`]) runs it over ssh on the host being
 /// previewed, which is the only place the host's filesystem exists.
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
-    cleanup_once(i64::default(), true, true, log_fn).await
+    // A preview persists nothing, so its writer identity never reaches the
+    // file; it is recorded anyway so the returned report is self-describing.
+    cleanup_once(i64::default(), true, true, CleanupWriter::Cli, log_fn).await
 }
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
@@ -1531,12 +1583,15 @@ async fn cleanup_once(
     active_slot_count: i64,
     force: bool,
     preview: bool,
+    writer: CleanupWriter,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     let started = Instant::now();
     let attempted_at = epoch_now();
     let hostname = crate::providers::vast::system_hostname();
     let mut report = CleanupReport::base(active_slot_count, &hostname);
+    report.writer = writer.as_str();
+    report.writer_version = env!("CARGO_PKG_VERSION");
 
     // Python's outer `except BaseException` half: any failure before the
     // policy resolves lands in `runtime` and leaves the default outcome.

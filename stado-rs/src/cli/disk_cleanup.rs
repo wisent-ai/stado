@@ -45,7 +45,13 @@ pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError>
         return Ok(());
     }
     loop {
-        let report = disk_cleanup::run_cleanup_once(0, false, &mut |_message| {}).await;
+        let report = disk_cleanup::run_cleanup_once(
+            0,
+            false,
+            disk_cleanup::CleanupWriter::Cli,
+            &mut |_message| {},
+        )
+        .await;
         println!("{}", disk_cleanup::canonical_json(&report));
         if !watch {
             return Ok(());
