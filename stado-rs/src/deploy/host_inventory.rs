@@ -470,8 +470,17 @@ if [ "$listeners_state" = read ]; then
     port = parts[parts_count]
     if (port !~ /^[0-9]+$/) next
     host = substr(address, 1, length(address) - length(port) - 1)
-    if (host != "*" && host != "::1" && host !~ /^127\./) next
-    if (seen[port]++) next
+    # EVERY listening socket, once per address:port, and no interface filter.
+    # This used to drop anything that was not loopback and then keep only the
+    # FIRST row per port, which made two facts unrepresentable: that a port has
+    # more than one holder, and that anything is listening on a routable
+    # address at all. charless-mac-mini had THREE servers on 8765 — the
+    # declared unit on 127.0.0.1, a stale duplicate on ::1, and an undeclared
+    # node proxy on the tailnet address serving every external caller — and
+    # this table could show exactly one of them. Consumers that only care
+    # about loopback filter for it themselves; a de-duplicating collector
+    # cannot be un-de-duplicated downstream.
+    if (seen[address]++) next
     pid = 0
     for (field = 7; field <= NF; field++) {
       if ($field ~ /:[0-9]+$/) {
@@ -691,7 +700,13 @@ pub struct ForwardMarker {
     pub url: String,
 }
 
-/// One listening loopback TCP socket and the pid that owns it.
+/// One listening TCP socket and the pid that owns it.
+///
+/// Every interface, not only loopback: an undeclared proxy on this host's
+/// tailnet address served the fleet's external object traffic for five days
+/// and could not appear here, because the collector dropped anything that was
+/// not loopback and then kept only the first row per port. Readers that only
+/// accept a loopback endpoint — [`verdict`], for one — test the address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Listener {
@@ -902,7 +917,16 @@ pub fn verdict(
     if listeners_state != LISTENERS_READ {
         return (Some(port), UNKNOWN);
     }
-    let listening = listeners.iter().any(|listener| listener.port == port);
+    // A forward marker names a LOOPBACK endpoint, so only a loopback-capable
+    // socket can satisfy one. The collector no longer filters interfaces —
+    // that filter is why three servers on one port could not be represented —
+    // so the restriction lives here, where it is actually meant.
+    let listening = listeners.iter().any(|listener| {
+        listener.port == port
+            && (listener.address == "*"
+                || listener.address == "::1"
+                || listener.address.starts_with("127."))
+    });
     (Some(port), if listening { MATCHED } else { STALE })
 }
 
