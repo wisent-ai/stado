@@ -4722,7 +4722,8 @@ fn quote_command_match(value: &str) -> Result<String, DeployError> {
     Ok(trimmed.to_string())
 }
 
-/// Boot one loaded launchd label out of the system domain.
+/// Boot one loaded launchd label out of the system domain or the calling
+/// account's launchd domain.
 ///
 /// The last gap in the world-to-declaration direction. `service list
 /// --undeclared` can now name a label the registry never declared, and
@@ -4733,9 +4734,11 @@ fn quote_command_match(value: &str) -> Result<String, DeployError> {
 /// over it: "is loaded and runs [], not [...]; retire it first" — with nothing
 /// able to retire it.
 ///
-/// Same `sudo -n` grant `ENSURE_BODY` uses to install a system daemon. A label
-/// launchd does not hold is reported `absent`, not an error: booting out
-/// something already gone is the state this command exists to reach.
+/// System jobs use the same `sudo -n` grant `ENSURE_BODY` uses. User jobs are
+/// removed from the calling account's own launchd domain, which is the same
+/// domain `service list --undeclared` reads. A label launchd does not hold is
+/// reported `absent`, not an error: booting out something already gone is the
+/// state this command exists to reach.
 const BOOTOUT_SCRIPT: &str = "set -u
 label=@LABEL@
 report() { printf 'STADO_BOOTOUT\\t%s\\t%s\\n' \"$1\" \"$2\"; }
@@ -4743,23 +4746,25 @@ if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
   report refused \"not a launchd host\"
   exit 0
 fi
-if ! /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
-  report absent \"launchd holds no system/$label\"
+if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+  if /usr/bin/sudo -n /bin/launchctl bootout \"system/$label\" 2>/dev/null &&
+     ! /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
+    report booted_out \"system/$label\"
+  else
+    report refused \"sudo -n launchctl bootout system/$label was refused or left the job loaded\"
+  fi
   exit 0
 fi
-if /usr/bin/sudo -n /bin/launchctl bootout \"system/$label\" 2>/dev/null; then
-  if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
-    report failed \"bootout returned success and the job is still loaded\"
+if /bin/launchctl list \"$label\" >/dev/null 2>&1; then
+  if /bin/launchctl remove \"$label\" 2>/dev/null &&
+     ! /bin/launchctl list \"$label\" >/dev/null 2>&1; then
+    report booted_out \"user/$label\"
   else
-    report booted_out \"\"
+    report refused \"launchctl remove $label was refused or left the user job loaded\"
   fi
-else
-  if /usr/bin/sudo -n /bin/launchctl print \"system/$label\" >/dev/null 2>&1; then
-    report refused \"sudo -n launchctl bootout system/$label was refused\"
-  else
-    report booted_out \"\"
-  fi
+  exit 0
 fi
+report absent \"launchd holds no system/$label or user/$label\"
 ";
 
 /// [`BOOTOUT_SCRIPT`] for one label. Returns `(state, detail)`.
