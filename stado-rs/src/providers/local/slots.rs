@@ -1265,14 +1265,48 @@ pub async fn advance_slot(
     };
     let output_dir = format!("/tmp/wc-{job_id}/output");
     let ts = isoformat_utc(Utc::now());
+    // The workload's own last words, read before the failure record is
+    // written rather than after it, because they ARE the failure record. This
+    // used to be computed below for OOM classification only, while `job.error`
+    // said "inspect the redacted command output" and the agent's own log line
+    // printed that sentence under the name `error_tail=`.
+    //
+    // On 2026-08-31 fifteen jobs on charless-mac-mini failed with that
+    // sentence. Their output said what happened: CuaDriver panicked on
+    // `+[NSPasteboard generalPasteboard]` returning NULL and never created
+    // `probierz.sock`. The queue record said nothing, so the failures were
+    // read as a missing Accessibility grant — which `stado host gui-automation
+    // status` reports as `granted` on that host — and an hour went into a
+    // permission that was never the problem.
+    let classification_error = if job.state == job_state::FAILED {
+        redacted_tail(
+            &job,
+            &Path::new(&output_dir).join("command_output.log"),
+            "4096".parse().expect("static error-tail size"),
+        )
+        .await?
+    } else {
+        String::new()
+    };
     if ret == 0 {
         job.completed_at = Some(ts);
     } else {
         job.failed_at = Some(ts);
-        job.error = Some(if !verification_failed {
-            "workload exited unsuccessfully; inspect the redacted command output".to_string()
+        let what = if verification_failed {
+            "verification command failed"
         } else {
-            "verification command failed; inspect the redacted command output".to_string()
+            "workload exited unsuccessfully"
+        };
+        // Collapsed to one line and bounded: this field is read in tables and
+        // in one-line log records, and a multi-line JSON blob there is as
+        // unreadable as no detail at all.
+        let said = classification_error
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        job.error = Some(match tail_chars(&said, 400) {
+            said if said.trim().is_empty() => format!("{what} and wrote no output"),
+            said => format!("{what}: {said}"),
         });
     }
     // Artifacts become durable before the terminal transition. A storage
@@ -1285,16 +1319,6 @@ pub async fn advance_slot(
     // trusts only flagged peaks, so legacy summed records can no
     // longer poison the model max().
     job.peak_vram_per_gpu = true;
-    let classification_error = if job.state == job_state::FAILED {
-        redacted_tail(
-            &job,
-            &Path::new(&output_dir).join("command_output.log"),
-            "4096".parse().expect("static error-tail size"),
-        )
-        .await?
-    } else {
-        String::new()
-    };
     if job.state == job_state::FAILED
         && sizing
             .escalate_on_oom(store, &mut job, &classification_error)
