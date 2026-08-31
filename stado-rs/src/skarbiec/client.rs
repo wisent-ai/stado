@@ -5,7 +5,8 @@
 use serde_json::{json, Value};
 
 use super::{
-    checked_url, erase_transient_agent_grant, read_grant, ItemInfo, SkarbiecError, AGENT_GRANTS,
+    checked_url, erase_transient_grant, read_grant, GrantMode, ItemInfo, SkarbiecError,
+    TRANSIENT_GRANTS,
 };
 
 pub struct Client {
@@ -14,27 +15,43 @@ pub struct Client {
     consumer: String,
     token_file: String,
     route_store: bool,
+    grant_mode: GrantMode,
 }
 
 impl Client {
+    /// The client for the Stado consumer grant this host is configured with.
+    ///
+    /// The mode is stated here rather than by the callers of this constructor,
+    /// because they supply no coordinates and so know strictly less than it
+    /// does: on an agent VM the startup template points `WC_SKARBIEC_TOKEN_FILE`
+    /// at the platform's one-shot handoff, and everywhere else the configured
+    /// grant is an operator-provisioned file that stays put.
     pub fn configured() -> Result<Self, SkarbiecError> {
+        let token_file = crate::config::skarbiec_token_file();
         Self::new(
             crate::config::skarbiec_url(),
             crate::config::skarbiec_consumer(),
-            crate::config::skarbiec_token_file(),
+            token_file,
+            GrantMode::for_grant_file(token_file),
         )
     }
 
-    pub fn new(base_url: &str, consumer: &str, token_file: &str) -> Result<Self, SkarbiecError> {
-        Self::build(base_url, consumer, token_file, true)
+    pub fn new(
+        base_url: &str,
+        consumer: &str,
+        token_file: &str,
+        grant_mode: GrantMode,
+    ) -> Result<Self, SkarbiecError> {
+        Self::build(base_url, consumer, token_file, true, grant_mode)
     }
 
     pub(crate) fn direct(
         base_url: &str,
         consumer: &str,
         token_file: &str,
+        grant_mode: GrantMode,
     ) -> Result<Self, SkarbiecError> {
-        Self::build(base_url, consumer, token_file, false)
+        Self::build(base_url, consumer, token_file, false, grant_mode)
     }
 
     fn build(
@@ -42,6 +59,7 @@ impl Client {
         consumer: &str,
         token_file: &str,
         route_store: bool,
+        grant_mode: GrantMode,
     ) -> Result<Self, SkarbiecError> {
         let consumer = consumer.trim().to_string();
         let token_file = token_file.trim().to_string();
@@ -65,25 +83,28 @@ impl Client {
             consumer,
             token_file,
             route_store,
+            grant_mode,
         })
     }
 
     fn request_token(&self) -> Result<String, SkarbiecError> {
-        if !self.consumer.ends_with("-agent") {
-            return read_grant(&self.token_file);
+        match self.grant_mode {
+            GrantMode::RereadPerRequest => read_grant(&self.token_file),
+            GrantMode::TransientHandoff => {
+                let key = (self.consumer.clone(), self.token_file.clone());
+                let mut cached = TRANSIENT_GRANTS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(token) = cached.get(&key) {
+                    return Ok(token.clone());
+                }
+                let token = read_grant(&self.token_file)?;
+                let byte_count = token.len();
+                cached.insert(key, token.clone());
+                erase_transient_grant(&self.token_file, byte_count);
+                Ok(token)
+            }
         }
-        let key = (self.consumer.clone(), self.token_file.clone());
-        let mut cached = AGENT_GRANTS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(token) = cached.get(&key) {
-            return Ok(token.clone());
-        }
-        let token = read_grant(&self.token_file)?;
-        let byte_count = token.len();
-        cached.insert(key, token.clone());
-        erase_transient_agent_grant(&self.token_file, byte_count);
-        Ok(token)
     }
 
     fn request(
@@ -131,6 +152,7 @@ impl Client {
                 &self.base_url,
                 &self.consumer,
                 &self.token_file,
+                self.grant_mode,
                 id,
             ))
             .await;
@@ -215,6 +237,7 @@ impl Client {
                 &self.base_url,
                 &self.consumer,
                 &self.token_file,
+                self.grant_mode,
             ))
             .await;
         }

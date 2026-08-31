@@ -51,6 +51,7 @@ pub(crate) fn configured_client() -> Result<Client, String> {
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        stado::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|exc| exc.to_string())
 }

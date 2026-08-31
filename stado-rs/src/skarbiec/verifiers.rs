@@ -1,9 +1,13 @@
 //! Dedicated verifier-grant constructors. Each verifier is an auth boundary:
 //! it enforces its exact consumer name and a token file distinct from every
 //! other grant, and it never routes through the credential store selector.
+//!
+//! Every grant here is provisioned on disk by the fleet and stays there, so
+//! each one declares `GrantMode::RereadPerRequest`: a rotated verifier grant is
+//! picked up without restarting, and none of these files is ever erased.
 
 use super::client::Client;
-use super::SkarbiecError;
+use super::{GrantMode, SkarbiecError};
 
 impl Client {
     /// Dedicated verifier used only for namespace-scoped product object
@@ -26,6 +30,7 @@ impl Client {
             crate::config::object_skarbiec_url(),
             crate::config::object_skarbiec_consumer(),
             crate::config::object_skarbiec_token_file(),
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -48,6 +53,7 @@ impl Client {
             crate::config::skarbiec_url(),
             crate::config::alert_skarbiec_consumer(),
             crate::config::alert_skarbiec_token_file(),
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -73,6 +79,7 @@ impl Client {
             crate::config::skarbiec_url(),
             crate::config::release_signing_skarbiec_consumer(),
             crate::config::release_signing_skarbiec_token_file(),
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -99,6 +106,7 @@ impl Client {
             crate::config::release_skarbiec_url(),
             crate::config::release_skarbiec_consumer(),
             token_file,
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -128,6 +136,7 @@ impl Client {
             crate::config::machine_skarbiec_url(),
             crate::config::machine_skarbiec_consumer(),
             token_file,
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -156,6 +165,7 @@ impl Client {
             crate::config::service_skarbiec_url(),
             crate::config::service_skarbiec_consumer(),
             token_file,
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -187,6 +197,7 @@ impl Client {
             crate::config::rate_limit_skarbiec_url(),
             crate::config::rate_limit_skarbiec_consumer(),
             token_file,
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -222,6 +233,7 @@ impl Client {
             crate::config::integration_skarbiec_url(),
             crate::config::integration_skarbiec_consumer(),
             token_file,
+            GrantMode::RereadPerRequest,
         )
     }
 
@@ -254,6 +266,7 @@ impl Client {
             crate::config::integration_provider_skarbiec_url(),
             provider.consumer(),
             token_file,
+            GrantMode::RereadPerRequest,
         )
     }
 }

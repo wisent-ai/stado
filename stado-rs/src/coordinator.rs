@@ -185,6 +185,22 @@ pub(crate) async fn agent_workload_grant() -> Result<Option<String>, crate::skar
         )));
     }
     let consumer = config::agent_skarbiec_consumer();
+    // A naming contract on an identity Stado itself provisions, enforced here at
+    // the boundary where deployment configuration is read, and it fails closed.
+    //
+    // It is a requirement, not an inference: nothing downstream derives
+    // behaviour from the suffix, and the exclusion list below is the proof that
+    // the suffix alone never identified a remote workload agent —
+    // `stado-local-agent` and `stado-azure-agent` both end in `-agent` and are
+    // both rejected. What it protects is real: this consumer's bearer is
+    // projected into every agent VM's startup template (`AGENT_WORKLOAD_GRANT_B64`,
+    // `AZURE_AGENT_PROTECTED_GRANT`), so accepting a broad or control-plane
+    // identity here would ship that identity's grant to every remote host.
+    //
+    // The Skarbiec read path no longer depends on this check. Caching and
+    // erasure are decided by the `GrantMode` each construction site declares, so
+    // a consumer renamed in violation of this contract is refused here rather
+    // than silently changing how its bearer is handled.
     if consumer.is_empty()
         || !consumer.ends_with("-agent")
         || matches!(
@@ -205,7 +221,15 @@ pub(crate) async fn agent_workload_grant() -> Result<Option<String>, crate::skar
         ));
     }
     let agent_token = crate::skarbiec::read_grant(token_file)?;
-    let agent_vault = crate::skarbiec::Client::new(url, consumer, token_file)?;
+    // The workload grant is materialized into the platform's handoff directory
+    // on the agent VMs and is an owner-only provisioned file on the control
+    // plane, so its placement is what states the mode.
+    let agent_vault = crate::skarbiec::Client::new(
+        url,
+        consumer,
+        token_file,
+        crate::skarbiec::GrantMode::for_grant_file(token_file),
+    )?;
     let mut visible: Vec<String> = agent_vault
         .list_items()
         .await?
