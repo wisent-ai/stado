@@ -34,7 +34,10 @@
 //!    [`super::service_file_fetch`], whose whole contract is that the bytes
 //!    arrive unaltered, and the file is never written to disk or printed.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use super::{service_file_fetch, weles_capture, DeployError, Runner};
 use crate::targets::ComputeTarget;
@@ -49,17 +52,17 @@ pub const ALLOWLIST_KEY: &str = "WELES_ACTION_ALLOWLIST";
 /// decides.
 pub const DEFAULT_ACTION: &str = "generic_browser_task";
 
-/// The env file a Weles worker sources on this fleet.
-pub const DEFAULT_ENV_FILE: &str = "$HOME/.config/weles/worker.env";
+/// The immutable action catalog shipped by the active Weles release.
+pub const DEFAULT_ALLOWLIST_FILE: &str =
+    "$HOME/weles/scripts/worker/deploy/weles-action-allowlist.txt";
 
 /// Every action one host will accept, in the order the file lists them.
 ///
-/// Parsed from the LAST assignment of [`ALLOWLIST_KEY`], because a sourced
-/// file assigns top to bottom and a later duplicate silently wins — the same
-/// rule [`super::service_env_file::shadowing`] reports on.
-pub fn parse_allowlist(env_body: &str) -> Vec<String> {
+/// The canonical file is one action per line. A legacy worker env assignment
+/// remains readable so an older active release can still explain its own gate.
+pub fn parse_allowlist(body: &str) -> Vec<String> {
     let mut found: Option<&str> = None;
-    for line in env_body.lines() {
+    for line in body.lines() {
         let trimmed = line.trim_start();
         let assignment = trimmed
             .strip_prefix("export ")
@@ -68,29 +71,44 @@ pub fn parse_allowlist(env_body: &str) -> Vec<String> {
             found = Some(value);
         }
     }
-    let Some(raw) = found else { return Vec::new() };
-    let unquoted = super::service_env_file::effective_text(raw);
-    unquoted
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_string)
-        .collect()
+    let legacy = found.is_some();
+    let content = found
+        .map(super::service_env_file::effective_text)
+        .unwrap_or(body);
+    let entries: Vec<&str> = if legacy {
+        content.split(',').collect()
+    } else {
+        content.lines().collect()
+    };
+    let mut seen = BTreeSet::new();
+    let mut actions = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let action = entry.trim();
+        if action.is_empty() {
+            continue;
+        }
+        if !action
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            || !seen.insert(action)
+        {
+            return Vec::new();
+        }
+        actions.push(action.to_string());
+    }
+    actions
 }
 
-/// Read one host's action allowlist.
-///
-/// The env file is fetched byte-exact and kept in memory only: it carries the
-/// worker's credentials and this function wants one line of it.
+/// Read one host's action allowlist byte-exactly.
 pub async fn host_allowlist(
     target: &ComputeTarget,
-    env_file: &str,
+    allowlist_file: &str,
     runner: &Runner,
 ) -> Result<Vec<String>, DeployError> {
-    let fetched = service_file_fetch::fetch_file(target, env_file, runner).await?;
+    let fetched = service_file_fetch::fetch_file(target, allowlist_file, runner).await?;
     if !fetched.ok() {
         return Err(DeployError(format!(
-            "{}: could not read {env_file} to learn which actions this worker accepts: {} ({})",
+            "{}: could not read {allowlist_file} to learn which actions this worker accepts: {} ({})",
             target.name,
             fetched.report.file_state,
             if fetched.report.detail.is_empty() {
@@ -146,13 +164,17 @@ pub struct BrowserTask<'a> {
     pub url: &'a str,
     /// What the agent is being asked to accomplish, in words.
     pub objective: &'a str,
-    /// A stable label for the browser session, so a resumed flow reuses one
-    /// profile instead of starting anonymous every time.
+    /// Stable recording label. `account_id` controls the browser profile when
+    /// a caller explicitly requests a fresh one.
     pub session_label: &'a str,
+    /// Exact item passed to a named Weles login trajectory.
+    pub login_item: Option<&'a str>,
+    /// A unique identity whose SHA-256 names the persistent profile directory.
+    pub account_id: Option<&'a str>,
+    /// Require Weles to allocate the profile directory atomically.
+    pub fresh_profile: bool,
     /// Whether the run may sign in. `false` sends the same read-only,
-    /// no-login, no-mutation constraints `host weles-image-inspect` fixes;
-    /// `true` is for the flows whose whole purpose is authentication, and it
-    /// is the caller's explicit decision rather than a default.
+    /// no-login, no-mutation constraints `host weles-image-inspect` fixes.
     pub allow_login: bool,
     /// Run without a visible window.
     pub headless: bool,
@@ -163,7 +185,7 @@ impl BrowserTask<'_> {
     /// `host weles-image-inspect` already sends for this action — so the two
     /// callers of `generic_browser_task` cannot disagree about its schema.
     pub fn params(&self) -> Value {
-        json!({
+        let mut params = json!({
             "url": self.url,
             "objective": self.objective,
             "flow_name": format!("stado-browser-task:{}", self.session_label),
@@ -175,7 +197,11 @@ impl BrowserTask<'_> {
                 "no_login": !self.allow_login,
                 "no_mutation": !self.allow_login,
             },
-        })
+        });
+        if let Some(login_item) = self.login_item {
+            params["login_item"] = json!(login_item);
+        }
+        params
     }
 }
 
@@ -185,6 +211,7 @@ pub struct TaskOutcome {
     pub ok: bool,
     pub exit_code: Option<i64>,
     pub result: Value,
+    pub profile: Option<Value>,
 }
 
 impl TaskOutcome {
@@ -196,6 +223,9 @@ impl TaskOutcome {
         object.insert("ok".to_string(), json!(self.ok));
         object.insert("exit_code".to_string(), json!(self.exit_code));
         object.insert("result".to_string(), self.result.clone());
+        if let Some(profile) = &self.profile {
+            object.insert("profile".to_string(), profile.clone());
+        }
         object
     }
 }
@@ -210,18 +240,41 @@ impl TaskOutcome {
 pub async fn submit(target: &str, task: &BrowserTask<'_>) -> Result<TaskOutcome, DeployError> {
     let admission = weles_capture::resolve_admission(target).await?;
     let channel = weles_capture::open_channel(&admission).await?;
-    let payload =
-        weles_capture::observe_action_payload(&channel, task.action, task.params()).await?;
+    let payload = weles_capture::observe_action_payload(
+        &channel,
+        task.action,
+        task.params(),
+        task.account_id,
+        task.fresh_profile,
+    )
+    .await?;
     let run_id = payload
         .get("run_id")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let profile = if task.fresh_profile {
+        task.account_id.map(|account_id| {
+            let directory_key = hex::encode(Sha256::digest(account_id.as_bytes()));
+            let platform = task.action.split('_').next().unwrap_or("unknown");
+            json!({
+                "mode": "fresh",
+                "account_id": account_id,
+                "directory_key": directory_key,
+                "directory": format!(
+                    "$HOME/.local/state/weles/browser-profiles/{platform}/chromium/{directory_key}"
+                ),
+            })
+        })
+    } else {
+        None
+    };
     Ok(TaskOutcome {
         ok: payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
         exit_code: payload.get("exitCode").and_then(Value::as_i64),
         result: payload.get("result").cloned().unwrap_or(Value::Null),
         run_id,
+        profile,
     })
 }
 
@@ -289,6 +342,9 @@ mod tests {
             session_label: "oko-calendar",
             allow_login: false,
             headless: true,
+            login_item: None,
+            account_id: None,
+            fresh_profile: false,
         };
         let params = task.params();
         assert_eq!(params["constraints"]["no_login"], json!(true));

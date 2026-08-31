@@ -5381,6 +5381,8 @@ pub async fn weles_image_inspect(
                 "no_mutation": true,
             },
         }),
+        None,
+        false,
     )
     .await
     .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
@@ -5578,7 +5580,9 @@ pub struct BrowserTaskRequest<'a> {
     pub objective: &'a str,
     pub session_label: &'a str,
     pub action: &'a str,
-    pub env_file: &'a str,
+    pub allowlist_file: &'a str,
+    pub login_item: Option<&'a str>,
+    pub fresh_profile: bool,
     pub allow_login: bool,
     pub windowed: bool,
     pub json: bool,
@@ -5596,7 +5600,9 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         objective,
         session_label,
         action,
-        env_file,
+        allowlist_file,
+        login_item,
+        fresh_profile,
         allow_login,
         windowed,
         json,
@@ -5624,14 +5630,36 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     if objective.is_empty() {
         return Err(CmdError::usage("--objective is empty"));
     }
+    if let Some(item) = login_item {
+        let bytes = item.as_bytes();
+        if bytes.is_empty()
+            || bytes.len() > 128
+            || !bytes[0].is_ascii_alphanumeric()
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(CmdError::usage("--login-item is not a valid Weles item id"));
+        }
+        if !action.ends_with("_login") {
+            return Err(CmdError::usage(
+                "--login-item requires an action whose name ends in _login",
+            ));
+        }
+        if !allow_login {
+            return Err(CmdError::usage("--login-item requires --allow-login"));
+        }
+    }
+    let account_id = fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4()));
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let allowlist = crate::deploy::weles_browser_task::host_allowlist(&resolved, env_file, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let allowlist =
+        crate::deploy::weles_browser_task::host_allowlist(&resolved, allowlist_file, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
     crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
         .map_err(|error| CmdError::click(error.to_string()))?;
 
@@ -5640,6 +5668,9 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         url: parsed.as_str(),
         objective: &objective,
         session_label,
+        login_item,
+        account_id: account_id.as_deref(),
+        fresh_profile,
         allow_login,
         headless: !windowed,
     };
@@ -5661,6 +5692,12 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         println!("outcome:   {}", if outcome.ok { "ok" } else { "failed" });
         if let Some(code) = outcome.exit_code {
             println!("exit:      {code}");
+        }
+        if let Some(profile) = &outcome.profile {
+            println!(
+                "profile:   {}",
+                profile["directory"].as_str().unwrap_or("fresh")
+            );
         }
         if !outcome.result.is_null() {
             println!("result:    {}", serde_json::to_string(&outcome.result)?);

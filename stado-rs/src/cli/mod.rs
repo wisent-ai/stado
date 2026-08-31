@@ -1819,9 +1819,16 @@ enum HostCommands {
         /// Action to run; must be one TARGET's allowlist carries.
         #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ACTION)]
         action: String,
-        /// Env file whose `WELES_ACTION_ALLOWLIST` decides what TARGET accepts.
-        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ENV_FILE)]
-        env_file: String,
+        /// Exact action catalog shipped by the active Weles release.
+        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ALLOWLIST_FILE)]
+        allowlist_file: String,
+        /// Exact Weles login item for a named credential trajectory.
+        #[arg(long)]
+        login_item: Option<String>,
+        /// Give the run a new account identity, which makes Weles create a new
+        /// browser profile directory instead of clearing or reusing one.
+        #[arg(long)]
+        fresh_profile: bool,
         /// Permit the run to sign in and change state. Off by default: the
         /// same read-only, no-login, no-mutation constraints
         /// `weles-image-inspect` fixes. Turning it on is an explicit decision,
@@ -2590,7 +2597,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 objective,
                 session_label,
                 action,
-                env_file,
+                allowlist_file,
+                login_item,
+                fresh_profile,
                 allow_login,
                 windowed,
                 json,
@@ -2601,7 +2610,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     objective: &objective,
                     session_label: &session_label,
                     action: &action,
-                    env_file: &env_file,
+                    allowlist_file: &allowlist_file,
+                    login_item: login_item.as_deref(),
+                    fresh_profile,
                     allow_login,
                     windowed,
                     json,
