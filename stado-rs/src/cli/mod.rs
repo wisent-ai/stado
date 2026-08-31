@@ -19,6 +19,7 @@ pub mod azure;
 pub mod billing;
 pub mod blast_radius;
 pub mod bootstrap;
+pub mod builds;
 pub mod cancel;
 pub mod capabilities;
 pub mod cloudflare;
@@ -28,9 +29,12 @@ pub mod control_plane;
 pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
+pub mod database;
 pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
+pub mod egress;
+pub mod fleet;
 pub mod host;
 pub mod identity;
 pub mod inference;
@@ -41,6 +45,7 @@ pub mod mail;
 pub mod overview;
 pub mod placement;
 pub mod precheck_runner;
+pub mod product;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
@@ -48,6 +53,8 @@ pub mod recovery;
 pub mod registry;
 pub mod release_catalog;
 pub mod release_cmd;
+pub mod release_evidence;
+pub mod release_quarantine;
 pub mod release_submit;
 pub mod resolver;
 pub mod resources;
@@ -55,9 +62,11 @@ pub mod results;
 pub mod schedule;
 pub mod secrets;
 pub mod service;
+pub mod service_converge;
 pub mod service_verify;
 pub mod status;
 pub mod storage;
+pub mod stream;
 pub mod submit;
 pub mod table;
 pub mod vast;
@@ -205,8 +214,6 @@ The worker host must already have the shell, runtime, and GPU driver required by
 
 3. Start the local control plane:
    stado local-control-plane
-
-Open http://127.0.0.1:8765
 
 Submit your first job:
    stado submit \"printf 'hello from Stado\\n'\"
@@ -377,11 +384,15 @@ enum Commands {
         once: bool,
     },
 
-    /// Run the read-only HTTP dashboard for the wisent-compute queue.
+    /// Run the Stado API listener for the wisent-compute queue.
     ///
-    /// Renders queue counts, per-model breakdown, live agent capacity, recent
-    /// failures, and a throughput-based completion projection at GET / with
-    /// auto-refresh, and the same data as JSON at GET /api/state.json.
+    /// Serves the authenticated object, release, machine, service and
+    /// host-health routes plus the three enrollment routes over loopback
+    /// HTTP. It serves no HTML page; the operator workspace is Stado
+    /// Desktop.
+    ///
+    /// With --enrollment-only the listener serves nothing but the three
+    /// enrollment routes, which is the only shape safe to publish.
     Dashboard {
         /// Bind address. Default WC_DASHBOARD_BIND or 127.0.0.1.
         #[arg(long)]
@@ -389,9 +400,14 @@ enum Commands {
         /// Port. Default WC_DASHBOARD_PORT or 8765.
         #[arg(long)]
         port: Option<i64>,
+        /// Serve ONLY GET /join.sh, GET /api/fleet/invite/key and
+        /// POST /api/fleet/join; answer 404 to every other path and method.
+        /// Publish this listener through a tunnel, never the full dashboard.
+        #[arg(long)]
+        enrollment_only: bool,
     },
 
-    /// Run a device-local dashboard, scheduler, and worker.
+    /// Run a device-local API listener, scheduler, and worker.
     #[command(name = "local-control-plane", hide = true)]
     LocalControlPlane {
         #[arg(long, default_value = "127.0.0.1")]
@@ -402,7 +418,7 @@ enum Commands {
         interval: i64,
     },
 
-    /// Run a cloud-hosted coordinator and dashboard.
+    /// Run a cloud-hosted coordinator and API listener.
     #[command(name = "cloud-control-plane", hide = true)]
     CloudControlPlane {
         #[arg(long, default_value = "localhost")]
@@ -462,6 +478,15 @@ enum Commands {
     #[command(subcommand)]
     Registry(RegistryCommands),
 
+    /// Manage native build recipes: poll a repo, build on new commits.
+    #[command(subcommand)]
+    Builds(builds::BuildsCommands),
+
+    /// Add machines to the fleet, group them, hold their SSH keys, and
+    /// diagnose the workers: enroll, join/approve, key, doctor.
+    #[command(subcommand)]
+    Fleet(fleet::FleetCommands),
+
     /// Which host holds which identity, and whether that is still true.
     #[command(subcommand)]
     Identity(IdentityCommands),
@@ -511,15 +536,34 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Run host-local network egress processes under Stado service management.
+    #[command(subcommand)]
+    Egress(egress::EgressCommands),
+    /// Install, inspect, update, roll back and remove canonical Wisent products.
+    #[command(subcommand)]
+    Product(product::ProductCommands),
     /// Atomically relocate a declared service group between registered hosts.
     #[command(subcommand)]
     Placement(placement::PlacementCommands),
     /// Resolve logical services and run the local Stado data plane.
     #[command(subcommand)]
     Resolver(resolver::ResolverCommands),
+    /// Resolve fleet databases: placement endpoint and credential coordinate.
+    #[command(subcommand)]
+    Database(database::DatabaseCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
+    ///
+    /// Being replaced by the service declaration contract: a model server is
+    /// a service like any other, declared once with `stado service declare`
+    /// and deployed with `stado service deploy`. This plane keeps working
+    /// while its declarations migrate; add nothing new to it.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
+    /// Provision and operate an interactive display session on a host, and
+    /// stream it to a client (Moonlight): the way to use a fleet GPU
+    /// interactively, since a board cannot be borrowed over a network.
+    #[command(subcommand)]
+    Stream(stream::StreamCommands),
     /// Ordered deployment preflight: config, storage, provider auth, quota,
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
@@ -1011,7 +1055,7 @@ fn parse_target_kind(raw: &str) -> Result<String, String> {
 }
 
 fn parse_release_platform(raw: &str) -> Result<String, String> {
-    crate::deploy::host_release::managed_platform(raw)
+    crate::deploy::products::managed_platform(raw)
         .map(str::to_string)
         .map_err(|error| error.to_string())
 }
@@ -1056,6 +1100,84 @@ enum HostPrecheckRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Ensure one repository may schedule jobs on the managed runner group.
+    RepositoryAdd {
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Existing selected-repository runner group. Defaults to stado-precheck.
+        #[arg(long)]
+        runner_group: Option<String>,
+        /// Emit the reconciliation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mint a dedicated Brama review bearer and install it as a repository secret.
+    ModelReviewAdd {
+        target: String,
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the reconciliation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostPublisherRunnerCommands {
+    /// Install or reconcile the desktop publisher and grant its release secrets.
+    Install {
+        target: String,
+        /// Repository that may consume the shared release secrets. Repeat as needed.
+        #[arg(long = "repository", required = true)]
+        repositories: Vec<String>,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Grant one desktop repository the shared release secrets.
+    RepositoryAdd {
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the reconciliation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create repository signing material and publish its required release secrets.
+    Bootstrap {
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the bootstrap report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Issue or reuse the shared Developer ID certificate and grant it to repositories.
+    DeveloperId {
+        /// Registry host that runs the Account Holder Weles trajectory.
+        target: String,
+        /// Skarbiec item containing the Apple Account Holder credentials.
+        #[arg(long)]
+        account_item: String,
+        /// Desktop repository that receives signing secrets. Repeat as needed.
+        #[arg(long = "repository", required = true)]
+        repositories: Vec<String>,
+        /// Emit the bootstrap report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the installed runner service, identity and network boundary.
+    Status {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the runner, service definition and network boundary from TARGET.
+    Remove {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1068,13 +1190,53 @@ enum HostCommands {
         json: bool,
     },
     /// Publish one locally collected beacon through the scoped Stado health API.
+    ///
+    /// The `link` block (tailnet path, sleep/wake, interface changes) is
+    /// collected here, on the host, and merged into the document about this
+    /// machine before it is published.
     #[command(name = "publish-beacon")]
     PublishBeacon {
         /// JSON beacon file, or '-' for stdin.
         source: String,
+        /// Print the document that would be published; publish nothing.
+        #[arg(long)]
+        print: bool,
     },
     /// Recover a registry-managed macOS host through its approved channel.
-    Recover { target: String },
+    Recover {
+        target: String,
+        /// Use the bundled registry snapshot when the canonical registry cannot be read.
+        #[arg(long)]
+        bundled_registry: bool,
+        /// Replace Stado from an exact registry-trusted signed release before recovery.
+        #[arg(long, value_name = "VERSION")]
+        release: Option<String>,
+    },
+    /// Restore the core object API from its physical local store.
+    #[command(name = "recover-object-api")]
+    RecoverObjectApi {
+        target: String,
+        /// Emit the recovery report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Authorize TARGET's service resolver to read the registry from the
+    /// service-directory authority.
+    ///
+    /// A resolver anywhere but on the authority host itself can only obtain a
+    /// registry snapshot over ssh to that host, and a resolver with no snapshot
+    /// binds none of its declared adapters — so the host publishes nothing at
+    /// all, loudly in its log and invisibly everywhere else. This mints the
+    /// resolver keypair on TARGET when it has none and appends its PUBLIC half
+    /// to the authority account's authorized_keys, once. The private half is
+    /// generated where it is used and never travels.
+    #[command(name = "resolver-key")]
+    ResolverKey {
+        target: String,
+        /// Emit the authorization report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -1083,9 +1245,21 @@ enum HostCommands {
     /// Manage the isolated GitHub pre-check runner on a registry host.
     #[command(name = "precheck-runner", subcommand)]
     PrecheckRunner(HostPrecheckRunnerCommands),
+    /// Manage the organization-wide GitHub desktop publisher on a registry host.
+    #[command(name = "publisher-runner", subcommand)]
+    PublisherRunner(HostPublisherRunnerCommands),
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
+    /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
+    #[command(name = "gpu-power-limit")]
+    GpuPowerLimit {
+        target: String,
+        watts: u32,
+        /// Emit the registry generation and driver report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Publish TARGET's registry `weles` declaration as its placement policy.
     ///
     /// The worker decides what it may claim from a file on its own disk, not
@@ -1098,7 +1272,7 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report or revert the GUI-automation enablement of TARGET.
+    /// Manage the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
     /// Report or reclaim tagged build caches on TARGET.
@@ -1125,6 +1299,49 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Move objects from one key prefix to another inside TARGET's store,
+    /// on the host that holds it.
+    ///
+    /// The object API has GET, PUT, DELETE, list and stat and no move, so
+    /// re-addressing an object used to mean pulling its body to the control
+    /// plane and pushing it back. On 2026-08-30 doing that with 134 MiB GGUF
+    /// parts took the always-on mac's release ingress down for ten minutes.
+    /// Inside one store the bytes never move at all: the destination is
+    /// hard-linked, hashed, compared against the source, and only then is the
+    /// source unlinked.
+    ///
+    /// Previews by default. An existing destination is never overwritten.
+    #[command(name = "object-relocate")]
+    ObjectRelocate {
+        target: String,
+        /// Store namespace holding both addresses, e.g. probierz.
+        #[arg(long)]
+        namespace: String,
+        /// The mis-addressed key prefix, e.g. ecosystem/probierz/.
+        #[arg(long)]
+        from_prefix: String,
+        /// The key prefix it belongs under. Empty means the namespace root.
+        #[arg(long, default_value = "")]
+        to_prefix: String,
+        /// Store root on the host. Defaults to the object API's own backing
+        /// directory, $HOME/.stado/local-storage.
+        #[arg(long)]
+        store_root: Option<String>,
+        /// Report what a pass would move and change nothing. The default, so
+        /// it never has to be remembered.
+        #[arg(long)]
+        dry_run: bool,
+        /// Relocate what the pass names.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Decide at most this many objects in one pass. 0 is every one of
+        /// them; the command is resumable either way.
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Preview what the registry cleanup would delete on TARGET.
     Cleanup {
         target: String,
@@ -1135,125 +1352,213 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Replace an owner-only Stado program on TARGET with a build proven to run there.
-    #[command(name = "install-binary")]
-    InstallBinary {
-        target: String,
-        /// Local executable to install.
-        #[arg(long)]
-        from: Option<String>,
-        /// Put the previous build back instead of installing a new one.
-        #[arg(long)]
-        rollback: bool,
-        /// Recover through the fixed local last-good registry snapshot when the authority is down.
-        #[arg(long)]
-        last_known_registry: bool,
-        /// Basename under $HOME/.stado/bin on the target.
-        #[arg(long, default_value = "stado")]
-        name: String,
-        /// Emit the installation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Install one small operator helper in TARGET's owner-only Stado bin directory.
-    #[command(name = "install-helper")]
-    InstallHelper {
-        target: String,
-        /// Local helper file to transfer.
-        source: String,
-        /// Safe basename under $HOME/.stado/bin on the target.
-        name: String,
-        /// Emit the transfer report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Install one owner-only opaque credential file on TARGET.
-    #[command(name = "install-secret")]
-    InstallSecret {
-        target: String,
-        /// Owner-only regular local file to transfer.
-        source: String,
-        /// Safe basename under $HOME/.stado on the target.
-        name: String,
-        /// Emit the transfer report as JSON; credential content is never emitted.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Install one credential field directly from Stado's selected store.
-    #[command(name = "install-credential")]
-    InstallCredential {
-        target: String,
-        /// Credential item id in the selected store.
-        item: String,
-        /// Exact string field to transfer.
-        field: String,
-        /// Absolute target home directory; omit to use the SSH account's home.
-        #[arg(long)]
-        home: Option<String>,
-        /// Safe basename under $HOME/.stado on the target.
-        name: String,
-        /// Emit the transfer report as JSON; credential content is never emitted.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Transfer one immutable product release archive through the registry SSH channel.
-    #[command(name = "install-release")]
-    InstallRelease {
-        target: String,
-        /// Local .tar.gz release archive.
-        source: String,
-        /// Path-safe release family; the remote asset is FAMILY.tar.gz.
-        family: String,
-        /// Immutable release version.
-        version: String,
-        /// Target platform.
-        #[arg(long, default_value = "darwin-arm64")]
-        platform: String,
-        /// Emit the transfer report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run one previously installed owner-only helper and wait for its result.
-    #[command(name = "run-helper")]
-    RunHelper {
-        target: String,
-        /// Safe basename under $HOME/.stado/bin on the target.
-        name: String,
-        /// Correlation identifier to hand the helper, repeatable. UUIDs only: a
-        /// helper that takes operator words is a remote shell.
-        #[arg(long = "uuid")]
-        uuid: Vec<String>,
-        /// Emit the execution report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Remove one previously installed owner-only helper from TARGET.
-    #[command(name = "remove-helper")]
-    RemoveHelper {
-        target: String,
-        /// Safe basename under $HOME/.stado/bin on the target.
-        name: String,
-        /// Emit the removal report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Every helper script TARGET carries, oldest first, with its age and size.
+    /// Why HOST is claiming nothing: its own agent's published gates, the
+    /// disk policy behind them, and what it declared against what it has.
     ///
-    /// `install-helper` writes into `$HOME/.stado/bin` and nothing removes
-    /// what it wrote: charless-mac-mini holds 553 installed helper scripts
-    /// beside 16 binaries. Reporting is the default; `--prune` removes the
-    /// ones past `--older-than-days` and refuses to run without it, because
-    /// "remove everything" is never what an operator means here.
-    Helpers {
+    /// Read-only and safe against a live host. The Mac mini claimed nothing
+    /// for hours at 2 GiB free against a 55 GiB policy, publishing
+    /// `disk_pressure_unresolved` every tick, and no command said so.
+    Gates {
+        host: String,
+        /// Emit the gates as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Why TARGET went quiet: beacon age, the path and endpoint it published,
+    /// its last sleep and wake, its interface changes, the silences recorded
+    /// against it, and what readers refused because of them.
+    ///
+    /// Read-only and safe against a live host. control-host was
+    /// unreachable from 18:29 to 18:35 UTC on 2026-08-19 and came back on a
+    /// direct path; nothing in this product carried a trace of it.
+    Link {
         target: String,
-        /// Only count -- and, with --prune, remove -- helpers older than this.
+        /// Emit the link report as JSON.
         #[arg(long)]
-        older_than_days: Option<u32>,
-        /// Remove the helpers past the threshold. Required companion of
-        /// --older-than-days; without it this command only reports.
+        json: bool,
+    },
+    /// Reclaim disk on HOST in declared stages, measuring each one.
+    ///
+    /// Previews by default: the host's own janitor pass, the release build
+    /// scratch tree, and delivered product trees no `current` link and no
+    /// live process references. `--apply` is the only thing that deletes and
+    /// requires `--reason`, which is recorded on the host itself.
+    Reclaim {
+        host: String,
+        /// Report what each stage would remove and delete nothing. The
+        /// default, so it never has to be remembered.
         #[arg(long)]
-        prune: bool,
-        /// Emit the inventory as JSON.
+        dry_run: bool,
+        /// Remove what the stages name. Requires --reason.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Why the space is being reclaimed; appended to the host's own
+        /// audit log beside the disk it changed.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Emit the staged report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace the tags of one Skarbiec item on TARGET, payload untouched.
+    ///
+    /// Consumers enumerate vault items by tag: Brama spends a subscription only
+    /// when its item carries `brama:subscription` and `brama:agent:<agent>`, so
+    /// an item that loses them leaves the fleet while its credential stays
+    /// valid and every check that counts credentials keeps answering green.
+    /// The owner key that may rewrite tags lives on the host, so this runs
+    /// there, reads the item before and after, and reports both.
+    #[command(name = "retag-vault-item")]
+    RetagVaultItem {
+        target: String,
+        /// Vault item id, e.g. provider:kimi:brama-sub-wisent-app-kimi-primary.
+        item: String,
+        /// The complete tag list to store, comma separated. This replaces the
+        /// item's tags rather than adding to them.
+        ///
+        /// Omit it to READ: the item's current state, revision and tags are
+        /// reported and nothing is written. A command that can only replace a
+        /// tag list forces an operator to guess the list they are replacing,
+        /// and a guess that drops `brama:agent:<other>` silently unsubscribes
+        /// another agent from a paid plan while every credential count stays
+        /// green.
+        #[arg(long)]
+        tags: Option<String>,
+        /// Emit the before/after report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pull TARGET's Skarbiec mirror into its live vault without discarding
+    /// local-only items.
+    #[command(name = "sync-vault")]
+    SyncVault {
+        target: String,
+        /// Emit the Skarbiec pull report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mint one bounded Skarbiec bearer on TARGET's live vault.
+    #[command(name = "vault-token-mint")]
+    VaultTokenMint {
+        target: String,
+        consumer: String,
+        /// Comma-separated Skarbiec capabilities.
+        #[arg(long)]
+        capabilities: String,
+        /// Exact audience bound into the bearer.
+        #[arg(long)]
+        audience: String,
+        /// Bearer lifetime in seconds.
+        #[arg(long, default_value_t = 31_536_000)]
+        ttl_seconds: u64,
+        /// Replace an existing consumer's capability set.
+        #[arg(long)]
+        replace_capabilities: bool,
+        /// Print only the bearer, for piping directly into a secret store.
+        #[arg(long)]
+        raw_token: bool,
+        /// Emit nonsecret bearer metadata as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing reads are added without printing the bearer.
+    #[command(name = "reconcile-object-verifier")]
+    ReconcileObjectVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ensure TARGET's release verifier can read one declared product publisher.
+    ///
+    /// The existing bearer, expiry, and unrelated product capabilities are
+    /// preserved. Only PRODUCT's controller-owned shadow and read capability
+    /// are reconciled, without printing either bearer.
+    #[command(name = "reconcile-release-verifier")]
+    ReconcileReleaseVerifier {
+        target: String,
+        /// Exact product key from release_api.publishers.
+        #[arg(long)]
+        product: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's service-verifier grant match service_api.deployers exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing read capabilities are added without printing the
+    /// bearer or moving it through argv.
+    #[command(name = "reconcile-service-verifier")]
+    ReconcileServiceVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
+    #[command(name = "recover-skarbiec-audit")]
+    RecoverSkarbiecAudit {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover stale per-user GnuPG daemons blocking Skarbiec decryption.
+    #[command(name = "recover-skarbiec-crypto")]
+    RecoverSkarbiecCrypto {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// The tail of one managed unit's own log on TARGET.
+    ///
+    /// A crash-looping unit says why in its log and nowhere else: the health
+    /// beacon reports it failed and carries no log, and `host exec` is a
+    /// read-only allowlist that cannot read a file.
+    #[command(name = "unit-log")]
+    UnitLog {
+        target: String,
+        /// Unit label as launchd knows it, e.g. com.wisent.always-on.brama.
+        unit: String,
+        /// Tail this many lines from each declared log path (default 40).
+        #[arg(long)]
+        lines: Option<u32>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run Stado's native build and signed release journeys on TARGET.
+    #[command(name = "verify-release-platform")]
+    VerifyReleasePlatform {
+        target: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long = "ref")]
+        revision: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Classify HOST's local replica against the store it mirrors, object by
+    /// object, and optionally reclaim the twins.
+    ///
+    /// Classifying deletes nothing. `--reclaim-twins --apply` deletes ONLY the
+    /// replica objects that same pass proved byte-identical to the primary, by
+    /// hashing both copies moments before the unlink — never a verdict an
+    /// earlier run recorded, because an audit written to a file and a deletion
+    /// run against it later is how a safety net becomes data loss.
+    #[command(name = "backup-audit")]
+    BackupAudit {
+        target: String,
+        /// Delete the twins this pass proves. Names them and deletes nothing
+        /// without --apply.
+        #[arg(long = "reclaim-twins")]
+        reclaim_twins: bool,
+        /// Actually delete what --reclaim-twins proved in this same pass.
+        #[arg(long, requires = "reclaim_twins")]
+        apply: bool,
+        /// Emit the classification as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1270,6 +1575,27 @@ enum HostCommands {
         #[arg(long)]
         local_port: u16,
         /// Emit the forwarding report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close a forwarding channel opened by `forward-local` or
+    /// `forward-remote`, and reconcile its markers.
+    ///
+    /// A tunnel the fleet can open and cannot close is a port it cannot
+    /// reclaim: the detached `ssh -f -N` outlives the command that made it, and
+    /// its marker under `~/.stado/forwards` keeps asserting an endpoint that
+    /// may no longer carry anything. This ends the exact channel, deletes its
+    /// markers, and re-reads the exposed port to confirm it stopped listening.
+    ///
+    /// The ssh process is matched on its complete `-R` or `-L` specification
+    /// and its destination, never on the word `ssh`: this machine runs several
+    /// forwards, and a match by program name would tear down the fleet's other
+    /// channels.
+    #[command(name = "forward-close")]
+    ForwardClose {
+        target: String,
+        /// The forward name whose markers were written.
+        name: String,
         #[arg(long)]
         json: bool,
     },
@@ -1352,27 +1678,45 @@ enum HostCommands {
         #[arg(long)]
         resume: Option<String>,
     },
-    /// Deliver one file of any size to TARGET's owner-only Stado files
-    /// directory, checksummed on arrival.
-    #[command(name = "install-file")]
-    InstallFile {
+    /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
+    /// does not have: the path must live under a managed area of the approved
+    /// account's home, be a regular file owned by that account, and never be
+    /// a symlink — anything else is refused before anything is deleted.
+    #[command(name = "remove-file")]
+    RemoveFile {
         target: String,
-        /// Local file to transfer.
-        source: String,
-        /// Safe basename under $HOME/.stado/files on the target.
-        name: String,
-        /// Land it owner-executable instead of owner-readable only.
-        #[arg(long)]
-        executable: bool,
-        /// Emit the transfer report as JSON.
+        /// Absolute path on the target. Only `$HOME/Library/LaunchAgents`
+        /// and `$HOME/.stado` are deletable by this command; a system path is
+        /// refused with the privileged command that could remove it named.
+        path: String,
+        /// Emit the removal report as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
+    /// register it against the host's fleet vault, then print the reconciled
+    /// status.
+    #[command(name = "sync-acquisition-scopes")]
+    SyncAcquisitionScopes {
+        target: String,
+        /// Local acquisition-scope catalog file to deliver and register.
+        source: String,
     },
     /// Report TARGET's stado-managed binaries, forward markers and loopback
     /// listeners, and whether each marker still matches a live listener.
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report every program TARGET actually runs with its version, digest and
+    /// whether it came out of a release; omit TARGET to read what every host
+    /// has already reported. A host that has never reported is a failure
+    /// wherever the report is judged, never a pass.
+    Software {
+        target: Option<String>,
+        /// Emit the report and its findings as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1385,6 +1729,237 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// What TARGET's Weles worker is doing: its staged and installed releases,
+    /// whether its worker API answers, and its newest recorded runs with each
+    /// run's own verdict. Counts and timestamps only; recordings stay on the
+    /// host.
+    #[command(name = "weles-activity")]
+    WelesActivity {
+        target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect every image rendered by one HTTPS surface in a read-only Weles
+    /// browser session on TARGET. The objective and safety constraints are
+    /// fixed by Stado; the caller supplies only the URL.
+    #[command(name = "weles-image-inspect")]
+    WelesImageInspect {
+        target: String,
+        /// HTTPS page Weles must render and inspect.
+        #[arg(long)]
+        url: String,
+        /// Emit the complete redacted Weles result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enqueue one batch of `generic_capture` actions on TARGET's Weles
+    /// admission API from a checked-in capture plan. The plan is refused in
+    /// full before the host is contacted, the loopback API is reached over the
+    /// registry's own encrypted SSH channel for the length of the command, and
+    /// every artifact lands in Stado storage under the plan's own prefixes.
+    #[command(name = "weles-capture")]
+    WelesCapture {
+        target: String,
+        /// Capture plan file, schema `wisent.weles-capture-plan.v1`.
+        #[arg(long)]
+        plan: String,
+        /// Use this batch id instead of the one the plan declares.
+        #[arg(long)]
+        batch: Option<String>,
+        /// Emit the enqueue report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Per-action state of one capture batch — queued, running, done or
+    /// failed — plus the artifact keys already present in Stado storage under
+    /// the batch prefix. Read-only. Retrieval is `stado storage get`.
+    #[command(name = "weles-capture-status")]
+    WelesCaptureStatus {
+        target: String,
+        /// Batch id to report on.
+        #[arg(long)]
+        batch: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read, or declare, one Skarbiec capability route ON TARGET.
+    ///
+    /// A capability route maps a resource the broker is asked to resolve —
+    /// `origin:<page origin>/<field class>` for a browser fill — onto one
+    /// vault item and field. The table decides which credential a login form
+    /// receives, and it is per-host: charless-mac-mini holds its own, so a
+    /// route declared on an operator's laptop makes nothing resolvable there.
+    /// `capability-issue` refuses a resource with no route at issue time,
+    /// which is why this exists as its own verb rather than as a side effect
+    /// of some flow that needed one.
+    ///
+    /// Without `--resource` this is a READ: every route on TARGET with that
+    /// host's own answer for it — whether the item is one it can open and
+    /// whether the field is one that item carries. With all four flags it
+    /// declares one route. Skarbiec keeps the previous table beside the new
+    /// one, records the reason in its journal, reports an identical route as
+    /// unchanged, and refuses to repoint a live route.
+    #[command(name = "capability-route")]
+    CapabilityRoute {
+        target: String,
+        /// The resource to map, e.g. `origin:https://accounts.google.com/email`.
+        #[arg(long)]
+        resource: Option<String>,
+        /// The vault item on TARGET that holds the credential.
+        #[arg(long)]
+        item: Option<String>,
+        /// The field of that item, e.g. `username` or `password`.
+        #[arg(long)]
+        field: Option<String>,
+        /// Why this route exists. Required by Skarbiec for a declaration, and
+        /// carried into its journal beside the table: a change to which
+        /// credential a form receives is never self-explanatory later.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Ask TARGET to verify its whole table and report the SENTENCE behind
+        /// every route that cannot deliver, instead of the two booleans the
+        /// listing prints. A non-interactive channel may be unable to open a
+        /// vault the broker service on that host opens fine, and only the
+        /// sentence tells those apart.
+        #[arg(long)]
+        verify: bool,
+        /// Address one broker instance's capability state instead of the
+        /// host's vault-adjacent default. `capability-serve` is started with
+        /// whatever its launcher exports, and only that instance can redeem
+        /// what is issued into it. A leading `$HOME/` expands on the host.
+        #[arg(long)]
+        capability_file: Option<String>,
+        /// The route table that same instance resolves against.
+        #[arg(long)]
+        routes_file: Option<String>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one browser task on TARGET's Weles worker and report its result.
+    ///
+    /// The general submission surface. `weles-capture` hard-codes
+    /// `generic_capture`, which charless-mac-mini's worker does not accept, and
+    /// `weles-image-inspect` submits the allowlisted `generic_browser_task`
+    /// with its objective and constraints fixed in product code. So the only
+    /// action that host would run was reachable only through a command that
+    /// could not be told what to do, and every browser workflow this fleet
+    /// owns sat behind that.
+    ///
+    /// The action name is checked against TARGET's own
+    /// `WELES_ACTION_ALLOWLIST` before any channel is opened, and the
+    /// allowlist is read byte-exact rather than through `env-show`, which
+    /// clamps values at 400 characters and would silently truncate a
+    /// 4488-character list to its first 25 entries. An action the worker would
+    /// refuse is refused here, naming the action and the host.
+    ///
+    /// The request is held open for the run, so this reports what the run
+    /// produced rather than a queue receipt.
+    #[command(name = "weles-browser-task")]
+    WelesBrowserTask {
+        target: String,
+        /// Page the task starts on.
+        #[arg(long)]
+        url: String,
+        /// What the agent must accomplish. `@path` reads the objective from a
+        /// file, for the long ones that do not belong in a shell history.
+        #[arg(long)]
+        objective: String,
+        /// Stable recording label. `--fresh-profile` controls profile identity.
+        #[arg(long)]
+        session_label: String,
+        /// Action to run; must be one TARGET's allowlist carries.
+        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ACTION)]
+        action: String,
+        /// Exact action catalog shipped by the active Weles release.
+        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ALLOWLIST_FILE)]
+        allowlist_file: String,
+        /// Exact Weles login item for a named credential trajectory.
+        #[arg(long)]
+        login_item: Option<String>,
+        /// Give the run a new account identity, which makes Weles create a new
+        /// browser profile directory instead of clearing or reusing one.
+        #[arg(long)]
+        fresh_profile: bool,
+        /// Carry "this run may sign in" into the agent's instructions. This is
+        /// a HINT, not an enforced restriction: Weles appends the
+        /// read_only/no_login/no_mutation constraints to the model's goal text
+        /// and checks them nowhere, and the agent holds fill, click, navigate
+        /// and store_credential whether or not this is set. Its one mechanical
+        /// effect is that --sign-in-origin is refused without it.
+        #[arg(long)]
+        allow_login: bool,
+        /// Sign in on this page origin with the account Skarbiec holds, e.g.
+        /// `https://accounts.google.com`. Stado mints one single-use,
+        /// one-hour `weles.browser.fill` capability per field — email and
+        /// password — under one authorization id, and sends only those
+        /// references: no secret enters argv, the objective, a log line or the
+        /// report. The worker redeems each against its own broker at fill time
+        /// and zeroes the plaintext. Requires --sign-in-item and
+        /// --allow-login. A bare origin only: Weles compares it against the
+        /// live page's own origin, so a run that redirects elsewhere before the
+        /// prefill is refused there rather than filled.
+        #[arg(long)]
+        sign_in_origin: Option<String>,
+        /// The vault item holding that account. Checked against Skarbiec's
+        /// capability route table before anything is minted: the item a route
+        /// names is the item that would be read, and a disagreement is refused
+        /// rather than silently resolved in the route's favour.
+        #[arg(long)]
+        sign_in_item: Option<String>,
+        /// Run with a visible window. Some sign-in flows refuse headless.
+        #[arg(long)]
+        windowed: bool,
+        /// Emit the complete result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify, and with --repair complete, the browser runtime TARGET's Weles
+    /// release declares it needs.
+    ///
+    /// The worker records its sessions, so a missing recording dependency kills
+    /// `browserContext.newPage` before any navigation and every browser task on
+    /// the host fails. On charless-mac-mini that was Playwright's ffmpeg, absent
+    /// at ms-playwright/ffmpeg-1011/ffmpeg-mac, and three runs had already
+    /// failed that way before anyone looked. Recording is the evidence Weles
+    /// exists to keep, so the repair completes the runtime rather than turning
+    /// recording off.
+    ///
+    /// The requirement is read from `browsers.json` inside the installed
+    /// release, never hardcoded here, because Playwright pins an exact revision
+    /// per component and a constant would verify the wrong path the moment the
+    /// release moved. Verification reports every component the release installs
+    /// by default; --repair installs only the ones named, defaulting to the one
+    /// Weles takes from that cache, so a repair never downloads browsers
+    /// nothing drives.
+    #[command(name = "weles-browser-runtime")]
+    WelesBrowserRuntime {
+        target: String,
+        /// Component to install with --repair; repeat for each. Defaults to
+        /// ffmpeg, which is what the recording path needs.
+        #[arg(long = "component")]
+        components: Vec<String>,
+        /// Install the missing components, then verify again.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read TARGET's effective Stado configuration through its fleet channel.
+    ConfigShow { target: String },
+    /// Persist one dotted Stado configuration value on TARGET.
+    ConfigSet {
+        target: String,
+        key: String,
+        /// JSON value, or a bare string as accepted by `stado config set`.
+        value: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the new configuration immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
+    },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
@@ -1395,6 +1970,10 @@ enum HostCommands {
         /// Report the plan without mutation.
         #[arg(long)]
         dry_run: bool,
+        /// Reinstall the exact immutable bytes even when the host reports the
+        /// same semantic version; used to replace an unmanaged same-version file.
+        #[arg(long)]
+        reinstall: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1429,6 +2008,11 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC and automation artifacts.
     Status { target: String },
+    /// Configure persistent GUI login, install CuaDriver, and grant Accessibility.
+    Enable { target: String },
+    /// Grant the installed CuaDriver app Accessibility for the host's GUI user.
+    #[command(name = "grant-accessibility")]
+    GrantAccessibility { target: String },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
     Disable {
@@ -1603,8 +2187,10 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
     match matches.subcommand_name().unwrap_or_default() {
         "submit" | "status" | "cancel" | "results" | "job" | "machine" | "queue" | "storage"
         | "artifact" => "queue",
-        "host"
+        "fleet"
+        | "host"
         | "registry"
+        | "builds"
         | "service"
         | "instances"
         | "resources"
@@ -1620,7 +2206,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "coordinator"
         | "resolver"
         | "release"
-        | "dashboard"
+        | "database"
         | "schedule"
         | "agent"
         | "local-control-plane"
@@ -1725,7 +2311,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         Commands::Coordinator { target, once } => coordinator::run(target, once).await,
-        Commands::Dashboard { bind, port } => dashboard::run(bind, port).await,
+        Commands::Dashboard {
+            bind,
+            port,
+            enrollment_only,
+        } => dashboard::run(bind, port, enrollment_only).await,
         Commands::LocalControlPlane {
             bind,
             port,
@@ -1750,6 +2340,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
+        Commands::Builds(sub) => builds::run(sub).await,
+        Commands::Fleet(sub) => fleet::run(sub).await,
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
             IdentityCommands::Verify {
@@ -1760,8 +2352,20 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
-            HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
-            HostCommands::Recover { target } => host::recover(&target).await,
+            HostCommands::PublishBeacon { source, print } => {
+                host::publish_beacon(&source, print).await
+            }
+            HostCommands::Recover {
+                target,
+                bundled_registry,
+                release,
+            } => host::recover(&target, bundled_registry, release.as_deref()).await,
+            HostCommands::RecoverObjectApi { target, json } => {
+                host::recover_object_api(&target, json).await
+            }
+            HostCommands::ResolverKey { target, json } => {
+                host::authorize_resolver_key(&target, json).await
+            }
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
@@ -1795,12 +2399,23 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesRecordingsDir { target, path } => {
                 host::weles_recordings_dir(&target, &path).await
             }
+            HostCommands::GpuPowerLimit {
+                target,
+                watts,
+                json,
+            } => host::gpu_power_limit(&target, watts, json).await,
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
                 host::gui_automation_status(&target).await
             }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
+                host::gui_automation_enable(&target).await
+            }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
+                target,
+            }) => host::gui_automation_grant_accessibility(&target).await,
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }
@@ -1818,35 +2433,46 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
             HostCommands::Ping { target, json } => host::ping(&target, json).await,
             HostCommands::Disk { target, json } => host::disk(&target, json).await,
+            // Same default as `host reclaim`: `--dry-run` is what happens
+            // when nothing is asked for, and clap refuses it beside `--apply`.
+            HostCommands::ObjectRelocate {
+                target,
+                namespace,
+                from_prefix,
+                to_prefix,
+                store_root,
+                dry_run: _,
+                apply,
+                limit,
+                json,
+            } => {
+                let plan = crate::deploy::host_object_relocate::RelocatePlan {
+                    namespace,
+                    from: from_prefix,
+                    to: to_prefix,
+                    store_root,
+                    apply,
+                    limit,
+                };
+                host::object_relocate(&target, &plan, json).await
+            }
             HostCommands::Cleanup {
                 target,
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
-            HostCommands::InstallBinary {
-                target,
-                from,
-                name,
-                rollback,
-                last_known_registry,
+            HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
+            HostCommands::Link { target, json } => host::link(&target, json).await,
+            // `--dry-run` is the default and needs no argument: `--apply` is
+            // the only flag that changes anything, and clap already refuses
+            // the two together.
+            HostCommands::Reclaim {
+                host: target,
+                dry_run: _,
+                apply,
+                reason,
                 json,
-            } => {
-                host::install_binary(
-                    &target,
-                    from.as_deref(),
-                    &name,
-                    rollback,
-                    last_known_registry,
-                    json,
-                )
-                .await
-            }
-            HostCommands::InstallHelper {
-                target,
-                source,
-                name,
-                json,
-            } => host::install_helper(&target, &source, &name, json).await,
+            } => host::reclaim(&target, apply, reason.as_deref(), json).await,
             HostCommands::PrecheckRunner(command) => match command {
                 HostPrecheckRunnerCommands::Install { target, json } => {
                     precheck_runner::install(&target, json).await
@@ -1857,53 +2483,123 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 HostPrecheckRunnerCommands::Remove { target, json } => {
                     precheck_runner::remove(&target, json).await
                 }
+                HostPrecheckRunnerCommands::RepositoryAdd {
+                    repository,
+                    runner_group,
+                    json,
+                } => {
+                    precheck_runner::repository_add(&repository, runner_group.as_deref(), json)
+                        .await
+                }
+                HostPrecheckRunnerCommands::ModelReviewAdd {
+                    target,
+                    repository,
+                    json,
+                } => precheck_runner::model_review_add(&target, &repository, json).await,
             },
-            HostCommands::InstallFile {
-                target,
-                source,
-                name,
-                executable,
-                json,
-            } => host::install_file(&target, &source, &name, executable, json).await,
-            HostCommands::InstallSecret {
-                target,
-                source,
-                name,
-                json,
-            } => host::install_secret(&target, &source, &name, json).await,
-            HostCommands::InstallCredential {
+            HostCommands::PublisherRunner(command) => match command {
+                HostPublisherRunnerCommands::Install {
+                    target,
+                    repositories,
+                    json,
+                } => precheck_runner::install_publisher(&target, &repositories, json).await,
+                HostPublisherRunnerCommands::RepositoryAdd { repository, json } => {
+                    precheck_runner::publisher_repository_add(&repository, json).await
+                }
+                HostPublisherRunnerCommands::Bootstrap { repository, json } => {
+                    precheck_runner::bootstrap_publisher_repository(&repository, json).await
+                }
+                HostPublisherRunnerCommands::DeveloperId {
+                    target,
+                    account_item,
+                    repositories,
+                    json,
+                } => {
+                    precheck_runner::bootstrap_developer_id(
+                        &target,
+                        &account_item,
+                        &repositories,
+                        json,
+                    )
+                    .await
+                }
+                HostPublisherRunnerCommands::Status { target, json } => {
+                    precheck_runner::status_publisher(&target, json).await
+                }
+                HostPublisherRunnerCommands::Remove { target, json } => {
+                    precheck_runner::remove_publisher(&target, json).await
+                }
+            },
+            HostCommands::RemoveFile { target, path, json } => {
+                host::remove_file(&target, &path, json).await
+            }
+            HostCommands::SyncAcquisitionScopes { target, source } => {
+                host::sync_acquisition_scopes(&target, &source).await
+            }
+            HostCommands::RetagVaultItem {
                 target,
                 item,
-                field,
-                home,
-                name,
+                tags,
+                json,
+            } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
+            HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::VaultTokenMint {
+                target,
+                consumer,
+                capabilities,
+                audience,
+                ttl_seconds,
+                replace_capabilities,
+                raw_token,
                 json,
             } => {
-                host::install_credential(&target, &item, &field, &name, home.as_deref(), json).await
+                host::vault_token_mint(
+                    &target,
+                    &consumer,
+                    &capabilities,
+                    &audience,
+                    ttl_seconds,
+                    replace_capabilities,
+                    raw_token,
+                    json,
+                )
+                .await
             }
-            HostCommands::InstallRelease {
-                target,
-                source,
-                family,
-                version,
-                platform,
-                json,
-            } => host::install_release(&target, &source, &family, &version, &platform, json).await,
-            HostCommands::RunHelper {
-                target,
-                name,
-                uuid,
-                json,
-            } => host::run_helper(&target, &name, &uuid, json).await,
-            HostCommands::RemoveHelper { target, name, json } => {
-                host::remove_helper(&target, &name, json).await
+            HostCommands::ReconcileObjectVerifier { target, json } => {
+                host::reconcile_object_verifier(&target, json).await
             }
-            HostCommands::Helpers {
+            HostCommands::ReconcileReleaseVerifier {
                 target,
-                older_than_days,
-                prune,
+                product,
                 json,
-            } => host::helpers(&target, older_than_days, prune, json).await,
+            } => host::reconcile_release_verifier(&target, &product, json).await,
+            HostCommands::ReconcileServiceVerifier { target, json } => {
+                host::reconcile_service_verifier(&target, json).await
+            }
+            HostCommands::RecoverSkarbiecAudit { target, json } => {
+                host::recover_skarbiec_audit(&target, json).await
+            }
+            HostCommands::RecoverSkarbiecCrypto { target, json } => {
+                host::recover_skarbiec_crypto(&target, json).await
+            }
+            HostCommands::UnitLog {
+                target,
+                unit,
+                lines,
+                json,
+            } => host::unit_log(&target, &unit, lines, json).await,
+            HostCommands::VerifyReleasePlatform {
+                target,
+                repo,
+                revision,
+                json,
+            } => host::verify_release_platform(&target, &repo, &revision, json).await,
+            HostCommands::BackupAudit {
+                target,
+                reclaim_twins,
+                apply,
+                json,
+            } => host::backup_audit(&target, reclaim_twins, apply, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
@@ -1911,6 +2607,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 local_port,
                 json,
             } => host::forward_local(&target, &name, remote_port, local_port, json).await,
+            HostCommands::ForwardClose { target, name, json } => {
+                host::forward_close(&target, &name, json).await
+            }
             HostCommands::ForwardRemote {
                 target,
                 name,
@@ -1946,14 +2645,102 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::reconcile(target, apply, json).await,
             HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
+            HostCommands::Software { target, json } => host::software(target, json).await,
             HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
+            HostCommands::WelesActivity { target, json } => {
+                host::weles_activity(&target, json).await
+            }
+            HostCommands::WelesImageInspect { target, url, json } => {
+                host::weles_image_inspect(&target, &url, json).await
+            }
+            HostCommands::WelesCapture {
+                target,
+                plan,
+                batch,
+                json,
+            } => host::weles_capture(&target, &plan, batch.as_deref(), json).await,
+            HostCommands::WelesCaptureStatus {
+                target,
+                batch,
+                json,
+            } => host::weles_capture_status(&target, &batch, json).await,
+            HostCommands::CapabilityRoute {
+                target,
+                resource,
+                item,
+                field,
+                reason,
+                verify,
+                capability_file,
+                routes_file,
+                json,
+            } => {
+                host::capability_route(host::CapabilityRouteRequest {
+                    target: &target,
+                    resource: resource.as_deref(),
+                    item: item.as_deref(),
+                    field: field.as_deref(),
+                    reason: reason.as_deref(),
+                    verify,
+                    capability_file: capability_file.as_deref(),
+                    routes_file: routes_file.as_deref(),
+                    json,
+                })
+                .await
+            }
+            HostCommands::WelesBrowserTask {
+                target,
+                url,
+                objective,
+                session_label,
+                action,
+                allowlist_file,
+                login_item,
+                fresh_profile,
+                allow_login,
+                sign_in_origin,
+                sign_in_item,
+                windowed,
+                json,
+            } => {
+                host::weles_browser_task(host::BrowserTaskRequest {
+                    target: &target,
+                    url: &url,
+                    objective: &objective,
+                    session_label: &session_label,
+                    action: &action,
+                    allowlist_file: &allowlist_file,
+                    login_item: login_item.as_deref(),
+                    fresh_profile,
+                    allow_login,
+                    sign_in_origin: sign_in_origin.as_deref(),
+                    sign_in_item: sign_in_item.as_deref(),
+                    windowed,
+                    json,
+                })
+                .await
+            }
+            HostCommands::WelesBrowserRuntime {
+                target,
+                components,
+                repair,
+                json,
+            } => host::weles_browser_runtime(&target, &components, repair, json).await,
+            HostCommands::ConfigShow { target } => host::config_show(&target).await,
+            HostCommands::ConfigSet {
+                target,
+                key,
+                value,
+                reload_service,
+            } => host::config_set(&target, &key, &value, reload_service.as_deref()).await,
             HostCommands::Release {
                 target,
                 binary,
                 version,
                 dry_run,
+                reinstall,
                 json,
-            } => host::release(&target, &binary, &version, dry_run, json).await,
+            } => host::release(&target, &binary, &version, dry_run, reinstall, json).await,
         },
         Commands::Bootstrap {
             target,
@@ -1967,9 +2754,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Alerts(sub) => alerts::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Egress(sub) => egress::dispatch(sub).await,
+        Commands::Product(sub) => product::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
+        Commands::Database(sub) => database::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
+        Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }

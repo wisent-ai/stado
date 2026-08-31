@@ -6,7 +6,6 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -51,14 +50,30 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     }
     Ok(())
 }
-/// `stado host publish-beacon FILE` — publish a locally collected health
-/// document through the dedicated, route-scoped Stado control API.
+/// `stado host publish-beacon FILE [--print]` — publish a locally collected
+/// health document through the dedicated, route-scoped Stado control API.
 ///
 /// This command deliberately has no direct-storage mode and does not consult
 /// provider credentials. Missing URL/token configuration, an insecure remote
 /// URL, an over-broad token file, malformed JSON, and an inconsistent server
 /// acknowledgement all fail closed.
-pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
+///
+/// The `link` block is collected HERE rather than by the collector scripts,
+/// because it is the one part of a beacon that cannot be assembled with `df`
+/// and `launchctl`: it reads the power log and the tailnet, and a host that
+/// went silent has to publish that account of itself or the silence leaves no
+/// trace at all (see [`crate::deploy::host_link`]). Collection never blocks
+/// the publish — every probe is capped and degrades to a null.
+///
+/// It is injected only into a document about THIS host. The macOS collector
+/// also relays beacons for hosts that cannot publish for themselves, and
+/// stamping this machine's connectivity onto another machine's document would
+/// invent the very evidence the block exists to provide.
+///
+/// `--print` writes the document that would be published and publishes
+/// nothing, so the collection can be inspected on a host without a beacon
+/// grant and without touching the fleet's store.
+pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     let bytes = if source == "-" {
         let mut bytes = Vec::new();
         std::io::stdin().lock().read_to_end(&mut bytes)?;
@@ -71,14 +86,15 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
             "host beacon must contain between one and 65535 bytes",
         ));
     }
-    let document: Value = serde_json::from_slice(&bytes)
+    let mut document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CmdError::click(format!("host beacon is not valid JSON: {error}")))?;
     let host = document
         .as_object()
         .and_then(|value| value.get("host"))
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?;
-    if !valid_beacon_host(host) {
+        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?
+        .to_string();
+    if !valid_beacon_host(&host) {
         return Err(CmdError::click(
             "host beacon host must be a lowercase DNS label",
         ));
@@ -94,6 +110,21 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
         ));
     }
 
+    if beacon_is_this_host(&host) {
+        let link =
+            crate::deploy::host_link::collect_link(&crate::deploy::production_runner()).await;
+        if let Some(object) = document.as_object_mut() {
+            object.insert("link".to_string(), serde_json::to_value(&link)?);
+        }
+    }
+    // The merged document is what gets published, so the bytes on the wire
+    // are the bytes just validated plus the block collected here.
+    let bytes = serde_json::to_vec(&document)?;
+    if print {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+
     let mut endpoint = host_health_api_url()?;
     {
         let mut segments = endpoint.path_segments_mut().map_err(|()| {
@@ -103,7 +134,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
         segments.push("api");
         segments.push("host-health");
     }
-    endpoint.query_pairs_mut().append_pair("host", host);
+    endpoint.query_pairs_mut().append_pair("host", &host);
 
     let token = host_health_api_token().await?;
     let response = crate::cli::storage::fleet_https_client()
@@ -134,7 +165,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     // from the control plane's -- the client was asserting an internal detail
     // it has no way to know.
     let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
-        && payload.get("host").and_then(Value::as_str) == Some(host)
+        && payload.get("host").and_then(Value::as_str) == Some(host.as_str())
         && payload
             .get("path")
             .and_then(Value::as_str)
@@ -156,6 +187,19 @@ fn valid_beacon_host(host: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+/// Is this beacon document about the machine running this command?
+///
+/// The beacon slug is the leading hostname label, lowercased — exactly how
+/// the collector scripts spell it (`hostname -s | tr '[:upper:]' '[:lower:]'`)
+/// and how the readers resolve a target back to its beacon object. A host
+/// whose name cannot be read at all matches nothing, which keeps the relay
+/// path from being mistaken for a self-publish.
+fn beacon_is_this_host(host: &str) -> bool {
+    let local = crate::targets::normalize_hostname(&crate::providers::vast::system_hostname());
+    let slug = local.split('.').next().unwrap_or_default();
+    !slug.is_empty() && slug == host
 }
 
 fn host_health_api_url() -> Result<url::Url, CmdError> {
@@ -281,20 +325,58 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     Ok(token)
 }
 
-/// `stado host recover TARGET` — recover a registry-managed macOS host
-/// through its approved channel (Python `host_recover` in cli.py: prints
-/// the report as sorted-keys JSON, exits 1 when status != "ok").
-pub async fn recover(target: &str) -> Result<(), CmdError> {
+/// `stado host recover TARGET [--release VERSION]` — optionally replace the
+/// remote Stado binary from the registry-trusted signed emergency channel,
+/// then recover a registry-managed macOS host through its approved channel.
+///
+/// The canonical remote registry remains the default and fleet-survival
+/// authority. `bundled_registry` is an explicit break-glass path for repairing
+/// the storage or authorization outage that made that authority unreadable.
+/// The selected registry is loaded exactly once: release trust and host
+/// identity must come from the same last-known-good or explicit bundled copy.
+pub async fn recover(
+    target: &str,
+    bundled_registry: bool,
+    release: Option<&str>,
+) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_recovery::recover_host(target, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = if bundled_registry {
+        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?
+    } else {
+        crate::deploy::host_channel::canonical_registry()
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?
+    };
+    let resolved = registry
+        .lookup(target)
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    // Repair the authority before any release catalog read. This path uses the
+    // already loaded registry identity and the host's physical local store, so
+    // the object API does not need to be available in order to recover itself.
+    let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+    let mut report = match release {
+        Some(version) => {
+            crate::deploy::host_recovery_release::recover(&registry, target, version, &runner).await
+        }
+        None => {
+            crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
+                .await
+        }
+    }
+    .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let Some(object) = report.as_object_mut() {
+        object.insert(
+            "object_api".to_string(),
+            json!({"status": "healthy", "detail": object_api}),
+        );
+    }
     println!(
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
     );
-    if report.get("status").and_then(Value::as_str) != Some("ok") {
-        // click.exceptions.Exit(1): nothing more to print.
+    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
+    {
         return Err(CmdError::silent(1));
     }
     Ok(())
@@ -319,9 +401,7 @@ pub async fn reboot(target: &str) -> Result<(), CmdError> {
 /// Resolve TARGET in the canonical registry, the same source
 /// `host weles-recordings-dir` writes back to.
 async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = super::registry::read_registry().await?;
     registry
         .targets
         .iter()
@@ -400,13 +480,33 @@ fn print_report(
 pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_STATUS_SCRIPT,
-        "",
-        &runner,
-    )
-    .await;
+    let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
+    print_report(&report)
+}
+
+/// `stado host gui-automation enable TARGET` — configure persistent GUI login,
+/// install the pinned signed CuaDriver app and grant Accessibility.
+pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved)
+        .await?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} has no readable host-account password",
+                resolved.name
+            ))
+        })?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
+    print_report(&report)
+}
+
+/// `stado host gui-automation grant-accessibility TARGET` — grant the
+/// installed, signed CuaDriver app Accessibility for the host's GUI user.
+pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
     print_report(&report)
 }
 
@@ -415,13 +515,7 @@ pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
 pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_DISABLE_SCRIPT,
-        bundle,
-        &runner,
-    )
-    .await;
+    let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
     print_report(&report)
 }
 
@@ -656,6 +750,94 @@ pub async fn weles_recordings_dir(target: &str, path: &str) -> Result<(), CmdErr
         println!("  {name}: WELES_RECORDINGS_ROOT={path}");
     }
     println!("updated {touched} LaunchAgent plist(s); reload weles agents to apply");
+    Ok(())
+}
+
+/// Persist TARGET's NVIDIA board power cap in the canonical registry and apply
+/// it immediately. The local agent keeps reconciling the declaration, including
+/// after driver resets and host reboots.
+pub async fn gpu_power_limit(target: &str, watts: u32, json: bool) -> Result<(), CmdError> {
+    if watts == 0 {
+        return Err(CmdError::usage("WATTS must be a positive integer"));
+    }
+
+    let store = crate::targets::RegistryStore::open().await?;
+    let current = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
+    let mut document: Value = serde_json::from_str(&current.content)?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    let entry = targets
+        .iter_mut()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+    entry.insert("gpu_power_limit_watts".to_string(), Value::from(watts));
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let registry = crate::targets::load_registry_from_str(&payload)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = registry
+        .lookup(target)
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    let generation = store.compare_and_swap(&current.version, &payload).await?;
+
+    let script = format!(
+        r#"set -eu
+nvidia_smi=$(command -v nvidia-smi)
+if [ -z "$nvidia_smi" ]; then
+  printf '%s\n' 'nvidia-smi is unavailable' >&2
+  exit 1
+fi
+indices=$("$nvidia_smi" --query-gpu=index --format=csv,noheader,nounits)
+if [ -z "$indices" ]; then
+  printf '%s\n' 'nvidia-smi returned no GPUs' >&2
+  exit 1
+fi
+for gpu in $indices; do
+  "$nvidia_smi" --id="$gpu" --power-limit={watts} >/dev/null
+done
+"$nvidia_smi" \
+  --query-gpu=index,power.limit,power.min_limit,power.max_limit \
+  --format=csv,noheader,nounits
+"#
+    );
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: registry now requires {watts} W at generation {generation}, but immediate reconciliation failed: {}",
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote nvidia-smi power-limit update failed"
+            )
+        )));
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "target": target,
+                "gpu_power_limit_watts": watts,
+                "registry_generation": generation,
+                "driver": output.stdout.trim(),
+                "status": "reconciled",
+            }))?
+        );
+    } else {
+        println!("{target}: gpu_power_limit_watts={watts} (generation {generation})");
+        print!("{}", output.stdout);
+    }
     Ok(())
 }
 
@@ -913,12 +1095,173 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
         if let Some(Value::String(detail)) = state.and_then(|value| value.get("error")) {
             println!("cleanup state unreadable: {detail}");
         }
+        // Whose verdict this is. Several processes write that one file on an
+        // always-on host -- the queue agent every tick, a `disk-cleanup
+        // --watch` unit on its own timer -- so OUTCOME above is the last pass
+        // by whoever made it, not a property of the host. On 2026-08-31 the
+        // agent recorded `interval_noop` with no errors and this command read
+        // `invalid_or_unavailable_policy` 46 seconds later from the same path.
+        // Naming the writer is what lets an operator tell those apart instead
+        // of believing whichever arrived last.
+        if let Some(Value::String(writer)) = state.and_then(|value| value.get("writer")) {
+            let version = state
+                .and_then(|value| value.get("writer_version"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown version");
+            println!(
+                "that pass was written by {writer} running {version}; this file \
+                 has more than one writer, so OUTCOME is the last pass rather \
+                 than the state of the host"
+            );
+        }
     } else {
         println!(
             "\ncleanup state: no state file at {} — the janitor has never \
              completed a pass on this host",
             recorded("path")
         );
+    }
+    // Said after the cleanup state, because it is the answer to the question
+    // that state raises: the janitor ran, it freed what it could, and the disk
+    // is still full. macOS publishes no size for a snapshot, so the count and
+    // the host's own names are all there is to print — and printing "0 bytes"
+    // for them would be the false reassurance this block exists to prevent.
+    let snapshots = report.get("local_snapshots");
+    let names: Vec<&str> = snapshots
+        .and_then(|value| value.get("names"))
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if snapshots.and_then(|value| value.get("supported")) == Some(&Value::Bool(true))
+        && !names.is_empty()
+    {
+        println!(
+            "\nlocal APFS snapshots: {} — their blocks are inside USED above, no \
+             stado command removes them, and macOS reports no size for them. \
+             Thin them with tmutil if the space is needed:",
+            names.len()
+        );
+        for name in names {
+            println!("  {name}");
+        }
+    }
+    report_outcome(&report, expected)
+}
+
+/// `stado host object-relocate TARGET --namespace NS --from-prefix P
+/// [--to-prefix Q] [--apply]` — re-address objects inside the store, on the
+/// host that holds it.
+///
+/// The refusals are printed last and printed always, because they are the
+/// only lines an operator has to act on: an object whose destination exists
+/// with different bytes is still at its wrong address and still has a second
+/// copy, and a run that reports 88 moves and hides one of those reads as a
+/// completed repair.
+pub async fn object_relocate(
+    target: &str,
+    plan: &crate::deploy::host_object_relocate::RelocatePlan,
+    json: bool,
+) -> Result<(), CmdError> {
+    let apply = plan.apply;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_object_relocate::relocate_host(target, plan, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let expected = crate::deploy::host_object_relocate::OK_STATUS;
+    if json {
+        print_json(&report);
+        return report_outcome(&report, expected);
+    }
+    let store = report.get("store");
+    let named = |key: &str| cell(store.and_then(|value| value.get(key)));
+    if let Some(Value::String(root)) = store.and_then(|value| value.get("missing_root")) {
+        println!("no store at {root} on this host — nothing was read");
+        return report_outcome(&report, expected);
+    }
+    if let Some(Value::String(os)) = store.and_then(|value| value.get("no_hasher")) {
+        println!(
+            "no sha256 program on this {os} host, so no body could be verified and \
+             none was touched"
+        );
+        return report_outcome(&report, expected);
+    }
+    println!(
+        "store {}\n  from {}\n    to {}",
+        named("root"),
+        named("source_prefix"),
+        named("destination_prefix"),
+    );
+    let totals = report.get("totals");
+    let counted = |key: &str| {
+        totals
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+    };
+    let objects: Vec<&Value> = report
+        .get("objects")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default();
+    let field = |item: &Value, key: &str| cell(item.get(key));
+    super::table::print(
+        &["OUTCOME", "BYTES", "SOURCE KEY", "DESTINATION KEY"],
+        &objects
+            .iter()
+            .map(|item| {
+                vec![
+                    field(item, "outcome"),
+                    field(item, "bytes"),
+                    field(item, "source_key"),
+                    field(item, "destination_key"),
+                ]
+            })
+            .collect::<Vec<_>>(),
+    );
+    println!(
+        "\n{} scanned, {} decided, {} relocated ({:.2} GiB), {} refused, {} empty \
+         directories pruned",
+        counted("scanned"),
+        counted("decided"),
+        counted("moved"),
+        counted("moved_bytes") as f64 / 1024.0_f64.powi(3),
+        counted("refused"),
+        counted("pruned_directories"),
+    );
+    // Said as its own line rather than folded into the counts above, because
+    // it is a different repair: the body is at the right address and the
+    // sidecar beside it still records the wrong one, which is what
+    // `storage ls --long` reads out.
+    let stale = counted("stale_uris");
+    if stale > 0 {
+        println!(
+            "{stale} sidecars still record the old address, {} rewritten",
+            counted("repaired_uris"),
+        );
+    }
+    if !apply {
+        println!("nothing was changed: pass --apply to relocate what is listed above");
+    }
+    // A pass the host cut short states so rather than letting its totals read
+    // as the whole tree.
+    if totals.and_then(|value| value.get("complete")) != Some(&Value::Bool(true)) {
+        println!(
+            "the host's closing count never arrived, so these totals are a lower bound; \
+             run the command again"
+        );
+    }
+    let remaining = counted("remaining");
+    if remaining > 0 {
+        println!("{remaining} left under the source prefix; run the command again to continue");
+    }
+    for item in &objects {
+        let outcome = item.get("outcome").and_then(Value::as_str).unwrap_or("");
+        if crate::deploy::host_object_relocate::is_refusal(outcome) {
+            println!(
+                "  {outcome}: {} still holds its own bytes and was left where it is",
+                field(item, "source_key")
+            );
+        }
     }
     report_outcome(&report, expected)
 }
@@ -992,6 +1335,749 @@ pub async fn cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdE
     report_outcome(&report, expected)
 }
 
+/// `stado host gates HOST [--json]` — why this host is claiming nothing, in
+/// one payload.
+///
+/// The exit status follows `claiming`, the way `host ping`'s follows its
+/// combined verdict, so `stado host reclaim mini --apply --reason … && stado
+/// host gates mini` is a usable sentence and a blocked host cannot be
+/// mistaken for a healthy one by a script that only reads status codes.
+///
+/// The Mac mini sat at roughly 2 GiB free against a 55 GiB policy, its agent
+/// published `disk_pressure_unresolved` every tick, it claimed nothing for
+/// hours, every release build queued behind it — and no command in this CLI
+/// said any of it. This is that sentence.
+pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let gates = crate::deploy::host_gates::read_host_gates(host, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let report = Value::Object(crate::deploy::host_gates::to_report(&gates));
+    if json {
+        print_json(&report);
+        return claiming_outcome(&gates);
+    }
+    println!("host:     {}", gates.host);
+    println!("claiming: {}", if gates.claiming { "yes" } else { "no" });
+    if gates.claiming {
+        println!("blockers: none");
+    } else {
+        // The agent's own words, unabridged: whatever is printed here has to
+        // be greppable in the code that published it.
+        println!("blockers: {}", gates.blockers.join(", "));
+    }
+    println!(
+        "disk:     {} free, low watermark {}, target {}, policy {}",
+        gigabytes(gates.free_gb),
+        gigabytes(gates.low_watermark_gb.map(|gb| gb as f64)),
+        gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
+        gates.policy_mode.as_deref().unwrap_or("none declared"),
+    );
+    // Both stores on one line, ahead of the capacity line the first one
+    // explains: an agent bound to a device-local store publishes capacity into
+    // a store nothing here reads, and an operator who cannot see the two
+    // backend names side by side reads `capacity_publication_stale` and goes
+    // looking at the agent's uptime instead of at what its unit exports.
+    match gates.agent_store_backend.as_deref() {
+        Some(backend) => println!(
+            "store:    agent writes to {backend}, this control plane reads {}{}",
+            gates.fleet_store_backend,
+            store_clause(&gates.blockers),
+        ),
+        None => println!(
+            "store:    this host did not answer with a storage backend, so where its agent \
+             publishes cannot be shown; this control plane reads {}",
+            gates.fleet_store_backend
+        ),
+    }
+    match gates.published_at.as_deref() {
+        Some(published) => println!(
+            "capacity: {} free slot(s) of {} declared, published {} ({})",
+            gates
+                .free_slots
+                .map_or_else(|| "-".to_string(), |slots| slots.to_string()),
+            gates.slots_declared,
+            gates.age_seconds.map_or_else(
+                || "at an unknown time".to_string(),
+                |age| format!(
+                    "{} ago",
+                    super::registry::human_age(chrono::TimeDelta::seconds(age))
+                )
+            ),
+            published,
+        ),
+        None => println!(
+            "capacity: nothing published for this host, so the scheduler cannot \
+             see it at all ({} slot(s) declared)",
+            gates.slots_declared
+        ),
+    }
+    // The consequence beside the cause: what this host's refusal is starving,
+    // oldest first, so "blocked" has a size and an age.
+    if !gates.waiting_jobs.is_empty() {
+        println!(
+            "waiting:  {} pinned job(s) this host is not taking: {}",
+            gates.waiting_jobs.len(),
+            gates
+                .waiting_jobs
+                .iter()
+                .map(|job| {
+                    let id = &job.job_id[..8.min(job.job_id.len())];
+                    match job.age_seconds {
+                        Some(age) => format!(
+                            "{id} ({} in queue)",
+                            super::registry::human_age(chrono::TimeDelta::seconds(age))
+                        ),
+                        None => id.to_string(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    // Printed after the verdict and never as part of it: a note is a thing the
+    // operator has to know before they conclude the numbers do not add up, and
+    // `stado host reclaim` is about to tell them it freed less than the deficit.
+    for note in &gates.notes {
+        if note == crate::deploy::host_gates::LOCAL_SNAPSHOTS_UNRECLAIMABLE {
+            println!(
+                "note:     {note} — {} local APFS snapshot(s), which macOS reports no size \
+                 for. `stado host reclaim {}` names each one and why it refuses it; the \
+                 `com.apple.os.update-*` ones are OS-update snapshots rather than local Time \
+                 Machine snapshots, so no stado command deletes them and none should",
+                gates
+                    .local_snapshots
+                    .map_or_else(|| "-".to_string(), |count| count.to_string()),
+                gates.host,
+            );
+            continue;
+        }
+        println!("note:     {note}");
+    }
+    claiming_outcome(&gates)
+}
+
+/// GiB with one decimal, or a dash for a number this host did not answer with.
+fn gigabytes(value: Option<f64>) -> String {
+    value.map_or_else(|| "-".to_string(), |gb| format!("{gb} GiB"))
+}
+
+/// What the two backend names mean when they do not agree, read off the
+/// blocker [`crate::deploy::host_gates`] already decided.
+///
+/// Keyed off the blocker and never re-classified here: a second classifier of
+/// storage backends in the CLI would eventually disagree with the one in the
+/// reader about one host, and the operator would believe whichever line they
+/// read first.
+fn store_clause(blockers: &[String]) -> &'static str {
+    if blockers
+        .iter()
+        .any(|blocker| blocker == crate::deploy::host_gates::AGENT_STORE_DEVICE_ONLY)
+    {
+        return " — a store only that host can address, so nothing its agent publishes ever \
+                reaches this fleet";
+    }
+    if blockers
+        .iter()
+        .any(|blocker| blocker == crate::deploy::host_gates::AGENT_STORE_UNKNOWN)
+    {
+        return " — a backend this build has no adapter for, so how far that agent's writes \
+                carry cannot be decided here";
+    }
+    ""
+}
+
+/// A host that is not claiming is a failed verdict, not a failed command: the
+/// read succeeded either way, and the message names the blockers rather than
+/// repeating that something is wrong.
+fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
+    if gates.claiming {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{} is claiming nothing: {}",
+        gates.host,
+        gates.blockers.join(", ")
+    )))
+}
+
+/// How many silence records `stado host link` carries in its document.
+///
+/// Five, newest first: enough that a host which has been dropping off every
+/// afternoon shows a pattern rather than a single incident, and few enough that
+/// the document stays readable on a terminal during the outage it describes.
+/// The full history stays in the store under `host_silence/<host>/`.
+const NEWEST_SILENCES: usize = 5;
+
+/// How far back `stado host link` counts what readers refused.
+///
+/// One hour rather than the silence threshold. The refusals a gap produces land
+/// AROUND it, not inside it: on 2026-08-19 the resolver refused twice while the
+/// beacon was still inside its tolerance, so a window as narrow as the
+/// threshold would report the gap with none of the refusals it caused. An hour
+/// is the span an operator asking "why did this host go quiet" has in mind, and
+/// every refusal record keeps its own timestamp for any question longer than
+/// that.
+const REFUSAL_WINDOW_SECONDS: i64 = 60 * 60;
+
+/// The beacon is fresh and nothing refused.
+const LINK_HEALTHY: &str = "healthy";
+/// Nothing has been heard from this host since the silence threshold.
+const LINK_SILENT: &str = "silent";
+/// Readers refused inside the window, or the host answers ssh while its own
+/// beacon is stale.
+const LINK_DEGRADED: &str = "degraded";
+
+/// What a host publishes no path for. Never a fabricated `direct`: "we do not
+/// know how this host is reachable" is the answer that sends an operator to
+/// look, and a guess is the answer that does not.
+const PATH_KIND_UNKNOWN: &str = "unknown";
+
+/// `stado host link TARGET [--json]` — why this host went quiet, in one
+/// payload.
+///
+/// The incident: between 18:29 and 18:35 UTC on 2026-08-19 control-host
+/// answered no ping and no ssh, then came back on `direct 10.0.0.253:41641`.
+/// Six minutes of a host being unreachable left no trace anywhere in this
+/// product. The only evidence was two ping packets an operator happened to
+/// send, and the reader-side refusals it caused — "service directory cache is
+/// stale", "registry authority exited: ssh connect Operation timed out" — went
+/// to `~/.stado/logs/stado-resolver.err` and nowhere a person would look. This
+/// command is the trace: the host's own account of its path and its sleep and
+/// wake times, the silences recorded against it, and what refused because of
+/// them.
+///
+/// Everything here is read. Opening and closing a silence belongs to the
+/// observer path in [`crate::monitor::host_silence`]; a diagnostic that
+/// recorded a silence every time an operator looked would make the count it
+/// prints a function of how often it was run.
+///
+/// The exit status follows `verdict`, the way `host gates`' follows `claiming`,
+/// so `stado host link mini && ...` is a usable sentence and a silent host
+/// cannot be mistaken for a healthy one by a script that reads only status
+/// codes.
+pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let store = beacon_store().await?;
+    let mut blockers: Vec<String> = Vec::new();
+
+    // The registry through the last-known-good cache, not the authority alone.
+    // This is the command an operator runs while the control plane is the thing
+    // that is sick: on 2026-08-19 every host command died on the same refused
+    // ssh the operator was trying to diagnose, which is a diagnostic that dies
+    // with its subject.
+    let (registry, notice) = crate::targets::fetch_registry_or_last_good()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let Some(sentence) = notice {
+        // On stderr so `--json` stays exactly one document on stdout, and in
+        // the blockers so the cache's age reaches whoever reads the document
+        // instead of the terminal.
+        eprintln!("{sentence}");
+        blockers.push(sentence);
+    }
+    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+
+    // The ssh half, through the same channel and the same fixed program
+    // `host ping` sends, so the two commands can never disagree about whether
+    // a host answers. A refused connection is this command's answer, not its
+    // failure: "does not answer ssh" is precisely what was asked.
+    let ssh = crate::deploy::host_channel::run_program(
+        resolved,
+        crate::deploy::host_ping::REMOTE_PROGRAM,
+        &runner,
+    )
+    .await;
+    let (ssh_reachable, ssh_error) = match &ssh {
+        Ok(output) if output.ok() => (true, None),
+        Ok(output) => (
+            false,
+            Some(crate::deploy::host_channel::last_error_line(
+                output,
+                "ssh failed",
+            )),
+        ),
+        Err(exc) => (false, Some(exc.to_string())),
+    };
+
+    // The one fact neither surface could state, and the reason the mini takes
+    // no work: whether anybody is logged in on its screen. Asked only of a
+    // host that just answered, so an unreachable box costs one connect attempt
+    // here rather than two, and answered by the same resolver
+    // `stado service restart` uses, so a diagnostic and a repair cannot
+    // disagree about the session underneath them.
+    let session = match &ssh_error {
+        None => crate::deploy::service::read_session(resolved, &runner).await,
+        Some(detail) => crate::deploy::service::HostSession::unknown(format!(
+            "this host did not answer, so nobody could ask it whether anyone is logged in on its \
+             screen: {detail}"
+        )),
+    };
+
+    // The beacon half, aged by the one rule `host ping` ages every beacon in
+    // this fleet with, and the `link` block the host published inside it.
+    let now = chrono::Utc::now();
+    let (signal, published) =
+        match crate::monitor::host_health::load_host_health(&store, &resolved.name).await {
+            Ok(report) => {
+                let published = crate::deploy::host_link::BeaconLink::from_beacon(&report.beacon)
+                    .map(serde_json::to_value)
+                    .transpose()?;
+                (
+                    crate::deploy::host_ping::grade_beacon(&report, now),
+                    published,
+                )
+            }
+            Err(exc) => (
+                crate::deploy::host_ping::BeaconSignal::unreadable(exc.to_string()),
+                None,
+            ),
+        };
+    let from_link = |key: &str| {
+        published
+            .as_ref()
+            .and_then(|block| block.get(key).cloned())
+            .unwrap_or(Value::Null)
+    };
+
+    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
+    // No age at all — no beacon object, an unparseable one, an unreadable store
+    // — counts as past the threshold. An absent beacon is the strongest form of
+    // "nothing has been heard from this host", not an exemption from it.
+    let stale = signal.age_seconds.is_none_or(|age| age > threshold);
+
+    if let Some(detail) = &signal.error {
+        blockers.push(detail.clone());
+    }
+    if let (true, Some(age)) = (stale, signal.age_seconds) {
+        blockers.push(format!(
+            "this host's newest beacon is {age}s old, past the {threshold}s silence threshold"
+        ));
+    }
+    if let Some(detail) = &ssh_error {
+        blockers.push(detail.clone());
+    }
+    if published.is_none() {
+        blockers.push(
+            "this host's beacon carries no link block, so its path, its sleep and wake \
+             times and its interface changes are unknown here"
+                .to_string(),
+        );
+    }
+
+    // A headless host is not a fault, and the verdict rules do not learn about
+    // this one. A headless host carrying a unit that only a logged-in screen
+    // can start IS the fault, and it is the fault that stops work:
+    // control-host has three of them and a job that has waited days for
+    // the capacity they would publish. The declaration half is
+    // `deploy::service::misdeclared_domains` rather than a second opinion
+    // about it; what is added here is the half that had to be read from the
+    // host. One blocker per unit, because each needs its own command run.
+    if session.is_headless() {
+        for misdeclared in crate::deploy::service::misdeclared_domains(resolved) {
+            blockers.push(format!(
+                "nobody is logged in on the screen here, and {} is registered as a user service, \
+                 so this machine cannot start it; install it as a machine service with one \
+                 privileged command on the host: {}",
+                misdeclared.unit,
+                misdeclared.install_command()
+            ));
+        }
+    }
+
+    // Looking at a beacon IS the observation the silence record is made of,
+    // and [`crate::monitor::host_silence::observe_beacon_age`] is the one
+    // entry point for the transition: whichever component notices the
+    // threshold crossing writes it, and three observers of one gap produce one
+    // record carrying three names. An operator running this command during an
+    // outage is exactly that — the observer who noticed — and on 2026-08-19
+    // nothing recorded what they saw. The instant is the beacon's own, recovered
+    // with the same parser that aged it: a silence's `started_at` is when the
+    // host was last heard from, and deriving it from the rounded age would
+    // misdate every record by up to a second.
+    let newest_beacon_at = signal
+        .reported_at
+        .as_deref()
+        .and_then(crate::deploy::host_ping::parse_timestamp);
+    if let Err(exc) = crate::monitor::host_silence::observe_beacon_age(
+        &store,
+        &resolved.name,
+        newest_beacon_at,
+        crate::monitor::host_silence::READER_CLI,
+        signal.error.as_deref(),
+    )
+    .await
+    {
+        blockers.push(exc.to_string());
+    }
+
+    // A store that will not answer for the silences is reported as a blocker
+    // and never as a failed command. Refusing to print the half that was read
+    // is the exact behaviour this command exists to end.
+    let silences = match crate::monitor::host_silence::recent_silences(
+        &store,
+        &resolved.name,
+        NEWEST_SILENCES,
+    )
+    .await
+    {
+        Ok(records) => records,
+        Err(exc) => {
+            blockers.push(exc.to_string());
+            Vec::new()
+        }
+    };
+    let refusals = match crate::monitor::host_silence::refusal_summary(
+        &store,
+        &resolved.name,
+        REFUSAL_WINDOW_SECONDS,
+    )
+    .await
+    {
+        Ok(summary) => summary,
+        Err(exc) => {
+            blockers.push(exc.to_string());
+            crate::monitor::host_silence::RefusalSummary::empty(REFUSAL_WINDOW_SECONDS)
+        }
+    };
+    let refused = refusals.count > usize::MIN;
+    if refused {
+        blockers.push(format!(
+            "readers refused {} time(s) in the last {}s: {}",
+            refusals.count,
+            refusals.window_seconds,
+            reason_counts(&refusals),
+        ));
+    }
+    // The open record's own first reader error, verbatim: it is what a reader
+    // wrote down at the moment the host stopped answering, and once the host is
+    // back it is the only account of the gap that exists.
+    if let Some(open) = silences.iter().find(|record| record.ended_at.is_none()) {
+        let mut sentence = format!(
+            "a silence opened at {} is still open",
+            silence_instant(open.started_at)
+        );
+        if let Some(detail) = &open.first_reader_error {
+            sentence.push_str(&format!("; first reader error: {detail}"));
+        }
+        blockers.push(sentence);
+    }
+
+    let verdict = if stale {
+        // A box that answers ssh while nothing has heard from its agent is not
+        // silent: it is running and not reporting, which is a different repair
+        // and the exact state that ran for five days in July.
+        if ssh_reachable {
+            LINK_DEGRADED
+        } else {
+            LINK_SILENT
+        }
+    } else if refused {
+        LINK_DEGRADED
+    } else {
+        LINK_HEALTHY
+    };
+
+    let path_kind = match from_link("path_kind") {
+        Value::Null => Value::String(PATH_KIND_UNKNOWN.to_string()),
+        kind => kind,
+    };
+    let changes = match from_link("interface_changes") {
+        Value::Array(changes) => changes,
+        _ => Vec::new(),
+    };
+    let recorded = silences
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<Value>, _>>()?;
+    let report = json!({
+        "host": resolved.name,
+        "beacon_age_seconds": signal.age_seconds,
+        "ssh_reachable": ssh_reachable,
+        "session": session.to_json(),
+        "path_kind": path_kind,
+        "endpoint": from_link("endpoint"),
+        "last_sleep_at": from_link("last_sleep_at"),
+        "last_wake_at": from_link("last_wake_at"),
+        "interface_changes": changes,
+        "silences": recorded,
+        "reader_refusals": {
+            "window_seconds": refusals.window_seconds,
+            "count": refusals.count,
+            "reasons": refusals.reasons,
+        },
+        "verdict": verdict,
+        "blockers": blockers,
+    });
+    if json {
+        print_json(&report);
+        return link_outcome(&resolved.name, verdict, blockers.len());
+    }
+
+    // The same facts in the shape `host gates` prints, so an operator reading
+    // one of these two commands can read the other without relearning it.
+    println!("host:     {}", resolved.name);
+    println!("verdict:  {verdict}");
+    if blockers.is_empty() {
+        println!("blockers: none");
+    } else {
+        // One per line, unabridged. These are whole sentences from the reader,
+        // the channel and the host's own agent; comma-joining them made three
+        // accounts read as one.
+        for (index, blocker) in blockers.iter().enumerate() {
+            let label = if index == usize::MIN {
+                "blockers:"
+            } else {
+                "         "
+            };
+            println!("{label} {blocker}");
+        }
+    }
+    match (signal.age_seconds, signal.reported_at.as_deref()) {
+        (Some(age), Some(reported)) => println!(
+            "beacon:   {} old, reported {reported}",
+            super::registry::human_age(chrono::TimeDelta::seconds(age))
+        ),
+        _ => println!("beacon:   nothing readable for this host"),
+    }
+    println!(
+        "ssh:      {}",
+        match &ssh_error {
+            None => "answered".to_string(),
+            Some(detail) => format!("did not answer: {detail}"),
+        }
+    );
+    // The headline in the operator's words first, the resolver's own sentence
+    // under it. Reversing those two is how `gui/501` becomes the answer to
+    // "is anyone logged in on that host".
+    println!("session:  {}", session.headline());
+    println!("          {}", session.detail);
+    // "unknown" alone, not "unknown via -": a host that published no endpoint
+    // has one fact to report, and a dash standing in for a second one reads as
+    // a field that failed rather than a field that does not apply.
+    println!(
+        "path:     {}",
+        match published.as_ref().and_then(|block| block.get("endpoint")) {
+            Some(Value::String(endpoint)) => format!("{} via {endpoint}", cell(Some(&path_kind))),
+            _ => cell(Some(&path_kind)),
+        }
+    );
+    println!(
+        "sleep:    last slept {}, last woke {}",
+        cell(
+            published
+                .as_ref()
+                .and_then(|block| block.get("last_sleep_at"))
+        ),
+        cell(
+            published
+                .as_ref()
+                .and_then(|block| block.get("last_wake_at"))
+        ),
+    );
+    if changes.is_empty() {
+        println!("changes:  none recorded");
+    } else {
+        println!("changes:  {} recorded", changes.len());
+        for change in &changes {
+            println!(
+                "          {} {}",
+                cell(change.get("at")),
+                cell(change.get("detail"))
+            );
+        }
+    }
+    if refused {
+        println!(
+            "refusals: {} in the last {}s: {}",
+            refusals.count,
+            refusals.window_seconds,
+            reason_counts(&refusals)
+        );
+    } else {
+        println!("refusals: none in the last {}s", refusals.window_seconds);
+    }
+    if silences.is_empty() {
+        println!("silences: none recorded for this host");
+    } else {
+        println!("silences: {} recorded, newest first", silences.len());
+        for record in &silences {
+            println!(
+                "          {} -> {} ({}){}",
+                silence_instant(record.started_at),
+                record
+                    .ended_at
+                    .map_or_else(|| "still open".to_string(), silence_instant),
+                record
+                    .duration_seconds
+                    .map_or_else(|| "-".to_string(), |seconds| format!("{seconds}s")),
+                record
+                    .first_reader_error
+                    .as_deref()
+                    .map_or_else(String::new, |detail| format!(
+                        ", first reader error: {detail}"
+                    )),
+            );
+        }
+    }
+    link_outcome(&resolved.name, verdict, blockers.len())
+}
+
+/// One silence instant, spelled the way the record on disk spells it.
+///
+/// `AutoSi` and a `Z`, which is what `chrono`'s own serialization writes into
+/// the blob: the report is a pointer into `host_silence/<host>/`, and an
+/// operator who copies the instant out of this report has to be able to find
+/// the record it names. `to_rfc3339`'s `+00:00` would not match it.
+fn silence_instant(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+}
+
+/// `token=count` pairs for one refusal summary, in the stable order the
+/// summary's own map holds them.
+fn reason_counts(refusals: &crate::monitor::host_silence::RefusalSummary) -> String {
+    refusals
+        .reasons
+        .iter()
+        .map(|(reason, count)| format!("{reason}={count}"))
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// A host whose link is not healthy is a failed verdict, not a failed command:
+/// the read succeeded either way.
+///
+/// The blockers stay in the report and deliberately out of this sentence. They
+/// carry the reader's and the channel's own words — "ssh connect Operation
+/// timed out" among them — and [`crate::failure::classify_message`] reads
+/// "timed out" in a command's failure message as a retryable failure, which
+/// would remap this command's exit status away from the 1 that every
+/// non-healthy verdict owes its caller.
+fn link_outcome(host: &str, verdict: &str, blockers: usize) -> Result<(), CmdError> {
+    if verdict == LINK_HEALTHY {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{host} link verdict is {verdict}, with {blockers} blocker(s) named in the report above"
+    )))
+}
+
+/// `stado host reclaim HOST [--dry-run|--apply --reason TEXT] [--json]` — get
+/// the space back, in declared stages, measuring each one.
+///
+/// Previewing is the default and `--apply` is the only thing that deletes,
+/// because the alternative — a flag that has to be remembered to make the
+/// command safe — is a flag that will be forgotten on the one host where it
+/// mattered. `--apply` additionally refuses to run without `--reason`: the
+/// record it appends on the host is the only account of why several tens of
+/// gigabytes left that machine, and a record whose reason is blank is a record
+/// nobody can act on six months later.
+pub async fn reclaim(
+    host: &str,
+    apply: bool,
+    reason: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let reason = reason.map(str::trim).filter(|text| !text.is_empty());
+    if apply && reason.is_none() {
+        return Err(CmdError::usage(
+            "host reclaim --apply removes files and needs --reason <text>; the reason is \
+             appended to the host's own audit log beside the disk it changed. Run without \
+             --apply to see what each stage would remove",
+        ));
+    }
+    let runner = crate::deploy::production_runner();
+    let (target, reclamation) = crate::deploy::host_reclaim::reclaim_host(host, apply, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let audited = match reason {
+        Some(reason) if apply => Some(
+            crate::deploy::host_reclaim::record_audit(
+                &target,
+                &reclamation,
+                reason,
+                &super::autonomy_cmd::actor(),
+                &runner,
+            )
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?,
+        ),
+        _ => None,
+    };
+    let report = Value::Object(crate::deploy::host_reclaim::to_report(
+        &target,
+        &reclamation,
+    ));
+    if json {
+        print_json(&report);
+        return Ok(());
+    }
+    if apply {
+        println!("APPLIED — {} lost the files named below.", target.name);
+    } else {
+        // Said before the table, not after it: an operator reading a list of
+        // paths has to know which of the two things they are looking at.
+        println!(
+            "DRY RUN — nothing on {} is deleted. Re-run with --apply --reason <text> \
+             to remove what follows.",
+            target.name
+        );
+    }
+    let rows: Vec<Vec<String>> = reclamation
+        .stages
+        .iter()
+        .map(|stage| {
+            vec![
+                stage.stage.clone(),
+                gigabytes(stage.free_kb_before.map(gib)),
+                gigabytes(stage.free_kb_after.map(gib)),
+                stage.items.to_string(),
+            ]
+        })
+        .collect();
+    super::table::print(&["STAGE", "FREE BEFORE", "FREE AFTER", "ITEMS"], &rows);
+    for stage in &reclamation.stages {
+        if let Some(detail) = &stage.detail {
+            println!("{}: {detail}", stage.stage);
+        }
+        for path in &stage.paths {
+            println!("  {} {path}", stage.stage);
+        }
+    }
+    if let Some(plan) = &reclamation.janitor_plan {
+        let cleaners: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
+            .iter()
+            .map(|cleaner| {
+                vec![
+                    cleaner.name.clone(),
+                    cleaner.scanned_items.to_string(),
+                    cleaner.eligible_items.to_string(),
+                    cleaner.deleted_items.to_string(),
+                ]
+            })
+            .collect();
+        if !cleaners.is_empty() {
+            println!("\nthe host's own janitor, per declared cleaner:");
+            super::table::print(&["CLEANER", "SCANNED", "ELIGIBLE", "DELETED"], &cleaners);
+        }
+    }
+    println!(
+        "\nfree: {} -> {}",
+        gigabytes(reclamation.free_kb_before.map(gib)),
+        gigabytes(reclamation.free_kb_after.map(gib)),
+    );
+    if let Some(audited) = audited {
+        println!("audited: {audited} on {}", target.name);
+    }
+    Ok(())
+}
+
+/// `df -Pk` blocks as GiB, through the one conversion `host disk` owns.
+fn gib(blocks: i64) -> f64 {
+    crate::deploy::host_disk::gib_from_blocks(blocks as f64)
+}
+
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
 /// command (`docs/missing-commands.md` item six).
 pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), CmdError> {
@@ -1037,9 +2123,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
     let names: Vec<String> = match target {
         Some(name) => vec![name],
         None => {
-            let registry = crate::targets::fetch_registry_remote()
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+            let registry = super::registry::read_registry().await?;
             registry
                 .targets
                 .iter()
@@ -1128,7 +2212,7 @@ pub async fn declare_version(
     version: &str,
     json: bool,
 ) -> Result<(), CmdError> {
-    let binary = crate::deploy::host_release::managed_binary(binary)
+    let binary = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
     if version.is_empty() {
@@ -1174,7 +2258,7 @@ pub async fn promote_version(
     version: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let managed = crate::deploy::host_release::managed_binary(binary)
+    let managed = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
     if !crate::deploy::host_release::is_exact_semver(version) {
@@ -1257,7 +2341,7 @@ pub async fn promote_version(
                     "cannot verify release_platform for {name:?}: inventory omitted it"
                 ))
             })?;
-        let observed = crate::deploy::host_release::managed_platform(observed)
+        let observed = crate::deploy::products::managed_platform(observed)
             .map_err(|error| CmdError::click(format!("{name}: {error}")))?;
         if !declared.is_empty() && declared != observed {
             return Err(CmdError::click(format!(
@@ -1272,6 +2356,13 @@ pub async fn promote_version(
         platforms.insert(observed.to_string());
     }
     for platform in &platforms {
+        // A product publishes for the platforms it declares, and promoting a
+        // version onto a fleet includes hosts it may not publish for at all.
+        // Refused rather than skipped: a declaration a host can never receive
+        // is drift this pack has no way to close.
+        managed
+            .platform(platform)
+            .map_err(|error| CmdError::click(error.to_string()))?;
         crate::deploy::host_release::catalog_identity(managed, version, platform)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
@@ -1350,9 +2441,7 @@ pub async fn reconcile(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = super::registry::read_registry().await?;
     let names: Vec<String> = match target {
         Some(name) => {
             if registry.targets.iter().all(|entry| entry.name != name) {
@@ -1405,6 +2494,7 @@ pub async fn reconcile(
                     &standing.target,
                     binary,
                     version,
+                    false,
                     false,
                     &runner,
                 )
@@ -1865,12 +2955,13 @@ pub async fn release(
     binary: &str,
     version: &str,
     dry_run: bool,
+    reinstall: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     use crate::deploy::host_release;
 
     let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, dry_run, &runner)
+    let report = host_release::release_host(target, binary, version, dry_run, reinstall, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     // Three outcomes are success, and conflating them would be the lie this
@@ -1964,211 +3055,11 @@ pub async fn release(
     report_outcome(&report, expected)
 }
 
-/// `stado host install-helper TARGET SOURCE NAME` — transfer one bounded,
-/// owner-executable operator helper without opening an arbitrary remote shell.
-pub async fn install_helper(
-    target: &str,
-    source: &str,
-    name: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    if name.is_empty()
-        || name
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-    {
-        return Err(CmdError::usage(
-            "helper name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
-        ));
-    }
-    let bytes = std::fs::read(source)?;
-    if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
-        return Err(CmdError::click(
-            "host helper must contain between one and 65535 bytes",
-        ));
-    }
-    let payload = STANDARD.encode(&bytes);
-    let remote_name = crate::deploy::shlex_quote(name);
-    let script = format!(
-        r#"set -euo pipefail
-name={remote_name}
-case "$name" in
-  ""|*[!A-Za-z0-9._-]*) printf '%s\n' 'invalid helper name' >&2; exit 1 ;;
-esac
-dir="$HOME/.stado/bin"
-tmp="$dir/.${{name}}.stado-install.$$"
-trap 'rm -f "$tmp"' EXIT
-/bin/mkdir -p "$dir"
-/bin/chmod 700 "$dir"
-if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then decode=-D; else decode=--decode; fi
-printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$tmp"
-/bin/chmod 700 "$tmp"
-/bin/mv "$tmp" "$dir/$name"
-trap - EXIT
-printf '%s\n' "$dir/$name"
-"#
-    );
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: helper installation failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote helper write failed")
-        )));
-    }
-    let path = format!("$HOME/.stado/bin/{name}");
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": bytes.len(),
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed {path} ({} bytes)", bytes.len());
-    }
-    Ok(())
-}
-
 /// Where a delivered file lands, relative to the target account's home.
 ///
 /// Separate from `.stado` itself so a delivery can never take the name of a
 /// credential, a helper, or anything else Stado keeps there.
 const DELIVERED_FILES_DIR: &str = ".stado/files";
-
-/// `stado host install-file TARGET SOURCE NAME [--executable]` — deliver one
-/// file of any size to a registry host through the approved channel.
-///
-/// The gap this closes: `install-helper` caps a delivery at what fits inside a
-/// script, and `install-secret` is for credentials and lands them unreadable
-/// and unexecutable by design. Anything else — a built binary, a bundle, a
-/// configuration file an operator produced elsewhere — had no channel at all,
-/// which is how a private `scp` ends up standing in for the audited one.
-pub async fn install_file(
-    target: &str,
-    source: &str,
-    name: &str,
-    executable: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    let metadata = std::fs::symlink_metadata(source)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(CmdError::usage("file source must be a regular file"));
-    }
-    let mode = if executable { "u=rwx,go=" } else { "u=rw,go=" };
-    let (path, byte_count) =
-        stream_file(target, source, name, DELIVERED_FILES_DIR, mode, None).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": byte_count,
-                "mode": mode,
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed {path} ({byte_count} bytes, {mode})");
-    }
-    Ok(())
-}
-/// Transfer one opaque owner credential without exposing it in argv, stdout,
-/// logs, a remote environment variable, or a general-purpose remote shell.
-pub async fn install_secret(
-    target: &str,
-    source: &str,
-    name: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    let metadata = std::fs::symlink_metadata(source)?;
-    let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.mode() & unsafe_bits != u32::default()
-    {
-        return Err(CmdError::usage(
-            "secret source must be a regular owner-only file without group or other permission bits",
-        ));
-    }
-    // Embedding the payload in the script is what caps an inline transfer, not
-    // anything about the secret itself, so a file too large to embed is streamed
-    // instead of refused. Both paths land owner-only and are checksummed on the
-    // far side before they take the name.
-    let (path, byte_count) = if metadata.len() > u64::from(u16::MAX) {
-        stream_file(target, source, name, ".stado", "u=rw,go=", None).await?
-    } else {
-        let bytes = std::fs::read(source)?;
-        transfer_secret(target, name, &bytes, None).await?
-    };
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": byte_count,
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed owner-only {path} ({byte_count} bytes)");
-    }
-    Ok(())
-}
-
-/// Resolve one exact credential field through Stado's selected store and
-/// transfer it directly to a host. The value never reaches argv, stdout, a
-/// local temporary file, or the JSON report.
-pub async fn install_credential(
-    target: &str,
-    item: &str,
-    field: &str,
-    name: &str,
-    home: Option<&str>,
-    json: bool,
-) -> Result<(), CmdError> {
-    let value = crate::credential_store::read_string(item, field)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "credential item {item:?} has no string field {field:?}"
-            ))
-        })?;
-    let (path, byte_count) = transfer_secret(target, name, value.as_bytes(), home).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "credential": item,
-                "field": field,
-                "path": path,
-                "bytes": byte_count,
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed {item}.{field} as owner-only {path} ({byte_count} bytes)");
-    }
-    Ok(())
-}
 
 pub(crate) async fn install_secret_value_at_home(
     target: &str,
@@ -2179,28 +3070,335 @@ pub(crate) async fn install_secret_value_at_home(
     transfer_secret(target, name, value.as_bytes(), Some(home)).await
 }
 
-/// Deliver one file through the [`install_file`] channel and RETURN where it
+/// Deliver one file through the [`stream_file`] channel and RETURN where it
 /// landed, for a caller that renders its own report.
 ///
-/// A callee that prints is unusable from a machine-readable caller: with
-/// [`install_file`] itself, `stado host publish-placement-policy --json` would
-/// put a delivery report in front of its own document and hand the operator two
-/// JSON objects on one stream. Same channel, same checksum, same owner-only
-/// mode — only the reporting belongs to whoever asked.
+/// A callee that prints is unusable from a machine-readable caller:
+/// `stado host publish-placement-policy --json` would put a delivery report in
+/// front of its own document and hand the operator two JSON objects on one
+/// stream. Same channel, same checksum, same owner-only mode — only the
+/// reporting belongs to whoever asked.
 pub(crate) async fn deliver_file(
     target: &str,
     source: &str,
     name: &str,
 ) -> Result<(String, usize), CmdError> {
-    stream_file(
-        target,
-        source,
-        name,
-        DELIVERED_FILES_DIR,
-        "u=rw,go=",
-        None,
+    stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
+}
+
+/// The registration `stado host sync-acquisition-scopes` performs on the host,
+/// natively: the checks and key steps of the retired registration script as
+/// individual remote commands, with every branch taken here. Modeled on
+/// weles's register-weles-acquisition-scopes-host.sh with the two appstore
+/// token re-mints removed — minting weles worker credentials is not part of
+/// registering a catalog, and every re-mint silently extended those tokens'
+/// expiry.
+///
+/// Everything about the registration is fixed: the vault, the workload key,
+/// and the single skarbiec call. The one operator-chosen word — the delivered
+/// catalog's basename — was validated by [`catalog_file_name`] before
+/// delivery and is validated again below, so the file this reads is decided
+/// here, not by whoever wrote the variable.
+///
+/// The return is the one line the retired script printed, composed here.
+/// Failures divide the way the channel always divided them: a transport error
+/// is returned as-is, and a remote refusal is wrapped with the delivered path
+/// so the operator can tell "delivered and not registered" from "never
+/// reached the host".
+async fn register_acquisition_scopes(
+    resolved: &ComputeTarget,
+    delivered: &str,
+    catalog_name: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    use crate::deploy::host_channel;
+
+    // A remote refusal: the script's own words, wrapped with which half of
+    // the operation happened.
+    let refused = |detail: String| {
+        CmdError::click(format!(
+            "{}: the catalog reached {delivered} and was NOT registered: {detail}. \
+             Settle the refusal and sync again",
+            resolved.name
+        ))
+    };
+
+    if catalog_name.is_empty()
+        || catalog_name.starts_with('.')
+        || !catalog_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(refused("invalid catalog file name".to_string()));
+    }
+
+    let home = host_channel::remote_home(resolved, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let bin = format!("{home}/.stado/bin/skarbiec");
+    let vault = format!("{home}/.stado/skarbiec.vault.json");
+    let private_key = format!("{home}/.stado/weles-credential-workload-private.pem");
+    let catalog = format!("{home}/.stado/files/{catalog_name}");
+
+    for file in [&bin, &vault, &private_key, &catalog] {
+        let present = host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(file)),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !present {
+            return Err(refused(format!(
+                "required acquisition-scope file is missing: {file}"
+            )));
+        }
+    }
+
+    let brewed = "/opt/homebrew/opt/openssl@3/bin/openssl";
+    let openssl = if host_channel::remote_test(resolved, &format!("-x {brewed}"), runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        brewed.to_string()
+    } else {
+        let looked_up = host_channel::run_command(resolved, "command -v openssl", runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let found = looked_up.stdout.trim();
+        if found.is_empty() {
+            return Err(refused(
+                "openssl is required to derive the workload public key".to_string(),
+            ));
+        }
+        found.to_string()
+    };
+
+    let public_key =
+        match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await
+        {
+            Ok(path) => path,
+            Err(detail) => return Err(refused(detail)),
+        };
+
+    // Skarbiec accepts only an Ed25519 workload key. A host still holding an
+    // older key gets one Ed25519 replacement, and the new private key takes
+    // the canonical path only after registration with its public half
+    // succeeded.
+    let mut candidate_key = private_key.clone();
+    let mut new_private_key: Option<String> = None;
+    let described = host_channel::run_program(
+        resolved,
+        &[
+            openssl.as_str(),
+            "pkey",
+            "-in",
+            private_key.as_str(),
+            "-text",
+            "-noout",
+        ],
+        runner,
     )
     .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !described.stdout.contains("ED25519") {
+        let fresh =
+            match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner)
+                .await
+            {
+                Ok(path) => path,
+                Err(detail) => {
+                    remove_remote(resolved, &[public_key.as_str()], runner).await;
+                    return Err(refused(detail));
+                }
+            };
+        for words in [
+            vec![
+                openssl.as_str(),
+                "genpkey",
+                "-algorithm",
+                "ED25519",
+                "-out",
+                fresh.as_str(),
+            ],
+            vec!["/bin/chmod", "600", fresh.as_str()],
+        ] {
+            let stepped = host_channel::run_program(resolved, &words, runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            if !stepped.ok() {
+                remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
+                return Err(refused(host_channel::last_error_line(
+                    &stepped,
+                    "openssl could not generate an Ed25519 workload key",
+                )));
+            }
+        }
+        candidate_key = fresh.clone();
+        new_private_key = Some(fresh);
+    }
+
+    let derived = host_channel::run_program(
+        resolved,
+        &[
+            openssl.as_str(),
+            "pkey",
+            "-in",
+            candidate_key.as_str(),
+            "-pubout",
+            "-out",
+            public_key.as_str(),
+        ],
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !derived.ok() {
+        let mut litter = vec![public_key.as_str()];
+        if let Some(fresh) = &new_private_key {
+            litter.push(fresh.as_str());
+        }
+        remove_remote(resolved, &litter, runner).await;
+        return Err(refused(host_channel::last_error_line(
+            &derived,
+            "openssl could not derive the workload public key",
+        )));
+    }
+
+    let registered = host_channel::run_command(
+        resolved,
+        &format!(
+            "SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
+             --workload-public-key-file {} --replace-capabilities >/dev/null",
+            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(&bin),
+            crate::deploy::shlex_quote(&catalog),
+            crate::deploy::shlex_quote(&public_key),
+        ),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !registered.ok() {
+        let mut litter = vec![public_key.as_str()];
+        if let Some(fresh) = &new_private_key {
+            litter.push(fresh.as_str());
+        }
+        remove_remote(resolved, &litter, runner).await;
+        return Err(refused(host_channel::last_error_line(
+            &registered,
+            "remote registration failed",
+        )));
+    }
+
+    if let Some(fresh) = &new_private_key {
+        let moved = host_channel::run_program(
+            resolved,
+            &["/bin/mv", "-f", fresh.as_str(), private_key.as_str()],
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !moved.ok() {
+            remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
+            return Err(refused(host_channel::last_error_line(
+                &moved,
+                "the new Ed25519 workload key could not be moved into place",
+            )));
+        }
+    }
+    remove_remote(resolved, &[public_key.as_str()], runner).await;
+
+    Ok(format!(
+        "{{\"status\":\"reconciled\",\"catalog\":\"{catalog_name}\"}}\n"
+    ))
+}
+
+/// One scratch file in the host's own `.stado` directory, owner-only from the
+/// moment `mktemp` creates it.
+async fn acquisition_scratch(
+    resolved: &ComputeTarget,
+    home: &str,
+    suffix: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, String> {
+    let made = crate::deploy::host_channel::run_command(
+        resolved,
+        &format!(
+            "mktemp {}",
+            crate::deploy::shlex_quote(&format!("{home}/.stado/{suffix}"))
+        ),
+        runner,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if !made.ok() {
+        return Err(crate::deploy::host_channel::last_error_line(
+            &made,
+            "could not create a scratch file on the host",
+        ));
+    }
+    Ok(made.stdout.trim().to_string())
+}
+
+/// Best-effort removal of this registration's scratch files — the retired
+/// script's EXIT trap. A failure to remove is not a failure of the
+/// registration that already happened, so it is ignored here exactly as the
+/// trap's `rm -f` ignored it there.
+async fn remove_remote(resolved: &ComputeTarget, paths: &[&str], runner: &crate::deploy::Runner) {
+    let mut words = vec!["/bin/rm", "-f"];
+    words.extend_from_slice(paths);
+    let _ = crate::deploy::host_channel::run_program(resolved, &words, runner).await;
+}
+
+/// The basename a local catalog is delivered and registered under.
+///
+/// A name, never a path: it becomes one component under
+/// `$HOME/.stado/files` on the host, so it follows the delivered-name rules
+/// ([`release_component`]) and additionally may not start with `.` — no
+/// hidden files, and no `.`/`..` components, whichever spelling produced
+/// them.
+fn catalog_file_name(source: &str) -> Result<String, CmdError> {
+    let name = std::path::Path::new(source)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| CmdError::usage("catalog path must end in a file name"))?;
+    release_component("catalog file name", name)?;
+    if name.starts_with('.') {
+        return Err(CmdError::usage("catalog file name must not start with '.'"));
+    }
+    Ok(name.to_string())
+}
+
+/// `stado host sync-acquisition-scopes TARGET SOURCE` — deliver the checked-in
+/// Skarbiec acquisition-scope catalog to TARGET and register it against the
+/// host's fleet vault.
+///
+/// Two audited halves and no third way in: the catalog travels through the
+/// [`stream_file`] delivery channel into `$HOME/.stado/files`, owner-only
+/// and checksummed on arrival, and the registration is
+/// [`register_acquisition_scopes`] — there is nothing to install on the host
+/// and nothing left behind but the delivered catalog. This is the reviewed
+/// replacement for running weles's register script through the retired helper
+/// channel.
+pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), CmdError> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(CmdError::usage("catalog source must be a regular file"));
+    }
+    let name = catalog_file_name(source)?;
+    let (delivered, _bytes) = deliver_file(target, source, &name).await?;
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let printed = register_acquisition_scopes(&resolved, &delivered, &name, &runner).await?;
+    print!("{printed}");
+    if !printed.ends_with('\n') {
+        println!();
+    }
+    Ok(())
 }
 
 async fn transfer_secret(
@@ -2304,423 +3502,2837 @@ printf '%s\n' "$dir/$name"
     ))
 }
 
-/// The shape of a UUID, written out rather than counted: every `x` is one hex digit
-/// and the dashes fall where they fall. A template compares as exactly as a length
-/// arithmetic would and stays legible at the callsite.
-const UUID_SHAPE: &str = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
-
-/// Is this string a UUID, and therefore free of anything a shell could act on?
-fn is_uuid(value: &str) -> bool {
-    value.len() == UUID_SHAPE.len()
-        && value
-            .bytes()
-            .zip(UUID_SHAPE.bytes())
-            .all(|(byte, shape)| match shape {
-                b'-' => byte == b'-',
-                _ => byte.is_ascii_hexdigit(),
-            })
+/// Remove one file from TARGET's home: the path Stado never had a way to
+/// delete, so a retired or broken unit left its plist on disk forever and the
+/// only answer was a bare `rm` over ssh, which nothing bounds and nobody
+/// audits. This is that answer as a product verb. The guards are on the host,
+/// not on the client, because the file is what the host says it is, not what
+/// the operator believes:
+///
+/// - the path must be absolute, contain no `..`, and live under
+///   `$HOME/Library/LaunchAgents` or `$HOME/.stado` of the approved account —
+///   a system path is not refused because it is dangerous, it is refused
+///   because this channel has no right there, and the refusal names the
+///   privileged command that does have one;
+/// - it must be a regular file owned by that account — a symlink under an
+///   allowed root can point anywhere, a directory would make this a recursive
+///   delete, and somebody else's file is not this login's to remove.
+///
+/// Absence is reported as `absent`, not invented into a success.
+/// The outcome of one [`remove_file_document`] call, so a composed command
+/// (`service remove`) can carry the file half as data instead of scraping
+/// another command's stdout.
+pub struct RemoveFileOutcome {
+    pub target: String,
+    pub path: String,
+    pub status: String,
+    pub detail: Option<String>,
 }
 
-/// Run one helper previously placed in the remote owner-only Stado directory.
-///
-/// Arguments are accepted only as UUIDs. That is not a stylistic limit: the reason
-/// this refused every argument was that operator words become a shell escape, and a
-/// UUID cannot be a path, a flag, a glob, a redirection or a metacharacter -- there is
-/// nothing in the grammar to escape with. The helper stays the reviewed program; the
-/// UUID only tells it which of the operator's own records to act on.
-///
-/// Refusing outright is what pushed callers into private ssh invocations with their
-/// own key files and their own known_hosts, which is the same action with the audit
-/// trail removed. A correlation id is the smallest thing that lets those callers come
-/// back through the registry channel.
-pub async fn run_helper(
-    target: &str,
-    name: &str,
-    uuids: &[String],
-    json: bool,
-) -> Result<(), CmdError> {
-    release_component("helper name", name)?;
-    let mut arguments = String::new();
-    for uuid in uuids {
-        if !is_uuid(uuid) {
-            return Err(CmdError::click(format!(
-                "{uuid:?} is not a UUID; `host run-helper` carries correlation \
-                 identifiers and nothing else, because anything with shell grammar in \
-                 it would make the helper a remote shell"
-            )));
-        }
-        arguments.push(' ');
-        arguments.push_str(uuid);
+impl RemoveFileOutcome {
+    pub fn succeeded(&self) -> bool {
+        self.status == "removed" || self.status == "absent"
+    }
+
+    fn failure_sentence(&self) -> String {
+        format!(
+            "{}: {} {}{}",
+            self.target,
+            self.path,
+            self.status,
+            self.detail
+                .as_ref()
+                .map(|detail| format!(" — {detail}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
+/// The guarded delete itself, as a value: validation, resolution, the fixed
+/// remote script, the marker read. Printing belongs to the caller.
+pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFileOutcome, CmdError> {
+    if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
+        return Err(CmdError::usage(
+            "path must be absolute, contain no '..', and carry no NUL",
+        ));
     }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let remote_name = crate::deploy::shlex_quote(name);
-    let script = crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
-    let runner = crate::deploy::production_runner();
+    let quoted = crate::deploy::shlex_quote(path);
+    let script = format!(
+        r#"set -u
+path={quoted}
+report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
+# `/Library/LaunchDaemons/com.wisent.*.plist` is a managed area too. The fleet
+# INSTALLS there — `deploy::service::ENSURE_BODY` writes a system daemon with
+# `sudo -n /usr/bin/install -m 644 -o root -g wheel` — and until now it could
+# not delete what it wrote, so `service remove` refused with "outside the
+# managed home areas" and every always-on host only ever accumulated unit
+# files. charless-mac-mini reached 81 that the registry does not declare,
+# including a `com.wisent.compute.service.com.wisent.compute.service.stado-agent-mini`
+# whose KeepAlive job restarted a duplicate queue agent every time it was
+# stopped. Create and delete now share one grant and one guard set.
+privileged=no
+case "$path" in
+  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*) ;;
+  /Library/LaunchDaemons/com.wisent.*.plist) privileged=yes ;;
+  *) report refused "outside the managed areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
+esac
+if [ -L "$path" ]; then
+  report refused "a symlink points outside the managed area; remove it by hand: rm -- $path"
+elif [ -d "$path" ]; then
+  report refused "a directory is not removed by a single-file command"
+elif [ ! -e "$path" ]; then
+  report absent ""
+elif [ ! -f "$path" ]; then
+  report refused "not a regular file"
+elif [ "$privileged" = yes ]; then
+  # Owned by root by construction, so the `-O` test the home areas use would
+  # refuse every one of them. The grant is the same `sudo -n` the install used;
+  # a host without it is told which command was refused rather than left with a
+  # unit nobody can remove.
+  if /usr/bin/sudo -n /bin/rm -f -- "$path"; then
+    if [ -e "$path" ]; then
+      report failed "sudo rm succeeded and the path is still there"
+    else
+      report removed ""
+    fi
+  else
+    report refused "sudo -n rm -- $path was refused; this host has no passwordless grant"
+  fi
+elif [ ! -O "$path" ]; then
+  report refused "not owned by this account; remove it on the host with: sudo rm -- $path"
+else
+  rm -f -- "$path"
+  if [ -e "$path" ]; then
+    report failed "rm succeeded and the path is still there"
+  else
+    report removed ""
+  fi
+fi
+"#
+    );
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
         &script,
-        std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
-        &runner,
+        std::time::Duration::from_secs(60),
+        &crate::deploy::production_runner(),
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
+    let (state, detail) = output
+        .stdout
+        .lines()
+        .find_map(|line| {
+            crate::deploy::host_channel::marker_fields(line)
+                .as_slice()
+                .split_first()
+                .and_then(|(marker, rest)| {
+                    (*marker == "STADO_REMOVE_FILE")
+                        .then(|| (rest[0].to_string(), rest.get(1).map(|s| s.to_string())))
+                })
+        })
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: the host answered without a removal report: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(&output, "no marker in output")
+            ))
+        })?;
+    let outcome = RemoveFileOutcome {
+        target: resolved.name.clone(),
+        path: path.to_string(),
+        status: state,
+        detail,
+    };
+    if outcome.succeeded() {
+        Ok(outcome)
+    } else {
+        Err(CmdError::click(outcome.failure_sentence()))
+    }
+}
+
+/// Remove one file from TARGET's home: the path Stado never had a way to
+/// delete, so a retired or broken unit left its plist on disk forever and the
+/// only answer was a bare `rm` over ssh, which nothing bounds and nobody
+/// audits. This is that answer as a product verb. The guards are on the host,
+/// not on the client, because the file is what the host says it is, not what
+/// the operator believes:
+///
+/// - the path must be absolute, contain no `..`, and live under
+///   `$HOME/Library/LaunchAgents` or `$HOME/.stado` of the approved account —
+///   a system path is not refused because it is dangerous, it is refused
+///   because this channel has no right there, and the refusal names the
+///   privileged command that does have one;
+/// - it must be a regular file owned by that account — a symlink under an
+///   allowed root can point anywhere, a directory would make this a recursive
+///   delete, and somebody else's file is not this login's to remove.
+///
+/// Absence is reported as `absent`, not invented into a success.
+pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), CmdError> {
+    let outcome = remove_file_document(target, path).await?;
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "target": target,
-                "helper": name,
-                "status": if output.ok() { "completed" } else { "failed" },
-                "exit_code": output.code,
-                "stdout": output.stdout,
-                "stderr": output.stderr,
+                "target": outcome.target,
+                "path": outcome.path,
+                "status": outcome.status,
+                "detail": outcome.detail,
             }))?
         );
     } else {
-        print!("{}", output.stdout);
-        eprint!("{}", output.stderr);
+        match &outcome.detail {
+            Some(detail) if !detail.is_empty() => {
+                println!(
+                    "{}: {} {} — {detail}",
+                    outcome.target, outcome.path, outcome.status
+                )
+            }
+            _ => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
+        }
     }
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: helper {name} failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote helper failed")
+    Ok(())
+}
+
+/// A vault item id or tag: the alphabet `release_component` allows, plus the
+/// `:` that every one of these names is built out of
+/// (`provider:kimi:brama-sub-…`, `brama:agent:wisent-app`).
+///
+/// Checked here because these words are interpolated into a script that
+/// performs an owner write, and a name that arrived from an inventory is no
+/// more trustworthy than one an operator typed.
+fn vault_word(kind: &str, value: &str) -> Result<(), CmdError> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+    {
+        return Err(CmdError::usage(format!(
+            "{kind} must contain only letters, digits, '.', '_', '-' or ':'"
         )));
     }
     Ok(())
 }
 
-/// The exact removal `host remove-helper` performs, for one named helper on an
-/// already-resolved target.
-///
-/// Shared with `host helpers --prune`, which removes many of these in one run.
-/// One function, because two spellings of "delete a file under `.stado/bin`"
-/// would be two policies about symlinks, about what counts as absent, and
-/// about which channel the deletion is audited on -- and the second one always
-/// turns out to be a shell one-liner somebody wrote in a hurry.
-///
-/// Returns the remote's own word: `removed` or `absent`. Absent is not a
-/// failure; a helper listed by an inventory taken seconds ago and gone by the
-/// time the removal lands is a race with a truthful outcome, and reporting it
-/// as an error would send an operator looking for a fault nobody committed.
-async fn remove_installed_helper(
+/// What the host reported for one phase of the retag.
+struct RetagPhase {
+    state: String,
+    revision: String,
+    tags: String,
+}
+
+/// One item of the host's vault, read as a retag phase: its state, revision
+/// and tags, or `absent` when the vault holds no such item. The vault is read
+/// over the channel and parsed here — the phase rendering the retired
+/// script's python snippet produced, without a python payload.
+async fn read_vault_phase(
     resolved: &ComputeTarget,
-    name: &str,
+    vault: &str,
+    item: &str,
     runner: &crate::deploy::Runner,
-) -> Result<String, CmdError> {
-    // The name may have come back from a remote inventory rather than from the
-    // operator's own argv, so it is checked here as well: this is the last
-    // place before it is interpolated into a script that deletes files.
-    release_component("helper name", name)?;
-    let remote_name = crate::deploy::shlex_quote(name);
-    // Regular file only: a symlink under that name is not something this
-    // command put there, and following it would delete an unrelated path.
-    let script = format!(
-        r#"set -euo pipefail
-helper="$HOME/.stado/bin/"{remote_name}
-if [ -L "$helper" ]; then
-  printf '%s\n' "refusing to remove symlink: $helper" > /dev/stderr
-  false
-elif [ -f "$helper" ]; then
-  rm -f -- "$helper"
-  printf '%s\n' removed
-else
-  printf '%s\n' absent
-fi
-"#
-    );
-    let output = crate::deploy::host_channel::run_script_with_timeout(
-        resolved,
-        &script,
-        std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
+) -> Result<RetagPhase, String> {
+    let text = crate::deploy::host_channel::remote_read_file(resolved, vault, runner)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("the vault at {vault} could not be read"))?;
+    let document: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("the vault at {vault} did not parse as JSON: {error}"))?;
+    let Some(record) = document.get("items").and_then(|items| items.get(item)) else {
+        return Ok(RetagPhase {
+            state: "absent".to_string(),
+            revision: "-".to_string(),
+            tags: "-".to_string(),
+        });
+    };
+    let state = record
+        .get("state")
+        .and_then(Value::as_str)
+        .filter(|state| !state.is_empty())
+        .unwrap_or("-")
+        .to_string();
+    let revision = match record.get("revision") {
+        Some(Value::String(revision)) => revision.clone(),
+        Some(Value::Number(revision)) => revision.to_string(),
+        _ => "-".to_string(),
+    };
+    let tags = record
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<&str>>()
+                .join(",")
+        })
+        .filter(|tags| !tags.is_empty())
+        .unwrap_or_else(|| "-".to_string());
+    Ok(RetagPhase {
+        state,
+        revision,
+        tags,
+    })
+}
+
+/// Replace one Skarbiec item's tags on TARGET, and report what the host had
+/// before and has after.
+///
+/// Tags decide who may spend a credential: Brama treats a vault item as a
+/// subscription only when it carries `brama:subscription` and
+/// `brama:agent:<agent>`, so an item that loses them leaves the fleet while
+/// remaining perfectly valid — silently, because a credential nobody can see
+/// still passes every check that counts credentials. Restoring them is a write
+/// only the owner key can make, and that key lives on the host, so this runs
+/// there and nowhere else.
+///
+/// Tags only: the payload is never read, rewritten or re-encrypted, which is
+/// the whole reason this is not a `set-json`.
+pub async fn retag_vault_item(
+    target: &str,
+    item: &str,
+    tags: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    vault_word("vault item", item)?;
+    if let Some(tags) = tags {
+        for tag in tags.split(',') {
+            vault_word("tag", tag)?;
+        }
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    // The host's own overrides, resolved on the host the way the retired
+    // script's `${VAR:-default}` did.
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: {item} could not be retagged: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(
+                &environment,
+                "the host's vault environment could not be read"
+            )
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables.next().unwrap_or_default().to_string();
+    let gnupg_home = variables.next().unwrap_or_default().to_string();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+
+    // A remote refusal names the check that failed, in the words the retired
+    // script printed to stderr.
+    let refused = |detail: String| {
+        CmdError::click(format!(
+            "{}: {item} could not be retagged: {detail}",
+            resolved.name
+        ))
+    };
+    if !crate::deploy::host_channel::remote_test(
+        &resolved,
+        &format!("-x {}", crate::deploy::shlex_quote(&skarbiec)),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Err(refused(format!("no Skarbiec binary at {skarbiec}")));
+    }
+    if !crate::deploy::host_channel::remote_test(
+        &resolved,
+        &format!("-f {}", crate::deploy::shlex_quote(&vault)),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Err(refused(format!("no vault at {vault}")));
+    }
+    // Whether this build can retag at all. The discriminator is the usage
+    // literal, never the bare command name: rustc packs string literals into
+    // one unterminated blob, so a binary that carries the command shows
+    // `...setgetretagdelete...` on a single line and a whole-line match for
+    // `retag` reports absent on a build that has it. That false negative cost
+    // an hour and sent one diagnosis at the wrong host.
+    let capable = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "strings -a {} 2>/dev/null | grep -q 'usage: retag <id> --tags'",
+            crate::deploy::shlex_quote(&skarbiec)
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !capable.ok() {
+        return Err(refused(format!(
+            "the Skarbiec build at {skarbiec} predates the retag operation"
+        )));
+    }
+
+    // The caller states what the host had and has rather than asserting
+    // success: read the item before, retag, read it again.
+    let before = read_vault_phase(&resolved, &vault, item, &runner)
+        .await
+        .map_err(refused)?;
+    // No --tags: this is a read. Report what the host holds and write nothing,
+    // so the operator who is about to replace a tag list can see the list they
+    // would be replacing.
+    let Some(tags) = tags else {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "target": resolved.name,
+                    "item": item,
+                    "read_only": true,
+                    "state": before.state,
+                    "revision": before.revision,
+                    "tags": before.tags,
+                }))?
+            );
+        } else {
+            println!(
+                "{}: {item} has rev={} state={} tags={}",
+                resolved.name, before.revision, before.state, before.tags
+            );
+        }
+        return Ok(());
+    };
+    let retagged = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} retag {} --tags {} > /dev/null",
+            crate::deploy::shlex_quote(&gnupg_home),
+            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(tags),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !retagged.ok() {
+        return Err(refused(crate::deploy::host_channel::last_error_line(
+            &retagged,
+            "remote retag failed",
+        )));
+    }
+    let after = read_vault_phase(&resolved, &vault, item, &runner)
+        .await
+        .map_err(|detail| {
+            CmdError::click(format!(
+                "{}: {item} reported no tags after the retag; the host said: {detail}",
+                resolved.name
+            ))
+        })?;
+    let before = Some(before);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "item": item,
+                "before": before.as_ref().map(|phase| json!({
+                    "state": phase.state,
+                    "revision": phase.revision,
+                    "tags": phase.tags,
+                })),
+                "after": {
+                    "state": after.state,
+                    "revision": after.revision,
+                    "tags": after.tags,
+                },
+            }))?
+        );
+    } else {
+        if let Some(phase) = &before {
+            println!(
+                "{}: {item} had rev={} state={} tags={}",
+                resolved.name, phase.revision, phase.state, phase.tags
+            );
+        }
+        println!(
+            "{}: {item} now rev={} state={} tags={}",
+            resolved.name, after.revision, after.state, after.tags
+        );
+    }
+    Ok(())
+}
+/// Run one Skarbiec command on TARGET and parse its JSON answer.
+///
+/// The vault and GnuPG paths are resolved by the target itself. Arguments stay
+/// separate all the way through the host channel, so neither bearer material
+/// nor an operator-supplied capability enters a remote shell command.
+async fn remote_skarbiec_json(
+    target: &str,
+    arguments: &[String],
+) -> Result<(ComputeTarget, Value), CmdError> {
+    let command = arguments
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CmdError::usage("a Skarbiec command is required"))?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the Skarbiec environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
+    let gnupg_home = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let mut invocation = vec![
+        "/usr/bin/env",
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        gnupg_environment.as_str(),
+        vault_environment.as_str(),
+        skarbiec.as_str(),
+    ];
+    invocation.extend(arguments.iter().map(String::as_str));
+    let output = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec {command} failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+        )));
+    }
+    let report = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "{}: Skarbiec {command} returned unreadable JSON: {error}",
+            resolved.name
+        ))
+    })?;
+    Ok((resolved, report))
+}
+
+/// Pull the encrypted Skarbiec mirror into TARGET's live vault.
+///
+/// Skarbiec performs the destructive comparison itself: a remote vault with
+/// local-only items is backed up and refused rather than overwritten. Stado
+/// supplies the managed host channel and deliberately exposes no force path.
+pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-pull")]).await?;
+    if report.get("ok").and_then(Value::as_bool) != Some(true) {
+        let reason = report
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("sync_refused");
+        let detail = report
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or("Skarbiec refused to replace the live vault");
+        let local_only = report
+            .get("local_only_items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        let local_only = if local_only.is_empty() {
+            String::new()
+        } else {
+            format!("; local-only items: {local_only}")
+        };
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec {reason}: {detail}{local_only}",
+            resolved.name
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "vault_synced",
+                "skarbiec": report,
+            }))?
+        );
+    } else {
+        println!("{}: vault synced", resolved.name);
+    }
+    Ok(())
+}
+
+/// Mint a least-privilege bearer inside TARGET's live Skarbiec vault.
+///
+/// Metadata is the default output. `raw_token` exists only for a direct pipe
+/// into another secret store; Stado never writes that bearer to disk or argv.
+#[allow(clippy::too_many_arguments)]
+pub async fn vault_token_mint(
+    target: &str,
+    consumer: &str,
+    capabilities: &str,
+    audience: &str,
+    ttl_seconds: u64,
+    replace_capabilities: bool,
+    raw_token: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("consumer", consumer)?;
+    vault_word("audience", audience)?;
+    if raw_token && json_output {
+        return Err(CmdError::usage(
+            "--raw-token and --json cannot be used together",
+        ));
+    }
+    if capabilities.is_empty()
+        || !capabilities
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-/,:#".contains(&byte))
+    {
+        return Err(CmdError::usage(
+            "capabilities must be a comma-separated list of exact action:item[#field] values",
+        ));
+    }
+    let mut arguments = vec![
+        String::from("token-mint"),
+        consumer.to_string(),
+        String::from("--capabilities"),
+        capabilities.to_string(),
+        String::from("--audience"),
+        audience.to_string(),
+        String::from("--ttl-seconds"),
+        ttl_seconds.to_string(),
+    ];
+    if replace_capabilities {
+        arguments.push(String::from("--replace-capabilities"));
+    }
+    let (resolved, mut report) = remote_skarbiec_json(target, &arguments).await?;
+    let token = report
+        .get("token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: Skarbiec token-mint returned no bearer",
+                resolved.name
+            ))
+        })?
+        .to_string();
+    if raw_token {
+        println!("{token}");
+        return Ok(());
+    }
+    if let Some(object) = report.as_object_mut() {
+        object.remove("token");
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "token_minted",
+                "skarbiec": report,
+            }))?
+        );
+    } else {
+        println!(
+            "{}: token minted for {consumer} with audience {audience}",
+            resolved.name
+        );
+    }
+    Ok(())
+}
+
+/// Reconcile the object verifier on TARGET to the exact configured namespace set.
+pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid object_api.namespaces: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let items = namespaces
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    reconcile_verifier(
+        target,
+        json_output,
+        "object",
+        "object_api.namespaces",
+        crate::config::OBJECT_API_VERIFIER_CONSUMER,
+        "WC_OBJECT_SKARBIEC_TOKEN_FILE",
+        "stado-object-api-verifier-skarbiec-token",
+        items,
+        true,
+    )
+    .await
+}
+
+/// Reconcile one product's release verifier dependency on TARGET.
+pub async fn reconcile_release_verifier(
+    target: &str,
+    product: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid release_api.publishers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let publisher = publishers.get(product).ok_or_else(|| {
+        CmdError::click(format!(
+            "release_api.publishers declares no publisher for {product:?}"
+        ))
+    })?;
+    let items = std::collections::BTreeSet::from([publisher.item().to_string()]);
+    reconcile_verifier(
+        target,
+        json_output,
+        "release",
+        &format!("release_api.publishers.{product}"),
+        crate::config::RELEASE_API_VERIFIER_CONSUMER,
+        "WC_RELEASE_SKARBIEC_TOKEN_FILE",
+        "stado-release-api-verifier-skarbiec-token",
+        items,
+        false,
+    )
+    .await
+}
+
+/// Reconcile the service verifier on TARGET to the exact configured deployer set.
+pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let deployers = crate::config::service_api_deployers().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid service_api.deployers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let items = deployers
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    reconcile_verifier(
+        target,
+        json_output,
+        "service",
+        "service_api.deployers",
+        crate::config::SERVICE_API_VERIFIER_CONSUMER,
+        "WC_SERVICE_SKARBIEC_TOKEN_FILE",
+        "stado-service-api-verifier-skarbiec-token",
+        items,
+        true,
+    )
+    .await
+}
+
+/// Read one nonsecret Skarbiec metadata report on a managed host.
+///
+/// Verifier reconciliation needs grant expiry, vault ownership and item lifecycle,
+/// not the encrypted vault envelope. Reading those through Skarbiec keeps the
+/// operator boundary intact and avoids transporting the whole vault over the host
+/// channel.
+async fn remote_skarbiec_metadata(
+    target: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+    skarbiec: &str,
+    vault: &str,
+    gnupg_home: &str,
+    command: &str,
+) -> Result<Value, CmdError> {
+    let path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let output = crate::deploy::host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            path,
+            gnupg_environment.as_str(),
+            vault_environment.as_str(),
+            skarbiec,
+            command,
+        ],
         runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
-            "{}: helper {name} could not be removed: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote removal failed")
+            "{}: Skarbiec {command} metadata unavailable: {}",
+            target.name,
+            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
         )));
     }
-    Ok(output.stdout.trim().to_string())
+    serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "{}: Skarbiec {command} returned unreadable metadata: {error}",
+            target.name
+        ))
+    })
 }
 
-/// Remove one previously installed helper. Installing a helper is how Stado
-/// runs what the exec allowlist refuses, which makes every diagnostic a file
-/// left behind on someone else's machine; without this the fleet accumulates
-/// them and nothing but the operator's memory says what they were for.
-pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
-    release_component("helper name", name)?;
+/// Preserve an isolated verifier bearer while making its capabilities match config.
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_verifier(
+    target: &str,
+    json_output: bool,
+    kind: &str,
+    config_name: &str,
+    consumer: &str,
+    token_file_env: &str,
+    token_file_default: &str,
+    items: std::collections::BTreeSet<String>,
+    replace_capabilities: bool,
+) -> Result<(), CmdError> {
+    if items.is_empty() {
+        return Err(CmdError::click(format!(
+            "{config_name} is empty; refusing to mint an unusable verifier grant"
+        )));
+    }
+    for item in &items {
+        vault_word(&format!("{kind} verifier item"), item)?;
+    }
+
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let state = remove_installed_helper(&resolved, name, &runner).await?;
-    if json {
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment_command = format!(
+        "printf '%s\\n%s\\n%s\\n' \"${{SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}}\" \
+         \"${{GNUPGHOME:-$HOME/.gnupg}}\" \
+         \"${{{token_file_env}:-$HOME/.stado/{token_file_default}}}\""
+    );
+    let environment =
+        crate::deploy::host_channel::run_command(&resolved, &environment_command, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: {kind} verifier environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables.next().unwrap_or_default().to_string();
+    let gnupg_home = variables.next().unwrap_or_default().to_string();
+    let token_file = variables.next().unwrap_or_default().to_string();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    for (label, path, test) in [
+        ("Skarbiec binary", skarbiec.as_str(), "-x"),
+        ("vault", vault.as_str(), "-f"),
+    ] {
+        let present = crate::deploy::host_channel::remote_test(
+            &resolved,
+            &format!("{test} {}", crate::deploy::shlex_quote(path)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !present {
+            return Err(CmdError::click(format!(
+                "{}: no {label} at {path}",
+                resolved.name
+            )));
+        }
+    }
+    let bearer_preserved = crate::deploy::host_channel::remote_test(
+        &resolved,
+        &format!(
+            "-f {} && ! -L {}",
+            crate::deploy::shlex_quote(&token_file),
+            crate::deploy::shlex_quote(&token_file),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let token_metadata =
+        remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "tokens")
+            .await?;
+    let grant = token_metadata
+        .as_array()
+        .and_then(|tokens| {
+            tokens
+                .iter()
+                .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer))
+        })
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: {consumer} has no existing grant",
+                resolved.name
+            ))
+        })?;
+    let expires_at = grant
+        .get("expires_at")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| CmdError::click(format!("{kind} verifier grant has no numeric expiry")))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .as_secs();
+    let ttl = expires_at
+        .checked_sub(now)
+        .filter(|ttl| *ttl > 0)
+        .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
+    // Publisher items remain authoritative in the control-plane vault. The
+    // release API reads target-local verifier shadows with the same ids. Keep
+    // those shadows target-owned and atomically replace a staged vault copy;
+    // this copies the current value without rotating or reclassifying source.
+    let mut publisher_lifecycles = Vec::new();
+    if kind == "release" {
+        let authoritative_vault = crate::credential_store::owner::vault()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
+        let authoritative: Value = serde_json::from_str(&authoritative_text)?;
+        let target_vaults =
+            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "vaults")
+                .await?;
+        let target_owner = target_vaults
+            .get("vaults")
+            .and_then(Value::as_array)
+            .and_then(|vaults| {
+                vaults
+                    .iter()
+                    .find(|entry| entry.get("path").and_then(Value::as_str) == Some(vault.as_str()))
+            })
+            .and_then(|entry| entry.get("owner"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| CmdError::click("target vault has no owner identity"))?;
+        let target_items =
+            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
+                .await?;
+        for item in &items {
+            let source_entry = authoritative
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|entries| entries.get(item))
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} is absent"
+                    ))
+                })?;
+            let source_management = source_entry
+                .get("management")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} has no management metadata"
+                    ))
+                })?;
+            let mode = source_management
+                .get("mode")
+                .and_then(Value::as_str)
+                .filter(|value| matches!(*value, "owner" | "managed" | "external"))
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} has no supported lifecycle mode"
+                    ))
+                })?;
+            let controller = source_management
+                .get("controller")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} has no lifecycle controller"
+                    ))
+                })?;
+            let token =
+                crate::credential_store::owner::read_string(item, "token").map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot read authoritative release publisher item {item}: {error}"
+                    ))
+                })?;
+            let target_entry = target_items.as_array().and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.get("id").and_then(Value::as_str) == Some(item))
+            });
+            let shadow_owned = target_entry
+                .and_then(|entry| entry.get("management"))
+                .and_then(Value::as_object)
+                .is_some_and(|management| {
+                    management.get("mode").and_then(Value::as_str) == Some("owner")
+                        && management.get("controller").and_then(Value::as_str)
+                            == Some(target_owner)
+                });
+            let compare_command = format!(
+                "set -eu; expected=$(/bin/cat); actual=$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --field token); [ \"$actual\" = \"$expected\" ]",
+                crate::deploy::shlex_quote(&gnupg_home),
+                crate::deploy::shlex_quote(&vault),
+                crate::deploy::shlex_quote(&skarbiec),
+                crate::deploy::shlex_quote(item),
+            );
+            let mut comparison = crate::deploy::host_channel::run_program_with_stdin(
+                &resolved,
+                &["/bin/sh", "-c", &compare_command],
+                &format!("{token}\n"),
+                &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if !shadow_owned || !comparison.ok() {
+                let payload = serde_json::to_string(&serde_json::json!({
+                    "schema": "skarbiec.item.v2",
+                    "kind": "token",
+                    "fields": { "token": token },
+                    "context": {}
+                }))?;
+                let staging = format!("{vault}.stado-release-verifier");
+                let set_command = format!(
+                    "set -eu; live={}; staging={}; trap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM; /bin/cp -p \"$live\" \"$staging\"; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} reclaim {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} rm {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} set-json {} --type token >/dev/null; /bin/chmod 600 \"$staging\"; /bin/mv -f \"$staging\" \"$live\"; trap - EXIT HUP INT TERM",
+                    crate::deploy::shlex_quote(&vault),
+                    crate::deploy::shlex_quote(&staging),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                );
+                let convergence_transport_error =
+                    match crate::deploy::host_channel::run_program_with_stdin(
+                        &resolved,
+                        &["/bin/sh", "-c", &set_command],
+                        &payload,
+                        &runner,
+                    )
+                    .await
+                    {
+                        Ok(converged) if converged.ok() => None,
+                        // A vault replacement can close the host channel after
+                        // the atomic move but before the shell reports success.
+                        // A nonzero transport-shaped result is therefore as
+                        // ambiguous as an I/O error: reconnect and prove the
+                        // target item before deciding whether the write failed.
+                        Ok(converged) => Some(
+                            crate::deploy::host_channel::last_error_line(
+                                &converged,
+                                "verifier shadow command ended before acknowledgement",
+                            )
+                            .to_string(),
+                        ),
+                        // Replacing the vault may invalidate the transport whose
+                        // credential came from that vault. Reconnect and judge the
+                        // item by its postcondition instead of repeating the write.
+                        Err(error) => Some(error.to_string()),
+                    };
+                comparison = crate::deploy::host_channel::run_program_with_stdin(
+                    &resolved,
+                    &["/bin/sh", "-c", &compare_command],
+                    &format!("{token}\n"),
+                    &runner,
+                )
+                .await
+                .map_err(|error| {
+                    let first = convergence_transport_error
+                        .as_deref()
+                        .unwrap_or("shadow write completed");
+                    CmdError::click(format!(
+                        "{}: cannot verify release verifier shadow for {item} after {first}: {error}",
+                        resolved.name
+                    ))
+                })?;
+            }
+            if !comparison.ok() {
+                return Err(CmdError::click(format!(
+                    "{}: release verifier shadow for {item} differs after reconciliation",
+                    resolved.name,
+                )));
+            }
+            publisher_lifecycles.push(json!({
+                "item": item,
+                "mode": mode,
+                "controller": controller,
+                "readable": true,
+            }));
+        }
+    }
+    let capabilities = items
+        .iter()
+        .map(|item| format!("read:{item}#token"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let common = format!(
+        "set -eu; \
+         PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; export PATH; \
+         GNUPGHOME={}; export GNUPGHOME; \
+         SKARBIEC_VAULT_FILE={}; export SKARBIEC_VAULT_FILE; \
+         token_file={}; staged=''; \
+         if [ -L \"$token_file\" ]; then exit 40; fi",
+        crate::deploy::shlex_quote(&gnupg_home),
+        crate::deploy::shlex_quote(&vault),
+        crate::deploy::shlex_quote(&token_file),
+    );
+    let command = if replace_capabilities {
+        format!(
+            "{common}; \
+             if [ -f \"$token_file\" ]; then source_file=\"$token_file\"; \
+             else \
+               staged=\"$token_file.stado-new.$$\"; \
+               trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
+               umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
+               source_file=\"$staged\"; \
+             fi; \
+             {} token-mint {} --capabilities {} --replace-capabilities \
+               --token-file \"$source_file\" --ttl-seconds {} > /dev/null; \
+             if [ -n \"$staged\" ]; then /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; fi",
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(consumer),
+            crate::deploy::shlex_quote(&capabilities),
+            ttl,
+        )
+    } else {
+        let item = items
+            .first()
+            .expect("product-scoped release verifier has one item");
+        format!(
+            "{common}; \
+             if [ -f \"$token_file\" ]; then \
+               {} token-ensure-read {} {} --field token --token-file \"$token_file\" > /dev/null; \
+             else \
+               staged=\"$token_file.stado-new.$$\"; \
+               trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
+               umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
+               {} token-mint {} --capabilities {} --replace-capabilities \
+                 --token-file \"$staged\" --ttl-seconds {} > /dev/null; \
+               /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; \
+             fi",
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(consumer),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(consumer),
+            crate::deploy::shlex_quote(&capabilities),
+            ttl,
+        )
+    };
+    let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !reconciled.ok() {
+        return Err(CmdError::click(format!(
+            "{}: {kind} verifier reconciliation failed without replacing its token file: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&reconciled, "remote command failed")
+        )));
+    }
+
+    let item_list = items.iter().cloned().collect::<Vec<_>>();
+    if json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "target": target,
-                "helper": name,
-                "status": state,
+                "target": resolved.name,
+                "consumer": consumer,
+                "items": item_list,
+                "publisher_lifecycles": publisher_lifecycles,
+                "bearer_preserved": bearer_preserved,
+                "expires_at": expires_at,
             }))?
         );
     } else {
-        println!("{target}: {name} {state}");
+        let verb = if replace_capabilities {
+            "reads exactly"
+        } else {
+            "can read"
+        };
+        println!(
+            "{}: {consumer} {verb} {}",
+            resolved.name,
+            item_list.join(",")
+        );
     }
     Ok(())
 }
 
-/// The helper that inventories `$HOME/.stado/bin` on a target.
-///
-/// Installed with
-/// `stado host install-helper <target> stado-rs/scripts/report-stale-helpers.sh
-/// report-stale-helpers`.
-const INVENTORY_HELPER: &str = "report-stale-helpers";
-
-/// One installed helper script, as the remote inventory reported it.
-struct InstalledHelper {
-    name: String,
-    bytes: u64,
-    /// Seconds since the file was last written, from the remote's own clock
-    /// against this one. Skew shows up as a small negative that clamps to
-    /// zero, which is a helper installed moments ago -- exactly what it is.
-    age_seconds: i64,
-}
-
-/// One `name<TAB>mtime<TAB>size` line from `report-stale-helpers`.
-///
-/// `None` for anything that is not exactly those three fields. A short line, a
-/// number that will not parse, a fourth field from a newer helper: none of
-/// them is a helper this can date or size, and inventing a zero for the
-/// missing half would put a fabricated row at the head of an oldest-first list
-/// -- which is the first thing `--prune` would then delete.
-fn parse_inventory_line(line: &str, now: i64) -> Option<InstalledHelper> {
-    let mut fields = line.split('\t');
-    let name = fields.next().filter(|name| !name.is_empty())?;
-    let modified: i64 = fields.next()?.parse().ok()?;
-    let bytes: u64 = fields.next()?.parse().ok()?;
-    if fields.next().is_some() {
-        return None;
-    }
-    Some(InstalledHelper {
-        name: name.to_string(),
-        bytes,
-        // Clamped: a remote clock ahead of this one is skew, not a helper
-        // installed in the future, and a negative age would sort to the end of
-        // the list and read as the newest thing on the host.
-        age_seconds: (now - modified).max(i64::default()),
-    })
-}
-
-/// A prune that could not remove everything it named, reported after the
-/// table rather than instead of it.
-///
-/// The rows already printed are true and the operator needs them more than
-/// they need an early exit; the non-zero status is what stops a caller
-/// treating a partial sweep as a completed one.
-fn removal_outcome(target: &str, failed: usize) -> Result<(), CmdError> {
-    if failed == usize::default() {
-        return Ok(());
-    }
-    Err(CmdError::click(format!(
-        "{target}: {failed} helper(s) could not be removed; each is reported above with the \
-         remote's own words"
-    )))
-}
-
-/// `stado host helpers TARGET [--older-than-days N] [--prune] [--json]` — every
-/// helper script this host carries, oldest first.
-///
-/// `install-helper` has a writer and no reaper. charless-mac-mini carries 553
-/// installed helper scripts beside 16 binaries: each was delivered to settle
-/// one incident, none was ever withdrawn, and `host provenance` can only print
-/// the count as a footnote because nothing enumerated them. This is the
-/// enumeration -- name, age and size, which is the least an operator needs to
-/// decide whether a script from an incident nobody remembers may go.
-///
-/// Removal is under `--prune` and never otherwise, and `--prune` demands an
-/// explicit `--older-than-days`: a sweep with no threshold means "remove
-/// everything", which is never the intent on a directory whose 553 entries
-/// include the ones three products currently run.
-///
-/// The inventory comes from the installed helper rather than from a shell
-/// one-liner, and every removal goes back through the same audited channel
-/// `host remove-helper` uses, one named helper at a time. A host without the
-/// inventory helper is an error naming the install command, never an empty
-/// table: "nobody looked" rendered as "nothing is there" is the fold this
-/// fleet has already paid for.
-pub async fn helpers(
-    target: &str,
-    older_than_days: Option<u32>,
-    prune: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    if prune && older_than_days.is_none() {
-        return Err(CmdError::usage(
-            "--prune requires --older-than-days: removing every helper is never the intent, \
-             and this directory holds the scripts three products currently run",
-        ));
-    }
+/// Recover a local Skarbiec audit-lock stall and restart only its loaded dependants.
+pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let inventory =
-        crate::deploy::host_channel::run_installed_helper(target, INVENTORY_HELPER, &runner)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{target}: cannot read the helper inventory: {error}; install it with \
-                     `stado host install-helper {target} \
-                     stado-rs/scripts/report-stale-helpers.sh {INVENTORY_HELPER}`"
-                ))
-            })?;
-
-    let now = chrono::Utc::now().timestamp();
-    let mut installed: Vec<InstalledHelper> = Vec::new();
-    // A line the inventory format does not explain is carried to the operator
-    // rather than dropped: a row this cannot parse is a row this cannot reason
-    // about, and silently shrinking the population is how a count stops being
-    // evidence.
-    let mut unreadable: Vec<String> = Vec::new();
-    for line in inventory.lines() {
-        let line = line.trim_end();
-        if line.is_empty() {
-            continue;
-        }
-        match parse_inventory_line(line, now) {
-            Some(helper) => installed.push(helper),
-            None => unreadable.push(line.to_string()),
-        }
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh"),
+        std::time::Duration::from_secs(90),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec audit recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
     }
-    // Oldest first: the head of this list is where the fossils are, and it is
-    // also exactly what `--prune` acts on, so the two orders cannot disagree.
-    installed.sort_by(|left, right| {
-        right
-            .age_seconds
-            .cmp(&left.age_seconds)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-
-    let threshold = older_than_days.map(|days| {
-        i64::from(days).saturating_mul(
-            i64::try_from(crate::monitor::billing::SECONDS_PER_DAY).unwrap_or(i64::MAX),
-        )
-    });
-    let stale = |helper: &InstalledHelper| {
-        threshold.is_some_and(|threshold| helper.age_seconds >= threshold)
-    };
-
-    let mut pruned: Vec<Value> = Vec::new();
-    let mut failed = usize::default();
-    if prune {
-        let resolved = crate::deploy::host_channel::canonical_target(target)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        // One failure does not end the sweep. A helper that is a symlink is
-        // refused by the removal script by design, and letting that abort the
-        // run would leave the remaining hundreds unreported and the operator
-        // with no idea how far it got.
-        for helper in installed.iter().filter(|helper| stale(helper)) {
-            match remove_installed_helper(&resolved, &helper.name, &runner).await {
-                Ok(status) => pruned.push(json!({"helper": helper.name, "status": status})),
-                Err(error) => {
-                    failed += 1;
-                    pruned.push(json!({
-                        "helper": helper.name,
-                        "status": "failed",
-                        "error": error.to_string(),
-                    }));
-                }
-            }
-        }
-    }
-
-    let older = installed.iter().filter(|helper| stale(helper)).count();
-    if json {
-        let rows: Vec<Value> = installed
-            .iter()
-            .map(|helper| {
-                json!({
-                    "helper": helper.name,
-                    "age_seconds": helper.age_seconds,
-                    "bytes": helper.bytes,
-                    "stale": threshold.map(|_| stale(helper)),
-                })
-            })
-            .collect();
-        let mut report = json!({
-            "target": target,
-            "helpers": rows,
-            "total": installed.len(),
-            "older_than_days": older_than_days,
-            "older_than_threshold": older,
-            "unreadable": unreadable,
-        });
-        if prune {
-            report["pruned"] = Value::Array(pruned);
-        }
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return removal_outcome(target, failed);
-    }
-
-    for line in &unreadable {
-        eprintln!("{target}: an inventory line could not be read: {line}");
-    }
-    if installed.is_empty() {
-        println!("{target}: carries no installed helper scripts");
-        return Ok(());
-    }
-    let rows: Vec<Vec<String>> = installed
-        .iter()
-        .map(|helper| {
-            let mut row = vec![
-                helper.name.clone(),
-                super::registry::human_age(chrono::TimeDelta::seconds(helper.age_seconds)),
-                helper.bytes.to_string(),
-            ];
-            if threshold.is_some() {
-                row.push(if stale(helper) { "yes" } else { "no" }.to_string());
-            }
-            row
-        })
-        .collect();
-    if threshold.is_some() {
-        super::table::print(&["HELPER", "AGE", "BYTES", "OLDER"], &rows);
-    } else {
-        super::table::print(&["HELPER", "AGE", "BYTES"], &rows);
-    }
-    for entry in &pruned {
+    let detail = recovered.stdout.trim();
+    if json_output {
         println!(
-            "pruned {}: {}{}",
-            entry.get("helper").and_then(Value::as_str).unwrap_or(""),
-            entry.get("status").and_then(Value::as_str).unwrap_or(""),
-            entry
-                .get("error")
-                .and_then(Value::as_str)
-                .map_or_else(String::new, |error| format!(": {error}"))
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
+/// Recover stale per-user GnuPG daemons after Skarbiec reports a keybox stall.
+pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-crypto.sh"),
+        std::time::Duration::from_secs(240),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec cryptographic recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    let detail = recovered.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
+/// Restore the core object API without depending on the API being available.
+///
+/// The checked-in host helper only mutates an unavailable listener. It pins the
+/// service to the physical local store, preserves the previous system plist and
+/// verifies the loopback health endpoint after launchd has loaded the new unit.
+async fn recover_object_api_on_target(
+    resolved: &ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        resolved,
+        include_str!("../../../deploy/recover_object_api.sh"),
+        std::time::Duration::from_secs(240),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: object API recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    Ok(recovered.stdout.trim().to_string())
+}
+
+/// Run the object-API boundary repair as a focused operator command.
+pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let detail = recover_object_api_on_target(&resolved, &runner).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "healthy": true,
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
+/// Authorize TARGET's service resolver on the service-directory authority.
+pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let report = crate::deploy::host_resolver_key::authorize(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: resolver key {} ({}), authorized_keys on {} {}",
+            report["target"].as_str().unwrap_or_default(),
+            report["key_state"].as_str().unwrap_or_default(),
+            report["key_type"].as_str().unwrap_or_default(),
+            report["authority"].as_str().unwrap_or_default(),
+            report["authorized_keys"].as_str().unwrap_or_default(),
         );
     }
-    // The count is the finding. One helper left behind is untidy; 553 of them
-    // is a directory that accumulated while nobody decided to keep any of it,
-    // and only the number says which of those two an operator is looking at.
-    println!(
-        "\n{target}: {} installed helper script(s) in $HOME/.stado/bin",
-        installed.len()
-    );
-    if let Some(days) = older_than_days {
-        println!("{target}: {older} older than {days} day(s)");
-        if !prune && older != usize::default() {
-            println!("nothing was removed; `--prune` removes exactly those {older}");
+    Ok(())
+}
+
+/// One declared log path out of a unit plist: `StandardOutPath` or
+/// `StandardErrorPath`, or nothing when the plist does not declare it.
+/// PlistBuddy writes its "does not exist" to stderr and prints nothing, so a
+/// failed read is simply no path.
+async fn unit_log_path(
+    resolved: &ComputeTarget,
+    key: &str,
+    plist: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<Option<String>, CmdError> {
+    let output = crate::deploy::host_channel::run_program(
+        resolved,
+        &["/usr/libexec/PlistBuddy", "-c", key, plist],
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let declared = output.stdout.trim();
+    Ok((output.ok() && !declared.is_empty()).then(|| declared.to_string()))
+}
+
+/// The tail of one managed unit's own log, from the paths its unit file
+/// declares.
+///
+/// A unit that crash-loops states why in its log and nowhere else: the health
+/// beacon reports `failed` with an empty `last_log`, `service status` reports
+/// the state, and `host exec` is a read-only allowlist that cannot read a file.
+/// Without this the only route to the sentence naming the fault was an ssh
+/// session, which is the one thing the fleet does not allow, so the fault got
+/// guessed at instead.
+pub async fn unit_log(
+    target: &str,
+    unit: &str,
+    lines: Option<u32>,
+    json: bool,
+) -> Result<(), CmdError> {
+    // A unit label is a reverse-DNS name; it names the plist files this reads,
+    // so it is checked before it gets there.
+    vault_word("unit label", unit)?;
+    let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    // The unit file is found, never guessed: the daemon directory first, then
+    // both agent directories, exactly the retired reader's search order.
+    let mut plist = None;
+    for candidate in [
+        format!("/Library/LaunchDaemons/{unit}.plist"),
+        format!("{home}/Library/LaunchAgents/{unit}.plist"),
+        format!("/Library/LaunchAgents/{unit}.plist"),
+    ] {
+        if crate::deploy::host_channel::remote_test(
+            &resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            plist = Some(candidate);
+            break;
         }
     }
-    removal_outcome(target, failed)
+    let Some(plist) = plist else {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
+             directories",
+            resolved.name
+        )));
+    };
+
+    // The report is composed here, in the wire text the retired reader
+    // printed: STADO_UNITLOG marker lines interleaved with the prefixed
+    // tails, so the JSON and text renderings below parse it unchanged.
+    let mut report = format!("STADO_UNITLOG\tplist\t{plist}\n");
+
+    // One reader for both keys: a unit that sends stdout and stderr to the
+    // same file must not be tailed twice, and a unit that separates them must
+    // not have half of its account silently dropped.
+    let out_path = unit_log_path(&resolved, "Print :StandardOutPath", &plist, &runner).await?;
+    let err_path = unit_log_path(&resolved, "Print :StandardErrorPath", &plist, &runner).await?;
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(path) = &out_path {
+        declared.push(path.clone());
+    }
+    if let Some(path) = &err_path {
+        if out_path.as_ref() != Some(path) {
+            declared.push(path.clone());
+        }
+    }
+    if declared.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: {unit} declares no log path",
+            resolved.name
+        )));
+    }
+
+    for log in &declared {
+        if crate::deploy::host_channel::remote_test(
+            &resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(log)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            report.push_str(&format!("STADO_UNITLOG\tfile\t{log}\n"));
+            report.push_str(&format!("=== {log} (last {lines} lines)\n"));
+            let tail = crate::deploy::host_channel::run_program(
+                &resolved,
+                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
+                &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if tail.ok() {
+                report.push_str(&tail.stdout);
+            } else {
+                report.push_str("    unreadable\n");
+            }
+        } else {
+            report.push_str(&format!("STADO_UNITLOG\tabsent\t{log}\n"));
+            report.push_str(&format!("=== {log} (absent)\n"));
+        }
+    }
+
+    let body: String = report
+        .lines()
+        .filter(|line| !line.starts_with("STADO_UNITLOG\t"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if json {
+        let files: Vec<serde_json::Value> = report
+            .lines()
+            .filter_map(
+                |line| match crate::deploy::host_channel::marker_fields(line).as_slice() {
+                    ["STADO_UNITLOG", kind, value] => Some(json!({
+                        "kind": kind,
+                        "path": value,
+                    })),
+                    _ => None,
+                },
+            )
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "unit": unit,
+                "lines": lines,
+                "declared": files,
+                "log": body,
+            }))?
+        );
+    } else {
+        println!("{body}");
+    }
+    Ok(())
+}
+
+/// What one Weles worker host is doing: the Node.js program that reads the
+/// worker's run evidence on the host itself and prints one JSON document.
+///
+/// Fed to the host's own `node` over the channel's stdin, with the run limit
+/// and API port as argv — the same two values the retired bash wrapper took
+/// from the host's environment. There is nothing to install on the host and
+/// nothing left behind after the read.
+///
+/// Recordings hold page DOM, console output, HAR bodies, personas and proxy
+/// identities. None of that is emitted. What leaves the host is counts,
+/// timestamps, run identifiers, artifact sizes, cost, and the pass/fail flag a
+/// trajectory wrote about itself — the fields a remote operator view needs to
+/// name a run and say how it ended.
+const WELES_ACTIVITY_SOURCE: &str = r#"const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+
+const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
+const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
+const home = os.homedir();
+const workerRoot = path.join(home, '.local/share/weles-worker');
+
+const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
+const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
+
+const isoOrNull = (value) => {
+  const time = Number(value);
+  return Number.isFinite(time) && time > 0 ? new Date(time).toISOString() : null;
+};
+
+const readJson = (file) => {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+// The version marker names the release the activator staged; the directories say
+// which releases actually ran here. The two disagree while a deploy is mid
+// flight, and a report that carried only one of them would hide that.
+const releaseMarker = (() => {
+  try {
+    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+})();
+
+const compareVersions = (left, right) => {
+  const parts = (value) => String(value).split('.').map((piece) => Number.parseInt(piece, 10) || 0);
+  const [a, b] = [parts(left), parts(right)];
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+};
+
+let releases = [];
+try {
+  releases = fs
+    .readdirSync(workerRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort(compareVersions);
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+
+const ARTIFACT_CLASSES = [
+  ['screenshots', /\.png$/i],
+  ['pages', /\.html$/i],
+  ['videos', /\.webm$/i],
+  ['logs', /\.(log|ndjson)$/i],
+  ['records', /\.json$|\.jsonl$|\.har$/i],
+];
+
+const classify = (name) => {
+  for (const [label, pattern] of ARTIFACT_CLASSES) {
+    if (pattern.test(name)) return label;
+  }
+  return 'other';
+};
+
+const RUNNING_WINDOW_MS = 180_000;
+
+const describeRun = (release, platform, runDirectory) => {
+  const stat = fs.statSync(runDirectory);
+  const counts = { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 };
+  let bytes = 0;
+  let action = null;
+  let resultOk = null;
+  let startedAt = null;
+  let completedAt = null;
+
+  const walk = (directory, depth) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        // The one directory directly under a run is the action that produced it.
+        if (depth === 0 && !action) action = entry.name;
+        if (depth < 4) walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      counts[classify(entry.name)] += 1;
+      try {
+        bytes += fs.statSync(full).size;
+      } catch {
+        // A file rotated away mid-walk is not worth failing the report over.
+      }
+      if (/result\.json$/i.test(entry.name)) {
+        const document = readJson(full);
+        if (document && typeof document.ok === 'boolean') resultOk = document.ok;
+        if (typeof document?.completed_at === 'string') completedAt = document.completed_at;
+      } else if (entry.name === 'session_meta.json') {
+        const document = readJson(full);
+        if (typeof document?.started_at === 'string') startedAt = document.started_at;
+      }
+    }
+  };
+  walk(runDirectory, 0);
+
+  const uploaded = fs.existsSync(path.join(runDirectory, '.uploaded.json'));
+  const costs = readJson(path.join(path.dirname(runDirectory), '_costs', `${path.basename(runDirectory)}.json`));
+  const isFresh = Date.now() - stat.mtimeMs < RUNNING_WINDOW_MS;
+
+  let status = 'recorded';
+  if (resultOk === true) status = 'succeeded';
+  else if (resultOk === false) status = 'failed';
+  else if (isFresh) status = 'running';
+
+  return {
+    id: path.basename(runDirectory),
+    release,
+    platform,
+    action,
+    status,
+    started_at: startedAt ?? isoOrNull(stat.birthtimeMs),
+    completed_at: completedAt,
+    updated_at: isoOrNull(stat.mtimeMs),
+    artifact_counts: counts,
+    artifact_bytes: bytes,
+    cost_usd: typeof costs?.cost_usd === 'number' ? costs.cost_usd : null,
+    uploaded,
+  };
+};
+
+const runs = [];
+let runTotal = 0;
+for (const release of releases) {
+  const releaseRoot = path.join(workerRoot, release);
+  let platforms = [];
+  try {
+    platforms = fs
+      .readdirSync(releaseRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    continue;
+  }
+  for (const platform of platforms) {
+    const recordings = path.join(releaseRoot, platform, 'recordings');
+    let entries = [];
+    try {
+      entries = fs.readdirSync(recordings, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      // `_costs` is the sidecar ledger of the runs beside it, not a run.
+      if (!entry.isDirectory() || entry.name === '_costs') continue;
+      runTotal += 1;
+      runs.push({ release, platform, directory: path.join(recordings, entry.name) });
+    }
+  }
+}
+
+runs.sort((left, right) => {
+  const time = (row) => {
+    try {
+      return fs.statSync(row.directory).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  return time(right) - time(left);
+});
+
+const described = runs.slice(0, runLimit).map((row) => describeRun(row.release, row.platform, row.directory));
+
+const probePort = (port) =>
+  new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    const finish = (listening) => {
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.setTimeout(1500);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+
+probePort(apiPort).then((listening) => {
+  const document = {
+    schema_version: 1,
+    host: shortHostname || hostname,
+    hostname,
+    generated_at: new Date().toISOString(),
+    worker: {
+      staged_release: releaseMarker,
+      installed_releases: releases,
+      newest_release: releases.at(-1) ?? null,
+    },
+    api: {
+      endpoint: `http://127.0.0.1:${apiPort}`,
+      listening,
+    },
+    run_total: runTotal,
+    runs: described,
+  };
+  process.stdout.write(`STADO-WELES-ACTIVITY ${JSON.stringify(document)}\n`);
+});
+"#;
+
+/// The marker [`WELES_ACTIVITY_SOURCE`] prefixes to its one JSON line, so a
+/// login shell's own greeting cannot be mistaken for the report.
+const WELES_ACTIVITY_MARKER: &str = "STADO-WELES-ACTIVITY ";
+
+/// Run [`WELES_ACTIVITY_SOURCE`] on one host with the host's own node, and
+/// hand back what it printed.
+///
+/// The run limit and API port are the host's environment or the defaults the
+/// retired wrapper carried, resolved on the host so an operator's local
+/// environment cannot steer a remote read.
+async fn read_weles_activity(
+    resolved: &ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<String, crate::deploy::DeployError> {
+    use crate::deploy::host_channel;
+    let mut node = None;
+    for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+        if host_channel::remote_test(resolved, &format!("-x {candidate}"), runner).await? {
+            node = Some(candidate);
+            break;
+        }
+    }
+    let Some(node) = node else {
+        return Err(crate::deploy::DeployError(
+            "Node.js is unavailable on this host".to_string(),
+        ));
+    };
+    let environment = host_channel::run_command(
+        resolved,
+        "printf '%s %s' \"${WELES_ACTIVITY_RUN_LIMIT:-40}\" \"${WELES_API_PORT:-8788}\"",
+        runner,
+    )
+    .await?;
+    if !environment.ok() {
+        return Err(crate::deploy::DeployError(host_channel::last_error_line(
+            &environment,
+            "the host's Weles environment could not be read",
+        )));
+    }
+    let mut values = environment.stdout.split_whitespace();
+    let limit = values.next().unwrap_or("40");
+    let port = values.next().unwrap_or("8788");
+    let output = host_channel::run_program_with_stdin(
+        resolved,
+        &[node, "-", limit, port],
+        WELES_ACTIVITY_SOURCE,
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(crate::deploy::DeployError(host_channel::last_error_line(
+            &output,
+            "the Weles activity read did not complete",
+        )));
+    }
+    Ok(output.stdout)
+}
+
+/// Report TARGET's Weles worker releases, API reachability and recorded runs.
+pub async fn weles_activity(target: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
+        })?;
+    let output = read_weles_activity(&resolved, &runner)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
+        })?;
+
+    let document = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(WELES_ACTIVITY_MARKER))
+        .next_back()
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{target}: the Weles activity read printed no report line"
+            ))
+        })?;
+    let report: Value = serde_json::from_str(document).map_err(|error| {
+        CmdError::click(format!(
+            "{target}: the Weles activity report is not readable JSON: {error}"
+        ))
+    })?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let worker = &report["worker"];
+    println!(
+        "{target}: worker {} staged, {} newest installed, API {} on {}",
+        worker["staged_release"].as_str().unwrap_or("unknown"),
+        worker["newest_release"].as_str().unwrap_or("unknown"),
+        if report["api"]["listening"].as_bool().unwrap_or_default() {
+            "answering"
+        } else {
+            "silent"
+        },
+        report["api"]["endpoint"]
+            .as_str()
+            .unwrap_or("unknown endpoint"),
+    );
+    let runs = report["runs"].as_array().map_or(&[][..], Vec::as_slice);
+    println!(
+        "{target}: {} recorded run(s), {} newest below",
+        report["run_total"].as_u64().unwrap_or_default(),
+        runs.len()
+    );
+    // Newest first, exactly as the host ordered them: a run's own verdict and
+    // the time it last wrote are what an operator reads to know where work is.
+    for run in runs {
+        println!(
+            "  {:<10} {:<22} {:<38} {}",
+            run["status"].as_str().unwrap_or("unknown"),
+            run["action"].as_str().unwrap_or("unknown action"),
+            run["id"].as_str().unwrap_or("-"),
+            run["updated_at"].as_str().unwrap_or("-"),
+        );
+    }
+    Ok(())
+}
+
+/// Inspect the images rendered by one HTTPS surface in a read-only Weles
+/// browser session on TARGET.
+pub async fn weles_image_inspect(
+    target: &str,
+    source_url: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    let parsed = url::Url::parse(source_url)
+        .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(CmdError::usage(
+            "--url must be an HTTPS URL without embedded credentials",
+        ));
+    }
+    let source_url = parsed.to_string();
+    let host = parsed.host_str().expect("checked above");
+    let objective = "Inspect this public page without signing in or changing any user or application state. Scroll through the whole page to trigger lazy-loaded media. Inspect every rendered img element and report its currentSrc URL host and pathname, complete flag, naturalWidth and naturalHeight. Inspect PerformanceResourceTiming entries for image resources and /api/stado/object requests, including responseStatus where Chromium exposes it. Count loaded and failed images, count /api/stado/object image URLs, list every failed URL or HTTP status, and list any visible image-error placeholder text and the affected card or room name. Return one concise JSON object containing final_url, rendered_images, loaded_images, failed_images, stado_object_images, failed_resources, placeholders, and observations. Do not click controls that mutate data, create an account, or submit forms.";
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let result = crate::deploy::weles_capture::observe_action_payload(
+        &channel,
+        "generic_browser_task",
+        json!({
+            "url": source_url.as_str(),
+            "objective": objective,
+            "flow_name": format!("stado-image-inspection:{host}"),
+            "session_label": format!("stado-image-inspection-{host}"),
+            "proxy": "none",
+            "headless": true,
+            "constraints": {
+                "read_only": true,
+                "no_login": true,
+                "no_mutation": true,
+            },
+        }),
+        None,
+        false,
+    )
+    .await
+    .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let run_id = result
+        .get("run_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::click(format!("{target}: Weles returned no diagnostic run id")))?;
+    let diagnostics = crate::deploy::weles_capture::image_diagnostics(&channel, run_id)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let task_result = result.get("result").cloned().unwrap_or(Value::Null);
+    let browser_run = json!({
+        "run_id": run_id,
+        "trajectory_ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "exit_code": result.get("exitCode"),
+        "final_url": task_result.get("final_url"),
+        "trajectory_error": task_result.get("error"),
+    });
+    let report = json!({
+        "target": target,
+        "source_url": source_url.as_str(),
+        "action": "generic_browser_task",
+        "endpoint": admission.declared_url,
+        "transport": channel.transport(),
+        "admission_token": channel.token_state(),
+        "browser_run": browser_run,
+        "images": diagnostics,
+    });
+    if json {
+        print_json(&report);
+    } else {
+        println!(
+            "{target}: inspected {} through {}",
+            report["source_url"].as_str().unwrap_or(source_url.as_str()),
+            admission.declared_url,
+        );
+        print_json(&diagnostics);
+    }
+    Ok(())
+}
+
+/// `stado host weles-capture TARGET --plan PLAN.json [--batch ID] [--json]` —
+/// enqueue one batch of `generic_capture` actions on TARGET's Weles admission
+/// API.
+///
+/// The plan is validated in full before the host is contacted: one bad capture
+/// refuses the whole plan, because a half-enqueued batch still renders pages
+/// and still writes artifacts, and nothing downstream can tell those from the
+/// ones somebody planned.
+pub async fn weles_capture(
+    target: &str,
+    plan: &str,
+    batch: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let plan = crate::deploy::weles_capture::parse_plan(plan, target, batch)
+        .map_err(|error| CmdError::usage(error.to_string()))?;
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let accepted = crate::deploy::weles_capture::enqueue(&channel, &plan)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    if json {
+        print_json(&json!({
+            "target": target,
+            "batch": plan.batch,
+            "action": crate::deploy::weles_capture::CAPTURE_ACTION,
+            "endpoint": admission.declared_url,
+            "transport": channel.transport(),
+            "admission_token": channel.token_state(),
+            "enqueued": accepted.len(),
+            "actions": accepted
+                .iter()
+                .map(|action| json!({
+                    "action_id": action.action_id,
+                    "site_slug": action.site_slug,
+                    "axis": action.axis,
+                    "artifact_prefix": action.artifact_prefix,
+                }))
+                .collect::<Vec<Value>>(),
+            "status": "enqueued",
+        }));
+        return Ok(());
+    }
+    println!(
+        "{target}: enqueued {} {} action(s) for batch {} on {}",
+        accepted.len(),
+        crate::deploy::weles_capture::CAPTURE_ACTION,
+        plan.batch,
+        admission.declared_url,
+    );
+    for action in &accepted {
+        println!(
+            "  {:<38} {:<24} {:<13} {}",
+            action.action_id, action.site_slug, action.axis, action.artifact_prefix,
+        );
+    }
+    Ok(())
+}
+
+/// `stado host weles-capture-status TARGET --batch ID [--json]` — per-action
+/// state of one capture batch, and the artifact keys already in Stado storage
+/// under that batch's prefix. Read-only.
+///
+/// The exit status answers whether the batch is KNOWN, not whether every
+/// capture succeeded: a runner polls this in a loop and a failed capture is a
+/// row to read, not an error to retry. A batch nobody enqueued exits non-zero,
+/// after printing the report, because that is the one question the report
+/// cannot answer by being empty.
+/// `stado host weles-browser-runtime` — verify, and optionally complete, the
+/// browser runtime a Weles host needs.
+///
+/// Verify always runs first and runs again after a repair, so the command
+/// reports the host's state rather than the installer's exit code: an install
+/// that printed success and left the marker absent is the failure this whole
+/// family of commands exists to catch.
+pub async fn weles_browser_runtime(
+    target: &str,
+    components: &[String],
+    repair: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    // One set decides both what is judged and what a repair installs, so the
+    // verdict can never fail on something --repair would not have fixed.
+    let required: Vec<String> = if components.is_empty() {
+        vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
+    } else {
+        components.to_vec()
+    };
+    let mut report =
+        crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let mut installed: Vec<String> = Vec::new();
+    if repair {
+        installed = crate::deploy::weles_browser_runtime::repair(&resolved, &required, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // Re-verify: the host's own answer decides, not the installer's.
+        report =
+            crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+
+    if json {
+        let mut object = report.to_report(&resolved.name);
+        object.insert("repaired".to_string(), serde_json::json!(installed));
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+    } else {
+        println!("host:     {}", resolved.name);
+        println!("runtime:  {}", report.verdict());
+        for line in &installed {
+            println!("repair:   {line}");
+        }
+        super::table::print(
+            &["COMPONENT", "REVISION", "DEFAULT", "STATE", "EXPECTED AT"],
+            &report
+                .components
+                .iter()
+                .map(|component| {
+                    vec![
+                        component.name.clone(),
+                        component.revision.clone(),
+                        component.install_by_default.to_string(),
+                        component.state.clone(),
+                        component.expected_path.clone(),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    match report.failure(&resolved.name) {
+        Some(reason) => Err(CmdError::click(reason)),
+        None => Ok(()),
+    }
+}
+
+/// What one `host capability-route` invocation asks for.
+pub struct CapabilityRouteRequest<'a> {
+    pub target: &'a str,
+    pub resource: Option<&'a str>,
+    pub item: Option<&'a str>,
+    pub field: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub verify: bool,
+    /// Address a named broker instance instead of the host's default files.
+    pub capability_file: Option<&'a str>,
+    pub routes_file: Option<&'a str>,
+    pub json: bool,
+}
+
+/// `stado host capability-route` — the fleet's own surface for the table that
+/// decides which credential a login form receives, on the host that holds it.
+///
+/// Read without `--resource`, declare with all four flags: the same shape
+/// `retag-vault-item` uses, so an operator about to change a route can first
+/// see what they would be changing. Nothing secret crosses either way: a
+/// route names coordinates, never a value.
+pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(), CmdError> {
+    let CapabilityRouteRequest {
+        target,
+        resource,
+        item,
+        field,
+        reason,
+        verify,
+        json,
+        capability_file,
+        routes_file,
+    } = request;
+    // Declaring takes all four or none of them. A partial declaration is the
+    // one input that could look like a read and write something.
+    let declaration =
+        match (resource, item, field, reason) {
+            (None, None, None, None) => None,
+            (Some(resource), Some(item), Some(field), Some(reason)) => {
+                if reason.trim().is_empty() {
+                    return Err(CmdError::usage(
+                    "--reason must say why this route exists; it travels into Skarbiec's journal \
+                     beside the table",
+                ));
+                }
+                Some((resource, item, field, reason))
+            }
+            (None, _, _, _) => {
+                return Err(CmdError::usage(
+                    "reading takes only TARGET; declaring takes --resource, --item, --field and \
+                 --reason together",
+                ))
+            }
+            _ => return Err(CmdError::usage(
+                "declaring one capability route takes --resource, --item, --field and --reason \
+                 together",
+            )),
+        };
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let broker = crate::deploy::host_capability::resolve(
+        &resolved,
+        &crate::deploy::host_capability::BrokerFiles {
+            capability_file,
+            routes_file,
+        },
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+
+    if verify && declaration.is_some() {
+        return Err(CmdError::usage(
+            "--verify is a read; it does not combine with declaring a route",
+        ));
+    }
+    let report = match declaration {
+        Some((resource, item, field, reason)) => crate::deploy::host_capability::route_add(
+            &resolved, &broker, resource, item, field, reason, &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?,
+        None if verify => {
+            crate::deploy::host_capability::verify_routes(&resolved, &broker, &runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?
+        }
+        None => crate::deploy::host_capability::routes(&resolved, &broker, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?,
+    };
+
+    if json {
+        let mut object = crate::deploy::host_channel::base_report(&resolved);
+        object.insert("vault".to_string(), json!(broker.vault));
+        object.insert("report".to_string(), report);
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+        return Ok(());
+    }
+    println!("host:      {}", resolved.name);
+    println!("vault:     {}", broker.vault);
+    match report.get("added").and_then(Value::as_bool) {
+        Some(true) => {
+            println!(
+                "declared:  {} -> {}/{}",
+                report["resource"].as_str().unwrap_or_default(),
+                report["item"].as_str().unwrap_or_default(),
+                report["field"].as_str().unwrap_or_default(),
+            );
+            if let Some(backup) = report.get("backup").and_then(Value::as_str) {
+                println!("backup:    {backup}");
+            }
+        }
+        Some(false) => println!(
+            "unchanged: {} already maps {}/{}",
+            report["resource"].as_str().unwrap_or_default(),
+            report["item"].as_str().unwrap_or_default(),
+            report["field"].as_str().unwrap_or_default(),
+        ),
+        None if verify => {
+            // `checked` plus one line per route that cannot deliver, in the
+            // host's own words. An empty `broken` list is the whole point.
+            println!(
+                "checked:   {}",
+                report.get("checked").and_then(Value::as_u64).unwrap_or(0)
+            );
+            let broken = report
+                .get("broken")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            println!("broken:    {}", broken.len());
+            for row in broken {
+                println!(
+                    "  {:<52} {}",
+                    row["resource"].as_str().unwrap_or_default(),
+                    row["problem"].as_str().unwrap_or_default(),
+                );
+            }
+        }
+        None => {
+            let rows = report
+                .get("routes")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            println!("routes:    {}", rows.len());
+            for row in rows {
+                println!(
+                    "  {:<52} {}/{} item={} field={}",
+                    row["resource"].as_str().unwrap_or_default(),
+                    row["item"].as_str().unwrap_or_default(),
+                    row["field"].as_str().unwrap_or_default(),
+                    row["item_present"].as_bool().unwrap_or(false),
+                    row["field_present"].as_bool().unwrap_or(false),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What one `host weles-browser-task` invocation asks for.
+pub struct BrowserTaskRequest<'a> {
+    pub target: &'a str,
+    pub url: &'a str,
+    pub objective: &'a str,
+    pub session_label: &'a str,
+    pub action: &'a str,
+    pub allowlist_file: &'a str,
+    pub login_item: Option<&'a str>,
+    pub fresh_profile: bool,
+    pub allow_login: bool,
+    pub sign_in_origin: Option<&'a str>,
+    pub sign_in_item: Option<&'a str>,
+    pub windowed: bool,
+    pub json: bool,
+}
+
+/// `stado host weles-browser-task` — the general Weles submission surface.
+///
+/// The allowlist check happens first and on its own round trip, because the
+/// point is to refuse before anything is enqueued: a name the worker will not
+/// run must produce a sentence here, not an accepted job that disappears.
+pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), CmdError> {
+    let BrowserTaskRequest {
+        target,
+        url,
+        objective,
+        session_label,
+        action,
+        allowlist_file,
+        login_item,
+        fresh_profile,
+        allow_login,
+        sign_in_origin,
+        sign_in_item,
+        windowed,
+        json,
+    } = request;
+    // Both halves or neither, and only where the run says it may sign in.
+    // Checked before the host is resolved: a flag combination that cannot work
+    // should cost nothing.
+    let sign_in =
+        match (sign_in_origin, sign_in_item) {
+            (None, None) => None,
+            (Some(_), None) => {
+                return Err(CmdError::usage(
+                    "--sign-in-origin needs --sign-in-item: the vault item holding the account",
+                ))
+            }
+            (None, Some(_)) => return Err(CmdError::usage(
+                "--sign-in-item needs --sign-in-origin: the page origin whose fields are filled",
+            )),
+            (Some(origin), Some(item)) => {
+                if !allow_login {
+                    return Err(CmdError::usage(
+                    "--sign-in-origin requires --allow-login: a prefilled credential is a sign-in, \
+                     and the run's own instructions would otherwise tell the agent not to",
+                ));
+                }
+                let origin = crate::deploy::weles_browser_task::exact_origin(origin)
+                    .map_err(|error| CmdError::usage(error.to_string()))?;
+                Some((origin, item))
+            }
+        };
+    let parsed = url::Url::parse(url)
+        .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.username() != "" {
+        return Err(CmdError::usage(
+            "--url must be an HTTP or HTTPS URL without embedded credentials",
+        ));
+    }
+    // `@path` keeps a long objective out of a shell history and out of argv.
+    let objective = match objective.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|error| {
+                CmdError::usage(format!("cannot read objective from {path}: {error}"))
+            })?
+            .trim()
+            .to_string(),
+        // Trimmed on both paths: an all-whitespace objective is not a task,
+        // and only trimming the `@file` path made that depend on how the
+        // objective was supplied.
+        None => objective.trim().to_string(),
+    };
+    if objective.is_empty() {
+        return Err(CmdError::usage("--objective is empty"));
+    }
+    if let Some(item) = login_item {
+        let bytes = item.as_bytes();
+        if bytes.is_empty()
+            || bytes.len() > 128
+            || !bytes[0].is_ascii_alphanumeric()
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(CmdError::usage("--login-item is not a valid Weles item id"));
+        }
+        if !action.ends_with("_login") {
+            return Err(CmdError::usage(
+                "--login-item requires an action whose name ends in _login",
+            ));
+        }
+        if !allow_login {
+            return Err(CmdError::usage("--login-item requires --allow-login"));
+        }
+    }
+    let account_id = fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4()));
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let allowlist =
+        crate::deploy::weles_browser_task::host_allowlist(&resolved, allowlist_file, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    // Only now: a capability is single-use and expires, so it is issued after
+    // the action has been shown to be one this host accepts, never before.
+    // Issued ON that host, because redemption is a socket there.
+    let credential_prefill = match &sign_in {
+        None => Vec::new(),
+        Some((origin, item)) => {
+            let prefill = crate::deploy::weles_browser_task::issue_sign_in_prefill(
+                &resolved, origin, item, &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if !json {
+                println!("sign-in:   {origin} as the account in {item}");
+                println!(
+                    "prefill:   {} field(s), issued on {}, single-use",
+                    prefill.entries.len(),
+                    resolved.name
+                );
+                if !prefill.unconfirmed.is_empty() {
+                    println!(
+                        "note:      this channel could not open {} to confirm the field; the \
+                         worker's own broker reads it at fill time (`host capability-route {} \
+                         --verify` says why)",
+                        prefill.unconfirmed.join(", "),
+                        resolved.name
+                    );
+                }
+            }
+            prefill.entries
+        }
+    };
+
+    let task = crate::deploy::weles_browser_task::BrowserTask {
+        action,
+        url: parsed.as_str(),
+        objective: &objective,
+        session_label,
+        login_item,
+        account_id: account_id.as_deref(),
+        fresh_profile,
+        allow_login,
+        headless: !windowed,
+        credential_prefill,
+    };
+    let outcome = crate::deploy::weles_browser_task::submit(target, &task)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&Value::Object(
+                outcome.to_report(&resolved.name, action)
+            ))?
+        );
+    } else {
+        println!("host:      {}", resolved.name);
+        println!("action:    {action}");
+        println!("run:       {}", outcome.run_id);
+        println!("outcome:   {}", if outcome.ok { "ok" } else { "failed" });
+        if let Some(code) = outcome.exit_code {
+            println!("exit:      {code}");
+        }
+        if let Some(profile) = &outcome.profile {
+            println!(
+                "profile:   {}",
+                profile["directory"].as_str().unwrap_or("fresh")
+            );
+        }
+        if !outcome.result.is_null() {
+            println!("result:    {}", serde_json::to_string(&outcome.result)?);
+        }
+    }
+    if outcome.ok {
+        Ok(())
+    } else {
+        Err(CmdError::click(format!(
+            "{}: {action} run {} did not succeed",
+            resolved.name, outcome.run_id
+        )))
+    }
+}
+
+pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Result<(), CmdError> {
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let batch_status = crate::deploy::weles_capture::status(&channel, batch)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let states = batch_status.captures;
+    let totals = crate::deploy::weles_capture::totals(&states);
+    let stored: usize = states.iter().map(|state| state.artifacts.len()).sum();
+    if json {
+        print_json(&json!({
+            "target": target,
+            "batch": batch,
+            "action": crate::deploy::weles_capture::CAPTURE_ACTION,
+            "endpoint": admission.declared_url,
+            "transport": channel.transport(),
+            "artifacts_unreachable": batch_status.artifacts_unreachable,
+            "actions": states
+                .iter()
+                .map(|state| json!({
+                    "action_id": state.action_id,
+                    "site_slug": state.site_slug,
+                    "axis": state.axis,
+                    "state": state.state,
+                    "error": state.error,
+                    "artifact_prefix": state.artifact_prefix,
+                    "artifacts": state.artifacts,
+                }))
+                .collect::<Vec<Value>>(),
+            "totals": totals
+                .iter()
+                .map(|(state, count)| (state.clone(), Value::from(*count)))
+                .collect::<serde_json::Map<String, Value>>(),
+            "artifacts_stored": stored,
+        }));
+    } else {
+        println!(
+            "{target}: batch {batch} carries {} {} action(s), {}",
+            states.len(),
+            crate::deploy::weles_capture::CAPTURE_ACTION,
+            totals
+                .iter()
+                .map(|(state, count)| format!("{count} {state}"))
+                .collect::<Vec<String>>()
+                .join(", "),
+        );
+        if let Some(unreachable) = &batch_status.artifacts_unreachable {
+            println!("{target}: artifact listing unreadable: {unreachable}");
+        }
+        for state in &states {
+            println!(
+                "  {:<9} {:<24} {:<13} {:>3} artifact(s)  {}{}",
+                state.state,
+                state.site_slug,
+                state.axis,
+                state.artifacts.len(),
+                state.action_id,
+                state
+                    .error
+                    .as_deref()
+                    .map_or_else(String::new, |error| format!("  {error}")),
+            );
+        }
+        println!(
+            "{target}: {stored} object(s) under stado://{}/{batch}/",
+            crate::deploy::weles_capture::ARTIFACT_NAMESPACE
+        );
+    }
+    if states.is_empty() {
+        return Err(CmdError::click(format!(
+            "{target}: no {} action carries batch {batch}, so nothing was ever enqueued under that id",
+            crate::deploy::weles_capture::CAPTURE_ACTION
+        )));
+    }
+    Ok(())
 }
 
 /// Open a background reverse SSH forward using the exact registry channel.
 /// Both ends bind loopback; SSH supplies transport encryption and refuses to
 /// report success until the remote listener exists.
+/// The `-R` specification `forward_local` gave ssh, which is what identifies
+/// one channel among several on this machine.
+///
+/// Matching on this and the destination, never on the program name: this host
+/// runs other forwards, and `pkill ssh` would take the fleet's other channels
+/// down with the one being closed.
+fn reverse_forward_spec(remote_port: u16, local_port: u16) -> String {
+    format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}")
+}
+fn local_forward_spec_prefix(local_port: u16) -> String {
+    format!("127.0.0.1:{local_port}:127.0.0.1:")
+}
+
+/// `stado host forward-close TARGET NAME` — end a channel opened by either
+/// `forward-local` or `forward-remote` and reconcile its markers.
+///
+/// Order matters. The process is ended first, then the markers are removed,
+/// then the exposed port is re-read: a marker deleted while the tunnel still
+/// carried traffic would leave a live port nothing describes, which is worse
+/// than the stale marker it was trying to fix.
+pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("forward name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let local_marker = std::path::Path::new(&home)
+        .join(".stado")
+        .join("forwards")
+        .join(format!("{name}.local"));
+    let local_forward_marker = std::path::Path::new(&home)
+        .join(".stado")
+        .join("forwards")
+        .join(format!("{name}.url"));
+
+    // The ports come from the markers the open wrote, so a close addresses the
+    // exact channel that was opened rather than a port an operator remembers.
+    let local_port = std::fs::read_to_string(&local_marker)
+        .ok()
+        .and_then(|body| url::Url::parse(body.trim()).ok())
+        .and_then(|parsed| parsed.port());
+    let remote_marker_body = crate::deploy::service_file_fetch::fetch_file(
+        &resolved,
+        &format!("$HOME/.stado/forwards/{name}.url"),
+        &runner,
+    )
+    .await
+    .ok()
+    .filter(|fetched| fetched.ok())
+    .map(|fetched| String::from_utf8_lossy(&fetched.content).trim().to_string());
+    let remote_port = remote_marker_body
+        .as_deref()
+        .and_then(|body| url::Url::parse(body).ok())
+        .and_then(|parsed| parsed.port());
+    // `forward-remote` has no marker on TARGET. Its local `.url` marker is
+    // considered only when neither half of a reverse forward exists, so the
+    // same name can never make this close the wrong direction.
+    let local_forward_port = if local_port.is_none() && remote_port.is_none() {
+        std::fs::read_to_string(&local_forward_marker)
+            .ok()
+            .and_then(|body| url::Url::parse(body.trim()).ok())
+            .and_then(|parsed| parsed.port())
+    } else {
+        None
+    };
+
+    if local_port.is_none() && remote_port.is_none() && local_forward_port.is_none() {
+        return Err(CmdError::click(format!(
+            "{target}: no forward named {name:?} is recorded here or on the host, so there is \
+             nothing to close; `stado host inventory {target}` lists the markers that exist"
+        )));
+    }
+
+    // End the ssh that carries it, matched on the whole -R spec.
+    let mut ended: Vec<String> = Vec::new();
+    if let (Some(remote), Some(local)) = (remote_port, local_port) {
+        let spec = reverse_forward_spec(remote, local);
+        let listing = tokio::process::Command::new("/bin/ps")
+            .args(["ax", "-o", "pid=", "-o", "command="])
+            .output()
+            .await?;
+        for line in String::from_utf8_lossy(&listing.stdout).lines() {
+            let trimmed = line.trim_start();
+            let Some((pid, command)) = trimmed.split_once(char::is_whitespace) else {
+                continue;
+            };
+            if !command.contains(&spec) || !command.contains("ssh") {
+                continue;
+            }
+            let Ok(parsed) = pid.parse::<i32>() else {
+                continue;
+            };
+            let killed = tokio::process::Command::new("/bin/kill")
+                .args(["-TERM", &parsed.to_string()])
+                .output()
+                .await?;
+            ended.push(format!(
+                "pid {parsed}{}",
+                if killed.status.success() {
+                    ""
+                } else {
+                    " (signal refused)"
+                }
+            ));
+        }
+    }
+    // A local forward is identified by the complete local half of its `-L`
+    // specification and the registry target's exact SSH destination. Matching
+    // either one alone could end an unrelated channel.
+    if let Some(local) = local_forward_port {
+        let ssh = resolved
+            .ssh
+            .as_deref()
+            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+        let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+        let destination = argv
+            .pop()
+            .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+        let spec_prefix = local_forward_spec_prefix(local);
+        let listing = tokio::process::Command::new("/bin/ps")
+            .args(["ax", "-o", "pid=", "-o", "command="])
+            .output()
+            .await?;
+        for line in String::from_utf8_lossy(&listing.stdout).lines() {
+            let trimmed = line.trim_start();
+            let Some((pid, command)) = trimmed.split_once(char::is_whitespace) else {
+                continue;
+            };
+            if !command.contains("ssh")
+                || !command.contains(" -L ")
+                || !command.contains(&spec_prefix)
+                || !command.contains(&destination)
+            {
+                continue;
+            }
+            let Ok(parsed) = pid.parse::<i32>() else {
+                continue;
+            };
+            let killed = tokio::process::Command::new("/bin/kill")
+                .args(["-TERM", &parsed.to_string()])
+                .output()
+                .await?;
+            ended.push(format!(
+                "pid {parsed}{}",
+                if killed.status.success() {
+                    ""
+                } else {
+                    " (signal refused)"
+                }
+            ));
+        }
+    }
+
+    // Then the markers, remote first for a reverse forward: it is the one
+    // another machine reads.
+    let remote_removed = if remote_marker_body.is_some() {
+        let script = format!(
+            "set -eu\n/bin/rm -f \"$HOME/.stado/forwards/\"{name}\".url\"\n",
+            name = crate::deploy::shlex_quote(name)
+        );
+        let removed = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !removed.ok() {
+            return Err(CmdError::click(format!(
+                "{target}: the channel was ended and its host marker could not be removed, so \
+                 the host still advertises an endpoint: {}",
+                crate::deploy::host_channel::last_error_line(
+                    &removed,
+                    "remote marker removal failed"
+                )
+            )));
+        }
+        true
+    } else {
+        false
+    };
+    let local_removed = if local_forward_port.is_some() {
+        std::fs::remove_file(&local_forward_marker).is_ok()
+    } else {
+        std::fs::remove_file(&local_marker).is_ok()
+    };
+
+    // Re-read the side that was exposed. The endpoint itself, not a process
+    // lookup, decides whether the port was reclaimed.
+    let still_listening = if let Some(port) = local_forward_port {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        Some(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                tokio::net::TcpStream::connect(("127.0.0.1", port)),
+            )
+            .await
+            .map_or(true, |result| result.is_ok()),
+        )
+    } else {
+        match remote_port {
+            Some(port) => {
+                let report = crate::deploy::service_serving::read_serving(
+                    &resolved,
+                    "com.wisent.host-health-beacon",
+                    "",
+                    &[port],
+                    &runner,
+                )
+                .await
+                .ok();
+                report.map(|report| {
+                    report
+                        .ports
+                        .first()
+                        .is_some_and(|entry| !entry.holders.is_empty())
+                })
+            }
+            None => None,
+        }
+    };
+    let effective_local_port = local_forward_port.or(local_port);
+    let direction = if local_forward_port.is_some() {
+        "local"
+    } else {
+        "reverse"
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "name": name,
+                "direction": direction,
+                "remote_port": remote_port,
+                "local_port": effective_local_port,
+                "ended": ended,
+                "remote_marker_removed": remote_removed,
+                "local_marker_removed": local_removed,
+                "port_still_listening": still_listening,
+                "remote_port_still_listening": if local_forward_port.is_none() { still_listening } else { None },
+                "local_port_still_listening": if local_forward_port.is_some() { still_listening } else { None },
+            }))?
+        );
+    } else {
+        println!("host:      {}", resolved.name);
+        println!("forward:   {name}");
+        println!("direction: {direction}");
+        println!(
+            "ports:     remote {} local {}",
+            remote_port.map_or_else(|| "-".to_string(), |port| port.to_string()),
+            effective_local_port.map_or_else(|| "-".to_string(), |port| port.to_string())
+        );
+        println!(
+            "ended:    {}",
+            if ended.is_empty() {
+                "no matching ssh process on this machine".to_string()
+            } else {
+                ended.join(", ")
+            }
+        );
+        println!(
+            "markers:  host {} local {}",
+            if remote_removed { "removed" } else { "absent" },
+            if local_removed { "removed" } else { "absent" }
+        );
+        println!(
+            "port:     {}",
+            match still_listening {
+                Some(true) if local_forward_port.is_some() => "STILL LISTENING locally",
+                Some(true) => "STILL LISTENING on the host",
+                Some(false) => "reclaimed",
+                None => "unverified",
+            }
+        );
+    }
+    match still_listening {
+        Some(true) => Err(CmdError::click(format!(
+            "{}: {name} was closed and its {} port is still listening, so something else holds \
+             it; the markers are gone and the port is not this forward's any more",
+            resolved.name,
+            if local_forward_port.is_some() {
+                "local"
+            } else {
+                "remote"
+            }
+        ))),
+        _ => Ok(()),
+    }
+}
+
 pub async fn forward_local(
     target: &str,
     name: &str,
@@ -2910,6 +6522,155 @@ pub async fn forward_remote(
     Ok(())
 }
 
+/// The replica roots every fleet host uses, relative to the managed home. Both
+/// are the values the service catalog declares for the object API unit
+/// (`WC_LOCAL_STORAGE_PATH`) and its replica, so this command reads the same
+/// layout the fleet installs rather than asking an operator to name a path.
+const BACKUP_ROOT: &str = ".stado/local-backup";
+const PRIMARY_ROOT: &str = ".stado/local-storage";
+
+/// Classify a host's local replica against the store it mirrors, and reclaim
+/// the twins when asked.
+///
+/// The first time a tree on this fleet was assumed to be duplicate data it
+/// turned out to be the only copy of 9.58 GiB, so classifying is the default
+/// and it deletes nothing. A reclaim proves and deletes inside ONE pass: every
+/// object it unlinks was hashed on both sides moments earlier by that same
+/// pass. It never reads a verdict from a previous run, which is the shape that
+/// turns a replica into data loss when addresses move between the audit and
+/// the deletion — and they did move on this host, twice, in one evening.
+pub async fn backup_audit(
+    target: &str,
+    reclaim_twins: bool,
+    apply: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.trim().is_empty() {
+        return Err(CmdError::click(
+            "this control plane has no storage.stado.namespace, so a replica path cannot be \
+             resolved to a primary address",
+        ));
+    }
+    let plan = crate::deploy::host_backup_audit::AuditPlan {
+        namespace: namespace.to_string(),
+        backup_root: BACKUP_ROOT.to_string(),
+        primary_root: PRIMARY_ROOT.to_string(),
+        reclaim: reclaim_twins,
+        apply,
+    };
+    let runner = crate::deploy::production_runner();
+    let (_, audit) = crate::deploy::host_backup_audit::audit_host(target, &plan, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let gib = |bytes: u64| bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+    if json {
+        let classes: serde_json::Map<String, Value> = audit
+            .classes
+            .iter()
+            .map(|(class, totals)| {
+                (
+                    class.clone(),
+                    json!({"objects": totals.objects, "bytes": totals.bytes}),
+                )
+            })
+            .collect();
+        print_json(&json!({
+            "host": audit.host,
+            "complete": audit.complete,
+            "unavailable": audit.unavailable,
+            "classes": classes,
+            "reclaimable_bytes": audit.reclaimable_bytes(),
+            "retained_bytes": audit.retained_bytes(),
+            "reclaim": {
+                "requested": reclaim_twins,
+                "applied": reclaim_twins && apply,
+                "complete": audit.reclaim_complete,
+                "deleted_objects": audit.deleted.objects,
+                "deleted_bytes": audit.deleted.bytes,
+                "would_delete_objects": audit.would_delete.objects,
+                "would_delete_bytes": audit.would_delete.bytes,
+                "delete_failed_objects": audit.delete_failed.objects,
+                "delete_failed_bytes": audit.delete_failed.bytes,
+                "pruned_directories": audit.pruned_directories,
+            },
+            "free_kb_before": audit.free_kb_before,
+            "free_kb_after": audit.free_kb_after,
+        }));
+        return Ok(());
+    }
+    for class in [
+        crate::deploy::host_backup_audit::TWIN,
+        crate::deploy::host_backup_audit::ABSENT,
+        crate::deploy::host_backup_audit::DIFFERS,
+        crate::deploy::host_backup_audit::SAME_SIZE_UNPROVEN,
+    ] {
+        let totals = audit.classes.get(class).cloned().unwrap_or_default();
+        println!(
+            "{class:9} {:>7} object(s)  {:>8.2} GiB",
+            totals.objects,
+            gib(totals.bytes)
+        );
+        for (bytes, path) in audit.examples.get(class).into_iter().flatten() {
+            println!("          {:>8.2} GiB  {path}", gib(*bytes));
+        }
+    }
+    println!(
+        "reclaim:  {:.2} GiB proven present and identical in the primary; {:.2} GiB is data and stays",
+        gib(audit.reclaimable_bytes()),
+        gib(audit.retained_bytes())
+    );
+    // The free-space pair the pass read itself, on both sides of its own
+    // deletions. Reported even for a read-only classification, because "how
+    // full is this disk while you are telling me what is on it" is the
+    // question the whole command exists to serve.
+    let gib_kb = |blocks: i64| blocks as f64 / 1024.0 / 1024.0;
+    if let (Some(before), Some(after)) = (audit.free_kb_before, audit.free_kb_after) {
+        println!(
+            "free:     {:.2} GiB before, {:.2} GiB after ({:+.2} GiB)",
+            gib_kb(before),
+            gib_kb(after),
+            gib_kb(after - before),
+        );
+    }
+    if reclaim_twins {
+        if apply {
+            println!(
+                "deleted:  {} object(s)  {:.2} GiB, each one hashed on both sides by this pass; \
+                 {} emptied directories removed",
+                audit.deleted.objects,
+                gib(audit.deleted.bytes),
+                audit.pruned_directories,
+            );
+            if audit.delete_failed.objects > 0 {
+                println!(
+                    "refused:  {} object(s) the host would not unlink; they are still in the replica",
+                    audit.delete_failed.objects
+                );
+            }
+            if !audit.reclaim_complete {
+                println!(
+                    "warning:  the reclaim half did not print its own end marker, so the deleted \
+                     count is a floor; run the command again"
+                );
+            }
+        } else {
+            println!(
+                "would delete: {} object(s)  {:.2} GiB — nothing was changed; pass --apply, which \
+                 re-proves every one of them in that same pass",
+                audit.would_delete.objects,
+                gib(audit.would_delete.bytes),
+            );
+        }
+    }
+    if !audit.complete {
+        println!(
+            "warning:  the host did not finish classifying, so these totals are a floor, not the answer"
+        );
+    }
+    Ok(())
+}
+
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()
         || !value
@@ -2919,601 +6680,6 @@ fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
         return Err(CmdError::usage(format!(
             "{kind} must contain only letters, digits, '.', '_' or '-'"
         )));
-    }
-    Ok(())
-}
-
-fn release_archive_hash(path: &std::path::Path) -> Result<(u64, String), CmdError> {
-    let mut file = std::fs::File::open(path)?;
-    let bytes = file.metadata()?.len();
-    if bytes == u64::default() {
-        return Err(CmdError::click("release archive is empty"));
-    }
-    let mut hasher = Sha256::new();
-    let mut buffer = [u8::MIN; u16::MAX as usize];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == usize::default() {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok((bytes, hex::encode(hasher.finalize())))
-}
-
-/// Transfer one immutable release archive through Stado's registry-authorized
-/// SSH channel. The remote side verifies the local digest before create-only
-/// publication into its owner-only staging tree.
-pub async fn install_release(
-    target: &str,
-    source: &str,
-    family: &str,
-    version: &str,
-    platform: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    release_component("family", family)?;
-    release_component("version", version)?;
-    release_component("platform", platform)?;
-    let asset = format!("{family}.tar.gz");
-    let source_path = std::path::Path::new(source);
-    if !source_path.is_file() || source_path.is_symlink() {
-        return Err(CmdError::click(format!(
-            "release source must be a regular file: {}",
-            source_path.display()
-        )));
-    }
-    let (bytes, sha256) = release_archive_hash(source_path)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let relative = format!(".stado/releases/{family}/{version}/{platform}");
-    let temporary = format!(".{asset}.stado-{}", uuid::Uuid::new_v4().simple());
-    let prepare = format!(
-        "set -euo pipefail\ndirectory=\"$HOME/{relative}\"\n/bin/mkdir -p \"$directory\"\n/bin/chmod u=rwx,go= \"$directory\"\nprintf '%s\\n' \"$HOME\"\n"
-    );
-    let runner = crate::deploy::production_runner();
-    let prepared = crate::deploy::host_channel::run_script(&resolved, &prepare, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !prepared.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: cannot prepare release staging: {}",
-            crate::deploy::host_channel::last_error_line(
-                &prepared,
-                "remote release directory creation failed"
-            )
-        )));
-    }
-    let remote_home = prepared.stdout.trim();
-    if !remote_home.starts_with('/')
-        || remote_home.bytes().any(|byte| {
-            !(byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
-        })
-    {
-        return Err(CmdError::click(
-            "target returned an unsafe or non-absolute home directory",
-        ));
-    }
-    let remote_temporary = format!("{remote_home}/{relative}/{temporary}");
-    let remote_final = format!("{remote_home}/{relative}/{asset}");
-    if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        std::fs::copy(source_path, &remote_temporary)?;
-    } else {
-        let ssh = resolved
-            .ssh
-            .as_deref()
-            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-        let key = crate::deploy::ssh_key::materialize(&resolved.name)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        let destination = format!("{ssh}:{remote_temporary}");
-        let transferred = tokio::process::Command::new("scp")
-            .arg("-i")
-            .arg(key.path())
-            .arg("-o")
-            .arg("IdentitiesOnly=yes")
-            .arg("-q")
-            .arg("-o")
-            .arg("BatchMode=yes")
-            .arg("-o")
-            .arg("ConnectTimeout=15")
-            .arg("-o")
-            .arg("StrictHostKeyChecking=accept-new")
-            .arg(source_path)
-            .arg(&destination)
-            .kill_on_drop(true)
-            .output()
-            .await?;
-        if !transferred.status.success() {
-            return Err(CmdError::click(format!(
-                "{target}: release transfer failed: {}",
-                String::from_utf8_lossy(&transferred.stderr)
-                    .lines()
-                    .next_back()
-                    .unwrap_or("scp failed")
-            )));
-        }
-    }
-    let verify = format!(
-        r#"set -euo pipefail
-temporary={temporary}
-final={final}
-expected={expected}
-trap '/bin/rm -f "$temporary"' EXIT
-line=$(/usr/bin/openssl dgst -sha256 -r "$temporary")
-actual="${{line%% *}}"
-if [ "$actual" != "$expected" ]; then
-  printf '%s\n' "release checksum mismatch: expected=$expected actual=$actual" > /dev/stderr
-  false
-fi
-if [ -e "$final" ]; then
-  line=$(/usr/bin/openssl dgst -sha256 -r "$final")
-  existing="${{line%% *}}"
-  if [ "$existing" != "$expected" ]; then
-    printf '%s\n' "immutable release path already contains a different archive" > /dev/stderr
-    false
-  fi
-  /bin/rm -f "$temporary"
-else
-  /bin/mv "$temporary" "$final"
-fi
-/bin/chmod u=rw,go=r "$final"
-trap - EXIT
-printf '%s\n' "$final"
-"#,
-        temporary = crate::deploy::shlex_quote(&remote_temporary),
-        final = crate::deploy::shlex_quote(&remote_final),
-        expected = crate::deploy::shlex_quote(&sha256),
-    );
-    let verified = crate::deploy::host_channel::run_script(&resolved, &verify, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !verified.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: release verification failed: {}",
-            crate::deploy::host_channel::last_error_line(
-                &verified,
-                "remote release verification failed"
-            )
-        )));
-    }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "family": family,
-                "version": version,
-                "platform": platform,
-                "path": format!("$HOME/{relative}/{asset}"),
-                "bytes": bytes,
-                "sha256": sha256,
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: installed {family}/{version}/{platform}/{asset} ({bytes} bytes, sha256={sha256})"
-        );
-    }
-    Ok(())
-}
-
-const INSTALL_BODY: &str = r#"dir="$HOME/.stado/bin"
-staged="$dir/.$name.install"
-installed="$dir/$name"
-previous="$dir/$name.previous"
-trap 'rm -f "$staged"' EXIT
-
-[ -s "$staged" ] || { printf '%s\n' 'delivered program is missing or empty' >&2; exit 1; }
-/bin/chmod 755 "$staged"
-
-if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then
-  /usr/bin/xattr -c "$staged" 2>/dev/null || true
-  /usr/bin/codesign -s - --force "$staged" >/dev/null 2>&1 \
-    || { printf '%s\n' 'delivered program could not be signed on this host' >&2; exit 1; }
-fi
-
-new_version="$("$staged" --version 2>&1)" \
-  || { printf '%s\n' "delivered program does not run here: $new_version" >&2; exit 1; }
-
-old_version="absent"
-if [ -x "$installed" ]; then
-  old_version="$("$installed" --version 2>&1 || printf '%s' 'unreadable')"
-  /bin/cp -p "$installed" "$previous"
-fi
-
-/bin/mv "$staged" "$installed"
-trap - EXIT
-
-if ! "$installed" --version >/dev/null 2>&1; then
-  if [ -f "$previous" ]; then /bin/mv "$previous" "$installed"; fi
-  printf '%s\n' 'installed program does not run; rolled back to the previous build' >&2
-  exit 1
-fi
-
-printf 'STADO-BIN-OLD %s\n' "$old_version"
-printf 'STADO-BIN-NEW %s\n' "$new_version"
-"#;
-
-/// Replace an owner-only Stado program on TARGET with a build proven to run there.
-///
-/// These binaries are what every other operation on that host goes through, so
-/// installing one wrongly removes the means of repair. Three rules are encoded
-/// here rather than left to whoever is at the keyboard:
-///
-/// * the new binary is renamed into place, never written through the file that
-///   is already there -- overwriting a Mach-O in place invalidates its
-///   signature and the kernel answers the next exec with SIGKILL, no message;
-/// * it is signed and then executed on the target BEFORE it becomes the CLI,
-///   because a binary that is merely present is not evidence of anything;
-/// * the previous build is kept, and a version that will not run is rolled
-///   back automatically rather than reported as an installation.
-pub async fn install_binary(
-    target: &str,
-    source: Option<&str>,
-    name: &str,
-    rollback: bool,
-    last_known_registry: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    if name.is_empty()
-        || name
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-    {
-        return Err(CmdError::usage(
-            "program name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
-        ));
-    }
-    if rollback {
-        return rollback_binary(target, name, last_known_registry, json).await;
-    }
-    let source = source.ok_or_else(|| CmdError::usage("--from is required unless --rollback"))?;
-    let bytes = std::fs::metadata(source)
-        .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
-        .len();
-    if bytes == 0 {
-        return Err(CmdError::click(format!("{source} is empty")));
-    }
-
-    // Computed before anything is delivered, on this machine, because this is
-    // the last moment the answer exists: the checkout the file came out of is
-    // here and nowhere else, and once the process ends nothing on either side
-    // can reconstruct it.
-    let provenance = crate::provenance::describe(std::path::Path::new(source), name);
-    if let Some(unknown) = unprovenanced_reason(source, &provenance) {
-        eprintln!(
-            "{target}: DRIFTED -- installing {name} from a build with no producer: {unknown}. \
-             This is the trade that put stado 0.7.1 on charless-mac-mini, a control-plane \
-             binary whose version no commit on any branch of this repository has ever \
-             contained, and that left the Weles worker beside it on release main-objapi-fix, \
-             built on a laptop and never published -- installing is one command and releasing \
-             is a pipeline. The install proceeds, because refusing strands whoever is \
-             mid-incident; the manifest at $HOME/{PROVENANCE_DIR}/{name}.json records the gap \
-             so `stado host provenance {target}` finds it later without anyone remembering \
-             this line."
-        );
-    }
-    let resolved = install_binary_target(target, last_known_registry).await?;
-    let ssh_target = resolved.ssh.clone().unwrap_or_default();
-    if ssh_target.is_empty() {
-        return Err(CmdError::click(format!(
-            "{target} declares no ssh destination, so the CLI cannot be delivered"
-        )));
-    }
-    let runner = crate::deploy::production_runner();
-
-    let stage = crate::deploy::host_channel::run_script(
-        &resolved,
-        "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado/bin\"\n/bin/chmod 700 \"$HOME/.stado/bin\"\n",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !stage.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: cannot prepare the CLI directory: {}",
-            crate::deploy::host_channel::last_error_line(&stage, "remote mkdir failed")
-        )));
-    }
-
-    // The same command has to work on the machine running it, where there is no
-    // ssh listener to talk to and a copy is just a copy.
-    if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        let home = std::env::var("HOME")
-            .map_err(|_| CmdError::click("HOME is not set, so the CLI path is unknown"))?;
-        let staged = std::path::Path::new(&home).join(format!(".stado/bin/.{name}.install"));
-        std::fs::copy(source, &staged).map_err(|error| {
-            CmdError::click(format!(
-                "cannot stage the CLI at {}: {error}",
-                staged.display()
-            ))
-        })?;
-        return finish_install(
-            target,
-            source,
-            name,
-            bytes,
-            &provenance,
-            &resolved,
-            &runner,
-            json,
-        )
-        .await;
-    }
-    let mut copy_argv = crate::deploy::host_channel::ssh_options(&ssh_target);
-    copy_argv.pop();
-    let mut scp_argv = vec!["scp".to_string(), "-q".to_string()];
-    scp_argv.extend(copy_argv.into_iter().skip(usize::from(true)));
-    scp_argv.push(source.to_string());
-    scp_argv.push(format!("{ssh_target}:.stado/bin/.{name}.install"));
-    let copy = runner(crate::deploy::CommandSpec::new(scp_argv))
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !copy.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: cannot deliver the CLI: {}",
-            copy.detail()
-        )));
-    }
-
-    finish_install(
-        target,
-        source,
-        name,
-        bytes,
-        &provenance,
-        &resolved,
-        &runner,
-        json,
-    )
-    .await
-}
-
-/// Sign, prove, swap and verify -- the half of `install-binary` that is identical
-/// whether the program arrived over ssh or was copied on the spot.
-///
-/// The provenance record travels as an argument rather than being recomputed
-/// here: it is derived on the machine that holds the checkout, and hashing a
-/// release binary twice per install to save a parameter is a poor trade.
-#[allow(clippy::too_many_arguments)]
-async fn finish_install(
-    target: &str,
-    source: &str,
-    name: &str,
-    bytes: u64,
-    provenance: &crate::provenance::Provenance,
-    resolved: &crate::targets::ComputeTarget,
-    runner: &crate::deploy::Runner,
-    json: bool,
-) -> Result<(), CmdError> {
-    let quoted = crate::deploy::shlex_quote(name);
-    let script = format!("set -euo pipefail\nname={quoted}\n{INSTALL_BODY}");
-    let output = crate::deploy::host_channel::run_script(resolved, &script, runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: CLI update failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote install failed")
-        )));
-    }
-    let marker = |tag: &str| -> String {
-        output
-            .stdout
-            .lines()
-            .find_map(|line| line.strip_prefix(tag))
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
-    let old_version = marker("STADO-BIN-OLD ");
-    let new_version = marker("STADO-BIN-NEW ");
-
-    // After the swap and before the report: a manifest that arrives first
-    // would describe a binary that may never land, and a report printed first
-    // would be the same one-line receipt that said `stado 0.7.1 -> stado
-    // 0.7.0` and left nothing behind to check it against.
-    let manifest = deliver_provenance(target, provenance, resolved)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "{target}: {name} is installed but its provenance manifest could not be \
-                 delivered, so the host now carries an artifact nothing can trace to a \
-                 commit: {error}"
-            ))
-        })?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "name": name,
-                "bytes": bytes,
-                "previous_version": old_version,
-                "installed_version": new_version,
-                "commit": provenance.commit,
-                "sha256": provenance.sha256,
-                "builder": provenance.builder,
-                "provenance": manifest,
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: {name} {old_version} -> {new_version} (commit {}, built on {}, recorded at {manifest})",
-            provenance.commit, provenance.builder
-        );
-    }
-    Ok(())
-}
-
-/// Where a delivered provenance manifest lands, one file per artifact.
-///
-/// Its own directory under `.stado`, not beside the binary in `.stado/bin`:
-/// everything in that directory is executed, and a JSON document that is not
-/// a program has no business sharing a namespace with the ones that are.
-const PROVENANCE_DIR: &str = ".stado/provenance";
-
-/// Why this build cannot be traced to a published commit, or `None` when it
-/// can.
-///
-/// Three distinct answers rather than one boolean, because they send an
-/// operator to three different places: build it inside a checkout, commit
-/// what you built, push what you committed. A single "unverified" would have
-/// described 0.7.1 accurately and told nobody what to do about it.
-fn unprovenanced_reason(
-    source: &str,
-    provenance: &crate::provenance::Provenance,
-) -> Option<String> {
-    let Some(repo) = crate::provenance::source_repo(std::path::Path::new(source)) else {
-        return Some(format!(
-            "{source} does not sit under a git checkout's target/ directory, so no tree \
-             claims to have produced it"
-        ));
-    };
-    if !provenance.names_a_commit() {
-        return Some(format!(
-            "{} has no resolvable HEAD, so the build has no commit to name",
-            repo.display()
-        ));
-    }
-    if !crate::provenance::reachable_in_repo(&provenance.commit, &repo) {
-        return Some(format!(
-            "commit {} is not reachable from origin/main in {}, so it exists only on the \
-             machine that built it",
-            provenance.commit,
-            repo.display()
-        ));
-    }
-    None
-}
-
-/// Deliver one artifact's manifest to the host that now carries the artifact.
-///
-/// Through `stream_file`, the same audited channel the binary itself went
-/// over: owner-only, checksummed on the far side before it takes its name. A
-/// separate private path for the paperwork would be a second way onto these
-/// hosts, which is the shape of the problem this is meant to close.
-async fn deliver_provenance(
-    target: &str,
-    provenance: &crate::provenance::Provenance,
-    resolved: &crate::targets::ComputeTarget,
-) -> Result<String, CmdError> {
-    let document = serde_json::to_vec_pretty(provenance)?;
-    let staged = tempfile::Builder::new()
-        .prefix(".stado-provenance-")
-        .suffix(".json")
-        .tempfile()?;
-    std::fs::write(staged.path(), &document)?;
-    let source = staged
-        .path()
-        .to_str()
-        .ok_or_else(|| CmdError::click("provenance staging path is not valid UTF-8"))?;
-    let name = format!("{}.json", provenance.artifact);
-    let (path, _) = stream_file(
-        target,
-        source,
-        &name,
-        PROVENANCE_DIR,
-        "u=rw,go=",
-        Some(resolved),
-    )
-    .await?;
-    Ok(path)
-}
-
-const ROLLBACK_BODY: &str = r#"dir="$HOME/.stado/bin"
-installed="$dir/$name"
-previous="$dir/$name.previous"
-
-[ -s "$previous" ] || { printf '%s\n' 'there is no previous build to restore' >&2; exit 1; }
-/bin/chmod 755 "$previous"
-"$previous" --version >/dev/null 2>&1 \
-  || { printf '%s\n' 'the previous build does not run either; not swapping' >&2; exit 1; }
-/bin/mv "$previous" "$installed"
-"$installed" --version >/dev/null 2>&1 \
-  || { printf '%s\n' 'restored build does not run' >&2; exit 1; }
-
-# The manifest described the build that was just removed. Left in place it
-# would name a commit for bytes no longer on this host, which is worse than
-# naming nothing: `host provenance` reports a missing manifest as
-# unprovenanced, and unprovenanced is the truth here until the next install.
-/bin/rm -f "$HOME/.stado/provenance/$name.json"
-"#;
-
-/// Put the previous build of one owner-only Stado program back on TARGET.
-///
-/// `install-binary` verifies that a new build runs, which is not the same as
-/// verifying that the unit around it still works: a program can answer
-/// `--version` perfectly and still reject the arguments its launchd job passes.
-/// That failure appears after the swap, so the previous build is kept beside
-/// the new one and this is how it comes back.
-async fn install_binary_target(
-    target: &str,
-    last_known_registry: bool,
-) -> Result<crate::targets::ComputeTarget, CmdError> {
-    if !last_known_registry {
-        return crate::deploy::host_channel::canonical_target(target)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()));
-    }
-    let home = std::env::var("HOME")
-        .map_err(|_| CmdError::click("HOME is not set, so the registry cache path is unknown"))?;
-    let path = std::path::Path::new(&home)
-        .join(".stado")
-        .join("cache")
-        .join("registry-last-good.json");
-    let registry = crate::targets::load_registry_file(&path)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .clone();
-    eprintln!(
-        "{target}: RECOVERY -- the registry authority is not being consulted; routing this binary install through {}",
-        path.display()
-    );
-    Ok(resolved)
-}
-
-async fn rollback_binary(
-    target: &str,
-    name: &str,
-    last_known_registry: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    let resolved = install_binary_target(target, last_known_registry).await?;
-    let runner = crate::deploy::production_runner();
-    let quoted = crate::deploy::shlex_quote(name);
-    let script = format!("set -euo pipefail\nname={quoted}\n{ROLLBACK_BODY}");
-    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: rollback failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote rollback failed")
-        )));
-    }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "name": name,
-                "provenance": crate::provenance::UNPROVENANCED,
-                "status": "rolled-back",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: {name} restored from the previous build; its provenance manifest was \
-             dropped, because it described the build just removed"
-        );
     }
     Ok(())
 }
@@ -3553,7 +6719,6 @@ async fn stream_file(
     name: &str,
     subdir: &str,
     mode: &str,
-    resolved: Option<&crate::targets::ComputeTarget>,
 ) -> Result<(String, usize), CmdError> {
     release_component("delivered file name", name)?;
     let bytes = std::fs::metadata(source)?.len();
@@ -3561,12 +6726,9 @@ async fn stream_file(
     digest.update(std::fs::read(source)?);
     let expected_sha256 = hex::encode(digest.finalize());
 
-    let resolved = match resolved {
-        Some(resolved) => resolved.clone(),
-        None => crate::deploy::host_channel::canonical_target(target)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?,
-    };
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
     let staged = format!("{subdir}/.{name}.stado-stream");
 
@@ -3662,16 +6824,29 @@ if [ -d "$bin" ]; then
     [ -f "$program" ] || continue
     case "${program##*/}" in .*|*.previous) continue ;; esac
     # A release artifact is a compiled program; a helper is a checked-in script
-    # delivered by `host install-helper`. Both live in this directory and only
-    # the first is something a release pipeline produces, so reporting them in
-    # one list buries the question being asked. charless-mac-mini carries dozens
-    # of helpers accumulated over months -- helpers have a writer and no reaper,
-    # the same accretion that fills ~/.stado/forwards with markers for services
-    # that were renamed years of incidents ago. The shebang is the honest
-    # discriminator and it is readable without executing anything.
+    # left over from the retired helper channel. Both live in this directory and
+    # only the first is something a release pipeline produces, so reporting them
+    # in one list buries the question being asked. control-host carries
+    # dozens of helpers accumulated over months -- the channel had a writer and
+    # no reaper, the same accretion that fills ~/.stado/forwards with markers
+    # for services that were renamed years of incidents ago. The shebang is the
+    # honest discriminator and it is readable without executing anything.
     kind=binary
     case "$(/usr/bin/head -c 2 "$program" 2>/dev/null)" in '#!') kind=script ;; esac
-    printf 'STADO-ARTIFACT %s %s\n' "$kind" "${program##*/}"
+    # The manifest is a claim about specific bytes. Reporting its commit without
+    # checking it still describes the file beside it is the same unverified
+    # declaration this command exists to find: on 2026-08-12 this laptop's
+    # manifest named a commit while the binary next to it had been replaced by
+    # hand, and the tool repeated the manifest with a straight face.
+    digest=-
+    if [ "$kind" = binary ]; then
+      if [ -x /usr/bin/shasum ]; then
+        digest=$(/usr/bin/shasum -a 256 "$program" | /usr/bin/awk '{print $1}')
+      elif command -v sha256sum >/dev/null 2>&1; then
+        digest=$(sha256sum "$program" | /usr/bin/awk '{print $1}')
+      fi
+    fi
+    printf 'STADO-ARTIFACT %s %s %s\n' "$kind" "$digest" "${program##*/}"
   done
 fi
 if [ -d "$dir" ]; then
@@ -3691,6 +6866,12 @@ struct CarriedArtifact {
     /// repository first. Collapsing the two is how a fleet learns to disregard
     /// its own reports.
     reachable: Option<bool>,
+    /// Does the manifest still describe the bytes beside it? `None` when there
+    /// is no manifest or the host could not hash the file. A manifest naming a
+    /// commit for a binary that has since been replaced is worse than no
+    /// manifest: it answers the provenance question confidently and wrongly,
+    /// which is exactly the failure this command was built to expose.
+    describes: Option<bool>,
     age_seconds: Option<i64>,
 }
 
@@ -3730,19 +6911,24 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         std::collections::BTreeMap::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut helpers: usize = 0;
+    let mut present: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for line in output.stdout.lines() {
         if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
-            // `<kind> <name>`. A helper script has no release behind it, so
-            // listing it beside the control-plane binary answers a question
-            // nobody asked and hides the one that matters.
-            let mut words = artifact.trim().splitn(2, ' ');
+            // `<kind> <digest> <name>`. A helper script has no release behind
+            // it, so listing it beside the control-plane binary answers a
+            // question nobody asked and hides the one that matters.
+            let mut words = artifact.trim().splitn(3, ' ');
             let kind = words.next().unwrap_or_default();
+            let digest = words.next().unwrap_or_default().trim().to_string();
             let Some(name) = words.next().map(str::trim).filter(|name| !name.is_empty()) else {
                 continue;
             };
             if kind == "script" {
                 helpers += 1;
                 continue;
+            }
+            if !digest.is_empty() && digest != "-" {
+                present.insert(name.to_string(), digest);
             }
             names.insert(name.to_string());
         } else if let Some(document) = line.strip_prefix("STADO-MANIFEST ") {
@@ -3778,10 +6964,15 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     .ok()
                     .map(|stamp| (now - stamp.with_timezone(&chrono::Utc)).num_seconds())
             });
+            let describes = match (&record, present.get(&artifact)) {
+                (Some(record), Some(actual)) => Some(record.sha256.eq_ignore_ascii_case(actual)),
+                _ => None,
+            };
             CarriedArtifact {
                 artifact,
                 record,
                 reachable,
+                describes,
                 age_seconds,
             }
         })
@@ -3811,6 +7002,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     "at": item.record.as_ref().map(|record| record.at.clone()),
                     "age_seconds": item.age_seconds,
                     "reachable": item.reachable,
+                    "describes_artifact": item.describes,
                 })
             })
             .collect();
@@ -3844,6 +7036,11 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 Some(false) => "no",
                 None => "unknown",
             };
+            let describes = match item.describes {
+                Some(true) => "match",
+                Some(false) => "REPLACED",
+                None => "-",
+            };
             vec![
                 item.artifact.clone(),
                 commit_of(item),
@@ -3852,6 +7049,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     .map_or_else(|| "-".to_string(), |record| record.builder.clone()),
                 age,
                 reachable.to_string(),
+                describes.to_string(),
             ]
         })
         .collect();
@@ -3865,7 +7063,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     super::table::print(
-        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE"],
+        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE", "BYTES"],
         &rows,
     );
     if repository.is_none() {
@@ -3880,6 +7078,19 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             rows.len()
         );
     }
+    let replaced = carried
+        .iter()
+        .filter(|item| item.describes == Some(false))
+        .count();
+    if replaced != usize::default() {
+        // Louder than drift, because the manifest is not merely absent: it
+        // answers the provenance question, and its answer is about bytes that
+        // are gone. Every reader downstream inherits that wrong answer.
+        println!(
+            "{target}: {replaced} artifact(s) were replaced after their manifest was written, so \
+             the commit shown for them describes bytes that are no longer on the host"
+        );
+    }
     if helpers != usize::default() {
         // Not drift, and not nothing. Helpers are delivered one at a time to
         // solve one incident and are never removed, so the population only
@@ -3889,6 +7100,350 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             "{target}: {helpers} installed helper script(s) alongside, which carry no release \
              and are not counted above"
         );
+    }
+    Ok(())
+}
+
+/// The release-control binaries rolled out to one target, as concrete paths the
+/// reporter can hash.
+///
+/// A rollout product lives under its own install root — brama is
+/// `/Users/charles/.stado/services/brama/bin/brama` — so it appears in neither
+/// `$HOME/.stado/bin` nor any `managed_versions` entry, and a report that did not
+/// name it could say nothing at all about the one binary
+/// `stado release status` is about.
+fn release_product_programs(
+    document: &Value,
+    host: &str,
+) -> Vec<crate::host_software::ProductBinary> {
+    let Ok(Some(control)) = crate::release_control::control(document) else {
+        return Vec::new();
+    };
+    control
+        .products
+        .values()
+        .filter(|policy| policy.targets.contains_key(host))
+        .map(|policy| {
+            let path = format!(
+                "{}/{}",
+                policy.install_root.trim_end_matches('/'),
+                policy.binary.trim_start_matches('/')
+            );
+            crate::host_software::ProductBinary {
+                name: path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&policy.binary)
+                    .to_string(),
+                path,
+                desired: policy
+                    .desired
+                    .as_ref()
+                    .map(|desired| desired.version.clone()),
+            }
+        })
+        .collect()
+}
+
+/// `stado host software [TARGET] [--json]` — what a host actually runs, and
+/// which of it came out of a release.
+///
+/// Naming a TARGET takes the report: one round trip over the audited channel,
+/// and the answer is persisted as an observation before it is printed, so
+/// `stado release status` can judge every rollout without opening an ssh
+/// connection per target. Omitting TARGET reads what is already on file for
+/// every host, ages included — a host that has never reported is absent from
+/// that list and is reported as `never` by every gate that asks about it, which
+/// is the state that used to print as `unreported` beside a zero exit.
+///
+/// The failure of the read is recorded too. Leaving the previous report in place
+/// after a refused connection would let an hour-old answer keep reading as
+/// current, which is the exact shape of the outage
+/// [`crate::observations`] exists to make visible.
+pub async fn software(target: Option<String>, json: bool) -> Result<(), CmdError> {
+    let Some(target) = target else {
+        let hosts = crate::host_software::reported_hosts(&crate::observations::load());
+        return print_reports(&hosts, json).await;
+    };
+    let resolved = crate::deploy::host_channel::canonical_target(&target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let document = super::registry::fetch_document().await?;
+    let products = release_product_programs(&document, &resolved.name);
+    let programs: Vec<String> = products
+        .iter()
+        .map(|product| product.path.clone())
+        .collect();
+    let runner = crate::deploy::production_runner();
+    match crate::host_software::gather(&resolved, &programs, &runner).await {
+        Ok((rows, scripts)) => {
+            crate::host_software::record(&resolved.name, &rows, scripts)
+                .map_err(|error| CmdError::click(error.to_string()))?;
+        }
+        Err(error) => {
+            // Recorded, then reported. An operator who is told the read failed
+            // and finds yesterday's report still on file has been told two
+            // different things by one command.
+            if let Err(write) = crate::host_software::record_refusal(&resolved.name, &error.0) {
+                eprintln!("warning: could not record the failed software read: {write}");
+            }
+            return Err(CmdError::click(format!(
+                "{target}: cannot read what software it runs: {}",
+                error.0
+            )));
+        }
+    }
+    print_reports(&[resolved.name], json).await
+}
+
+/// Every named host's newest report, with the disagreements the fleet has
+/// against it.
+async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
+    let records = crate::observations::load();
+    // The remote registry, because the declaration being checked is the fleet's
+    // and not whatever a local copy last said. One fetch for every row: the
+    // question "what does this host declare" is asked once per host and the
+    // answer is one document.
+    let registry = super::registry::read_registry().await.ok();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut failures = usize::default();
+    for host in hosts {
+        let report = crate::host_software::load_in(&records, host);
+        let declared = registry
+            .as_ref()
+            .and_then(|registry| registry.targets.iter().find(|entry| &entry.name == host))
+            .map(|entry| entry.managed_versions.clone())
+            .unwrap_or_default();
+        let finding = crate::host_software::judge(&report, &declared, None);
+        if finding.failed {
+            failures = failures.saturating_add(1);
+        }
+        if json {
+            let mut object = report.json();
+            finding.merge_into(&mut object);
+            payload.push(object);
+            continue;
+        }
+        println!("{host}: {} [{}]", report.summary(), report.age());
+        if !report.refusal().is_empty() {
+            println!("  the last read did not complete: {}", report.refusal());
+        }
+        let rows: Vec<Vec<String>> = report
+            .rows
+            .iter()
+            .map(|row| {
+                vec![
+                    row.provenance.clone(),
+                    row.name.clone(),
+                    row.version.clone(),
+                    row.sha256.chars().take(12).collect(),
+                    row.path.clone(),
+                ]
+            })
+            .collect();
+        if !rows.is_empty() {
+            super::table::print(&["PROVENANCE", "NAME", "VERSION", "SHA256", "PATH"], &rows);
+        }
+        for sentence in &finding.sentences {
+            println!("  ! {sentence}");
+        }
+    }
+    if json {
+        print_json(&json!({"hosts": payload}));
+    } else if hosts.is_empty() {
+        println!(
+            "no host has reported its software: run `stado host software TARGET` for each \
+             registry target, because a host that never says what it runs is not a host anything \
+             here can vouch for"
+        );
+    }
+    if failures == usize::default() {
+        return Ok(());
+    }
+    // This command reports and it also gates, for the same reason
+    // `stado release status` now does: printing a host that cannot be shown to
+    // run what the fleet declares, and then exiting zero, is the shape of the
+    // failure the whole report exists to end. Every sentence is already beside
+    // the host it belongs to, so nothing is said twice.
+    eprintln!(
+        "{failures} of {} host(s) cannot be shown to be running what the fleet declares for \
+         them; each is named above",
+        hosts.len()
+    );
+    Err(CmdError::silent(super::CLICK_ERROR_CODE))
+}
+
+/// Read the effective configuration on a fleet host using the same installed
+/// Stado binary and config path its services consume.
+pub async fn config_show(target: &str) -> Result<(), CmdError> {
+    remote_config(target, None).await
+}
+
+/// Persist one configuration field on a fleet host. Values travel base64
+/// encoded inside the audited script and are decoded into argv, never parsed by
+/// a remote shell. When `reload_service` is named, the existing service
+/// reconciler activates the new configuration only after the atomic write
+/// succeeds.
+pub async fn config_set(
+    target: &str,
+    key: &str,
+    value: &str,
+    reload_service: Option<&str>,
+) -> Result<(), CmdError> {
+    if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
+        return Err(CmdError::click(
+            "configuration key must be a non-empty dotted name",
+        ));
+    }
+    remote_config(target, Some((key, value))).await?;
+    if let Some(service) = reload_service {
+        super::service::reconcile_after_config_change(
+            service,
+            target,
+            &format!("managed configuration {key} changed"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {
+    let target = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout = remote_config_output(&target, update, &crate::deploy::production_runner()).await?;
+    print!("{stdout}");
+    Ok(())
+}
+
+/// One `stado config show` on a fleet host — the effective configuration its
+/// own installed binary resolves, from its own `STADO_CONFIG` — returned
+/// instead of printed.
+///
+/// Factored out of [`remote_config`] so [`crate::deploy::host_gates`] can ask
+/// a host which storage backend its queue agent is bound to without a second
+/// remote script existing for the same question. Two scripts reading one
+/// host's configuration would eventually read it two different ways — a
+/// different `STADO_CONFIG`, a different binary, a different `HOME` — and the
+/// answer that matters here is exactly "what does the config the services
+/// consume say", which is what this one already asks.
+///
+/// The incident: the Mac mini's agent unit was re-declared with a
+/// `STADO_CONFIG` naming a config that set `wc_storage_backend: "local"`, so
+/// the agent published its capacity into an on-disk store on that machine and
+/// nothing in the fleet ever read it. `host config-show` could see that field
+/// the whole time; nothing that judged the host asked it.
+pub(crate) async fn remote_config_output(
+    target: &ComputeTarget,
+    update: Option<(&str, &str)>,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    let action = match update {
+        None => "\"$binary\" config show".to_string(),
+        Some((key, value)) => format!(
+            "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             \"$binary\" config set \"$key\" \"$value\"\n\
+             \"$binary\" config show",
+            STANDARD.encode(key.as_bytes()),
+            STANDARD.encode(value.as_bytes())
+        ),
+    };
+    let script = format!(
+        "set -euo pipefail\n\
+         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+         binary=\"$HOME/.stado/bin/stado\"\n\
+         test -x \"$binary\"\n\
+         {action}\n"
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        target,
+        &script,
+        std::time::Duration::from_secs(60),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote Stado configuration command failed",
+            ),
+        ));
+    }
+    Ok(output.stdout)
+}
+
+pub async fn verify_release_platform(
+    target: &str,
+    repo: &str,
+    revision: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if !repo.starts_with("https://") {
+        return Err(CmdError::click("--repo must be an https:// clone URL"));
+    }
+    if revision.len() != 40
+        || !revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(CmdError::click("--ref must be a full lowercase Git commit"));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let repo = crate::deploy::shlex_quote(repo);
+    let revision = crate::deploy::shlex_quote(revision);
+    let script = format!(
+        r#"set -euo pipefail
+export PATH="$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+root="$HOME/.stado/work"
+/bin/mkdir -p "$root"
+work=$(/usr/bin/mktemp -d "$root/release-platform.XXXXXX")
+trap '/bin/rm -rf "$work"' EXIT HUP INT TERM
+/usr/bin/git -C "$work" init -q source
+/usr/bin/git -C "$work/source" remote add origin {repo}
+/usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
+/usr/bin/git -C "$work/source" checkout -q --detach FETCH_HEAD
+/usr/bin/git clone -q --depth 1 https://github.com/wisent-ai/skarbiec.git "$work/skarbiec"
+cargo build --release --manifest-path "$work/skarbiec/Cargo.toml"
+export SKARBIEC_TEST_BIN="$work/skarbiec/target/release/skarbiec"
+cd "$work/source/stado-rs"
+cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1
+cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1
+"#
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(45 * 60),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        let detail = format!("{}\n{}", output.stdout, output.stderr);
+        let tail = detail.lines().rev().take(80).collect::<Vec<_>>();
+        return Err(CmdError::click(format!(
+            "{target}: platform verification failed:\n{}",
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "target": target,
+                "revision": revision.trim_matches('\''),
+                "verified": true,
+                "output": output.stdout,
+            }))?
+        );
+    } else {
+        print!("{}", output.stdout);
     }
     Ok(())
 }

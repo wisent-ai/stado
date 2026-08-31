@@ -260,7 +260,6 @@ a cloud account, cloud credential, Skarbiec, GPU, or Python.
 - the runtime required by the workload itself.
 
 Install an exact verified release before following the
-<<<<<<< HEAD
 [complete onboarding path](https://stado.wisent.com/docs/onboarding). A machine joins a fleet by one
 of four methods — `invite` (send a fragment, or a one-line code where the
 control point is published; touch nothing either way), `adopt` (Stado
@@ -272,11 +271,6 @@ one of them the private half of the channel key stays in the operator's
 credential store and only the public line reaches the machine. If you are
 attaching your own computer to a fleet someone else operates, read
 [Add your own machine](https://stado.wisent.com/docs/add-your-machine) instead. For source
-=======
-[complete onboarding path](docs/onboarding.md); if you are attaching your own
-computer to a fleet someone else operates, read
-[Add your own machine](docs/add-your-machine.md) instead. For source
->>>>>>> f402741b (docs: correct and complete machine onboarding)
 development only, install Rust and Cargo and build from `stado-rs/`.
 
 ### 1. Create the minimal local configuration
@@ -569,7 +563,6 @@ Support:
 
 Documentation:
 
-<<<<<<< HEAD
 - [Release and compatibility](https://stado.wisent.com/docs/release)
 - [Onboarding](https://stado.wisent.com/docs/onboarding)
 - [Add your own machine](https://stado.wisent.com/docs/add-your-machine)
@@ -579,17 +572,5 @@ Documentation:
 - [CLI reference](https://stado.wisent.com/docs/cli)
 - [Configuration and credentials](https://stado.wisent.com/docs/configuration)
 - [Operations](https://stado.wisent.com/docs/operations)
-=======
-- [Release and compatibility](docs/release.md)
-- [Changelog](CHANGELOG.md)
-- [Onboarding](docs/onboarding.md)
-- [Add your own machine](docs/add-your-machine.md)
-- [Architecture](docs/architecture.md)
-- [Integration contracts and lifecycle](docs/integrations.md)
-- [CLI reference](docs/cli.md)
-- [Configuration and credentials](docs/configuration.md)
-- [Operations](docs/operations.md)
-- [Rust implementation notes](stado-rs/README.md)
->>>>>>> f402741b (docs: correct and complete machine onboarding)
 
 Stado is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
