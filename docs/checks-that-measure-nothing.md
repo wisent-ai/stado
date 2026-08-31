@@ -1,13 +1,13 @@
 # Checks that measure nothing
 
-One defect shape has now been found eighteen times in this repository, in
-eighteen different subsystems, inside about twelve hours. Every instance is
+One defect shape has now been found nineteen times in this repository, in
+nineteen different subsystems, inside about thirteen hours. Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The eighteen
+## The nineteen
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -29,6 +29,7 @@ what is actually there.
 | 16 | `validate_registry` and every write path (#197) | this document is valid | which *section* is not. One unresolvable `inference` entry refused the entire document, and `declare-version`, `promote-version`, `service adopt`, `host add` and `registry push` all validate the whole document before writing — so a field those writes never touch could freeze every domain at once. The blast radius was the fault, not the value |
 | 17 | **our own binaries**, and then the fleet's | the tool reading live state understands the code that produced it | its own age — and this is not the false positive it first looked like. `stado registry validate` refused `inference.routes["wisent-backend/evaluation"] = "best"`; that value is permitted by `gateway_selector` (`src/inference/schema.rs`, `value == "best"`), added in `f020b63e` at 05:56:02Z. Two agents read the refusal from binaries built before it and concluded the fleet's registry was unwritable. **But `f020b63e` landed 3m43s AFTER `stado-v0.13.9` was tagged, so it ships in 0.13.10 — and every host below that, including the one just delivered 0.13.9, genuinely cannot parse `"best"`.** At 07:13:43Z the mini's janitor answered `invalid_or_unavailable_policy`, `errors: ["policy:ValueError"]`, `target_name: null`: it rejected the WHOLE registry over that one route, and rejecting the document means resolving no `disk_cleanup` policy at all — so every cleaner on the host stopped, including the `build_caches` armed hours earlier. Restoring the route to `openai/gpt-4o-mini` at 07:19:11Z returned it to `errors: []`, `mode: enforce` by 07:25:20Z. One entry in a section the janitor never reads was a fleet-wide janitor kill switch for any host below 0.13.10. Found by `store-reclaim` |
 | 18 | `host disk`'s `outcome`, read from `~/.cache/wisent-compute/disk-cleanup-state.json` (#206) | the janitor's state file says whether disk maintenance is working, and when it last ran | **which janitor wrote it.** Two processes write that path on an always-on host — the queue agent in-process every tick (`providers/local/agent.rs:783`) and the standalone launchd unit `com.wisent.compute.disk-cleanup.disk-cleanup` on its own timer (`cli/disk_cleanup.rs:48`) — and `host disk` reported whichever wrote last as the state of the host. Measured 46 seconds apart: `interval_noop`, `errors: []`, all six cleaners scanned, then `invalid_or_unavailable_policy` from the same path. Both true about their own writer, neither true about the host. **The codebase already knew.** `deploy/host_gates.rs:324-341` documents this exact file's multiple writers — "the queue agent every ten seconds, a `disk-cleanup --watch` unit on its own timer" — because it had already been bitten by it, reading `low watermark 20 GiB, target 18 GiB`, a floor above its own ceiling, alternating with the canonical 15/18 between one reading and the next. It fixed *itself* by preferring the registry declaration and left the other reader of the same file unfixed. **And the cost is not only reporting.** `run_with_lock`'s interval gate reads `last_attempt_at` from that same shared file (`disk_cleanup/mod.rs:1289-1303`) and returns `interval_noop` *before* scanning a single cleaner and *before* the lock is reached — so the redundant unit's stamp starves the real janitor. Proven under manufactured pressure by `store-reclaim`: thresholds raised to 40/42 GiB with 31.2 GiB free, and at 15:26:03.9Z the agent reported `disk_pressure_active: true`, `errors: []`, and every cleaner `scanned 0`; 27 seconds later the other janitor stamped the file `invalid_or_unavailable_policy`, `next_pass 15:31:31Z`. Pressure active, policy resolved, nothing scanned. Not a check that missed something: two instruments reporting on one subject with no arbitration — so the operator's verdict depends on timing, and the redundant one disables the real one |
+| 19 | `src/cli/mod.rs` and every `mod` declaration in the crate (#212) | the files in the tree are the code that runs | **that anything declares them.** A `.rs` file no `mod` declaration names is not a compile error - it is not compiled at all, and `cargo check`, `cargo clippy`, `git log` and a file listing all look untouched. On 2026-08-31 at 15:48:36Z a commit replaced `src/cli/mod.rs` with a six-day-old copy, deleting nine `pub mod` declarations - `builds`, `database`, `egress`, `fleet`, `product`, `release_evidence`, `release_quarantine`, `service_converge`, `stream` - while all nine files stayed on disk. `main` did stop compiling, but 27 errors away in unrelated callers, and **no diagnostic named a missing declaration**; the whole `cli/fleet/` subtree went dark and the symptom was `dashboard::run` being called with two of its three arguments. Fourteen seconds later a second commit added a 279-line `src/bin/stado_fleet/key/mod.rs` to fix `stado fleet key ls`, and nothing declares it: that fix has never been compiled, while the command it corrects still lists by item-name prefix at `src/cli/fleet/key/mod.rs:270` - against its own commit message's principle that behaviour must never be derived from item names. A third file, `src/queue/secrets.rs`, has been product code compiled into nothing since 2026-07-27. **Now checked:** `stado-rs/scripts/unreachable_modules.py` resolves every declaration from `src/lib.rs` and each `[[bin]]` path and fails on any file the walk never reached - 3 unreachable at the healthy tip, **23 at the clobbered one** - wired into `version-check` before anything is built, with a ratchet file recording the four known ones and their reasons |
 
 ## The property they share
 
@@ -39,7 +40,7 @@ because config said off. A publish assumed complete because the loop exited. A
 tag assumed to mean bytes exist. A timeout assumed to be enough. A port
 assumed to have one holder, counted with a tool that could not show two. A
 boundary assumed to gate what its name says. A binary assumed to be current. A
-state file assumed to have one writer.
+state file assumed to have one writer. A file on disk assumed to be code.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
@@ -90,6 +91,12 @@ seven days by a process no report could name.
    module away from the boundary that needed it. When the diagnosis is written
    down and the repair is local, the next reader inherits the defect **and**
    the comment explaining it. Fix the artefact: make it say who wrote it.
+7. **A green build is not evidence the tree is wired up.** Rust reports a
+   missing `mod` declaration only where something references the module, so
+   nine deleted declarations surfaced as 27 errors in unrelated callers, and an
+   undeclared file that nobody references surfaces as nothing at all. The check
+   has to enumerate the files and resolve the declarations - the same
+   one-declaration-used-twice rule as #3, applied to the module graph.
 
 ## What was proven, on live runs
 

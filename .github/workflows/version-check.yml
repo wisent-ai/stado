@@ -55,6 +55,28 @@ jobs:
       # replacement for the deprecated Node 20 runtime in v4.
       - uses: actions/checkout@v5
 
+      - name: Every source file must be reachable from a crate root
+        # Before anything is built, because this failure mode does not look like a
+        # build failure. A `.rs` file that no `mod` declaration names is not a
+        # compile error -- it is not compiled at all, and `cargo check`, `cargo
+        # clippy` and a file listing all look untouched.
+        #
+        # On 2026-08-31 at 15:48Z one commit replaced src/cli/mod.rs with a
+        # six-day-old copy, deleting nine `pub mod` declarations while all nine
+        # files stayed on disk. main stopped compiling, but 27 errors away in
+        # unrelated callers, and no diagnostic named a missing declaration.
+        # Fourteen seconds later another commit added a 279-line
+        # src/bin/stado_fleet/key/mod.rs that nothing declares, so the fix it
+        # carries has never been compiled and the command it corrects still runs
+        # the old path. This step names the cause instead of the symptom.
+        #
+        # It is not a version question and needs no binary, tags or channel, so
+        # it runs first and cheaply. The .known file is a ratchet: the four files
+        # already unreachable are listed with reasons, anything new fails, and a
+        # listed path that no longer exists fails too.
+        run: scripts/unreachable_modules.py --known scripts/unreachable_modules.known
+        working-directory: stado-rs
+
       - name: Make tags and history visible to the version check
         # actions/checkout fetches one commit and no tags, and scripts/baseline.py
         # refuses outright on such a clone -- assert_refs_visible() reads
