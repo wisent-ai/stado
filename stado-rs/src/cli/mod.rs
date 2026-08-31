@@ -1857,6 +1857,37 @@ enum HostCommands {
     ///
     /// The request is held open for the run, so this reports what the run
     /// produced rather than a queue receipt.
+    /// Activate a release already staged on TARGET by running THAT release's
+    /// own installer, once.
+    ///
+    /// A managed host installs its own releases with the installer inside its
+    /// active release. When that copy is broken the host cannot install the
+    /// release that repairs it - the repair is staged, verified and
+    /// unreachable, and every delivery after it piles up behind the same
+    /// unparseable script. This runs the staged copy instead. Same env file,
+    /// same digest contract, same script; only which copy executes differs.
+    ///
+    /// Refuses if the staged archive does not hash to the digest the
+    /// deployment env file declares, and refuses to run an installer that does
+    /// not parse. Reports the API's state either side, and fails if a port
+    /// that was answering before is silent after.
+    #[command(name = "activate-staged-release")]
+    ActivateStagedRelease {
+        /// Registry host holding the staged release.
+        target: String,
+        /// Product whose coordinate the env file declares, e.g. weles-worker.
+        #[arg(long, default_value = "weles-worker")]
+        product: String,
+        /// Deployment env file naming the release coordinate.
+        #[arg(long, default_value = "$HOME/.config/weles/worker.env")]
+        env_file: String,
+        /// Loopback port whose liveness is checked either side of the run.
+        #[arg(long, default_value_t = 8788)]
+        port: u16,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     #[command(name = "weles-browser-task")]
     WelesBrowserTask {
         target: String,
@@ -2713,6 +2744,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 })
                 .await
             }
+            HostCommands::ActivateStagedRelease {
+                target,
+                product,
+                env_file,
+                port,
+                json,
+            } => host::activate_staged_release(&target, &product, &env_file, port, json).await,
             HostCommands::WelesBrowserTask {
                 target,
                 url,
