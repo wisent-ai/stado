@@ -113,6 +113,13 @@ measured working.
 - **Archive-first ordering.** Every failed train this night left its coordinate
   **empty rather than partial**: 0.13.0, 0.13.1 and 0.13.9's linux leg all
   measured 0 of 9. An empty coordinate is retriable; a partial one never is.
+- **Where the partials actually came from, since this gets misremembered.**
+  Publication completes *before* public validation runs: when
+  `Validate public … release delivery` failed for 0.12.0 the linux coordinate
+  was already 9 of 9. So a failure in that step costs a red job and a WHOLE
+  coordinate. Every permanent partial came from a publish loop dying mid-write,
+  which is what the bounded retry and the read-back assertion address. Nobody
+  should hold a train because the validation step might fail.
 - **The completeness gate.** `stado host release --version 0.13.9 --dry-run`
   refused while the coordinate was short, naming the absent objects, and then
   correctly stopped refusing once darwin reached 9 of 9 — advancing to a
@@ -131,6 +138,22 @@ A record that quietly drops these is the thing it was written to prevent.
   the first evidence against a persistent one.
 - **The four permanent partials above stay on the list.** They are not
   historical trivia; they are the reason every check in this document exists.
+- **One runner serialises every publication, and that is a capacity limit
+  rather than a defect.** In `deploy.yml` both publish jobs -- `publish-linux`
+  and `deploy-control-plane` -- declare
+  `runs-on: [self-hosted, stado-control-plane]`, and exactly one runner carries
+  that label (`lukasz-macbook`). Only `qualification` and `identity` can run
+  hosted. Measured on 2026-08-31: a `product release` job took the runner at
+  16:54Z, and from then until at least 18:05Z BOTH the 0.13.13 and 0.13.14
+  trains sat with `publish-linux` and `deploy-control-plane` queued and no
+  runner assigned -- four publish legs across two trains, plus product-release
+  work from other sessions competing for the same label. 0.13.13's linux leg
+  finally started at 18:03:23Z, an hour and sixteen minutes after its train
+  began. Per-tag concurrency stopped trains from cancelling each other; it
+  cannot make them run in parallel. The honest fix costs hardware, so it is a
+  decision to take in daylight with a budget, not during a release. Its first
+  cost is already recorded: a fleet queue held paused for 65 minutes waiting
+  for a publication window that never arrived, with 18 jobs waiting.
 - **`0.13.9/linux-amd64` is deliberately empty.** `publish-linux` needs the
   service and release boundaries, and instance 14 is the release boundary.
   Retrying it now would risk a fifth permanent partial to satisfy a gate that
