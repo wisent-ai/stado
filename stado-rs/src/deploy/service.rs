@@ -5050,14 +5050,25 @@ fn quote_command_match(value: &str) -> Result<String, DeployError> {
 /// before this reports success. A label launchd does not hold is reported
 /// `absent`, not an error: booting out something already gone is the state this
 /// command exists to reach.
+///
+/// `scope` exists because the system domain is tried first and returns: a label
+/// declared in `/Library/LaunchDaemons` AND as a user LaunchAgent has two jobs,
+/// and the unqualified command can only ever reach the system one. On
+/// charless-mac-mini those two jobs held DIFFERENT programs — the system job
+/// ran the declared `stado coordinator`, the user job a `stado dashboard` from
+/// 2026-08-26 whose forced cleanup pass had been starving the host's janitor
+/// for five days — so the only job an operator needed to end was the only one
+/// this command could not name.
 const BOOTOUT_SCRIPT: &str = r#"set -u
 label=@LABEL@
+scope=@SCOPE@
 report() { printf 'STADO_BOOTOUT\t%s\t%s\n' "$1" "$2"; }
 if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   report refused "not a launchd host"
   exit 0
 fi
-if /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+if [ "$scope" != user ] \
+  && /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
   if ! /usr/bin/sudo -n /bin/launchctl bootout "system/$label" 2>/dev/null; then
     report refused "sudo -n launchctl bootout system/$label was refused"
     exit 0
@@ -5077,6 +5088,7 @@ fi
 uid=$(/usr/bin/id -u)
 removed=
 for domain in "gui/$uid" "user/$uid"; do
+  if [ "$scope" = system ]; then continue; fi
   if /bin/launchctl print "$domain/$label" >/dev/null 2>&1; then
     if ! /bin/launchctl bootout "$domain/$label" 2>/dev/null; then
       report refused "launchctl bootout $domain/$label was refused"
@@ -5097,18 +5109,57 @@ done
 if [ -n "$removed" ]; then
   report booted_out "${removed# }"
 else
-  report absent "launchd holds no system/$label, gui/$uid/$label or user/$uid/$label"
+  report absent "launchd holds no $scope job for $label (system, gui/$uid and user/$uid all read empty)"
 fi
 "#;
+
+/// Which launchd domain a bootout may act in.
+///
+/// `Any` is the historical behaviour: system first, and the user domains only
+/// when the system domain holds nothing. The other two exist for a label that
+/// is loaded in both, where the historical order can only ever reach one of
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootoutScope {
+    Any,
+    System,
+    User,
+}
+
+impl BootoutScope {
+    /// The word the remote program compares against.
+    fn word(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::System => "system",
+            Self::User => "user",
+        }
+    }
+
+    /// Parse an operator's `--domain`. `None` is [`Self::Any`].
+    pub fn parse(value: Option<&str>) -> Result<Self, DeployError> {
+        match value.map(str::trim) {
+            None | Some("") | Some("any") => Ok(Self::Any),
+            Some("system") => Ok(Self::System),
+            Some("user") => Ok(Self::User),
+            Some(other) => Err(DeployError(format!(
+                "{other:?} is not a launchd domain: system, user, or any"
+            ))),
+        }
+    }
+}
 
 /// [`BOOTOUT_SCRIPT`] for one label. Returns `(state, detail)`.
 pub async fn bootout_label(
     target: &ComputeTarget,
     label: &str,
+    scope: BootoutScope,
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     validate_unit_id(label)?;
-    let script = BOOTOUT_SCRIPT.replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?));
+    let script = BOOTOUT_SCRIPT
+        .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
+        .replace("@SCOPE@", scope.word());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
