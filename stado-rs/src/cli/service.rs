@@ -278,6 +278,12 @@ pub enum ServiceCommands {
         /// Require readiness JSON field `releaseVersion` to equal `--version`.
         #[arg(long)]
         require_release_version: bool,
+        /// Replace one legacy user LaunchAgent atomically with this release.
+        ///
+        /// The legacy unit is restored when activation fails. Its plist is
+        /// deleted only after exact readiness passes.
+        #[arg(long)]
+        supersede_unit: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -979,6 +985,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             readiness_timeout_seconds,
             reload_unit,
             require_release_version,
+            supersede_unit,
             json,
         } => {
             release(ServiceReleaseOptions {
@@ -990,6 +997,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 readiness_timeout_seconds,
                 reload_unit,
                 require_release_version,
+                supersede_unit: supersede_unit.as_deref(),
                 json,
             })
             .await
@@ -2133,6 +2141,7 @@ struct ServiceReleaseOptions<'a> {
     readiness_timeout_seconds: u64,
     reload_unit: bool,
     require_release_version: bool,
+    supersede_unit: Option<&'a str>,
     json: bool,
 }
 
@@ -2405,6 +2414,16 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         ));
     }
     let runner = production_runner();
+    if let Some(label) = options.supersede_unit {
+        if label == declared.unit_id() {
+            return Err(CmdError::usage(
+                "--supersede-unit must name the legacy user LaunchAgent, not the managed unit",
+            ));
+        }
+        service::check_user_launchagent(&target, label, &runner)
+            .await
+            .map_err(click)?;
+    }
     let shown = service::show_service(&target, declared, &runner)
         .await
         .map_err(click)?;
@@ -2434,7 +2453,23 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     )?;
     let previous_directory = current_service_version(&target, directory, &runner).await?;
 
-    update(
+    let superseded_was_running = if let Some(label) = options.supersede_unit {
+        let (state, detail) = service::bootout_label(&target, label, &runner)
+            .await
+            .map_err(click)?;
+        match state.as_str() {
+            "booted_out" => true,
+            "absent" => false,
+            _ => {
+                return Err(CmdError::click(format!(
+                    "could not supersede user LaunchAgent {label}: {detail}"
+                )))
+            }
+        }
+    } else {
+        false
+    };
+    if let Err(error) = update(
         options.name,
         options.host,
         None,
@@ -2442,7 +2477,17 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         None,
         false,
     )
-    .await?;
+    .await
+    {
+        if superseded_was_running {
+            if let Some(label) = options.supersede_unit {
+                service::restore_user_launchagent(&target, label, &runner)
+                    .await
+                    .map_err(click)?;
+            }
+        }
+        return Err(error);
+    }
     let installed_directory = current_service_version(&target, directory, &runner).await?;
     let restart = if options.reload_unit {
         service::reload_service_with_password(&target, declared, sudo_password.as_deref(), &runner)
@@ -2486,8 +2531,19 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             &runner,
         )
         .await;
-        return match rollback {
-            Ok(()) => {
+        let legacy_restore = if superseded_was_running {
+            if let Some(label) = options.supersede_unit {
+                service::restore_user_launchagent(&target, label, &runner)
+                    .await
+                    .map_err(click)
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
+        return match (rollback, legacy_restore) {
+            (Ok(()), Ok(())) => {
                 crate::release_agent::publish_service_release_status(
                     options.product,
                     options.host,
@@ -2496,18 +2552,29 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
                     bundle.previous_version.as_deref(),
                     bundle.previous_sha256.as_deref(),
                     Some(options.version),
-                    "service readiness failed; previous release restored",
+                    "service readiness failed; previous release and legacy unit restored",
                 )
                 .await
                 .map_err(CmdError::click)?;
                 Err(CmdError::click(format!(
-                    "{error}; rolled back to {previous_directory} and restarted it"
+                    "{error}; rolled back to {previous_directory} and restored the prior unit"
                 )))
             }
-            Err(rollback_error) => Err(CmdError::click(format!(
+            (Err(rollback_error), Ok(())) => Err(CmdError::click(format!(
                 "{error}; rollback to {previous_directory} also failed: {rollback_error}"
             ))),
+            (Ok(()), Err(legacy_error)) => Err(CmdError::click(format!(
+                "{error}; managed release rolled back, but the legacy unit could not be restored: {legacy_error}"
+            ))),
+            (Err(rollback_error), Err(legacy_error)) => Err(CmdError::click(format!(
+                "{error}; managed rollback failed: {rollback_error}; legacy restore failed: {legacy_error}"
+            ))),
         };
+    }
+    if let Some(label) = options.supersede_unit {
+        service::delete_user_launchagent(&target, label, &runner)
+            .await
+            .map_err(click)?;
     }
 
     crate::release_agent::publish_service_release_status(
@@ -2518,7 +2585,11 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         Some(options.version),
         Some(&bundle.artifact.artifact_sha256),
         bundle.previous_version.as_deref(),
-        "service restart and readiness passed",
+        if options.supersede_unit.is_some() {
+            "service readiness passed; superseded user LaunchAgent removed"
+        } else {
+            "service restart and readiness passed"
+        },
     )
     .await
     .map_err(CmdError::click)?;
@@ -2533,6 +2604,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             "artifact_directory": installed_directory,
             "status": "released",
             "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
+            "superseded_unit": options.supersede_unit,
         }))?;
     } else {
         println!(
