@@ -1781,7 +1781,16 @@ const RUNNING_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
 const STOPPED_DESCRIBE: &str = "the unit is not running";
 
 const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
-    stado_launchd_state
+    # launchctl bootout returns before an exiting job disappears from
+    # `launchctl print`. Wait for that declared end state instead of reporting
+    # a failed stop that becomes true moments after the command returns.
+    stopped_attempt=0
+    while [ \"$stopped_attempt\" -lt 30 ]; do
+      stado_launchd_state
+      if [ \"$pc_loaded\" = no ] || [ -z \"$pc_pid\" ]; then break; fi
+      stopped_attempt=$((stopped_attempt + 1))
+      /bin/sleep 1
+    done
     if [ \"$pc_loaded\" = no ]; then
       stado_post 'met' \"no job at $domain/$unit\"
     elif [ -n \"$pc_pid\" ]; then

@@ -792,6 +792,16 @@ pub enum ServiceCommands {
         /// declaration mentions.
         #[arg(long = "arg")]
         args: Vec<String>,
+        /// Keep this exact launchd label instead of minting one from NAME.
+        /// Darwin only; used when a managed daemon is recreated as a
+        /// per-login LaunchAgent without changing its service identity.
+        #[arg(long = "launchd-label")]
+        launchd_label: Option<String>,
+        /// Install a Darwin service as a per-login LaunchAgent even when the
+        /// target is declared always-on. The host must have a live gui/<uid>
+        /// domain; deployment refuses instead of falling back to a daemon.
+        #[arg(long = "as-launch-agent")]
+        as_launch_agent: bool,
         #[arg(long)]
         json: bool,
     },
@@ -868,8 +878,13 @@ pub enum ServiceCommands {
         /// not say so yet. The privileged install and bootstrap steps run
         /// under passwordless sudo, and a host without that grant is told
         /// exactly which step was refused.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "as_launch_agent")]
         as_daemon: bool,
+        /// Recreate a declared Darwin unit as a per-login Aqua LaunchAgent.
+        /// The old unit must be unloaded and its old plist removed first;
+        /// ensure then updates the existing registry record in one write.
+        #[arg(long = "as-launch-agent", conflicts_with = "as_daemon")]
+        as_launch_agent: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1276,6 +1291,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             from,
             from_artifact,
             args,
+            launchd_label,
+            as_launch_agent,
             json,
         } => {
             deploy(
@@ -1285,6 +1302,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 from,
                 from_artifact,
                 &args,
+                launchd_label.as_deref(),
+                as_launch_agent,
                 json,
             )
             .await
@@ -1297,6 +1316,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             args,
             reason,
             as_daemon,
+            as_launch_agent,
             json,
         } => {
             ensure(EnsureOptions {
@@ -1306,6 +1326,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 args: &args,
                 reason: &reason,
                 as_daemon,
+                as_launch_agent,
                 as_json: json,
             })
             .await
@@ -2380,7 +2401,15 @@ async fn rollback_service_release(
     sudo_password: Option<&str>,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
-    update(options.name, options.host, None, None, Some(previous), false).await?;
+    update(
+        options.name,
+        options.host,
+        None,
+        None,
+        Some(previous),
+        false,
+    )
+    .await?;
     let report = if options.reload_unit {
         service::reload_service_with_password(target, declared, sudo_password, runner).await
     } else {
@@ -4700,9 +4729,18 @@ async fn deploy(
     from: Option<String>,
     from_artifact: Option<String>,
     args: &[String],
+    launchd_label: Option<&str>,
+    as_launch_agent: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    if (launchd_label.is_some() || as_launch_agent)
+        && !target.release_platform.starts_with("darwin")
+    {
+        return Err(CmdError::click(
+            "--launchd-label and --as-launch-agent are Darwin-only",
+        ));
+    }
     let host = target.name.clone();
     // Exactly one source. Neither is a sensible default: a path deploys
     // whatever is on the host with no version identity, and an artifact
@@ -4758,7 +4796,14 @@ async fn deploy(
     } else {
         args
     };
-    let plan = service::plan_deploy(&target, name, from, args).map_err(click)?;
+    let mut plan = match launchd_label {
+        Some(label) => service::plan_deploy_labelled(&target, name, label, from, args, &[]),
+        None => service::plan_deploy(&target, name, from, args),
+    }
+    .map_err(click)?;
+    if as_launch_agent {
+        plan.force_daemon = false;
+    }
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
     // unit that then cannot be recorded would leave an unmanaged unit
@@ -4830,6 +4875,7 @@ struct EnsureOptions<'a> {
     args: &'a [String],
     reason: &'a str,
     as_daemon: bool,
+    as_launch_agent: bool,
     as_json: bool,
 }
 
@@ -4999,6 +5045,7 @@ pub(crate) async fn ensure_local_dependency(
         args: &[],
         reason,
         as_daemon,
+        as_launch_agent: false,
         as_json: false,
     })
     .await
@@ -5035,6 +5082,7 @@ pub(crate) async fn reconcile_after_config_change(
         args: &[],
         reason,
         as_daemon: true,
+        as_launch_agent: false,
         as_json: false,
     })
     .await?;
@@ -5060,6 +5108,9 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .await
         .map_err(click)?;
     let host = target.name.clone();
+    if options.as_launch_agent && !target.release_platform.starts_with("darwin") {
+        return Err(CmdError::click("--as-launch-agent is Darwin-only"));
+    }
 
     // Resolve both the operator-facing product name and the stable catalog
     // unit. An older registry may carry only the latter; treating that as no
@@ -5147,10 +5198,20 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     }
     .map_err(click)?;
     let mut plan = plan;
-    // The plan already carries the host's own answer ([`requires_daemon_domain`]).
-    // `--as-daemon` stays the operator's override for a host whose declaration
-    // does not say always-on yet, so it can only turn the daemon domain on.
-    plan.force_daemon = plan.force_daemon || options.as_daemon;
+    // A declared path is the service's durable domain choice. In particular,
+    // a LaunchAgent intentionally placed on an always-on Mac must not become
+    // a daemon again when ensure or the autonomy reconciler runs later.
+    if options.as_launch_agent
+        || (existing
+            .is_some_and(|declared| service::UnitDomain::from_path(&declared.path).is_per_login())
+            && !options.as_daemon)
+    {
+        plan.force_daemon = false;
+    } else {
+        // The target default remains the safe answer for undeclared services,
+        // and --as-daemon can still turn the system domain on explicitly.
+        plan.force_daemon = plan.force_daemon || options.as_daemon;
+    }
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and
