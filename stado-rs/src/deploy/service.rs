@@ -4209,9 +4209,9 @@ pub const DOMAIN_USER: &str = "user";
 /// What one `ensure` pass found and did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnsureOutcome {
-    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`] or
-    /// [`ACTION_ALREADY_CORRECT`]; any other word is a failure the remote
-    /// program named.
+    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`], [`ACTION_ALREADY_CORRECT`] or
+    /// [`ACTION_CONVERGED`]; any other word is a failure the remote program
+    /// named.
     pub action: String,
     /// The domain the unit ended up in, as launchd spells it.
     pub domain: String,
@@ -4225,12 +4225,23 @@ pub struct EnsureOutcome {
 }
 
 impl EnsureOutcome {
-    /// True when the pass reached one of the three intended actions AND the
+    /// True when the pass reached one of the four intended actions AND the
     /// host was observed with the unit loaded and running afterwards.
+    ///
+    /// [`ACTION_CONVERGED`] belongs here. It was added as a success action —
+    /// a drifted unit file rewritten and kicked in place, deliberately
+    /// avoiding the window `bootout` then `bootstrap` leaves — but this set
+    /// was never widened to admit it, so every converged pass was reported as
+    /// a failure naming the unit path it had just settled on. That is what
+    /// stopped the stado 0.13.11 release submission: its "Ensure the declared
+    /// object service" step converged
+    /// `com.wisent.always-on.stado-object-api` on charless-mac-mini and then
+    /// failed with `could not ensure …: converged: /Library/LaunchDaemons/…`,
+    /// so no product release could be submitted at all.
     pub fn succeeded(&self) -> bool {
         matches!(
             self.action.as_str(),
-            ACTION_CREATED | ACTION_RESTARTED | ACTION_ALREADY_CORRECT
+            ACTION_CREATED | ACTION_RESTARTED | ACTION_ALREADY_CORRECT | ACTION_CONVERGED
         ) && self.report.postcondition_held()
     }
 
@@ -6373,4 +6384,64 @@ fn split_words(value: &str) -> Vec<String> {
         words.push(current);
     }
     words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(action: &str, postcondition_met: bool) -> EnsureOutcome {
+        EnsureOutcome {
+            action: action.to_string(),
+            domain: DOMAIN_SYSTEM.to_string(),
+            pid: "4242".to_string(),
+            path: "/Library/LaunchDaemons/com.wisent.always-on.stado-object-api.plist".to_string(),
+            report: RemoteReport {
+                postcondition: "unit is loaded and running".to_string(),
+                postcondition_state: if postcondition_met {
+                    host_channel::POSTCONDITION_MET.to_string()
+                } else {
+                    "unmet".to_string()
+                },
+                ..RemoteReport::default()
+            },
+        }
+    }
+
+    /// A converged pass is a success. It was added as one — a drifted unit
+    /// file rewritten and kicked in place, without the window `bootout` then
+    /// `bootstrap` leaves — and `succeeded()` never admitted it, so the stado
+    /// 0.13.11 release submission failed with `could not ensure
+    /// com.wisent.always-on.stado-object-api: converged:
+    /// /Library/LaunchDaemons/…` after that ensure had done exactly what it
+    /// was asked to do.
+    #[test]
+    fn a_converged_ensure_pass_is_a_success() {
+        assert!(outcome(ACTION_CONVERGED, true).succeeded());
+        // And it counts as a change, because the host was written to.
+        assert!(outcome(ACTION_CONVERGED, true).changed());
+    }
+
+    #[test]
+    fn every_intended_action_succeeds_only_with_the_postcondition_held() {
+        for action in [
+            ACTION_CREATED,
+            ACTION_RESTARTED,
+            ACTION_ALREADY_CORRECT,
+            ACTION_CONVERGED,
+        ] {
+            assert!(outcome(action, true).succeeded(), "{action}");
+            assert!(
+                !outcome(action, false).succeeded(),
+                "{action} must not pass on an unmet postcondition"
+            );
+        }
+    }
+
+    /// Any other word stays a failure the remote program named.
+    #[test]
+    fn an_unknown_action_is_still_a_failure() {
+        assert!(!outcome("exploded", true).succeeded());
+        assert!(!outcome("", true).succeeded());
+    }
 }
