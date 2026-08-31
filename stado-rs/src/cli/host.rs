@@ -1121,6 +1121,34 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
             recorded("path")
         );
     }
+    // Who holds the run lock, printed with the state it explains. A pass that
+    // reported `lock_busy`, and an agent publishing `cleanup_in_progress`, are
+    // both this one fact seen from the outside; until this line existed an
+    // operator could read either of them for hours with no way to learn which
+    // process to look at.
+    let lock = report.get("cleanup_lock");
+    let lock_read = lock.and_then(|value| value.get("read")) == Some(&Value::Bool(true));
+    let holders: Vec<&Value> = lock
+        .and_then(|value| value.get("holders"))
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().collect())
+        .unwrap_or_default();
+    if lock_read && !holders.is_empty() {
+        let cells: Vec<Vec<String>> = holders
+            .iter()
+            .map(|holder| {
+                vec![
+                    cell(holder.get("pid")),
+                    cell(holder.get("command")),
+                    cell(lock.and_then(|value| value.get("path"))),
+                ]
+            })
+            .collect();
+        println!("\nthe janitor's run lock is held — no pass can scan while it is:");
+        super::table::print(&["PID", "COMMAND", "LOCK"], &cells);
+    } else if lock_read {
+        println!("\nthe janitor's run lock is free");
+    }
     // Said after the cleanup state, because it is the answer to the question
     // that state raises: the janitor ran, it freed what it could, and the disk
     // is still full. macOS publishes no size for a snapshot, so the count and

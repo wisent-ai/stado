@@ -58,6 +58,10 @@ pub const OK_STATUS: &str = "ok";
 /// is shell-quoted before it is spliced.
 const STATE_PATH_MARK: &str = "@STATE_PATH@";
 
+/// Substitution point for the janitor's lock path in [`REMOTE_SCRIPT`], on
+/// the same terms: a crate constant, shell-quoted before it is spliced.
+const LOCK_PATH_MARK: &str = "@LOCK_PATH@";
+
 /// The fixed remote program, with the janitor's state path spliced in by
 /// [`remote_script`]. Read-only: disk usage, cleanup state, snapshots, and a
 /// bounded two-level inventory of the two writable roots that dominate macOS.
@@ -75,6 +79,31 @@ if [ -r "$state" ]; then
   printf 'STADO_CLEANUP_STATE\t%s\n' "$(/usr/bin/tr -d '\t\r\n' < "$state")"
 else
   printf 'STADO_CLEANUP_STATE_MISSING\t%s\n' "$state"
+fi
+lock="$HOME/@LOCK_PATH@"
+# Who holds the janitor's run lock. `lock_busy` in a cleanup report and
+# `cleanup_in_progress` in an agent's capacity broadcast are the same fact
+# seen from two sides, and neither one names the holder -- so a host can
+# report both for hours, scan nothing, and refuse to admit work, with no
+# command able to say which process to look at. On charless-mac-mini that
+# cost most of a day. `lsof` is the only reader that answers it; the path is
+# fixed by the product, never supplied by an operator.
+if [ -e "$lock" ] && [ -x /usr/sbin/lsof ]; then
+  /usr/sbin/lsof -Fpc -- "$lock" 2>/dev/null | {
+    holder_pid=''
+    while IFS= read -r field; do
+      case "$field" in
+        p*) holder_pid=${field#p} ;;
+        c*)
+          if [ -n "$holder_pid" ]; then
+            printf 'STADO_CLEANUP_LOCK\t%s\t%s\n' "$holder_pid" "${field#c}"
+            holder_pid=''
+          fi
+          ;;
+      esac
+    done
+  }
+  printf 'STADO_CLEANUP_LOCK_END\t%s\n' "$lock"
 fi
 if [ -x /usr/bin/tmutil ]; then
   /usr/bin/tmutil listlocalsnapshots / 2>/dev/null | while IFS= read -r row; do
@@ -107,12 +136,17 @@ done
 fi
 "#;
 
-/// The remote program with the janitor's state path in place.
+/// The remote program with the janitor's state and lock paths in place.
 pub fn remote_script() -> String {
-    REMOTE_SCRIPT_TEMPLATE.replace(
-        STATE_PATH_MARK,
-        &shlex_quote(&disk_cleanup::state_relative_path()),
-    )
+    REMOTE_SCRIPT_TEMPLATE
+        .replace(
+            STATE_PATH_MARK,
+            &shlex_quote(&disk_cleanup::state_relative_path()),
+        )
+        .replace(
+            LOCK_PATH_MARK,
+            &shlex_quote(&disk_cleanup::lock_relative_path()),
+        )
 }
 
 /// One `df -Pk` row, in the units the host reported (1024-byte blocks for
@@ -225,6 +259,13 @@ pub struct CloneSummary {
     pub older_than_day: i64,
 }
 
+/// One process holding the janitor's run lock, as the host's `lsof` named it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LockHolder {
+    pub pid: String,
+    pub command: String,
+}
+
 /// Everything one host answered.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiskReading {
@@ -233,6 +274,11 @@ pub struct DiskReading {
     pub state: CleanupState,
     pub snapshots: LocalSnapshots,
     pub inventory: Vec<DiskItem>,
+    /// Who holds the run lock right now. Empty with `lock_read` true means
+    /// nothing holds it, which is a different fact from never having looked.
+    pub lock_holders: Vec<LockHolder>,
+    pub lock_read: bool,
+    pub lock_path: Option<String>,
 }
 
 /// Fold the marker lines of stdout into a reading.
@@ -258,6 +304,18 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
                     path: Some((*path).to_string()),
                     ..CleanupState::default()
                 };
+            }
+            ["STADO_CLEANUP_LOCK", pid, command] => {
+                reading.lock_holders.push(LockHolder {
+                    pid: (*pid).trim().to_string(),
+                    command: (*command).trim().to_string(),
+                });
+            }
+            // Printed whether or not anything held it, so "nobody is holding
+            // the lock" is distinguishable from "this host could not be asked".
+            ["STADO_CLEANUP_LOCK_END", path] => {
+                reading.lock_read = true;
+                reading.lock_path = Some((*path).to_string());
             }
             ["STADO_SNAPSHOT", name] => {
                 reading.snapshots.supported = true;
@@ -397,6 +455,21 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "next_pass_at": state.next_pass_at,
             "low_bytes": state.low_bytes,
             "error": state.error,
+        }),
+    );
+    // The other half of every `lock_busy` and `cleanup_in_progress` an
+    // operator has ever read: which process is holding the run lock.
+    report.insert(
+        "cleanup_lock".to_string(),
+        json!({
+            "read": reading.lock_read,
+            "path": reading.lock_path,
+            "held": !reading.lock_holders.is_empty(),
+            "holders": reading
+                .lock_holders
+                .iter()
+                .map(|holder| json!({"pid": holder.pid, "command": holder.command}))
+                .collect::<Vec<Value>>(),
         }),
     );
     // Reported next to the usage it does not appear in: `size_bytes` is
