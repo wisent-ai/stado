@@ -278,12 +278,21 @@ pub struct RoutedField {
 /// destructures: a target, a field class, and a capability REFERENCE. No
 /// secret is here, and none can be: the worker redeems the reference against
 /// its own broker and zeroes the plaintext when the fill returns.
+///
+/// NO `authorization_id`. Weles derives what it will accept from the page
+/// itself — `wsFillCredential` builds `{ purpose: 'weles.browser.fill',
+/// resource: "origin:<origin>/<field class>" }` and nothing more — and
+/// `assertCapability` compares the reference's `authorization_id` against
+/// that expectation's, which is `undefined`. A reference carrying one is
+/// therefore refused with `capability operation mismatch` before any
+/// redemption. The Apple sign-in binds its pair to a guard id because its own
+/// expectation is built with that id; copying the detail into this contract is
+/// what made run 49cfed33 fail on the fill with zero agent steps.
 pub fn prefill_entry(
     target: &str,
     field_class: &str,
     capability_id: &str,
     resource: &str,
-    authorization_id: &str,
 ) -> Value {
     json!({
         "target": target,
@@ -293,7 +302,6 @@ pub fn prefill_entry(
             "purpose": FILL_PURPOSE,
             "resource": resource,
             "target": CAPABILITY_TARGET,
-            "authorization_id": authorization_id,
         },
     })
 }
@@ -399,7 +407,6 @@ pub async fn issue_sign_in_prefill(
 ) -> Result<SignInPrefill, DeployError> {
     let broker = super::host_capability::resolve(target, runner).await?;
     let unconfirmed = confirm_routed_item(target, &broker, origin, item, runner).await?;
-    let authorization_id = uuid::Uuid::new_v4().to_string();
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
     for (fill_target, field_class) in SIGN_IN_FIELDS {
         let resource = fill_resource(origin, field_class);
@@ -413,7 +420,9 @@ pub async fn issue_sign_in_prefill(
                 capability_target: CAPABILITY_TARGET,
                 ttl_seconds: SIGN_IN_TTL_SECONDS,
                 max_uses: SIGN_IN_MAX_USES,
-                authorization_id: &authorization_id,
+                // Unbound on purpose: this consumer's expectation carries no
+                // authorization id, so binding one guarantees a mismatch.
+                authorization_id: None,
             },
             runner,
         )
@@ -423,7 +432,6 @@ pub async fn issue_sign_in_prefill(
             field_class,
             &capability_id,
             &resource,
-            &authorization_id,
         ));
     }
     Ok(SignInPrefill {
@@ -664,7 +672,6 @@ mod tests {
     #[test]
     fn a_prefill_run_puts_capability_references_on_the_wire_and_no_secret() {
         let origin = exact_origin("https://accounts.google.com").unwrap();
-        let authorization_id = "6f1f1f2e-0000-4000-8000-abcdefabcdef";
         let prefill: Vec<Value> = SIGN_IN_FIELDS
             .iter()
             .enumerate()
@@ -674,7 +681,6 @@ mod tests {
                     field_class,
                     &format!("{:064x}", index + 1),
                     &fill_resource(&origin, field_class),
-                    authorization_id,
                 )
             })
             .collect();
@@ -708,16 +714,20 @@ mod tests {
         for entry in entries {
             assert_eq!(entry["capability"]["purpose"], json!("weles.browser.fill"));
             assert_eq!(entry["capability"]["target"], json!("weles"));
-            // One authorization id for the pair, the way the Apple sign-in
-            // issues its own.
-            assert_eq!(
-                entry["capability"]["authorization_id"],
-                json!(authorization_id)
+            // NO authorization id. `wsFillCredential` builds its expectation as
+            // `{ purpose, resource }`, and `assertCapability` compares the
+            // reference's authorization_id against that expectation's
+            // `undefined`: a bound reference is refused with `capability
+            // operation mismatch` before anything is redeemed. Run 49cfed33
+            // failed exactly there, on the fill, with zero agent steps.
+            assert!(
+                entry["capability"].get("authorization_id").is_none(),
+                "{entry}"
             );
-            // A reference and nothing else: four capability fields plus the
-            // authorization id, and no field that could hold a secret.
+            // A reference and nothing else: four fields, none that could hold
+            // a secret.
             let capability = entry["capability"].as_object().unwrap();
-            assert_eq!(capability.len(), 5, "{entry}");
+            assert_eq!(capability.len(), 4, "{entry}");
             for forbidden in ["value", "secret", "password", "email", "username"] {
                 assert!(capability.get(forbidden).is_none(), "{entry}");
             }

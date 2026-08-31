@@ -212,6 +212,23 @@ pub async fn verify_routes(
     )))
 }
 
+/// The nonsecret item inventory of the target's own vault.
+///
+/// `skarbiec list` reads the vault's envelope, the same way `fleet vaults`
+/// reads it to count vaults, so this answers on a host whose gpg a channel
+/// session cannot spawn. An item's name is its `id`; no field value is read.
+pub async fn items(
+    target: &ComputeTarget,
+    broker: &RemoteBroker,
+    runner: &Runner,
+) -> Result<Vec<Value>, DeployError> {
+    let answer = run_json(target, broker, &["list"], runner).await?;
+    answer
+        .as_array()
+        .cloned()
+        .ok_or_else(|| DeployError(format!("{}: skarbiec list was not a JSON array", target.name)))
+}
+
 /// What one capability asks for, in Skarbiec's own vocabulary.
 pub struct Issuance<'a> {
     pub agent: &'a str,
@@ -221,7 +238,14 @@ pub struct Issuance<'a> {
     pub capability_target: &'a str,
     pub ttl_seconds: &'a str,
     pub max_uses: &'a str,
-    pub authorization_id: &'a str,
+    /// Skarbiec binds a capability to an authorization id when one is given,
+    /// and redemption then requires the redeemer to present the same one.
+    /// Whether to bind is the CONSUMER's contract, not a preference: Weles's
+    /// Apple sign-in builds its expectation with its guard id, while
+    /// `wsFillCredential` builds `{ purpose, resource }` and nothing else, so
+    /// a browser fill must be issued and referenced WITHOUT one or every
+    /// redemption throws `capability operation mismatch`.
+    pub authorization_id: Option<&'a str>,
 }
 
 /// Issue one capability on the target and return its id.
@@ -236,29 +260,26 @@ pub async fn issue(
     issuance: &Issuance<'_>,
     runner: &Runner,
 ) -> Result<String, DeployError> {
-    let issued = run_json(
-        target,
-        broker,
-        &[
-            "capability-issue",
-            "--agent",
-            issuance.agent,
-            "--purpose",
-            issuance.purpose,
-            "--resource",
-            issuance.resource,
-            "--target",
-            issuance.capability_target,
-            "--ttl",
-            issuance.ttl_seconds,
-            "--max-uses",
-            issuance.max_uses,
-            "--authorization-id",
-            issuance.authorization_id,
-        ],
-        runner,
-    )
-    .await?;
+    let mut arguments = vec![
+        "capability-issue",
+        "--agent",
+        issuance.agent,
+        "--purpose",
+        issuance.purpose,
+        "--resource",
+        issuance.resource,
+        "--target",
+        issuance.capability_target,
+        "--ttl",
+        issuance.ttl_seconds,
+        "--max-uses",
+        issuance.max_uses,
+    ];
+    if let Some(authorization_id) = issuance.authorization_id {
+        arguments.push("--authorization-id");
+        arguments.push(authorization_id);
+    }
+    let issued = run_json(target, broker, &arguments, runner).await?;
     issued
         .get("capability_id")
         .and_then(Value::as_str)

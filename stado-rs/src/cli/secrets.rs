@@ -69,11 +69,27 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// List nonsecret item metadata from one owner-controlled local vault file.
+    /// List nonsecret item metadata from one owner-controlled vault file.
+    ///
+    /// With `--host` the vault is the one THAT host holds, read through the
+    /// registry's own channel with the same read-only `skarbiec list` the
+    /// fleet's vault inventory already uses. A remote host's vault is a
+    /// separate store from this machine's — its capability routes, its
+    /// capability state and its items are all its own — and nothing else in
+    /// the product could answer "does that host hold this item" without
+    /// copying an encrypted vault around.
+    ///
+    /// Names, kinds and states only, never a field value.
     #[command(name = "inspect-vault")]
     InspectVault {
-        /// Encrypted Skarbiec vault file.
-        vault: String,
+        /// Encrypted Skarbiec vault file. Omit with `--host`.
+        vault: Option<String>,
+        /// Registry host whose own vault to read instead of a local file.
+        #[arg(long)]
+        host: Option<String>,
+        /// Only report items whose name contains this text.
+        #[arg(long = "match")]
+        matching: Option<String>,
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -130,7 +146,23 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
-        SecretsCommands::InspectVault { vault, json } => inspect_vault(&vault, json),
+        SecretsCommands::InspectVault {
+            vault,
+            host,
+            matching,
+            json,
+        } => match (host, vault) {
+            (Some(host), None) => {
+                inspect_host_vault(&host, matching.as_deref(), json).await
+            }
+            (None, Some(vault)) => inspect_vault(&vault, json),
+            (Some(_), Some(_)) => Err(CmdError::usage(
+                "inspect-vault reads either a local VAULT file or --host, not both",
+            )),
+            (None, None) => Err(CmdError::usage(
+                "inspect-vault needs a local VAULT file or --host",
+            )),
+        },
         SecretsCommands::BootstrapWeles { json } => bootstrap_weles(json),
         SecretsCommands::AdoptWelesVault { json } => adopt_weles_vault(json),
         // Same reasoning as `doctor`: the transcripts are readable when the
@@ -451,6 +483,82 @@ fn vault_items(
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|_| CmdError::click("Skarbiec inventory was not a JSON array"))
+}
+
+/// `credentials inspect-vault --host` — item names on the host that holds them.
+///
+/// The remote read is `skarbiec list`, the same read-only subcommand
+/// `fleet vaults` already runs on a host to count its vaults, addressed
+/// through [`crate::deploy::host_capability`] so the binary, the vault and
+/// GNUPGHOME are the host's own. An item's NAME is its `id`; nothing here
+/// reads or prints a field value.
+async fn inspect_host_vault(
+    host: &str,
+    matching: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(host)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let broker = crate::deploy::host_capability::resolve(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let inventory = crate::deploy::host_capability::items(&resolved, &broker, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let mut rows: Vec<(String, String, String)> = inventory
+        .iter()
+        .filter_map(|item| {
+            let name = item.get("id").and_then(Value::as_str)?.to_string();
+            if let Some(text) = matching {
+                if !name.to_lowercase().contains(&text.to_lowercase()) {
+                    return None;
+                }
+            }
+            Some((
+                name,
+                item.get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                item.get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ))
+        })
+        .collect();
+    rows.sort();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "host": resolved.name,
+                "vault": broker.vault,
+                "items_total": inventory.len(),
+                "matched": rows.len(),
+                "items": rows
+                    .iter()
+                    .map(|(name, kind, state)| json!({
+                        "name": name,
+                        "kind": kind,
+                        "state": state,
+                    }))
+                    .collect::<Vec<Value>>(),
+            }))?
+        );
+        return Ok(());
+    }
+    println!("host:      {}", resolved.name);
+    println!("vault:     {}", broker.vault);
+    println!("items:     {} total, {} shown", inventory.len(), rows.len());
+    for (name, kind, state) in &rows {
+        println!("  {name:<52} {kind:<12} {state}");
+    }
+    Ok(())
 }
 
 fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
