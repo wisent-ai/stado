@@ -269,6 +269,15 @@ pub enum ServiceCommands {
         /// Maximum seconds to wait for readiness.
         #[arg(long, default_value_t = 30)]
         readiness_timeout_seconds: u64,
+        /// Reload a system LaunchDaemon's unit definition before readiness.
+        ///
+        /// `kickstart` reuses launchd's cached ProgramArguments. Use this when
+        /// the plist was repointed from a legacy path to managed `current`.
+        #[arg(long)]
+        reload_unit: bool,
+        /// Require readiness JSON field `releaseVersion` to equal `--version`.
+        #[arg(long)]
+        require_release_version: bool,
         #[arg(long)]
         json: bool,
     },
@@ -968,6 +977,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             version,
             readiness_url,
             readiness_timeout_seconds,
+            reload_unit,
+            require_release_version,
             json,
         } => {
             release(ServiceReleaseOptions {
@@ -977,6 +988,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 version: &version,
                 readiness_url: readiness_url.as_deref(),
                 readiness_timeout_seconds,
+                reload_unit,
+                require_release_version,
                 json,
             })
             .await
@@ -2118,6 +2131,8 @@ struct ServiceReleaseOptions<'a> {
     version: &'a str,
     readiness_url: Option<&'a str>,
     readiness_timeout_seconds: u64,
+    reload_unit: bool,
+    require_release_version: bool,
     json: bool,
 }
 
@@ -2293,6 +2308,7 @@ fn validate_readiness_url(url: &str) -> Result<(), CmdError> {
 async fn wait_for_service_readiness(
     target: &targets::ComputeTarget,
     url: &str,
+    expected_release_version: Option<&str>,
     timeout_seconds: u64,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
@@ -2303,17 +2319,26 @@ async fn wait_for_service_readiness(
         ));
     }
     let script = format!(
-        "set -euo pipefail\nurl={}\ndeadline=$((SECONDS + {}))\n\
+        "set -euo pipefail\nurl={}\nexpected={}\ndeadline=$((SECONDS + {}))\n\
          while [ \"$SECONDS\" -lt \"$deadline\" ]; do\n\
-           if /usr/bin/curl -fsS --max-time 2 \"$url\" >/dev/null; then\n\
-             printf '%s\\n' ready\n\
-             exit 0\n\
+           if body=$(/usr/bin/curl -fsS --max-time 2 \"$url\"); then\n\
+             reported=\n\
+             if [ -n \"$expected\" ]; then\n\
+               reported=\"$(printf '%s' \"$body\" | /usr/bin/plutil -extract releaseVersion raw -o - - 2>/dev/null)\" || reported=\n\
+             fi\n\
+             if [ -z \"$expected\" ] || [ \"$reported\" = \"$expected\" ]; then\n\
+               printf '%s\\n' ready\n\
+               exit 0\n\
+             fi\n\
            fi\n\
            /bin/sleep 1\n\
          done\n\
-         printf '%s\\n' \"readiness timed out after {}s: $url\" >&2\n\
+         detail=\"readiness timed out after {}s: $url\"\n\
+         if [ -n \"$expected\" ]; then detail=\"$detail did not report releaseVersion $expected\"; fi\n\
+         printf '%s\\n' \"$detail\" >&2\n\
          exit 1",
         crate::deploy::shlex_quote(url),
+        crate::deploy::shlex_quote(expected_release_version.unwrap_or_default()),
         timeout_seconds,
         timeout_seconds,
     );
@@ -2336,12 +2361,17 @@ async fn rollback_service_release(
     previous: &str,
     target: &targets::ComputeTarget,
     declared: &ManagedService,
+    sudo_password: Option<&str>,
+    reload_unit: bool,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
     update(name, host, None, None, Some(previous), false).await?;
-    let report = service::restart_service(target, declared, runner)
-        .await
-        .map_err(click)?;
+    let report = if reload_unit {
+        service::reload_service_with_password(target, declared, sudo_password, runner).await
+    } else {
+        service::restart_service_with_password(target, declared, sudo_password, runner).await
+    }
+    .map_err(click)?;
     if report.succeeded("restarted") {
         Ok(())
     } else {
@@ -2363,6 +2393,17 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             options.host, options.name
         )));
     };
+    if options.require_release_version && options.readiness_url.is_none() {
+        return Err(CmdError::usage(
+            "--require-release-version requires --readiness-url",
+        ));
+    }
+    if options.reload_unit && !UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
+    {
+        return Err(CmdError::usage(
+            "--reload-unit is only needed for a system LaunchDaemon",
+        ));
+    }
     let runner = production_runner();
     let shown = service::show_service(&target, declared, &runner)
         .await
@@ -2379,6 +2420,11 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
                 options.host, options.name
             ))
         })?;
+    let sudo_password = if UnitDomain::from_path(&declared.path).requires_privileged_bootstrap() {
+        host_sudo_password(&target).await?
+    } else {
+        None
+    };
     let bundle = service_release_bundle(&options, &target, declared).await?;
     let archive_path = stage_service_release_archive(
         options.product,
@@ -2398,14 +2444,26 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     )
     .await?;
     let installed_directory = current_service_version(&target, directory, &runner).await?;
-    let restart = service::restart_service(&target, declared, &runner)
-        .await
-        .map_err(click);
+    let restart = if options.reload_unit {
+        service::reload_service_with_password(&target, declared, sudo_password.as_deref(), &runner)
+            .await
+    } else {
+        service::restart_service_with_password(&target, declared, sudo_password.as_deref(), &runner)
+            .await
+    }
+    .map_err(click);
     let activation = match restart {
         Ok(report) if report.succeeded("restarted") => {
             if let Some(url) = options.readiness_url {
-                wait_for_service_readiness(&target, url, options.readiness_timeout_seconds, &runner)
-                    .await
+                let expected = options.require_release_version.then_some(options.version);
+                wait_for_service_readiness(
+                    &target,
+                    url,
+                    expected,
+                    options.readiness_timeout_seconds,
+                    &runner,
+                )
+                .await
             } else {
                 Ok(())
             }
@@ -2423,6 +2481,8 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             &previous_directory,
             &target,
             declared,
+            sudo_password.as_deref(),
+            options.reload_unit,
             &runner,
         )
         .await;

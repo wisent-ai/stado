@@ -5381,6 +5381,8 @@ pub async fn weles_image_inspect(
                 "no_mutation": true,
             },
         }),
+        None,
+        false,
     )
     .await
     .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
@@ -5606,30 +5608,29 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
     } = request;
     // Declaring takes all four or none of them. A partial declaration is the
     // one input that could look like a read and write something.
-    let declaration = match (resource, item, field, reason) {
-        (None, None, None, None) => None,
-        (Some(resource), Some(item), Some(field), Some(reason)) => {
-            if reason.trim().is_empty() {
-                return Err(CmdError::usage(
+    let declaration =
+        match (resource, item, field, reason) {
+            (None, None, None, None) => None,
+            (Some(resource), Some(item), Some(field), Some(reason)) => {
+                if reason.trim().is_empty() {
+                    return Err(CmdError::usage(
                     "--reason must say why this route exists; it travels into Skarbiec's journal \
                      beside the table",
                 ));
+                }
+                Some((resource, item, field, reason))
             }
-            Some((resource, item, field, reason))
-        }
-        (None, _, _, _) => {
-            return Err(CmdError::usage(
-                "reading takes only TARGET; declaring takes --resource, --item, --field and \
+            (None, _, _, _) => {
+                return Err(CmdError::usage(
+                    "reading takes only TARGET; declaring takes --resource, --item, --field and \
                  --reason together",
-            ))
-        }
-        _ => {
-            return Err(CmdError::usage(
+                ))
+            }
+            _ => return Err(CmdError::usage(
                 "declaring one capability route takes --resource, --item, --field and --reason \
                  together",
-            ))
-        }
-    };
+            )),
+        };
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -5652,13 +5653,11 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
         ));
     }
     let report = match declaration {
-        Some((resource, item, field, reason)) => {
-            crate::deploy::host_capability::route_add(
-                &resolved, &broker, resource, item, field, reason, &runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-        }
+        Some((resource, item, field, reason)) => crate::deploy::host_capability::route_add(
+            &resolved, &broker, resource, item, field, reason, &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?,
         None if verify => {
             crate::deploy::host_capability::verify_routes(&resolved, &broker, &runner)
                 .await
@@ -5746,7 +5745,9 @@ pub struct BrowserTaskRequest<'a> {
     pub objective: &'a str,
     pub session_label: &'a str,
     pub action: &'a str,
-    pub env_file: &'a str,
+    pub allowlist_file: &'a str,
+    pub login_item: Option<&'a str>,
+    pub fresh_profile: bool,
     pub allow_login: bool,
     pub sign_in_origin: Option<&'a str>,
     pub sign_in_item: Option<&'a str>,
@@ -5766,7 +5767,9 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         objective,
         session_label,
         action,
-        env_file,
+        allowlist_file,
+        login_item,
+        fresh_profile,
         allow_login,
         sign_in_origin,
         sign_in_item,
@@ -5776,30 +5779,29 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     // Both halves or neither, and only where the run says it may sign in.
     // Checked before the host is resolved: a flag combination that cannot work
     // should cost nothing.
-    let sign_in = match (sign_in_origin, sign_in_item) {
-        (None, None) => None,
-        (Some(_), None) => {
-            return Err(CmdError::usage(
-                "--sign-in-origin needs --sign-in-item: the vault item holding the account",
-            ))
-        }
-        (None, Some(_)) => {
-            return Err(CmdError::usage(
-                "--sign-in-item needs --sign-in-origin: the page origin whose fields are filled",
-            ))
-        }
-        (Some(origin), Some(item)) => {
-            if !allow_login {
+    let sign_in =
+        match (sign_in_origin, sign_in_item) {
+            (None, None) => None,
+            (Some(_), None) => {
                 return Err(CmdError::usage(
+                    "--sign-in-origin needs --sign-in-item: the vault item holding the account",
+                ))
+            }
+            (None, Some(_)) => return Err(CmdError::usage(
+                "--sign-in-item needs --sign-in-origin: the page origin whose fields are filled",
+            )),
+            (Some(origin), Some(item)) => {
+                if !allow_login {
+                    return Err(CmdError::usage(
                     "--sign-in-origin requires --allow-login: a prefilled credential is a sign-in, \
                      and the run's own instructions would otherwise tell the agent not to",
                 ));
+                }
+                let origin = crate::deploy::weles_browser_task::exact_origin(origin)
+                    .map_err(|error| CmdError::usage(error.to_string()))?;
+                Some((origin, item))
             }
-            let origin = crate::deploy::weles_browser_task::exact_origin(origin)
-                .map_err(|error| CmdError::usage(error.to_string()))?;
-            Some((origin, item))
-        }
-    };
+        };
     let parsed = url::Url::parse(url)
         .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.username() != "" {
@@ -5823,14 +5825,36 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     if objective.is_empty() {
         return Err(CmdError::usage("--objective is empty"));
     }
+    if let Some(item) = login_item {
+        let bytes = item.as_bytes();
+        if bytes.is_empty()
+            || bytes.len() > 128
+            || !bytes[0].is_ascii_alphanumeric()
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(CmdError::usage("--login-item is not a valid Weles item id"));
+        }
+        if !action.ends_with("_login") {
+            return Err(CmdError::usage(
+                "--login-item requires an action whose name ends in _login",
+            ));
+        }
+        if !allow_login {
+            return Err(CmdError::usage("--login-item requires --allow-login"));
+        }
+    }
+    let account_id = fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4()));
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let allowlist = crate::deploy::weles_browser_task::host_allowlist(&resolved, env_file, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let allowlist =
+        crate::deploy::weles_browser_task::host_allowlist(&resolved, allowlist_file, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
     crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
         .map_err(|error| CmdError::click(error.to_string()))?;
 
@@ -5871,6 +5895,9 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         url: parsed.as_str(),
         objective: &objective,
         session_label,
+        login_item,
+        account_id: account_id.as_deref(),
+        fresh_profile,
         allow_login,
         headless: !windowed,
         credential_prefill,
@@ -5893,6 +5920,12 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         println!("outcome:   {}", if outcome.ok { "ok" } else { "failed" });
         if let Some(code) = outcome.exit_code {
             println!("exit:      {code}");
+        }
+        if let Some(profile) = &outcome.profile {
+            println!(
+                "profile:   {}",
+                profile["directory"].as_str().unwrap_or("fresh")
+            );
         }
         if !outcome.result.is_null() {
             println!("result:    {}", serde_json::to_string(&outcome.result)?);

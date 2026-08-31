@@ -108,10 +108,7 @@ pub async fn resolve(
         )));
     }
     if !host_channel::remote_test(target, &format!("-f {}", shlex_quote(&vault)), runner).await? {
-        return Err(DeployError(format!(
-            "{}: no vault at {vault}",
-            target.name
-        )));
+        return Err(DeployError(format!("{}: no vault at {vault}", target.name)));
     }
     Ok(RemoteBroker {
         vault,
@@ -271,10 +268,12 @@ pub async fn items(
     runner: &Runner,
 ) -> Result<Vec<Value>, DeployError> {
     let answer = run_json(target, broker, &["list"], runner).await?;
-    answer
-        .as_array()
-        .cloned()
-        .ok_or_else(|| DeployError(format!("{}: skarbiec list was not a JSON array", target.name)))
+    answer.as_array().cloned().ok_or_else(|| {
+        DeployError(format!(
+            "{}: skarbiec list was not a JSON array",
+            target.name
+        ))
+    })
 }
 
 /// What one capability asks for, in Skarbiec's own vocabulary.

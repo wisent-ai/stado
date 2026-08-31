@@ -152,9 +152,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             matching,
             json,
         } => match (host, vault) {
-            (Some(host), None) => {
-                inspect_host_vault(&host, matching.as_deref(), json).await
-            }
+            (Some(host), None) => inspect_host_vault(&host, matching.as_deref(), json).await,
             (None, Some(vault)) => inspect_vault(&vault, json),
             (Some(_), Some(_)) => Err(CmdError::usage(
                 "inspect-vault reads either a local VAULT file or --host, not both",
