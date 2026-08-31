@@ -47,6 +47,7 @@
 
 use std::path::{Component, Path};
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
@@ -5456,6 +5457,28 @@ pub async fn fetch_unit_file(
     })
 }
 
+/// How long one `file-sync` may take, for a payload of this size.
+///
+/// The content rides base64-inline inside the script body, so the transfer is
+/// bounded by the channel's own clock rather than by any per-write timeout.
+/// [`host_channel::run_script`] spends the fixed 120-second
+/// [`host_channel::remote_timeout`], while `service file-sync --executable`
+/// accepts payloads up to 96 MiB: every large file was therefore admitted by
+/// the size check and then killed by the clock. Delivering a 35 MB Weles
+/// worker release to a host's local release root failed exactly that way,
+/// with `an upstream did not answer in time` after 138 seconds and nothing
+/// written.
+///
+/// The floor stays the channel default, so small files behave exactly as
+/// before; beyond that the budget grows with the bytes actually being sent —
+/// one extra second per 256 KiB, which is roughly 4 seconds per megabyte and
+/// comfortably slower than any link this fleet uses.
+pub fn sync_timeout(content_len: usize) -> Duration {
+    const BYTES_PER_SECOND_BUDGET: usize = 256 * 1024;
+    host_channel::remote_timeout()
+        + Duration::from_secs((content_len / BYTES_PER_SECOND_BUDGET) as u64)
+}
+
 /// Atomically replace one owner-only file on a managed host.
 ///
 /// The content rides inside the approved channel's request body as base64,
@@ -5510,7 +5533,9 @@ printf 'STADO_SERVICE\tfile-sync\tfile_synced\t%s\n' "$target_path"
         )
         .replace("@CONTENT_B64@", &STANDARD.encode(content))
         .replace("@MODE@", &format!("{mode:04o}"));
-    let output = host_channel::run_script(target, &body, runner).await?;
+    let output =
+        host_channel::run_script_with_timeout(target, &body, sync_timeout(content.len()), runner)
+            .await?;
     Ok(report_from(output))
 }
 
@@ -6468,5 +6493,22 @@ mod tests {
     fn an_unknown_action_is_still_a_failure() {
         assert!(!outcome("exploded", true).succeeded());
         assert!(!outcome("", true).succeeded());
+    }
+
+    /// A small file keeps exactly the channel default, so nothing that worked
+    /// before changes; a large one gets a budget that grows with its bytes.
+    /// The 35 MB Weles worker release that timed out at 138 seconds under the
+    /// fixed 120-second clock now gets over four minutes.
+    #[test]
+    fn the_file_sync_budget_grows_with_the_payload() {
+        let floor = host_channel::remote_timeout();
+        assert_eq!(sync_timeout(0), floor);
+        assert_eq!(sync_timeout(1024), floor);
+        // 96 MiB is what `--executable` admits; it must not be admitted with a
+        // budget that cannot carry it.
+        assert!(sync_timeout(96 * 1024 * 1024) > floor * 3);
+        // The real payload: 35_331_163 bytes.
+        let real = sync_timeout(35_331_163);
+        assert!(real > Duration::from_secs(240), "{real:?}");
     }
 }
