@@ -1542,7 +1542,7 @@ fn planned_steps(
 /// [`crate::self_update::RELEASE_BINARIES`] as well, because a `SHA256SUMS`
 /// that is itself short would otherwise shrink the verified set to whatever
 /// happened to be listed.
-async fn missing_release_objects(
+pub(crate) async fn missing_release_objects(
     product: &Product,
     version: &str,
     platform: &str,
