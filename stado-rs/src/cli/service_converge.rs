@@ -1198,13 +1198,27 @@ fn emit(
     // The path is what an operator acts on and is far too long for a column, so
     // it is named here — and only for the rows where it contradicts the
     // declaration, which are the rows that would otherwise read as fine.
+    //
+    // This used to end "restart it to pick up what is installed", which is the
+    // wrong instruction to hand someone at seven in the morning. A stale
+    // process is a fact, not a fault. On 2026-08-31 `com.wisent.stado-resolver`
+    // on charless-mac-mini reported this line after a clean 0.13.9 delivery,
+    // and cycling it would have been tidiness: the running binary had no
+    // functional symptom, and restarting a load-bearing resolver to silence a
+    // diff is how a degraded host becomes a down host. So the line now states
+    // the condition under which the restart is actually required, and leaves
+    // the judgement where it belongs.
     for row in rows
         .iter()
         .filter(|row| row.process_cell() == PROCESS_DIFFERS)
     {
         eprintln!(
             "{}: the process under {} is running {} — not the artefact this \
-             unit's declaration resolves to; restart it to pick up what is installed",
+             unit's declaration resolves to. A stale process is not itself a \
+             fault. Restart it when the running binary lacks behaviour you now \
+             need — it cannot parse a registry value a newer version added, or \
+             a fix that this process executes has been delivered — and not \
+             merely because this line is printed.",
             row.binary,
             row.unit,
             row.running_binary.as_deref().unwrap_or(UNKNOWN)
