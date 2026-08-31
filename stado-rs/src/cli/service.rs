@@ -878,8 +878,13 @@ pub enum ServiceCommands {
         /// not say so yet. The privileged install and bootstrap steps run
         /// under passwordless sudo, and a host without that grant is told
         /// exactly which step was refused.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "as_launch_agent")]
         as_daemon: bool,
+        /// Recreate a declared Darwin unit as a per-login Aqua LaunchAgent.
+        /// The old unit must be unloaded and its old plist removed first;
+        /// ensure then updates the existing registry record in one write.
+        #[arg(long = "as-launch-agent", conflicts_with = "as_daemon")]
+        as_launch_agent: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1311,6 +1316,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             args,
             reason,
             as_daemon,
+            as_launch_agent,
             json,
         } => {
             ensure(EnsureOptions {
@@ -1320,6 +1326,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 args: &args,
                 reason: &reason,
                 as_daemon,
+                as_launch_agent,
                 as_json: json,
             })
             .await
@@ -4868,6 +4875,7 @@ struct EnsureOptions<'a> {
     args: &'a [String],
     reason: &'a str,
     as_daemon: bool,
+    as_launch_agent: bool,
     as_json: bool,
 }
 
@@ -5037,6 +5045,7 @@ pub(crate) async fn ensure_local_dependency(
         args: &[],
         reason,
         as_daemon,
+        as_launch_agent: false,
         as_json: false,
     })
     .await
@@ -5073,6 +5082,7 @@ pub(crate) async fn reconcile_after_config_change(
         args: &[],
         reason,
         as_daemon: true,
+        as_launch_agent: false,
         as_json: false,
     })
     .await?;
@@ -5098,6 +5108,9 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .await
         .map_err(click)?;
     let host = target.name.clone();
+    if options.as_launch_agent && !target.release_platform.starts_with("darwin") {
+        return Err(CmdError::click("--as-launch-agent is Darwin-only"));
+    }
 
     // Resolve both the operator-facing product name and the stable catalog
     // unit. An older registry may carry only the latter; treating that as no
@@ -5188,9 +5201,10 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     // A declared path is the service's durable domain choice. In particular,
     // a LaunchAgent intentionally placed on an always-on Mac must not become
     // a daemon again when ensure or the autonomy reconciler runs later.
-    if existing
-        .is_some_and(|declared| service::UnitDomain::from_path(&declared.path).is_per_login())
-        && !options.as_daemon
+    if options.as_launch_agent
+        || (existing
+            .is_some_and(|declared| service::UnitDomain::from_path(&declared.path).is_per_login())
+            && !options.as_daemon)
     {
         plan.force_daemon = false;
     } else {
