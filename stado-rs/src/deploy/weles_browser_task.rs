@@ -99,65 +99,92 @@ pub fn parse_allowlist(body: &str) -> Vec<String> {
     actions
 }
 
-/// The env file a Weles worker sources on this fleet, and the only place its
-/// redeeming identity is written down.
-pub const WORKER_ENV_FILE: &str = "$HOME/.config/weles/worker.env";
-
-/// The env key naming the identity a Weles worker redeems capabilities as.
-pub const WORKLOAD_ID_KEY: &str = "SKARBIEC_WORKLOAD_ID";
-
-/// The last assignment of one key in a sourced env file.
+/// The acquisition scopes catalog as the host registered it.
 ///
-/// Last wins, because a sourced file assigns top to bottom — the same rule
-/// [`parse_allowlist`] applies to its own key.
-pub fn last_assignment(body: &str, key: &str) -> Option<String> {
-    let mut found: Option<&str> = None;
-    for line in body.lines() {
-        let trimmed = line.trim_start();
-        let assignment = trimmed
-            .strip_prefix("export ")
-            .map_or(trimmed, str::trim_start);
-        if let Some(value) = assignment.strip_prefix(&format!("{key}=")) {
-            found = Some(value);
-        }
-    }
-    found
-        .map(super::service_env_file::effective_text)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+/// `stado host sync-acquisition-scopes` delivers the checked-in catalog to
+/// `$HOME/.stado/files/` and runs `skarbiec token-register-acquisitions` from
+/// THAT copy, so this staged file — not the release tree's — is the document
+/// the vault's workload registrations were minted from.
+pub const REGISTERED_SCOPES_FILE: &str = "$HOME/.stado/files/skarbiec-acquisition-scopes.conf";
+
+/// One catalog row: a name a workload public key is registered under, and the
+/// vault coordinate that grant covers.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AcquisitionScope {
+    pub consumer: String,
+    pub item: String,
+    pub field: String,
 }
 
-/// The identity to issue a sign-in capability to, read from the host.
+/// Every registered name in one catalog, in the order the file lists them.
+///
+/// `consumer|item|field` per line, `#` comments and blank lines ignored — the
+/// shape `read_acquisition_catalog` parses on the host. A row this cannot read
+/// is skipped rather than guessed at: the vault, not this parse, decides what
+/// is registered, and a wrong guess here would name an identity that is not.
+pub fn parse_scopes(body: &str) -> Vec<AcquisitionScope> {
+    let mut scopes = Vec::new();
+    for line in body.lines() {
+        let row = line.trim();
+        if row.is_empty() || row.starts_with('#') {
+            continue;
+        }
+        let mut columns = row.split('|');
+        let (Some(consumer), Some(item), Some(field), None) = (
+            columns.next(),
+            columns.next(),
+            columns.next(),
+            columns.next(),
+        ) else {
+            continue;
+        };
+        if consumer.is_empty() || item.is_empty() || field.is_empty() {
+            continue;
+        }
+        scopes.push(AcquisitionScope {
+            consumer: consumer.to_string(),
+            item: item.to_string(),
+            field: field.to_string(),
+        });
+    }
+    scopes
+}
+
+/// The name a capability for one vault coordinate must be issued to.
 ///
 /// Skarbiec authorises a redemption by the live vault token registering that
-/// workload's Ed25519 key, so a capability issued to any other name is denied
-/// no matter how correct its purpose and resource are. This is read from the
-/// worker's own env file rather than assumed: the Apple sign-in issues to
-/// `weles-worker`, charless-mac-mini's worker redeems as
-/// `weles-credential-worker-local`, and run 18e7cc47 failed with `capability
-/// denied` on exactly that mismatch after the route and the reference were
-/// both correct.
-pub async fn host_sign_in_agent(
+/// workload's Ed25519 key, and it looks that token up by the capability's
+/// agent — by name, with no capability check of its own. On this fleet the
+/// worker holds one key whose public half is registered under the catalog's
+/// per-field consumer names, so the registered name for the coordinate being
+/// filled is the only agent whose signature can verify.
+///
+/// Naming anything else is denied however correct the purpose, resource and
+/// route are: run 18e7cc47 was refused for `weles-worker`, a constant copied
+/// from the Apple sign-in, and run 47d89182 for `weles-credential-worker-local`,
+/// the worker's own `SKARBIEC_WORKLOAD_ID` — that string labels the workload,
+/// it is not a registration.
+pub fn scope_consumer<'a>(scopes: &'a [AcquisitionScope], item: &str, field: &str) -> Option<&'a str> {
+    scopes
+        .iter()
+        .find(|scope| scope.item == item && scope.field == field)
+        .map(|scope| scope.consumer.as_str())
+}
+
+/// Read the catalog the host's workload registrations were minted from.
+pub async fn host_scopes(
     target: &ComputeTarget,
-    env_file: &str,
+    scopes_file: &str,
     runner: &Runner,
-) -> Result<String, DeployError> {
-    let fetched = service_file_fetch::fetch_file(target, env_file, runner).await?;
+) -> Result<Vec<AcquisitionScope>, DeployError> {
+    let fetched = service_file_fetch::fetch_file(target, scopes_file, runner).await?;
     if !fetched.ok() {
         return Err(DeployError(format!(
-            "{}: could not read {env_file} to learn which identity its worker redeems as: {}",
+            "{}: could not read {scopes_file} to learn which identities its vault registers: {}",
             target.name, fetched.report.file_state
         )));
     }
-    let body = String::from_utf8_lossy(&fetched.content).into_owned();
-    last_assignment(&body, WORKLOAD_ID_KEY).ok_or_else(|| {
-        DeployError(format!(
-            "{} declares no {WORKLOAD_ID_KEY} in {env_file}, so no capability can be issued to \
-             the identity its worker redeems as",
-            target.name
-        ))
-    })
+    Ok(parse_scopes(&String::from_utf8_lossy(&fetched.content)))
 }
 
 /// Read one host's action allowlist byte-exactly.
@@ -451,8 +478,10 @@ pub fn vault_field_for(field_class: &str) -> &'static str {
 /// Confirm the redeeming host routes both resources to the item the caller
 /// named.
 ///
-/// Returns the routes it could not confirm readable, for the caller to say out
-/// loud. Whether the broker can open the item is the broker's business at
+/// Returns what each resource routes to, in `SIGN_IN_FIELDS` order: the vault
+/// field decides which registered identity the capability must be issued to,
+/// and `readable` is the part the caller says out loud. Whether the broker can
+/// open the item is the broker's business at
 /// redemption; whether the route points at the item the operator named is this
 /// command's business, and that is what is enforced here.
 pub async fn confirm_routed_item(
@@ -461,9 +490,9 @@ pub async fn confirm_routed_item(
     origin: &str,
     item: &str,
     runner: &Runner,
-) -> Result<Vec<String>, DeployError> {
+) -> Result<Vec<RoutedField>, DeployError> {
     let routes = super::host_capability::routes(target, broker, runner).await?;
-    let mut unconfirmed = Vec::new();
+    let mut confirmed = Vec::with_capacity(SIGN_IN_FIELDS.len());
     for (_, field_class) in SIGN_IN_FIELDS {
         let resource = fill_resource(origin, field_class);
         let routed = routed_item(&routes, &resource).map_err(|error| {
@@ -481,11 +510,9 @@ pub async fn confirm_routed_item(
                 target.name, routed.item, routed.field
             )));
         }
-        if !routed.readable {
-            unconfirmed.push(format!("{}/{}", routed.item, routed.field));
-        }
+        confirmed.push(routed);
     }
-    Ok(unconfirmed)
+    Ok(confirmed)
 }
 
 /// Issue the pair ON the redeeming host and return the prefill entries that
@@ -501,14 +528,29 @@ pub async fn issue_sign_in_prefill(
     target: &ComputeTarget,
     origin: &str,
     item: &str,
-    agent: &str,
+    scopes_file: &str,
     runner: &Runner,
 ) -> Result<SignInPrefill, DeployError> {
     let broker = super::host_capability::resolve(target, &weles_api_broker_files(), runner).await?;
-    let unconfirmed = confirm_routed_item(target, &broker, origin, item, runner).await?;
+    let routed = confirm_routed_item(target, &broker, origin, item, runner).await?;
+    let scopes = host_scopes(target, scopes_file, runner).await?;
+    let mut unconfirmed = Vec::new();
+    let mut agents = Vec::with_capacity(SIGN_IN_FIELDS.len());
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
-    for (fill_target, field_class) in SIGN_IN_FIELDS {
+    for ((fill_target, field_class), routed) in SIGN_IN_FIELDS.iter().zip(&routed) {
         let resource = fill_resource(origin, field_class);
+        // The agent is the name this host's vault registers the worker's
+        // workload key under for THIS coordinate. Read, never assumed: two
+        // runs were denied for names that sounded right and were registered
+        // nowhere.
+        let agent = scope_consumer(&scopes, &routed.item, &routed.field).ok_or_else(|| {
+            DeployError(format!(
+                "{}: {scopes_file} registers no identity for {}/{}, so a capability for \
+                 {resource} could only be issued to a name its vault does not know and its \
+                 broker would deny",
+                target.name, routed.item, routed.field
+            ))
+        })?;
         let capability_id = super::host_capability::issue(
             target,
             &broker,
@@ -526,6 +568,10 @@ pub async fn issue_sign_in_prefill(
             runner,
         )
         .await?;
+        if !routed.readable {
+            unconfirmed.push(format!("{}/{}", routed.item, routed.field));
+        }
+        agents.push(agent.to_string());
         entries.push(prefill_entry(
             fill_target,
             field_class,
@@ -535,6 +581,7 @@ pub async fn issue_sign_in_prefill(
     }
     Ok(SignInPrefill {
         entries,
+        agents,
         unconfirmed,
     })
 }
@@ -542,6 +589,10 @@ pub async fn issue_sign_in_prefill(
 /// The references, and what the target could not confirm about them.
 pub struct SignInPrefill {
     pub entries: Vec<Value>,
+    /// The registered identity each capability was issued to, in the same
+    /// order. Reported because it is the fact that decides whether redemption
+    /// can verify at all.
+    pub agents: Vec<String>,
     /// `item/field` coordinates the target's own listing could not open. Said
     /// out loud rather than treated as a refusal: the broker reads the item at
     /// redemption, and a channel session without gpg cannot answer for it.
@@ -1030,5 +1081,52 @@ mod tests {
     fn an_email_field_class_reads_the_items_username() {
         assert_eq!(vault_field_for("email"), "username");
         assert_eq!(vault_field_for("password"), "password");
+    }
+
+    #[test]
+    fn the_identity_for_a_coordinate_is_the_one_the_catalog_registers_for_it() {
+        // charless-mac-mini's own catalog, four rows of it: one consumer per
+        // (item, field), which is why the agent cannot be a single per-host
+        // name.
+        let body = "# consumer|item|field\n\
+                    \n\
+                    weles-gmail-client-username|weles-gmail-login|username\n\
+                    weles-google-sso-client-username|weles-google-sso-login|username\n\
+                    weles-google-sso-client-password|weles-google-sso-login|password\n";
+        let scopes = parse_scopes(body);
+        assert_eq!(scopes.len(), 3);
+        assert_eq!(
+            scope_consumer(&scopes, "weles-google-sso-login", "username"),
+            Some("weles-google-sso-client-username")
+        );
+        assert_eq!(
+            scope_consumer(&scopes, "weles-google-sso-login", "password"),
+            Some("weles-google-sso-client-password")
+        );
+    }
+
+    #[test]
+    fn a_coordinate_the_catalog_never_registers_has_no_identity_to_issue_to() {
+        // The two denials this replaced: names that sound like the worker but
+        // register nothing. An unregistered coordinate must answer None so the
+        // caller refuses before spending a capability the broker would deny.
+        let scopes =
+            parse_scopes("weles-google-sso-client-username|weles-google-sso-login|username\n");
+        assert_eq!(scope_consumer(&scopes, "weles-google-sso-login", "totp_secret"), None);
+        assert_eq!(scope_consumer(&scopes, "weles-worker", "username"), None);
+    }
+
+    #[test]
+    fn a_row_this_cannot_read_is_skipped_rather_than_guessed_at() {
+        let scopes = parse_scopes(
+            "# comment\n\
+             \n\
+             two|columns\n\
+             four|too|many|columns\n\
+             |weles-google-sso-login|username\n\
+             weles-google-sso-client-username|weles-google-sso-login|username\n",
+        );
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].consumer, "weles-google-sso-client-username");
     }
 }

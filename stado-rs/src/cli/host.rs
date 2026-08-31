@@ -5895,26 +5895,25 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     let credential_prefill = match &sign_in {
         None => Vec::new(),
         Some((origin, item)) => {
-            // The identity comes from the worker's own env file, never from a
-            // constant here: Skarbiec denies a redemption whose presenting
-            // workload is not the capability's agent.
-            let agent = crate::deploy::weles_browser_task::host_sign_in_agent(
-                &resolved,
-                crate::deploy::weles_browser_task::WORKER_ENV_FILE,
-                &runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
+            // The identity comes from the catalog this host's vault was
+            // registered from, never from a constant here: Skarbiec looks a
+            // capability's agent up by name, and a name it does not register
+            // is denied however correct the route and the reference are.
             let prefill = crate::deploy::weles_browser_task::issue_sign_in_prefill(
-                &resolved, origin, item, &agent, &runner,
+                &resolved,
+                origin,
+                item,
+                crate::deploy::weles_browser_task::REGISTERED_SCOPES_FILE,
+                &runner,
             )
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
             if !json {
                 println!("sign-in:   {origin} as the account in {item}");
                 println!(
-                    "prefill:   {} field(s) to {agent}, issued on {}, single-use",
+                    "prefill:   {} field(s) to {}, issued on {}, single-use",
                     prefill.entries.len(),
+                    prefill.agents.join(", "),
                     resolved.name
                 );
                 if !prefill.unconfirmed.is_empty() {
