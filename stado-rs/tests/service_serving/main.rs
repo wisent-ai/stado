@@ -22,9 +22,7 @@
 //! exits non-zero on anything but `serving`; and it refuses when no port was
 //! named instead of inventing an empty pass.
 
-use std::io::Write;
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::process::{Command, Output};
 
 /// The label every test addresses, declared on the target itself.
