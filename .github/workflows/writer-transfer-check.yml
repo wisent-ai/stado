@@ -24,7 +24,6 @@ jobs:
     # waiting on a busy runner is never a cancellation.
     timeout-minutes: 30
     env:
-      CARGO_HOME: ${{ runner.temp }}/cargo-home-${{ github.run_id }}-${{ github.job }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       STADO_API_URL: http://127.0.0.1:18776
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
