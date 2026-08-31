@@ -113,7 +113,7 @@ fn report(outcome: &Termination, job_id: &str) {
 
 /// Publish one durable terminal transition. The marker is create-if-absent,
 /// and terminal jobs make retries idempotent.
-async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
+pub(super) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
     for prefix in ["cancelled", "completed", "uploaded", "failed"] {
         if let Some(job) = store.read_job(prefix, job_id).await? {
             println!("Job {job_id} is already terminal ({})", job.state);
