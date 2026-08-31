@@ -1,13 +1,13 @@
 # Checks that measure nothing
 
-One defect shape has now been found seventeen times in this repository, in
-seventeen different subsystems, inside about twelve hours. Every instance is
+One defect shape has now been found eighteen times in this repository, in
+eighteen different subsystems, inside about twelve hours. Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The seventeen
+## The eighteen
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -28,6 +28,7 @@ what is actually there.
 | 15 | the `doctor` preflight in `deploy/deploy_stado_rust.sh` (#181, being fixed) | the fleet-shape finding names what an operator should declare | that the operator *can* declare it. The remedy says to add `queue_workdirs` and `backup_twins` "AFTER the host runs a binary that knows it" — and the check then fails the preflight that delivers that binary. A gate whose precondition is the outcome the change enables. Same shape as instance 8, found the same night, in the opposite direction |
 | 16 | `validate_registry` and every write path (#197) | this document is valid | which *section* is not. One unresolvable `inference` entry refused the entire document, and `declare-version`, `promote-version`, `service adopt`, `host add` and `registry push` all validate the whole document before writing — so a field those writes never touch could freeze every domain at once. The blast radius was the fault, not the value |
 | 17 | **our own binaries**, and then the fleet's | the tool reading live state understands the code that produced it | its own age — and this is not the false positive it first looked like. `stado registry validate` refused `inference.routes["wisent-backend/evaluation"] = "best"`; that value is permitted by `gateway_selector` (`src/inference/schema.rs`, `value == "best"`), added in `f020b63e` at 05:56:02Z. Two agents read the refusal from binaries built before it and concluded the fleet's registry was unwritable. **But `f020b63e` landed 3m43s AFTER `stado-v0.13.9` was tagged, so it ships in 0.13.10 — and every host below that, including the one just delivered 0.13.9, genuinely cannot parse `"best"`.** At 07:13:43Z the mini's janitor answered `invalid_or_unavailable_policy`, `errors: ["policy:ValueError"]`, `target_name: null`: it rejected the WHOLE registry over that one route, and rejecting the document means resolving no `disk_cleanup` policy at all — so every cleaner on the host stopped, including the `build_caches` armed hours earlier. Restoring the route to `openai/gpt-4o-mini` at 07:19:11Z returned it to `errors: []`, `mode: enforce` by 07:25:20Z. One entry in a section the janitor never reads was a fleet-wide janitor kill switch for any host below 0.13.10. Found by `store-reclaim` |
+| 18 | `host disk`'s `outcome`, read from `~/.cache/wisent-compute/disk-cleanup-state.json` (#206) | the janitor's state file says whether disk maintenance is working, and when it last ran | **which janitor wrote it.** Two processes write that path on an always-on host — the queue agent in-process every tick (`providers/local/agent.rs:783`) and the standalone launchd unit `com.wisent.compute.disk-cleanup.disk-cleanup` on its own timer (`cli/disk_cleanup.rs:48`) — and `host disk` reported whichever wrote last as the state of the host. Measured 46 seconds apart: `interval_noop`, `errors: []`, all six cleaners scanned, then `invalid_or_unavailable_policy` from the same path. Both true about their own writer, neither true about the host. **The codebase already knew.** `deploy/host_gates.rs:324-341` documents this exact file's multiple writers — "the queue agent every ten seconds, a `disk-cleanup --watch` unit on its own timer" — because it had already been bitten by it, reading `low watermark 20 GiB, target 18 GiB`, a floor above its own ceiling, alternating with the canonical 15/18 between one reading and the next. It fixed *itself* by preferring the registry declaration and left the other reader of the same file unfixed. **And the cost is not only reporting.** `run_with_lock`'s interval gate reads `last_attempt_at` from that same shared file (`disk_cleanup/mod.rs:1289-1303`) and returns `interval_noop` *before* scanning a single cleaner and *before* the lock is reached — so the redundant unit's stamp starves the real janitor. Proven under manufactured pressure by `store-reclaim`: thresholds raised to 40/42 GiB with 31.2 GiB free, and at 15:26:03.9Z the agent reported `disk_pressure_active: true`, `errors: []`, and every cleaner `scanned 0`; 27 seconds later the other janitor stamped the file `invalid_or_unavailable_policy`, `next_pass 15:31:31Z`. Pressure active, policy resolved, nothing scanned. Not a check that missed something: two instruments reporting on one subject with no arbitration — so the operator's verdict depends on timing, and the redundant one disables the real one |
 
 ## The property they share
 
@@ -37,7 +38,8 @@ enforced from another. A key assumed to be bare. Replication assumed off
 because config said off. A publish assumed complete because the loop exited. A
 tag assumed to mean bytes exist. A timeout assumed to be enough. A port
 assumed to have one holder, counted with a tool that could not show two. A
-boundary assumed to gate what its name says. A binary assumed to be current.
+boundary assumed to gate what its name says. A binary assumed to be current. A
+state file assumed to have one writer.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
@@ -77,6 +79,17 @@ seven days by a process no report could name.
    the harder lesson: a stale-instrument artefact and a real version-dependent
    defect look identical from outside and have opposite consequences, so
    "our tool was old" is where the investigation starts, not where it ends.
+6. **Fixing one reader of a shared artefact is not fixing the artefact.**
+   `host_gates.rs` had already been bitten by the janitor's state file — it
+   read a 20 GiB floor above its own 18 GiB ceiling, alternating with the
+   canonical 15/18 between one reading and the next — and it documented the
+   multiple writers in full before preferring the registry declaration. It
+   repaired itself and left `host disk`, reading the same file, to report the
+   losing writer's verdict as the host's for months. The same shape as
+   `doctor::object_auth_deadline`, which solved the boundary arithmetic one
+   module away from the boundary that needed it. When the diagnosis is written
+   down and the repair is local, the next reader inherits the defect **and**
+   the comment explaining it. Fix the artefact: make it say who wrote it.
 
 ## What was proven, on live runs
 
