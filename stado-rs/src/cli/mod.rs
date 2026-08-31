@@ -1693,6 +1693,37 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read TARGET's crontab, and optionally prune one entry from it.
+    ///
+    /// The periodic table is the one place a fleet host can declare a
+    /// process that no launchd domain and no registry document mentions.
+    /// charless-mac-mini carried four `@reboot` entries outside both, two of
+    /// which restart duplicates that had just been retired with verified
+    /// postconditions — so every repair on that host was one reboot from
+    /// coming back, and the only way to change the table was a bare
+    /// `crontab -e` over ssh.
+    ///
+    /// `--prune` previews by default and refuses anything but a single
+    /// matching line that references `$HOME/.stado`; `--apply` saves the
+    /// whole table under `$HOME/.stado/cron-backups` first and prints the
+    /// `--restore` command that puts it back.
+    Cron {
+        target: String,
+        /// Literal text naming the ONE entry to remove; usually the script's
+        /// path. Refused when it reaches more than one line.
+        #[arg(long)]
+        prune: Option<String>,
+        /// Install a table saved by an earlier `--prune --apply`.
+        #[arg(long, conflicts_with = "prune")]
+        restore: Option<String>,
+        /// Change the table. Without it, `--prune` only reports what it would
+        /// remove.
+        #[arg(long)]
+        apply: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
     /// register it against the host's fleet vault, then print the reconciled
     /// status.
@@ -2549,6 +2580,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveFile { target, path, json } => {
                 host::remove_file(&target, &path, json).await
             }
+            HostCommands::Cron {
+                target,
+                prune,
+                restore,
+                apply,
+                json,
+            } => host::cron(&target, prune.as_deref(), restore.as_deref(), apply, json).await,
             HostCommands::SyncAcquisitionScopes { target, source } => {
                 host::sync_acquisition_scopes(&target, &source).await
             }

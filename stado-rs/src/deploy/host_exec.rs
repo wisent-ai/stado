@@ -173,6 +173,21 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               a user, or a remote address",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/crontab", "-l"],
+        why: "prints the calling account's own crontab. `-l` is the read-only verb and takes \
+              no argument: `-e` opens an editor, `-r` deletes the table, and neither is in \
+              this table nor reachable through it; `-u <user>` would read another account's \
+              and is deliberately absent. Added 2026-08-31: a process nobody could name had \
+              been overwriting charless-mac-mini's janitor state file every four minutes \
+              since at least that morning, with the default outcome and no writer \
+              attribution, while the queue agent's own broadcast reported a healthy pass in \
+              the same second. It is not a launchd job - 47 undeclared fleet labels on that \
+              host, none of them a janitor - and it holds the run lock too briefly to be \
+              caught by sampling, which leaves a periodic table as the only remaining place \
+              it can be declared. Every reader in this group could see the file change and \
+              none could name the writer",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/uname", "-a"],
         why: "prints kernel identification; -a only widens the fields, and there is no input \
               to interpret",
