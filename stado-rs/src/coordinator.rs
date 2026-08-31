@@ -788,6 +788,31 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
             Ok(None) => {}
             Err(exc) => log(&format!("disaster-recovery replication failed: {exc}")),
         }
+        // The standing shape checks, on the interval this loop already has, so
+        // that "is what is declared what is running" is answered without
+        // anyone typing a command. Every finding carries its own subject,
+        // declaration, observation and fix, because a tick log is the only
+        // place some of these will ever be read.
+        //
+        // On 2026-08-30 seven defects of one shape — a declaration nothing
+        // compared against reality — were found and fixed by hand in one
+        // evening, and nothing in the product would have caught the eighth.
+        // This is what catches it.
+        {
+            let runner = crate::deploy::production_runner();
+            let mut shape = crate::fleet_shape::sweep(&runner).await;
+            if let Some(finding) = crate::fleet_shape::health_disagreement().await {
+                shape.measured += 1;
+                shape.findings.push(finding);
+            }
+            log(&shape.summary());
+            for finding in &shape.findings {
+                log(&finding.line());
+            }
+            for (host, reason) in &shape.unreachable {
+                log(&format!("fleet shape: {host} not measured — {reason}"));
+            }
+        }
         if once {
             return Ok(0);
         }

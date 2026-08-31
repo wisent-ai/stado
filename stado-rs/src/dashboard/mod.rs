@@ -214,17 +214,55 @@ enum Recheck {
 /// with a cold gpg-agent exceeded the previous 15s and the object API then
 /// answered 503 to the entire fleet until someone restarted it -- a cold
 /// agent is a slow start, not a broken grant.
-fn boundary_timeout() -> Duration {
-    Duration::from_secs(
-        std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0)
-            .unwrap_or(90),
-    )
+fn boundary_timeout(boundary: Boundary) -> Duration {
+    if let Some(configured) = std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+    {
+        return Duration::from_secs(configured);
+    }
+    // Per mapped item, not flat. Each verifier boundary reads its grant and
+    // then ONE vault field per mapped item, strictly serially, because a
+    // Skarbiec request decrypts and rewrites shared state and fanning out
+    // caused resets (`skarbiec::validate::object`). So the work is linear in
+    // the number of declarations, and a fixed 90 seconds is a budget that
+    // stops being true as the fleet grows.
+    //
+    // On 2026-08-31 charless-mac-mini declared 17 object namespaces, 14
+    // release publishers and 4 service deployers. Every boundary failed with
+    // "validation did not settle within 90 seconds", every object route
+    // answered 503, two `queue resume` attempts died on it, and no release
+    // could publish — while the vault was up, listening, and answering. The
+    // same lesson is already recorded one module over in
+    // `doctor::object_auth_deadline`, which budgets this exact sweep per item;
+    // this is that fix applied to the boundary the whole fleet reads through.
+    let mapped = match boundary {
+        Boundary::Object => {
+            crate::config::object_api_namespaces().map_or(usize::MIN, |items| items.len())
+        }
+        Boundary::Release => {
+            crate::config::release_api_publishers().map_or(usize::MIN, |items| items.len())
+        }
+        Boundary::Machine => {
+            crate::config::machine_api_clients().map_or(usize::MIN, |items| items.len())
+        }
+        Boundary::Service => {
+            crate::config::service_api_deployers().map_or(usize::MIN, |items| items.len())
+        }
+        // These read a fixed, small set of material rather than one item per
+        // declaration, so they keep the flat allowance.
+        Boundary::RateLimitVerifier | Boundary::RateLimitState | Boundary::Integration => {
+            usize::MIN
+        }
+    };
+    BOUNDARY_ITEM_ALLOWANCE + BOUNDARY_ITEM_ALLOWANCE * u32::try_from(mapped).unwrap_or(u32::MIN)
 }
 
-/// The shortest interval between two inline revalidations of the same
+/// Allowance for one grant read plus one mapped item. The flat value this
+/// replaces, kept as the unit, so a deployment that declares nothing sees the
+/// budget it always had.
+const BOUNDARY_ITEM_ALLOWANCE: Duration = Duration::from_secs(90);
 /// boundary. Long enough that a fleet hammering a shut boundary produces one
 /// vault sweep per cooldown rather than one per request, short enough that a
 /// transient reset costs seconds of 503 instead of a privileged restart.
@@ -492,14 +530,16 @@ impl Dashboard {
     /// timeout, misconfiguration — into the one sentence an operator reads in
     /// the log and in `last_error`.
     async fn validate_boundary(&self, boundary: Boundary) -> Result<(), String> {
-        let timeout = boundary_timeout();
+        let timeout = boundary_timeout(boundary);
         macro_rules! bounded {
             ($call:expr) => {
                 match tokio::time::timeout(timeout, $call).await {
                     Ok(Ok(_)) => Ok(()),
                     Ok(Err(error)) => Err(error.to_string()),
                     Err(_) => Err(format!(
-                        "validation did not settle within {} seconds",
+                        "validation did not settle within {} seconds, reading one vault field \
+                         per mapped item serially; a vault that accepts connections without \
+                         answering inside that budget looks identical to a missing grant here",
                         timeout.as_secs()
                     )),
                 }

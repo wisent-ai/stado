@@ -4553,6 +4553,11 @@ pub struct UndeclaredUnit {
     /// unrelated-looking labels for one job, and only the program says they are
     /// the same job.
     pub program: String,
+    /// EVERY unit file found for this label, across the system-daemon, user-agent
+    /// and system-agent domains. `path` is the first of these and stays what it
+    /// was; this is the list, because more than one entry means one label is
+    /// declared in more than one domain and launchd will happily run both.
+    pub declaring_paths: Vec<String>,
 }
 
 impl UndeclaredUnit {
@@ -4564,6 +4569,7 @@ impl UndeclaredUnit {
             "status": self.status,
             "path": self.path,
             "program": self.program,
+            "declaring_paths": self.declaring_paths,
         })
     }
 }
@@ -4602,15 +4608,25 @@ for label in $labels; do
   pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $1 }')
   status=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $2 }')
   plist=''
+  # EVERY domain the label has a unit file in, not the first one. The `break`
+  # this replaces is why a label declared as a system LaunchDaemon AND as a
+  # user LaunchAgent looked like one unit from here: the first candidate won,
+  # the second was never mentioned, and `--undeclared` could not see it either
+  # because the label itself IS declared. Three processes served one declared
+  # port on the always-on mac for days behind exactly that blindness.
+  domains=''
   for candidate in \"/Library/LaunchDaemons/$label.plist\" \"$HOME/Library/LaunchAgents/$label.plist\" \"/Library/LaunchAgents/$label.plist\"; do
-    if [ -f \"$candidate\" ]; then plist=\"$candidate\"; break; fi
+    if [ -f \"$candidate\" ]; then
+      if [ -z \"$plist\" ]; then plist=\"$candidate\"; fi
+      domains=\"${domains:+$domains }$candidate\"
+    fi
   done
   program=''
   if [ -n \"$plist\" ]; then
     program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \
       | /usr/bin/tr -d '[]\"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\\t\\r\\n' ' ')
   fi
-  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\"
+  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\"
 done
 ";
 
@@ -4893,6 +4909,31 @@ pub async fn undeclared_units(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<Vec<UndeclaredUnit>, DeployError> {
+    let declared: std::collections::BTreeSet<String> = declared_services(target)
+        .iter()
+        .map(|service| service.unit_id().to_string())
+        .collect();
+    Ok(loaded_units(target, runner)
+        .await?
+        .into_iter()
+        .filter(|unit| !declared.contains(&unit.label))
+        .collect())
+}
+
+/// EVERY fleet label loaded on TARGET, declared or not, with every domain that
+/// declares it.
+///
+/// [`undeclared_units`] is this list minus the registry's own labels, and that
+/// subtraction is why one class of duplicate hid for a whole evening: a label
+/// declared once as a system LaunchDaemon and once as a user LaunchAgent is
+/// DECLARED, so it never appears in the undeclared view, while launchd runs
+/// both copies. Three processes served one declared port on the always-on mac
+/// behind exactly that. Callers that need to reason about duplication read this
+/// one; callers that need to reason about ownership read the other.
+pub async fn loaded_units(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Vec<UndeclaredUnit>, DeployError> {
     let output = host_channel::run_script(target, LOADED_LABELS_SCRIPT, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
@@ -4900,26 +4941,27 @@ pub async fn undeclared_units(
             "the loaded-unit scan did not complete",
         )));
     }
-    let declared: std::collections::BTreeSet<String> = declared_services(target)
-        .iter()
-        .map(|service| service.unit_id().to_string())
-        .collect();
     Ok(output
         .stdout
         .lines()
         .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_LOADED", pid, status, label, path, program] => {
+            ["STADO_LOADED", pid, status, label, path, program, domains] => {
                 let label = (*label).trim().to_string();
-                (label.starts_with(FLEET_LABEL_PREFIX) && !declared.contains(&label)).then(|| {
-                    UndeclaredUnit {
+                label
+                    .starts_with(FLEET_LABEL_PREFIX)
+                    .then(|| UndeclaredUnit {
                         host: target.name.clone(),
                         label,
                         pid: (*pid).trim().trim_matches('-').to_string(),
                         status: (*status).trim().to_string(),
                         path: (*path).trim().trim_matches('-').to_string(),
                         program: (*program).trim().to_string(),
-                    }
-                })
+                        declaring_paths: (*domains)
+                            .split_whitespace()
+                            .filter(|path| *path != "-")
+                            .map(str::to_string)
+                            .collect(),
+                    })
             }
             _ => None,
         })
