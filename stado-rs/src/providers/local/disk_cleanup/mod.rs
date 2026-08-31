@@ -605,6 +605,34 @@ fn read_state(state_dir: &Path) -> Result<Value, JanitorError> {
     })
 }
 
+/// State key holding one attempt stamp per writer.
+pub const LAST_ATTEMPT_BY_WRITER: &str = "last_attempt_by_writer";
+
+/// The agent's in-process janitor.
+pub const WRITER_AGENT: &str = "agent";
+/// `stado disk-cleanup`, run by an operator or by a standalone unit.
+pub const WRITER_CLI: &str = "cli";
+/// A pass by a caller that never identified itself.
+pub const WRITER_UNKNOWN: &str = "unknown";
+
+// `OnceLock` and not `LazyLock` deliberately: the value is runtime input from
+// whichever entry point is running, which is the one case the project rule
+// keeps `OnceLock` for.
+static WRITER: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Name this process's janitor once, at startup.
+///
+/// The interval gate is per writer, so a process that does not say who it is
+/// shares one bucket with every other anonymous caller — which is the old
+/// behaviour and the defect. Both entry points in this binary name themselves.
+pub fn set_writer(name: &'static str) {
+    let _ = WRITER.set(name);
+}
+
+fn writer() -> &'static str {
+    WRITER.get().copied().unwrap_or(WRITER_UNKNOWN)
+}
+
 /// Python `_write_state`: lstat the destination (refuse symlink / foreign
 /// owner), write to a sibling tempfile (O_EXCL, 0600), fsync, atomic
 /// rename, fsync the directory.
@@ -620,9 +648,34 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
         Err(exc) if exc.kind() == io::ErrorKind::NotFound => {}
         Err(exc) => return Err(exc.into()),
     }
+    // `last_attempt_at` stays for readers that already parse it, and
+    // `last_attempt_by_writer` is what the interval gate consults.
+    //
+    // One shared stamp meant ANY process's attempt suppressed every other
+    // process's next pass. On 2026-08-31 charless-mac-mini had two janitors —
+    // the agent's in-process pass and a standalone
+    // `com.wisent.compute.disk-cleanup.disk-cleanup` unit — and the standalone
+    // one stamped the file every few minutes, so the agent's pass read a fresh
+    // stamp and returned `interval_noop` WITHOUT SCANNING A CLEANER even with
+    // `disk_pressure_active: true` against a 40 GiB watermark at 31.2 GiB
+    // free. Automatic disk maintenance was off on that host and every surface
+    // reported a healthy policy. `stado disk-cleanup --once` is a supported
+    // command, so this survives removing the duplicate unit: an operator's
+    // manual pass must not disable the janitor's next one either.
+    let mut writers = read_state(state_dir)
+        .ok()
+        .and_then(|state| {
+            state
+                .get(LAST_ATTEMPT_BY_WRITER)
+                .and_then(Value::as_object)
+                .cloned()
+        })
+        .unwrap_or_default();
+    writers.insert(writer().to_string(), serde_json::json!(attempted_at));
     let payload = canonical_json(&serde_json::json!({
         "version": STATE_VERSION,
         "last_attempt_at": attempted_at,
+        "last_attempt_by_writer": writers,
         "report": report,
     }));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
@@ -1286,7 +1339,19 @@ fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("last_success_at"))
         .and_then(|v| v.as_str().map(str::to_string));
-    let last_attempt = previous.get("last_attempt_at").and_then(Value::as_f64);
+    // This writer's own last attempt, not the file's. A shared stamp let any
+    // process's pass suppress every other process's next one: on
+    // charless-mac-mini a standalone janitor unit stamped the file every few
+    // minutes and the agent's pass returned `interval_noop` without scanning a
+    // cleaner, with pressure active against a 40 GiB watermark at 31.2 GiB
+    // free. The legacy key is the fallback so an existing state file keeps its
+    // meaning for one interval rather than authorising an immediate extra pass.
+    let last_attempt = previous
+        .get(LAST_ATTEMPT_BY_WRITER)
+        .and_then(Value::as_object)
+        .and_then(|writers| writers.get(writer()))
+        .and_then(Value::as_f64)
+        .or_else(|| previous.get("last_attempt_at").and_then(Value::as_f64));
     if !force
         && last_attempt.is_some()
         && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64

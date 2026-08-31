@@ -779,6 +779,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // The janitor's bounded cleanup pass (Python `run_cleanup_once`,
         // wrapped there in try/except BaseException — the Rust port folds
         // every failure into the returned report by construction).
+        // Name this janitor before its first pass: the interval gate is per
+        // writer, and an anonymous caller shares one bucket with every other
+        // anonymous one, which is the behaviour that let a standalone unit
+        // suppress this pass entirely.
+        disk_cleanup::set_writer(disk_cleanup::WRITER_AGENT);
         let cleanup_report =
             disk_cleanup::run_cleanup_once(slots.len() as i64, false, log_fn).await;
         agent_diag.insert("disk_cleanup".into(), cleanup_report.clone());

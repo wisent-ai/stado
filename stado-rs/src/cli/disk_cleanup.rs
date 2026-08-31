@@ -23,6 +23,9 @@ use crate::providers::local::disk_cleanup;
 
 /// `disk-cleanup` command body (Python `disk_cleanup`).
 pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError> {
+    // This process is the CLI janitor, and the interval gate is per writer, so
+    // an operator's manual pass no longer suppresses the agent's next one.
+    disk_cleanup::set_writer(disk_cleanup::WRITER_CLI);
     if once && watch {
         return Err(CmdError::usage("--once and --watch are mutually exclusive"));
     }
