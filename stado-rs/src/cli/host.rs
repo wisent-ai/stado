@@ -5569,7 +5569,6 @@ fn local_forward_spec_prefix(local_port: u16) -> String {
     format!("127.0.0.1:{local_port}:127.0.0.1:")
 }
 
-
 /// `stado host forward-close TARGET NAME` — end a channel opened by either
 /// `forward-local` or `forward-remote` and reconcile its markers.
 ///
@@ -5592,7 +5591,6 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
         .join(".stado")
         .join("forwards")
         .join(format!("{name}.url"));
-
 
     // The ports come from the markers the open wrote, so a close addresses the
     // exact channel that was opened rather than a port an operator remembers.
@@ -5624,7 +5622,6 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
     } else {
         None
     };
-
 
     if local_port.is_none() && remote_port.is_none() && local_forward_port.is_none() {
         return Err(CmdError::click(format!(
@@ -5712,7 +5709,6 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             ));
         }
     }
-
 
     // Then the markers, remote first for a reverse forward: it is the one
     // another machine reads.
