@@ -90,6 +90,7 @@ pub mod host_build_caches;
 pub mod host_capability;
 pub mod host_channel;
 pub mod host_cleanup;
+pub mod host_cron;
 pub mod host_disk;
 pub mod host_exec;
 pub mod host_gates;
