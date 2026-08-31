@@ -1426,6 +1426,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let mut started = 0i64;
         let mut diag_vram_rejected = 0i64;
         let mut diag_eligibility_rejected = 0i64;
+        // Every rule that refused something this loop, by name, with the jobs
+        // it judged. `BTreeMap` so the published order is stable and a diff
+        // between two broadcasts is readable.
+        let mut diag_reject_by_rule: std::collections::BTreeMap<String, i64> =
+            std::collections::BTreeMap::new();
+        let mut diag_reject_jobs_by_rule: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         let mut diag_eligible = 0i64;
         let max_claims = env_i64("WC_LOCAL_MAX_CLAIMS_PER_TICK", 0);
         let raw_reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
@@ -1538,6 +1545,19 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 // an operator holding it had to reconstruct the answer from the
                 // host's process table. The newest refusal carries its rule and
                 // the job it judged.
+                //
+                // And the newest alone was not enough either. On 2026-08-31
+                // this host refused three jobs per loop and published one
+                // reason — `pinned_only`, which explained the ten unpinned jobs
+                // and said nothing about two pinned ones that had waited eight
+                // days. A singular field on a plural fact answers whichever
+                // question the last iteration happened to be about, so every
+                // rule that fired in the loop is counted by name.
+                *diag_reject_by_rule.entry(reason.to_string()).or_insert(0) += 1;
+                diag_reject_jobs_by_rule
+                    .entry(reason.to_string())
+                    .or_default()
+                    .push(job.job_id.clone());
                 agent_diag.insert(
                     "last_eligibility_reject_job_id".into(),
                     Value::from(job.job_id.clone()),
@@ -1663,6 +1683,18 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             Value::from(isoformat_utc(Utc::now())),
         );
 
+        // The plural facts beside the singular ones. An operator reading
+        // `eligibility_rejected=3` can now see that two of them were one rule
+        // and one was another, and which jobs each rule judged, without
+        // sampling the broadcast until the field they need happens to be last.
+        agent_diag.insert(
+            "eligibility_rejected_by_rule".into(),
+            serde_json::to_value(&diag_reject_by_rule).unwrap_or(Value::Null),
+        );
+        agent_diag.insert(
+            "eligibility_rejected_jobs_by_rule".into(),
+            serde_json::to_value(&diag_reject_jobs_by_rule).unwrap_or(Value::Null),
+        );
         if started > 0 {
             continue;
         }
