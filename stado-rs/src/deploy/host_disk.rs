@@ -198,6 +198,10 @@ pub struct CleanupState {
     /// it is, which is the difference between a fact and a coin toss.
     pub writer: Option<String>,
     pub writer_version: Option<String>,
+    /// The pid that wrote the pass. Present from stado 0.13.20; a file
+    /// written by anything older carries no author at all, which is the state
+    /// this field exists to end.
+    pub writer_pid: Option<i64>,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,
     /// `free_bytes_after - free_bytes_before` of the recorded pass. Free
@@ -400,6 +404,7 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
         outcome: text("outcome"),
         writer: text("writer"),
         writer_version: text("writer_version"),
+        writer_pid: field("writer_pid").and_then(Value::as_i64),
         free_bytes_before: free_before,
         free_bytes_after: free_after,
         freed_bytes: match (free_before, free_after) {
@@ -449,6 +454,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "outcome": state.outcome,
             "writer": state.writer,
             "writer_version": state.writer_version,
+            "writer_pid": state.writer_pid,
             "free_bytes_before": state.free_bytes_before,
             "free_bytes_after": state.free_bytes_after,
             "freed_bytes": state.freed_bytes,
