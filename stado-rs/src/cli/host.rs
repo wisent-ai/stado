@@ -5579,6 +5579,9 @@ pub struct CapabilityRouteRequest<'a> {
     pub field: Option<&'a str>,
     pub reason: Option<&'a str>,
     pub verify: bool,
+    /// Address a named broker instance instead of the host's default files.
+    pub capability_file: Option<&'a str>,
+    pub routes_file: Option<&'a str>,
     pub json: bool,
 }
 
@@ -5598,6 +5601,8 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
         reason,
         verify,
         json,
+        capability_file,
+        routes_file,
     } = request;
     // Declaring takes all four or none of them. A partial declaration is the
     // one input that could look like a read and write something.
@@ -5630,9 +5635,16 @@ pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(),
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let broker = crate::deploy::host_capability::resolve(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let broker = crate::deploy::host_capability::resolve(
+        &resolved,
+        &crate::deploy::host_capability::BrokerFiles {
+            capability_file,
+            routes_file,
+        },
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
 
     if verify && declaration.is_some() {
         return Err(CmdError::usage(

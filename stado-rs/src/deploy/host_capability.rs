@@ -32,11 +32,34 @@ use serde_json::Value;
 use super::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
+/// Which broker instance on the host to address.
+///
+/// A host runs more than one. Skarbiec keeps a capability's state beside the
+/// vault by default, but `capability-serve` is started with whatever
+/// `SKARBIEC_CAPABILITY_FILE` and `SKARBIEC_CAPABILITY_ROUTES_FILE` its
+/// launcher exports, and the socket a consumer redeems on belongs to THAT
+/// instance. Weles's own launcher
+/// (`weles/scripts/worker/deploy/launch-weles-api-mac.sh:104-113`) exports
+/// `$HOME/.stado/weles-api-capabilities.json` and
+/// `$HOME/.stado/weles-api-capability-routes.json` and serves
+/// `$HOME/.stado/run/weles-api-capability.sock` from them. Issuing into the
+/// default files instead is invisible to that broker — which is how run
+/// ab07de3e reached the socket and found nothing it could resolve.
+///
+/// A leading `$HOME/` is expanded against the host's own home.
+#[derive(Default)]
+pub struct BrokerFiles<'a> {
+    pub capability_file: Option<&'a str>,
+    pub routes_file: Option<&'a str>,
+}
+
 /// Where one host keeps the broker this module talks to.
 pub struct RemoteBroker {
     pub vault: String,
     pub gnupg_home: String,
     pub skarbiec: String,
+    pub capability_file: Option<String>,
+    pub routes_file: Option<String>,
 }
 
 /// Resolve the host's own vault environment and Skarbiec binary.
@@ -47,6 +70,7 @@ pub struct RemoteBroker {
 /// than every other credential operation on that machine.
 pub async fn resolve(
     target: &ComputeTarget,
+    files: &BrokerFiles<'_>,
     runner: &Runner,
 ) -> Result<RemoteBroker, DeployError> {
     let home = host_channel::remote_home(target, runner).await?;
@@ -68,6 +92,12 @@ pub async fn resolve(
     let vault = variables.next().unwrap_or_default().to_string();
     let gnupg_home = variables.next().unwrap_or_default().to_string();
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let expand = |path: Option<&str>| {
+        path.map(|value| match value.strip_prefix("$HOME/") {
+            Some(rest) => format!("{home}/{rest}"),
+            None => value.to_string(),
+        })
+    };
 
     if !host_channel::remote_test(target, &format!("-x {}", shlex_quote(&skarbiec)), runner).await?
     {
@@ -87,6 +117,8 @@ pub async fn resolve(
         vault,
         gnupg_home,
         skarbiec,
+        capability_file: expand(files.capability_file),
+        routes_file: expand(files.routes_file),
     })
 }
 
@@ -94,11 +126,27 @@ impl RemoteBroker {
     /// One remote invocation, every word quoted.
     fn command(&self, arguments: &[&str]) -> String {
         let mut line = format!(
-            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {}",
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={}",
             shlex_quote(&self.gnupg_home),
             shlex_quote(&self.vault),
-            shlex_quote(&self.skarbiec),
         );
+        // Named only when the caller named them, so a plain read still shows
+        // the host's default table rather than silently reporting on some
+        // consumer's private one.
+        if let Some(capability_file) = &self.capability_file {
+            line.push_str(&format!(
+                " SKARBIEC_CAPABILITY_FILE={}",
+                shlex_quote(capability_file)
+            ));
+        }
+        if let Some(routes_file) = &self.routes_file {
+            line.push_str(&format!(
+                " SKARBIEC_CAPABILITY_ROUTES_FILE={}",
+                shlex_quote(routes_file)
+            ));
+        }
+        line.push(' ');
+        line.push_str(&shlex_quote(&self.skarbiec));
         for argument in arguments {
             line.push(' ');
             line.push_str(&shlex_quote(argument));

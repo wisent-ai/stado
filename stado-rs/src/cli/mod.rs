@@ -1825,6 +1825,15 @@ enum HostCommands {
         /// sentence tells those apart.
         #[arg(long)]
         verify: bool,
+        /// Address one broker instance's capability state instead of the
+        /// host's vault-adjacent default. `capability-serve` is started with
+        /// whatever its launcher exports, and only that instance can redeem
+        /// what is issued into it. A leading `$HOME/` expands on the host.
+        #[arg(long)]
+        capability_file: Option<String>,
+        /// The route table that same instance resolves against.
+        #[arg(long)]
+        routes_file: Option<String>,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -2655,6 +2664,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 field,
                 reason,
                 verify,
+                capability_file,
+                routes_file,
                 json,
             } => {
                 host::capability_route(host::CapabilityRouteRequest {
@@ -2664,6 +2675,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     field: field.as_deref(),
                     reason: reason.as_deref(),
                     verify,
+                    capability_file: capability_file.as_deref(),
+                    routes_file: routes_file.as_deref(),
                     json,
                 })
                 .await

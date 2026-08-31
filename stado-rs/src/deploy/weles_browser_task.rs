@@ -171,6 +171,32 @@ pub const SIGN_IN_MAX_USES: &str = "1";
 /// would burn a one-shot capability on `credential field class mismatch`.
 pub const SIGN_IN_FIELDS: [(&str, &str); 2] = [("email", "email"), ("password", "password")];
 
+/// The capability state the Weles API's own broker serves.
+///
+/// From that product's launcher, `launch-weles-api-mac.sh:104`: the broker on
+/// `$HOME/.stado/run/weles-api-capability.sock` — the socket the worker's
+/// `SKARBIEC_CAP_SOCKET` names — is started with these files, not with
+/// Skarbiec's vault-adjacent defaults. A capability issued into the default
+/// state is invisible to it.
+pub const WELES_API_CAPABILITY_FILE: &str = "$HOME/.stado/weles-api-capabilities.json";
+
+/// The route table that same broker resolves against
+/// (`launch-weles-api-mac.sh:105`).
+///
+/// Note for anyone declaring a route here: that launcher REINSTALLS this file
+/// from `weles/scripts/worker/deploy/weles-capability-routes.json` on every
+/// start, so a route declared on the host lasts until the unit next launches.
+/// The durable place for a new one is that checked-in file.
+pub const WELES_API_ROUTES_FILE: &str = "$HOME/.stado/weles-api-capability-routes.json";
+
+/// The broker instance a Weles browser fill is issued into.
+pub fn weles_api_broker_files() -> super::host_capability::BrokerFiles<'static> {
+    super::host_capability::BrokerFiles {
+        capability_file: Some(WELES_API_CAPABILITY_FILE),
+        routes_file: Some(WELES_API_ROUTES_FILE),
+    }
+}
+
 /// One page origin, in the exact form Weles compares against.
 ///
 /// Weles builds its expectation from `new URL(page.url()).origin`, so anything
@@ -405,7 +431,8 @@ pub async fn issue_sign_in_prefill(
     item: &str,
     runner: &Runner,
 ) -> Result<SignInPrefill, DeployError> {
-    let broker = super::host_capability::resolve(target, runner).await?;
+    let broker =
+        super::host_capability::resolve(target, &weles_api_broker_files(), runner).await?;
     let unconfirmed = confirm_routed_item(target, &broker, origin, item, runner).await?;
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
     for (fill_target, field_class) in SIGN_IN_FIELDS {

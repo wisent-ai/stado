@@ -501,7 +501,7 @@ async fn inspect_host_vault(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let broker = crate::deploy::host_capability::resolve(&resolved, &runner)
+    let broker = crate::deploy::host_capability::resolve(&resolved, &Default::default(), &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let inventory = crate::deploy::host_capability::items(&resolved, &broker, &runner)
