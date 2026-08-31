@@ -3739,8 +3739,51 @@ pub async fn stop_service_with_password(
 pub async fn retire_service(
     target: &ComputeTarget,
     service: &ManagedService,
+    sudo_password: Option<&str>,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
+    if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
+        let stopped = stop_service_with_password(target, service, sudo_password, runner).await?;
+        if !stopped.succeeded("stopped") {
+            return Ok(stopped);
+        }
+        let password = sudo_password.ok_or_else(|| {
+            DeployError(format!(
+                "{} on {} is a system LaunchDaemon and {} has no readable host-account password",
+                service.unit_id(),
+                service.host,
+                target.name
+            ))
+        })?;
+        validate_unit_id(service.unit_id())?;
+        let qualified = format!("system/{}", service.unit_id());
+        let recovery = format!("system/{}-recovery", service.unit_id());
+        for job in [&qualified, &recovery] {
+            let output = host_channel::run_program_with_stdin(
+                target,
+                &[
+                    "/usr/bin/sudo",
+                    "-S",
+                    "-p",
+                    "",
+                    "/bin/launchctl",
+                    "disable",
+                    job,
+                ],
+                &format!("{password}\n"),
+                runner,
+            )
+            .await?;
+            if !output.ok() {
+                let detail =
+                    host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
+                return Err(DeployError(format!(
+                    "privileged launchd disable failed on {} for {} with exit {}: {}",
+                    target.name, job, output.code, detail
+                )));
+            }
+        }
+    }
     let body = RETIRE_BODY.to_string();
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
     run_remote_checked(
