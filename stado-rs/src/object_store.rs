@@ -16,6 +16,13 @@ pub fn max_object_bytes() -> usize {
     (u32::MAX as usize / u8::BITS as usize).saturating_add(usize::from(true))
 }
 
+/// Largest independently authenticated chunk accepted by the object API.
+///
+/// The client and server share this value: raising it on only one side either
+/// restores the stalled single-request upload or makes valid chunks fail
+/// composition.
+pub const OBJECT_API_CHUNK_BYTES: usize = 3 * 1024 * 1024;
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ObjectRef {
     namespace: String,

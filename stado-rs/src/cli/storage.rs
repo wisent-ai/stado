@@ -42,6 +42,7 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::object_store::OBJECT_API_CHUNK_BYTES;
 use crate::queue::copy::{
     self, CopyOptions, CopyPlan, CopyReport, Endpoint, Outcome, CANONICAL_PREFIXES,
 };
@@ -1175,8 +1176,6 @@ fn max_object_api_download_body() -> usize {
     crate::object_store::max_object_bytes()
 }
 
-const OBJECT_API_CHUNK_BYTES: usize = 3 * 1024 * 1024;
-
 struct RemoteObjectApi {
     http: reqwest::Client,
     base_url: url::Url,
@@ -1509,8 +1508,7 @@ impl RemoteObjectApi {
     ) -> Result<RemotePutResponse, CmdError> {
         let object = crate::object_store::ObjectRef::parse(uri)?;
         let upload_id = hex::encode(Sha256::digest(&bytes));
-        let mut chunks =
-            Vec::with_capacity(bytes.len().div_ceil(OBJECT_API_CHUNK_BYTES));
+        let mut chunks = Vec::with_capacity(bytes.len().div_ceil(OBJECT_API_CHUNK_BYTES));
         let mut offset = 0usize;
         while offset < bytes.len() {
             let end = offset
@@ -1521,10 +1519,7 @@ impl RemoteObjectApi {
             let sha256 = hex::encode(Sha256::digest(&chunk));
             let chunk_object = crate::object_store::ObjectRef::new(
                 object.namespace(),
-                &format!(
-                    "{}.__stado_upload/{upload_id}/{index:08}",
-                    object.key()
-                ),
+                &format!("{}.__stado_upload/{upload_id}/{index:08}", object.key()),
             )?;
             let chunk_uri = chunk_object.to_string();
             let endpoint = self.endpoint(
@@ -1539,10 +1534,7 @@ impl RemoteObjectApi {
             ]);
             let response = self
                 .request_as(reqwest::Method::PUT, endpoint, bearer)
-                .header(
-                    reqwest::header::CONTENT_TYPE,
-                    "application/octet-stream",
-                )
+                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
                 .header(
                     "x-stado-object-metadata",
                     serde_json::to_string(&chunk_metadata)?,
@@ -1616,8 +1608,7 @@ impl RemoteObjectApi {
     ) -> Result<(), CmdError> {
         let create_only = if_absent;
         let if_absent = if if_absent { "true" } else { "false" };
-        let endpoint =
-            self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
+        let endpoint = self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
         let bearer = self.release_bearer(uri).await?;
         let bytes = bytes::Bytes::from(bytes);
         // The writer cannot answer until the backend has durably stored the body.
@@ -1759,8 +1750,7 @@ impl RemoteObjectApi {
                     "Stado object API object GET refused the byte range beginning at {start}"
                 )));
             }
-            let (end_exclusive, total) =
-                partial_content_bounds(&response, start, "object GET")?;
+            let (end_exclusive, total) = partial_content_bounds(&response, start, "object GET")?;
             if total > limit {
                 return Err(CmdError::click(format!(
                     "Stado object API object GET response exceeds the {limit}-byte limit"
@@ -2100,8 +2090,7 @@ impl RemoteObjectApi {
                     "Stado object API release GET refused the byte range beginning at {start}"
                 )));
             }
-            let (end_exclusive, total) =
-                partial_content_bounds(&response, start, "release GET")?;
+            let (end_exclusive, total) = partial_content_bounds(&response, start, "release GET")?;
             if total > limit {
                 return Err(CmdError::click(format!(
                     "Stado object API release GET response exceeds the {limit}-byte limit"
@@ -2183,9 +2172,7 @@ impl RemoteObjectApi {
                     })?;
                     continue;
                 }
-                if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE
-                    && body.is_empty()
-                {
+                if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE && body.is_empty() {
                     drop(response);
                     return self.get_release_in_ranges(origin).await;
                 }
