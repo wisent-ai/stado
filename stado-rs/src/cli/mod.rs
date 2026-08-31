@@ -31,6 +31,7 @@ pub mod dashboard;
 pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
+pub mod fleet;
 pub mod host;
 pub mod identity;
 pub mod inference;
@@ -48,6 +49,8 @@ pub mod recovery;
 pub mod registry;
 pub mod release_catalog;
 pub mod release_cmd;
+pub mod release_evidence;
+pub mod release_quarantine;
 pub mod release_submit;
 pub mod resolver;
 pub mod resources;
@@ -55,6 +58,7 @@ pub mod results;
 pub mod schedule;
 pub mod secrets;
 pub mod service;
+pub mod service_converge;
 pub mod service_verify;
 pub mod status;
 pub mod storage;
@@ -1011,7 +1015,7 @@ fn parse_target_kind(raw: &str) -> Result<String, String> {
 }
 
 fn parse_release_platform(raw: &str) -> Result<String, String> {
-    crate::deploy::host_release::managed_platform(raw)
+    crate::deploy::products::managed_platform(raw)
         .map(str::to_string)
         .map_err(|error| error.to_string())
 }
@@ -1725,7 +1729,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         Commands::Coordinator { target, once } => coordinator::run(target, once).await,
-        Commands::Dashboard { bind, port } => dashboard::run(bind, port).await,
+        Commands::Dashboard { bind, port } => dashboard::run(bind, port, false).await,
         Commands::LocalControlPlane {
             bind,
             port,

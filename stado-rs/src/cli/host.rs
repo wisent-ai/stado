@@ -400,13 +400,7 @@ fn print_report(
 pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_STATUS_SCRIPT,
-        "",
-        &runner,
-    )
-    .await;
+    let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
     print_report(&report)
 }
 
@@ -415,13 +409,7 @@ pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
 pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_DISABLE_SCRIPT,
-        bundle,
-        &runner,
-    )
-    .await;
+    let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
     print_report(&report)
 }
 
@@ -1128,7 +1116,7 @@ pub async fn declare_version(
     version: &str,
     json: bool,
 ) -> Result<(), CmdError> {
-    let binary = crate::deploy::host_release::managed_binary(binary)
+    let binary = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
     if version.is_empty() {
@@ -1174,7 +1162,7 @@ pub async fn promote_version(
     version: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let managed = crate::deploy::host_release::managed_binary(binary)
+    let managed = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
     if !crate::deploy::host_release::is_exact_semver(version) {
@@ -1257,7 +1245,7 @@ pub async fn promote_version(
                     "cannot verify release_platform for {name:?}: inventory omitted it"
                 ))
             })?;
-        let observed = crate::deploy::host_release::managed_platform(observed)
+        let observed = crate::deploy::products::managed_platform(observed)
             .map_err(|error| CmdError::click(format!("{name}: {error}")))?;
         if !declared.is_empty() && declared != observed {
             return Err(CmdError::click(format!(
@@ -1405,6 +1393,7 @@ pub async fn reconcile(
                     &standing.target,
                     binary,
                     version,
+                    false,
                     false,
                     &runner,
                 )
@@ -1870,7 +1859,7 @@ pub async fn release(
     use crate::deploy::host_release;
 
     let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, dry_run, &runner)
+    let report = host_release::release_host(target, binary, version, dry_run, false, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     // Three outcomes are success, and conflating them would be the lie this
@@ -2192,15 +2181,7 @@ pub(crate) async fn deliver_file(
     source: &str,
     name: &str,
 ) -> Result<(String, usize), CmdError> {
-    stream_file(
-        target,
-        source,
-        name,
-        DELIVERED_FILES_DIR,
-        "u=rw,go=",
-        None,
-    )
-    .await
+    stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=", None).await
 }
 
 async fn transfer_secret(
@@ -2355,12 +2336,17 @@ pub async fn run_helper(
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let remote_name = crate::deploy::shlex_quote(name);
-    let script = crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
     let runner = crate::deploy::production_runner();
-    let output = crate::deploy::host_channel::run_script_with_timeout(
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let helper = format!("{home}/.stado/bin/{name}");
+    let mut program = Vec::with_capacity(uuids.len() + 1);
+    program.push(helper.as_str());
+    program.extend(uuids.iter().map(String::as_str));
+    let output = crate::deploy::host_channel::run_program_with_timeout(
         &resolved,
-        &script,
+        &program,
         std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
         &runner,
     )
@@ -2566,16 +2552,25 @@ pub async fn helpers(
         ));
     }
     let runner = crate::deploy::production_runner();
-    let inventory =
-        crate::deploy::host_channel::run_installed_helper(target, INVENTORY_HELPER, &runner)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{target}: cannot read the helper inventory: {error}; install it with \
-                     `stado host install-helper {target} \
-                     stado-rs/scripts/report-stale-helpers.sh {INVENTORY_HELPER}`"
-                ))
-            })?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let helper = format!("{home}/.stado/bin/{INVENTORY_HELPER}");
+    let output = crate::deploy::host_channel::run_program(&resolved, &[&helper], &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot read the helper inventory: {}; install it with \
+             `stado host install-helper {target} \
+             stado-rs/scripts/report-stale-helpers.sh {INVENTORY_HELPER}`",
+            crate::deploy::host_channel::last_error_line(&output, "remote inventory helper failed")
+        )));
+    }
+    let inventory = output.stdout;
 
     let now = chrono::Utc::now().timestamp();
     let mut installed: Vec<InstalledHelper> = Vec::new();
@@ -3884,6 +3879,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         // Not drift, and not nothing. Helpers are delivered one at a time to
         // solve one incident and are never removed, so the population only
         // grows; naming the count is what makes an operator notice that a
+
         // directory of them accumulated while nobody decided to keep any.
         println!(
             "{target}: {helpers} installed helper script(s) alongside, which carry no release \
@@ -3891,4 +3887,167 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         );
     }
     Ok(())
+}
+/// Result of one guarded removal from a managed host area.
+pub struct RemoveFileOutcome {
+    pub target: String,
+    pub path: String,
+    pub status: String,
+    pub detail: Option<String>,
+}
+
+impl RemoveFileOutcome {
+    pub fn succeeded(&self) -> bool {
+        self.status == "removed" || self.status == "absent"
+    }
+
+    fn failure_sentence(&self) -> String {
+        format!(
+            "{}: {} {}{}",
+            self.target,
+            self.path,
+            self.status,
+            self.detail
+                .as_ref()
+                .map(|detail| format!(" — {detail}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
+/// Remove one regular file from the account or Stado-managed LaunchDaemon
+/// areas. Validation and ownership checks run on the host that owns the path.
+pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFileOutcome, CmdError> {
+    if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
+        return Err(CmdError::usage(
+            "path must be absolute, contain no '..', and carry no NUL",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let quoted = crate::deploy::shlex_quote(path);
+    let script = format!(
+        r#"set -u
+path={quoted}
+report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
+privileged=no
+case "$path" in
+  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*) ;;
+  /Library/LaunchDaemons/com.wisent.*.plist) privileged=yes ;;
+  *) report refused "outside the managed areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
+esac
+if [ -L "$path" ]; then
+  report refused "a symlink points outside the managed area; remove it by hand: rm -- $path"
+elif [ -d "$path" ]; then
+  report refused "a directory is not removed by a single-file command"
+elif [ ! -e "$path" ]; then
+  report absent ""
+elif [ ! -f "$path" ]; then
+  report refused "not a regular file"
+elif [ "$privileged" = yes ]; then
+  if /usr/bin/sudo -n /bin/rm -f -- "$path"; then
+    if [ -e "$path" ]; then
+      report failed "sudo rm succeeded and the path is still there"
+    else
+      report removed ""
+    fi
+  else
+    report refused "sudo -n rm -- $path was refused; this host has no passwordless grant"
+  fi
+elif [ ! -O "$path" ]; then
+  report refused "not owned by this account; remove it on the host with: sudo rm -- $path"
+else
+  /bin/rm -f -- "$path"
+  if [ -e "$path" ]; then
+    report failed "rm succeeded and the path is still there"
+  else
+    report removed ""
+  fi
+fi
+"#
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let (status, detail) = output
+        .stdout
+        .lines()
+        .find_map(
+            |line| match crate::deploy::host_channel::marker_fields(line).as_slice() {
+                ["STADO_REMOVE_FILE", status] => Some((status.to_string(), None)),
+                ["STADO_REMOVE_FILE", status, detail, ..] => {
+                    Some((status.to_string(), Some(detail.to_string())))
+                }
+                _ => None,
+            },
+        )
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: the host answered without a removal report: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(&output, "no marker in output")
+            ))
+        })?;
+    let outcome = RemoveFileOutcome {
+        target: resolved.name,
+        path: path.to_string(),
+        status,
+        detail,
+    };
+    if outcome.succeeded() {
+        Ok(outcome)
+    } else {
+        Err(CmdError::click(outcome.failure_sentence()))
+    }
+}
+
+/// Return the effective configuration resolved by the Stado binary installed
+/// on one host. `host_gates` shares this exact read path with the host command.
+pub(crate) async fn remote_config_output(
+    target: &ComputeTarget,
+    update: Option<(&str, &str)>,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    let action = match update {
+        None => "\"$binary\" config show".to_string(),
+        Some((key, value)) => format!(
+            "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             \"$binary\" config set \"$key\" \"$value\"\n\
+             \"$binary\" config show",
+            STANDARD.encode(key.as_bytes()),
+            STANDARD.encode(value.as_bytes())
+        ),
+    };
+    let script = format!(
+        "set -euo pipefail\n\
+         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+         binary=\"$HOME/.stado/bin/stado\"\n\
+         test -x \"$binary\"\n\
+         {action}\n"
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        target,
+        &script,
+        std::time::Duration::from_secs(60),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote Stado configuration command failed",
+            ),
+        ));
+    }
+    Ok(output.stdout)
 }
