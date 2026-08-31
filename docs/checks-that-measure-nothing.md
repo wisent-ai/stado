@@ -1,13 +1,13 @@
 # Checks that measure nothing
 
-One defect shape has now been found eleven times in this repository, in eleven
-different subsystems, inside about twelve hours. Every instance is the same
-thing: **a declaration checked against something narrower than the world.**
+One defect shape has now been found seventeen times in this repository, in
+seventeen different subsystems, inside about twelve hours. Every instance is
+the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The eleven
+## The seventeen
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -22,6 +22,12 @@ what is actually there.
 | 9 | `Presence`, `src/cli/storage.rs` (#174) | a failed `storage get` means the object is absent | that the store answered at all — "absent" and "unreachable" need opposite responses |
 | 10 | the object API's `/healthz` | the service is `"ok": true` | that any capability works. Measured 2026-08-31: `{"ok":true,"degraded":true,"boundaries":{"object":false,"release":false,"service":false,"machine":false,"integration":false,"rate_limit_verifier":false,...}}` while `/api/object` timed out and every authorized route returned 503. **Detected, not merely noticed:** check 3 of the fleet-shape detector (#181) reports this on the tick |
 | 11 | `boundary_timeout` in the object API's authorization validation (#181) | 90 seconds is enough to validate every boundary | anything about how much work that covers. The budget is flat; the work is not. `charless-mac-mini` declares 17 object namespaces, 14 release publishers and 4 service deployers, so the object boundary alone needs 18 sequential vault decrypt-and-audit operations — deliberately serial, because fanning out caused resets — and all six boundaries race one single-threaded vault inside the same flat 90 seconds. Every component was healthy; the fleet had simply outgrown the number. `doctor::object_auth_deadline` had already solved this arithmetic one module away by budgeting per declared item, and the boundary the whole fleet reads through never got it |
+| 12 | `host_inventory`'s listener collector (#185) | the table of listeners shows who holds a port | that it can represent more than one holder. It dropped every non-loopback address and kept only the first row per port — so a port with three servers on it looked like a port with one. **This is the sharpest instance in the table, because it is inside the detector built tonight to catch this pattern:** the fleet-shape check counted holders through an instrument that had already removed the evidence. A check built on a blind instrument is the same as no check |
+| 13 | `WC_BACKUP_STORAGE_BACKEND=local` in the object API unit (#168) | replication is the coordinator's tick, and it is off | that the store itself mirrors every object it accepts into a bare path beside itself. The replica had a second writer nobody was looking for, which is why the twins reappeared at almost exactly 15 GiB each time instead of growing — they were not left over, they were being remade |
+| 14 | `Boundary::Release` in `src/dashboard/mod.rs` | a boundary named "release publication" reports whether release publication can work | that anything consults it. It is enumerated (110), labelled (123), described (136), branched (244) and validated once at startup (550) — and required by **no route in the tree**. `boundaries_available` revalidates a closed boundary only when a request needs it, so once it fails at startup it reads `false` forever and gates nothing. It nearly cost the only quiet publishing window of the night, because the honest reading of a field called "release publication" is that publication is broken. Two honest resolutions: the release routes require it, or it stops being reported as a boundary |
+| 15 | the `doctor` preflight in `deploy/deploy_stado_rust.sh` (#181, being fixed) | the fleet-shape finding names what an operator should declare | that the operator *can* declare it. The remedy says to add `queue_workdirs` and `backup_twins` "AFTER the host runs a binary that knows it" — and the check then fails the preflight that delivers that binary. A gate whose precondition is the outcome the change enables. Same shape as instance 8, found the same night, in the opposite direction |
+| 16 | `validate_registry` and every write path (#197) | this document is valid | which *section* is not. One unresolvable `inference` entry refused the entire document, and `declare-version`, `promote-version`, `service adopt`, `host add` and `registry push` all validate the whole document before writing — so a field those writes never touch could freeze every domain at once. The blast radius was the fault, not the value |
+| 17 | **our own binaries** | the tool reading live state understands the code that produced it | its own age. `stado registry validate` refused `inference.routes["wisent-backend/evaluation"] = "best"` as naming a non-running deployment. `"best"` is explicitly permitted — `gateway_selector` at `src/inference/schema.rs:105` is `value == "best"` — added by `f020b63e` at 05:56:02Z, minutes after one binary was built and 95 minutes after the other. Two agents independently concluded the fleet's registry was unwritable, and one was about to report a colleague for breaking it. **The only false-positive instance in this table:** every other entry is a check that missed something; this is a check that would have accused someone. The binary is part of the instrument, and neither of us checked its age against the code we were reading |
 
 ## The property they share
 
@@ -29,7 +35,9 @@ In each case the system stored an *intent* and then re-read its own intent as
 evidence. A name assumed to lack a prefix. A watermark read from one place and
 enforced from another. A key assumed to be bare. Replication assumed off
 because config said off. A publish assumed complete because the loop exited. A
-tag assumed to mean bytes exist. A timeout assumed to be enough.
+tag assumed to mean bytes exist. A timeout assumed to be enough. A port
+assumed to have one holder, counted with a tool that could not show two. A
+boundary assumed to gate what its name says. A binary assumed to be current.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
@@ -37,13 +45,18 @@ check tells you the check models the wrong thing.**
 
 ## What it cost
 
+Four coordinates, permanently. Release objects are create-only and immutable,
+so none of these can ever be completed:
+
 - `stado/0.10.0/darwin-arm64` — 0 objects of 9. Never publishable for macOS.
 - `stado/0.11.0/darwin-arm64` — 4 of 9.
 - `stado/0.12.1/linux-amd64` — 2 of 9: `SHA256SUMS` and the manifest, no binaries.
+- `stado/0.13.2/darwin-arm64` — 1 of 9.
 
-Release objects are immutable, so none can be repaired: three version numbers
-gone. Separately, three queue agents published capacity for one consumer id
-under labels the registry never declared, and 55 pinned jobs were refused for
+Eight version numbers were spent in one night before anything published whole,
+and the fleet had no deliverable macOS build between 0.9.5 and 0.13.9.
+Separately, three queue agents published capacity for one consumer id under
+labels the registry never declared, and 55 pinned jobs were refused for
 seven days by a process no report could name.
 
 ## What a check has to do to be worth having
@@ -59,6 +72,47 @@ seven days by a process no report could name.
    guards.
 4. **Ask what validated it.** If a schema or health check passed over the
    defect, that check is the next thing to fix.
+5. **Check the instrument, including the binary.** A negative result from a
+   tool older than the code it is reading is not a finding. Instance 17 is what
+   that looks like when it goes wrong in the accusing direction.
+
+## What was proven, on live runs
+
+Four claims from this night have evidence behind them rather than an argument.
+Everything else in this document is a defect; these are the repairs that were
+measured working.
+
+- **Per-tag release concurrency.** The `stado-v0.13.9` train ran **62 minutes
+  uncancelled**. The four before it died in two to five, each superseded by the
+  next tag through one shared group.
+- **Platform decoupling.** On that same run `publish-linux` failed and
+  `darwin-arm64` published whole anyway — impossible under the previous
+  `needs: release` graph, which is how 0.10.0 and 0.12.0 lost the platform.
+- **Archive-first ordering.** Every failed train this night left its coordinate
+  **empty rather than partial**: 0.13.0, 0.13.1 and 0.13.9's linux leg all
+  measured 0 of 9. An empty coordinate is retriable; a partial one never is.
+- **The completeness gate.** `stado host release --version 0.13.9 --dry-run`
+  refused while the coordinate was short, naming the absent objects, and then
+  correctly stopped refusing once darwin reached 9 of 9 — advancing to a
+  different and correct refusal about the registry declaration. A gate that
+  only ever says no has not been shown to work.
+
+## Loose ends, kept visible on purpose
+
+A record that quietly drops these is the thing it was written to prevent.
+
+- **`stado-v0.13.7`'s cancellation is unexplained.** 05:19:34Z, a hosted
+  `ubuntu-latest` job, 78 seconds before `stado-v0.13.8` existed, with 214 GiB
+  free on the self-hosted host. Neither disk exhaustion nor tag concurrency
+  covers it. Per-tag concurrency has **not** absorbed it. One residual
+  canceller may still be real, though the 0.13.9 train surviving 62 minutes is
+  the first evidence against a persistent one.
+- **The four permanent partials above stay on the list.** They are not
+  historical trivia; they are the reason every check in this document exists.
+- **`0.13.9/linux-amd64` is deliberately empty.** `publish-linux` needs the
+  service and release boundaries, and instance 14 is the release boundary.
+  Retrying it now would risk a fifth permanent partial to satisfy a gate that
+  gates nothing.
 
 ## Open
 
