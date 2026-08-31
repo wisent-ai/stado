@@ -539,6 +539,7 @@ pub async fn issue_sign_in_prefill(
     let routed = confirm_routed_item(target, &broker, origin, item, runner).await?;
     let scopes = host_scopes(target, scopes_file, runner).await?;
     let mut unconfirmed = Vec::new();
+    let mut deferred = Vec::new();
     let mut agents = Vec::with_capacity(SIGN_IN_FIELDS.len());
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
     for ((fill_target, field_class), routed) in SIGN_IN_FIELDS.iter().zip(&routed) {
@@ -576,15 +577,28 @@ pub async fn issue_sign_in_prefill(
             unconfirmed.push(format!("{}/{}", routed.item, routed.field));
         }
         agents.push(agent.to_string());
-        entries.push(prefill_entry(
-            fill_target,
-            field_class,
-            &capability_id,
-            &resource,
-        ));
+        let reference = prefill_entry(fill_target, field_class, &capability_id, &resource);
+        // Only the identifier step is on the page the run opens. Every SSO this
+        // action drives - Google, Apple, Microsoft - asks for the identifier
+        // first and the secret on a page that does not exist yet, and a runtime
+        // that fills every entry at load spends the secret's one-shot
+        // capability on a field that cannot be there. Charless-mac-mini did
+        // exactly that twice: both capabilities `spent` within two seconds of
+        // the first page load, and the agent that reached the real password
+        // field was denied for a capability nobody had used.
+        //
+        // So the identifier is prefilled and the rest are handed over unspent,
+        // for the agent to redeem on the page that has the field. A runtime
+        // that defers absent fields itself reaches the same place.
+        if entries.is_empty() {
+            entries.push(reference);
+        } else {
+            deferred.push(reference);
+        }
     }
     Ok(SignInPrefill {
         entries,
+        deferred,
         agents,
         unconfirmed,
     })
@@ -592,7 +606,10 @@ pub async fn issue_sign_in_prefill(
 
 /// The references, and what the target could not confirm about them.
 pub struct SignInPrefill {
+    /// Filled by the runtime as soon as the page loads.
     pub entries: Vec<Value>,
+    /// Handed to the agent unspent, for the step whose field appears later.
+    pub deferred: Vec<Value>,
     /// The registered identity each capability was issued to, in the same
     /// order. Reported because it is the fact that decides whether redemption
     /// can verify at all.
@@ -611,6 +628,10 @@ pub struct BrowserTask<'a> {
     pub url: &'a str,
     /// What the agent is being asked to accomplish, in words.
     pub objective: &'a str,
+    /// The saved-trajectory key, when the caller needs one that differs from
+    /// the session label. Weles replays the flow saved under this name, so
+    /// resuming a profile whose last run failed needs a fresh one.
+    pub flow_name: Option<&'a str>,
     /// Stable recording label. `account_id` controls the browser profile when
     /// a caller explicitly requests a fresh one.
     pub session_label: &'a str,
@@ -635,6 +656,10 @@ pub struct BrowserTask<'a> {
     /// Vault-backed field prefills, each a capability REFERENCE the worker
     /// redeems locally. Empty for a run that carries no sign-in.
     pub credential_prefill: Vec<Value>,
+    /// Capability REFERENCES for steps whose field is not on the opening page.
+    /// The trajectory does not fill these; it carries the constraints into the
+    /// agent's goal, and the agent redeems one when its page arrives.
+    pub credential_deferred: Vec<Value>,
 }
 
 impl BrowserTask<'_> {
@@ -655,10 +680,19 @@ impl BrowserTask<'_> {
                 Value::Array(self.credential_prefill.clone()),
             );
         }
+        if !self.credential_deferred.is_empty() {
+            constraints.insert(
+                "credential_capabilities".to_string(),
+                Value::Array(self.credential_deferred.clone()),
+            );
+        }
         let mut params = json!({
             "url": self.url,
             "objective": self.objective,
-            "flow_name": format!("stado-browser-task:{}", self.session_label),
+            "flow_name": self.flow_name.map_or_else(
+                || format!("stado-browser-task:{}", self.session_label),
+                str::to_string,
+            ),
             "session_label": self.session_label,
             "proxy": "none",
             "headless": self.headless,
