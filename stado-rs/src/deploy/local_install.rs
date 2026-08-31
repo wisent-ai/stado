@@ -487,7 +487,7 @@ pub fn plist_text(
     env: &[(String, String)],
     log: &Path,
 ) -> String {
-    plist_document(label, exec_args, env, log, None)
+    plist_document(label, exec_args, env, log, None, Some("Aqua"))
 }
 
 /// The same job rendered for launchd's **system** domain, running as `user`.
@@ -507,22 +507,31 @@ pub fn daemon_plist_text(
     log: &Path,
     user: &str,
 ) -> String {
-    plist_document(label, exec_args, env, log, Some(user))
+    plist_document(label, exec_args, env, log, Some(user), None)
 }
 
-/// One renderer for both domains, so an agent and the daemon spelling of the
-/// same unit cannot come to disagree about anything but the account.
+/// One renderer for both domains, so the command, environment and logging of
+/// an agent and its daemon spelling stay identical. The agent additionally
+/// declares Aqua: a service deliberately placed in the GUI domain must not
+/// silently load into a background bootstrap where browser work cannot open a
+/// window.
 fn plist_document(
     label: &str,
     exec_args: &[String],
     env: &[(String, String)],
     log: &Path,
     user: Option<&str>,
+    session_type: Option<&str>,
 ) -> String {
     let user_xml = match user {
         Some(user) => format!("    <key>UserName</key>\n    <string>{user}</string>\n"),
         None => String::new(),
     };
+    let session_xml = session_type
+        .map(|session| {
+            format!("    <key>LimitLoadToSessionType</key>\n    <string>{session}</string>\n")
+        })
+        .unwrap_or_default();
     let args_xml: String = exec_args
         .iter()
         .map(|a| format!("        <string>{a}</string>\n"))
@@ -544,7 +553,7 @@ fn plist_document(
     <key>ProgramArguments</key>
     <array>
 {args_xml}    </array>
-{user_xml}    <key>RunAtLoad</key>
+{user_xml}{session_xml}    <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>

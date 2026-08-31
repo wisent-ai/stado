@@ -1226,6 +1226,13 @@ async fn run_deliveries(
             );
             save(run).await?;
         }
+    }
+
+    // Queue every target before waiting for any one of them. A silent host
+    // must not prevent later targets from receiving the same immutable
+    // release: they are independent deliveries, even though their required
+    // verdicts are collected into one release result.
+    for d in &m.deliveries {
         let current = run.deliveries[&d.name].clone();
         if current.state == DeliveryRunState::Passed {
             continue;

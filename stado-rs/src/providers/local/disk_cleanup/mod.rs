@@ -75,6 +75,24 @@ pub fn state_relative_path() -> String {
     parts.join("/")
 }
 
+/// The janitor's exclusive run lock relative to `$HOME`, exported for the
+/// same reason as [`state_relative_path`].
+///
+/// `lock_busy` and the agent's `cleanup_in_progress` are two views of one
+/// fact — somebody holds this file — and the product could print both
+/// without ever naming the holder. On 2026-08-31 charless-mac-mini reported
+/// them in alternation for hours while every cleaner scanned zero, and no
+/// command in the fleet could say which process was holding it:
+/// `host exec`'s allowlist has no form that names the owner of a file lock,
+/// correctly, because an operator-supplied path there would be a hole. So
+/// the path travels as a crate constant, and [`crate::deploy::host_disk`]
+/// splices it into its own fixed remote program.
+pub fn lock_relative_path() -> String {
+    let mut parts: Vec<&str> = STATE_DIR_PARTS.to_vec();
+    parts.push(LOCK_NAME);
+    parts.join("/")
+}
+
 /// `st_mode & S_IFMT` (Python `stat.S_IFMT`); the mask value is identical
 /// on every Unix the port targets.
 pub(crate) fn ifmt(mode: u32) -> u32 {
@@ -1420,6 +1438,40 @@ fn run_with_lock(
     }
 
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(DEADLINE_SECONDS);
+    // How much of the pass's remaining scan budget one cleaner may spend while
+    // declared cleaners behind it have not run yet.
+    //
+    // Every cleaner used to receive `max_scan_items` minus what the ones
+    // before it had spent, which reads as fair and is not: the cleaners run in
+    // a fixed order, and one whose root is large enough to exhaust the cap
+    // takes the whole pass, every pass, forever. Measured on
+    // charless-mac-mini on 2026-08-31 with `max_scan_items: 10000` and six
+    // declared cleaners: `weles_recordings` scanned 15, `build_caches` scanned
+    // 9,985 and found NOTHING eligible, and `chromium_clones`,
+    // `queue_workdirs` and `backup_twins` each received a budget of zero and
+    // scanned nothing — pass after pass, under real disk pressure, with 18 GiB
+    // of proven duplicates sitting in the replica that `backup_twins` exists
+    // to reclaim. The outcome was `cap_reached`, which is true and reads like
+    // work being done.
+    //
+    // An equal share of what is left, with everything unspent rolling forward
+    // to the cleaners behind: a cleaner that scans less than its share leaves
+    // more for the rest, and the last declared cleaner is handed whatever
+    // remains. No cleaner is ever handed zero while it is declared, which is
+    // the property that was missing.
+    let declared_after = |names: &[&str]| -> i64 {
+        names
+            .iter()
+            .filter(|name| policy.cleaners.contains_key(**name))
+            .count() as i64
+    };
+    let share = |remaining: i64, behind: i64| -> i64 {
+        if behind <= 0 {
+            remaining
+        } else {
+            (remaining / (behind + 1)).max(1).min(remaining)
+        }
+    };
     // Errors escaping _run_hf (a vanished cache root mid-pass, a failed
     // free-space probe) hit Python's outer `except BaseException`:
     // `runtime` error + the default outcome, state still written.
@@ -1428,6 +1480,16 @@ fn run_with_lock(
         &policy,
         report.active_slot_count,
         attempted_at,
+        share(
+            policy.max_scan_items,
+            declared_after(&[
+                "weles_recordings",
+                "build_caches",
+                chromium_clones::CLEANER,
+                queue_workdirs::CLEANER,
+                backup_twins::CLEANER,
+            ]),
+        ),
         deadline,
         &mut report,
     ) {
@@ -1440,20 +1502,41 @@ fn run_with_lock(
     if remaining_scan == 0 && policy.cleaners.contains_key("weles_recordings") {
         report.caps.scan = true;
     }
-    weles::scan_weles(home, &policy, attempted_at, remaining_scan, &mut report);
+    weles::scan_weles(
+        home,
+        &policy,
+        attempted_at,
+        share(
+            remaining_scan,
+            declared_after(&[
+                "build_caches",
+                chromium_clones::CLEANER,
+                queue_workdirs::CLEANER,
+                backup_twins::CLEANER,
+            ]),
+        ),
+        &mut report,
+    );
     let remaining_after_weles =
         (policy.max_scan_items - report.hf.scanned_items - report.weles.scanned_items).max(0);
     if remaining_after_weles == 0 && policy.cleaners.contains_key("build_caches") {
         report.caps.scan = true;
     }
     // The build-cache scan is the only one whose root can be the whole of
-    // `$HOME`: it walks with whatever scan budget the fixed-layout cleaners
+    // `$HOME`: it walks with its share of whatever the fixed-layout cleaners
     // left, and with the same pass deadline the HF scan honours.
     build_caches::scan_build_caches(
         home,
         &policy,
         attempted_at,
-        remaining_after_weles,
+        share(
+            remaining_after_weles,
+            declared_after(&[
+                chromium_clones::CLEANER,
+                queue_workdirs::CLEANER,
+                backup_twins::CLEANER,
+            ]),
+        ),
         deadline,
         &mut report,
     );
@@ -1473,7 +1556,10 @@ fn run_with_lock(
         home,
         &policy,
         attempted_at,
-        remaining_after_builds,
+        share(
+            remaining_after_builds,
+            declared_after(&[queue_workdirs::CLEANER, backup_twins::CLEANER]),
+        ),
         deadline,
         &mut report,
     );
@@ -1494,7 +1580,10 @@ fn run_with_lock(
         home,
         &policy,
         attempted_at,
-        remaining_after_clones,
+        share(
+            remaining_after_clones,
+            declared_after(&[backup_twins::CLEANER]),
+        ),
         deadline,
         live_jobs.as_deref(),
         &mut report,

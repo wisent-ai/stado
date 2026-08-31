@@ -158,6 +158,22 @@ A record that quietly drops these is the thing it was written to prevent.
   the first evidence against a persistent one.
 - **The four permanent partials above stay on the list.** They are not
   historical trivia; they are the reason every check in this document exists.
+- **Nothing in Stado can verify or repair a build host's cargo registry, and
+  the janitor was entitled to delete it.** `~/.cargo/registry` carries a
+  `CACHEDIR.TAG` byte-identical to the signature `build_caches` matches, so on
+  `lukasz-macbook` - the single runner that publishes every release, in
+  `enforce` mode with the cleaner's root defaulting to `$HOME` - the registry
+  was an eviction candidate. Measured with a seeded home: before the fix the
+  cleaner reported the registry and a project `target/` as **2 eligible items,
+  16,392,192 bytes**; after reserving it, **1 eligible, 8,196,096 bytes**, with
+  the registry counted under `reserved_or_hidden` and `target/` still eligible.
+  Everything else this cleaner removes is output that the next build
+  reproduces; the registry is input, shared by every build, and it returns only
+  by re-fetching from a network that has to answer. The gap that remains: the
+  integrity check that established the `0.13.14` failure was NOT a corrupt
+  extraction - comparing all 2010 files in the crate against the `.crate`
+  archive - was written by hand for one crate. No `stado` command does it, and
+  `build_caches` covers target trees, not registries.
 - **No write path in the pipeline depends on a MagicDNS name**, established by
   audit rather than assumed: every publish write goes to
   `http://127.0.0.1:18776`, and the four `*.ts.net` sites

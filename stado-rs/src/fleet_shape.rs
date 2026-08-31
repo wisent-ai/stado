@@ -128,6 +128,8 @@ pub const DOMAIN_CHECK: &str = "one-domain-per-declared-label";
 pub const HEALTH_CHECK: &str = "health-green-boundaries-down";
 pub const REPLICA_CHECK: &str = "replica-cannot-resolve";
 pub const DISK_CHECK: &str = "disk-headroom-against-policy";
+pub const PROGRAM_CHECK: &str = "loaded-label-runs-declared-program";
+pub const BINARY_CHECK: &str = "loaded-label-runs-installed-binary";
 
 /// Sweep the whole canonical registry.
 ///
@@ -190,6 +192,7 @@ async fn host_findings(
         .await
         .map_err(|error| error.to_string())?;
     duplicate_domains(target, &loaded, &mut findings);
+    process_identity(target, &loaded, &mut findings, &mut notes);
     listener_count(registry, target, runner, &mut findings).await;
     disk_headroom(target, runner, &mut findings, &mut notes).await;
     Ok((findings, notes))
@@ -225,6 +228,86 @@ fn duplicate_domains(
             ),
         });
     }
+}
+
+/// A loaded label runs the program its own unit file declares, and runs the
+/// binary that is on disk now.
+///
+/// Two facts, one read, and this fleet has had both of them wrong on the same
+/// host at the same time. Nothing was looking:
+///
+/// - `com.wisent.compute.service.stado-local-control-plane` declares
+///   `stado coordinator`, and launchd was holding a `stado dashboard` from
+///   2026-08-26 under it — a command the product DELETED on 2026-08-19,
+///   whose refresh loop forced a disk-cleanup pass every two minutes. Each
+///   forced pass stamped the janitor's shared interval, so the queue agent's
+///   own pass returned `interval_noop` before reaching a single cleaner, and
+///   the always-on mac ran with disk maintenance switched off while every
+///   report that read the unit file agreed with itself.
+/// - A process older than the binary it executes is running code nobody
+///   shipped. `service converge` already answers this per service, one
+///   service at a time, by hand; on 2026-08-31 the mini had a delivery land
+///   at 07:13Z and labels still executing the previous version hours later,
+///   and no sweep said so.
+///
+/// Both come free with the label read the sweep already does, which is the
+/// whole reason to ask them here: the cost of the answer is zero and the cost
+/// of not having it was a night.
+fn process_identity(
+    target: &ComputeTarget,
+    loaded: &[service::UndeclaredUnit],
+    out: &mut Vec<Finding>,
+    notes: &mut Vec<String>,
+) {
+    let mut program_checked = 0_usize;
+    let mut binary_checked = 0_usize;
+    for unit in loaded {
+        if unit.runs_declared_program() == Some(false) {
+            out.push(Finding {
+                check: PROGRAM_CHECK,
+                subject: format!("{}:{}", target.name, unit.label),
+                declared: unit.declared_program(),
+                observed: format!("pid {} runs {}", unit.pid, unit.running_program),
+                command: format!(
+                    "stado service bootout {} --host {} then stado service ensure {}",
+                    unit.label, target.name, unit.label
+                ),
+            });
+        }
+        if unit.runs_declared_program().is_some() {
+            program_checked += 1;
+        }
+        if unit.runs_current_binary() == Some(false) {
+            out.push(Finding {
+                check: BINARY_CHECK,
+                subject: format!("{}:{}", target.name, unit.label),
+                declared: "the process executes the binary now on disk".to_string(),
+                observed: format!(
+                    "pid {} started, then {} was replaced {} second(s) later",
+                    unit.pid,
+                    unit.running_binary().unwrap_or("its binary"),
+                    unit.binary_written_after_start().unwrap_or_default()
+                ),
+                command: format!(
+                    "stado service converge {} --host {}",
+                    unit.label, target.name
+                ),
+            });
+        }
+        if unit.runs_current_binary().is_some() {
+            binary_checked += 1;
+        }
+    }
+    // A label launchd holds no pid for answers neither question, and saying so
+    // is the difference between "every process is right" and "no process was
+    // read".
+    notes.push(format!(
+        "{}: {} loaded label(s), {} process(es) compared against their declaration, {} against the installed binary",
+        target.name,
+        loaded.len(),
+        program_checked,
+        binary_checked
+    ));
 }
 
 /// One process per declared service port, and one health verdict that agrees

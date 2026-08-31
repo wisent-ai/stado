@@ -172,9 +172,6 @@ jobs:
     permissions:
       contents: read
     env:
-      # A release build must not share Cargo's mutable registry source tree
-      # with unrelated local builds running under the same desktop account.
-      CARGO_HOME: ${{ runner.temp }}/cargo-home-${{ github.run_id }}-${{ github.job }}
       STADO_VERSION: ${{ needs.identity.outputs.version }}
       STADO_RELEASE_CHANNEL: ${{ needs.identity.outputs.channel }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
@@ -196,9 +193,9 @@ jobs:
       - uses: actions/checkout@v5
       - name: Ensure daemonless cross-build toolchain
         run: |
-          PATH="/opt/homebrew/bin:$CARGO_HOME/bin:$HOME/.cargo/bin:$PATH"
+          PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
           export PATH
-          printf '%s\n' /opt/homebrew/bin "$CARGO_HOME/bin" "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          printf '%s\n' /opt/homebrew/bin "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v zig >/dev/null || /opt/homebrew/bin/brew install zig
           command -v cargo-zigbuild >/dev/null || cargo install cargo-zigbuild --locked
       - name: Build provider-neutral Rust release
@@ -501,9 +498,6 @@ jobs:
     permissions:
       contents: read
     env:
-      # Keep the native build off the user's shared Cargo registry for the
-      # same reason as the independent Linux publisher above.
-      CARGO_HOME: ${{ runner.temp }}/cargo-home-${{ github.run_id }}-${{ github.job }}
       STADO_WRITER_API_URL: http://127.0.0.1:18776
       STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}

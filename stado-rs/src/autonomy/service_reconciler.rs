@@ -150,7 +150,7 @@ fn resolved_plan(
         unit.args = args;
         unit_env = env;
     }
-    let plan = match unit
+    let mut plan = match unit
         .unit
         .as_deref()
         .or_else(|| crate::cli::service::declared_label(declared))
@@ -166,6 +166,9 @@ fn resolved_plan(
         None => service::plan_deploy(target, &declared.name, &unit.program, &unit.args),
     }
     .map_err(|error| error.to_string())?;
+    if service::UnitDomain::from_path(&declared.path).is_per_login() {
+        plan.force_daemon = false;
+    }
     Ok((plan, unit.program, unit.args))
 }
 

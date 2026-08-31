@@ -164,7 +164,11 @@ pub fn parse_scopes(body: &str) -> Vec<AcquisitionScope> {
 /// from the Apple sign-in, and run 47d89182 for `weles-credential-worker-local`,
 /// the worker's own `SKARBIEC_WORKLOAD_ID` — that string labels the workload,
 /// it is not a registration.
-pub fn scope_consumer<'a>(scopes: &'a [AcquisitionScope], item: &str, field: &str) -> Option<&'a str> {
+pub fn scope_consumer<'a>(
+    scopes: &'a [AcquisitionScope],
+    item: &str,
+    field: &str,
+) -> Option<&'a str> {
     scopes
         .iter()
         .find(|scope| scope.item == item && scope.field == field)
@@ -1112,7 +1116,10 @@ mod tests {
         // caller refuses before spending a capability the broker would deny.
         let scopes =
             parse_scopes("weles-google-sso-client-username|weles-google-sso-login|username\n");
-        assert_eq!(scope_consumer(&scopes, "weles-google-sso-login", "totp_secret"), None);
+        assert_eq!(
+            scope_consumer(&scopes, "weles-google-sso-login", "totp_secret"),
+            None
+        );
         assert_eq!(scope_consumer(&scopes, "weles-worker", "username"), None);
     }
 
