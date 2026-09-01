@@ -2369,7 +2369,7 @@ impl Dashboard {
     }
 
     async fn put_host_health(&self, request: &Request, query: &str) -> Response {
-        match authorize_host_health(request).await {
+        match authorize_host_health(self, request).await {
             Ok(true) => {}
             Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
             // An unreadable authorization item is this service's failure, not
@@ -3141,21 +3141,18 @@ fn release_upload_target_key(key: &str) -> Option<&str> {
 }
 
 /// Route-scoped host beacon publication: the bearer stored as
-/// `stado-host-health-api/token` and nothing else. Machine clients are
-/// authorized separately through exact client policies; there is no global
-/// dashboard bearer.
+/// `stado-host-health-api/token` and nothing else. The dashboard resolves it
+/// through the same dedicated verifier grant as its object routes, never
+/// through the broad coordinator credential. Machine publishers are
+/// authorized separately through their exact client policies.
 ///
 /// `Ok(false)` is a rejected bearer. `Err(())` is this service being unable to
 /// read the item it compares against — a local, retryable fault that the
-/// caller cannot fix by presenting a different credential, and which the
-/// object and release routes already report as 503.
-async fn authorize_host_health(request: &Request) -> Result<bool, ()> {
-    let expected = match crate::skarbiec::read_string("stado-host-health-api", "token").await {
-        Ok(Some(value)) if !value.trim().is_empty() => value,
-        // An absent or empty item is configuration this route cannot serve
-        // against; it is not evidence about the presented bearer either.
-        Ok(_) | Err(_) => return Err(()),
-    };
+/// caller cannot fix by presenting a different credential.
+async fn authorize_host_health(dashboard: &Dashboard, request: &Request) -> Result<bool, ()> {
+    let expected = dashboard
+        .object_token("host-health", crate::config::HOST_HEALTH_API_ITEM)
+        .await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))

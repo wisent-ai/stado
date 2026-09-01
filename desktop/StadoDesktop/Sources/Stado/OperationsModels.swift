@@ -1597,6 +1597,9 @@ struct HostLink: Decodable, Identifiable, Sendable {
     let connectionPaths: [HostConnectionPathProbe]
     /// A resolver failure that prevented the route set itself from being read.
     let connectionProbeError: String?
+    /// The managed beacon publisher's newest recorded outcome. Present only
+    /// when the beacon is stale while the host itself still answers.
+    let beaconPublisher: HostBeaconPublisherDiagnosis?
     let lastSleepAt: String?
     let lastWakeAt: String?
     let interfaceChanges: [HostLinkInterfaceChange]
@@ -1647,6 +1650,7 @@ struct HostLink: Decodable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case host, endpoint, silences, verdict, blockers, session
+        case beaconPublisher = "beacon_publisher"
         case beaconAgeSeconds = "beacon_age_seconds"
         case sshReachable = "ssh_reachable"
         case selectedConnection = "selected_connection"
@@ -1671,6 +1675,8 @@ struct HostLink: Decodable, Identifiable, Sendable {
         connectionPaths =
             try values.decodeIfPresent([HostConnectionPathProbe].self, forKey: .connectionPaths) ?? []
         connectionProbeError = try values.decodeIfPresent(String.self, forKey: .connectionProbeError)
+        beaconPublisher =
+            try values.decodeIfPresent(HostBeaconPublisherDiagnosis.self, forKey: .beaconPublisher)
         lastSleepAt = try values.decodeIfPresent(String.self, forKey: .lastSleepAt)
         lastWakeAt = try values.decodeIfPresent(String.self, forKey: .lastWakeAt)
         interfaceChanges =
@@ -1695,6 +1701,21 @@ struct HostConnectionPathProbe: Decodable, Identifiable, Sendable {
     let error: String?
 
     var id: String { name }
+}
+
+/// Why a reachable host stopped publishing beacons, read from the managed
+/// publisher's own declared log by `stado host link`.
+struct HostBeaconPublisherDiagnosis: Decodable, Sendable {
+    let unit: String
+    let code: String
+    let detail: String
+    let repairable: Bool
+    let repairCommand: String?
+
+    enum CodingKeys: String, CodingKey {
+        case unit, code, detail, repairable
+        case repairCommand = "repair_command"
+    }
 }
 
 /// The `session` block of `stado host link <host> --json`: whether anybody is

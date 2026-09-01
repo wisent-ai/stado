@@ -895,7 +895,8 @@ struct HostsView: View {
                     title: linkAlarmTitle(link),
                     detail: link.blockers.isEmpty
                         ? "The command called this link \(link.verdict.word) and named no blocker. Nothing downstream reports it either, so the next reader to refuse will be the only trace."
-                        : link.blockers.joined(separator: "\n")
+                        : link.blockers.joined(separator: "\n"),
+                    actions: linkRepairActions(link)
                 )
             } else {
                 WisentField(
@@ -919,12 +920,22 @@ struct HostsView: View {
                     )
                 }
             }
+            WisentMutationBar(outcome: linkStore.repairOutcome(for: link.host)) {
+                linkStore.clearRepair()
+            }
             WisentField(
                 label: "Newest beacon",
                 value: link.beaconAgeSeconds.map { ConsoleFormat.age(Double($0)) }
                     ?? "No beacon has ever been published for this host",
                 tone: link.verdict.needsAttention ? link.verdict.tone : .neutral
             )
+            if let publisher = link.beaconPublisher {
+                WisentField(
+                    label: "Beacon publisher",
+                    value: "\(publisher.unit)\n\(publisher.detail)",
+                    tone: publisher.repairable ? .danger : .warning
+                )
+            }
             WisentField(
                 label: "SSH reachable",
                 value: link.sshReachable ? "Yes" : "No",
@@ -999,6 +1010,20 @@ struct HostsView: View {
                 tone: .warning
             )
         }
+    }
+
+    private func linkRepairActions(_ link: HostLink) -> [WisentAction] {
+        guard link.beaconPublisher?.repairable == true else { return [] }
+        return [
+            WisentAction(
+                "Repair beacon publication",
+                symbol: "wrench.and.screwdriver",
+                kind: .primary,
+                isEnabled: !linkStore.isRefreshing && !linkStore.isRepairing(link.host)
+            ) {
+                Task { await linkStore.repair(host: link.host) }
+            },
+        ]
     }
 
     /// The one line a healthy link earns: how fresh the beacon is and, when the
