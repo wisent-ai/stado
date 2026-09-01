@@ -4876,6 +4876,46 @@ pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<
     Ok(())
 }
 
+/// Repair Skarbiec's short-lived acquisition state after a service-user cutover.
+pub async fn recover_skarbiec_acquisition_state(
+    target: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-acquisition-state.sh"),
+        std::time::Duration::from_secs(90),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec acquisition-state recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    let detail = recovered.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// Restore the core object API without depending on the API being available.
 ///
 /// The checked-in host helper only mutates an unavailable listener. It pins the

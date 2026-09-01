@@ -1513,6 +1513,13 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Repair Skarbiec acquisition state left by a different service user.
+    #[command(name = "recover-skarbiec-acquisition-state")]
+    RecoverSkarbiecAcquisitionState {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -2675,6 +2682,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::RecoverSkarbiecCrypto { target, json } => {
                 host::recover_skarbiec_crypto(&target, json).await
+            }
+            HostCommands::RecoverSkarbiecAcquisitionState { target, json } => {
+                host::recover_skarbiec_acquisition_state(&target, json).await
             }
             HostCommands::UnitLog {
                 target,
