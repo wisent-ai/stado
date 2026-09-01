@@ -27,7 +27,7 @@ use super::CmdError;
 pub enum ReleaseCommands {
     /// Generate an Ed25519 release authority key pair.
     Keygen(ReleaseKeygenArgs),
-    /// Apply one reviewed product rollout policy to the canonical registry.
+    /// Apply reviewed product policy without changing the active release.
     #[command(name = "policy-apply")]
     PolicyApply(ReleasePolicyApplyArgs),
     /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
@@ -586,10 +586,19 @@ fn platforms(policy: &ProductReleasePolicy) -> BTreeSet<String> {
 
 async fn apply_policy(args: &ReleasePolicyApplyArgs) -> Result<(), CmdError> {
     let bytes = std::fs::read(&args.file)?;
-    let declaration: ReleasePolicyDocument = serde_json::from_slice(&bytes)?;
+    let mut declaration: ReleasePolicyDocument = serde_json::from_slice(&bytes)?;
+    if declaration.policy.desired.is_some() || declaration.policy.previous.is_some() {
+        return Err(CmdError::click(
+            "rollout policy cannot set desired or previous release state; use release promote",
+        ));
+    }
     let (document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let mut control = release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    if let Some(current) = control.products.get(&declaration.product) {
+        declaration.policy.desired = current.desired.clone();
+        declaration.policy.previous = current.previous.clone();
+    }
     control
         .products
         .insert(declaration.product.clone(), declaration.policy);
