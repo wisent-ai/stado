@@ -16,7 +16,9 @@ use super::CmdError;
 use crate::models::{job_state, Job, JobSecretRef};
 use crate::queue::storage::JobStorage;
 use crate::queue::submit::{submit_job, SubmitOptions};
-use crate::release_control::{self, QualificationStatus, ReleaseArtifactRef, ReleaseQualification};
+use crate::release_control::{
+    self, QualificationStatus, ReleaseArtifactRef, ReleaseQualification, StrategyKind,
+};
 use crate::release_pipeline::{
     self, ArtifactReceipt, BuildReceipt, CatalogSourceIdentity, DeliveryRun, DeliveryRunState,
     PipelineChannel, PlatformRun, PlatformRunState, ProductManifest, ReceiptInput,
@@ -1274,6 +1276,71 @@ async fn run_deliveries(
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct ReplaceRolloutStatus {
+    rollout_generation: u64,
+    phase: crate::release_agent::RolloutPhase,
+    active_version: Option<String>,
+    active_sha256: Option<String>,
+}
+
+async fn replace_status_exact(
+    product: &str,
+    target: &str,
+    generation: u64,
+    version: &str,
+    artifact_sha256: &str,
+) -> bool {
+    let uri = crate::release_agent::release_status_uri(product, target);
+    let Ok(bytes) = super::storage::fetch_object(&uri).await else {
+        return false;
+    };
+    let Ok(status) = serde_json::from_slice::<ReplaceRolloutStatus>(&bytes) else {
+        return false;
+    };
+    status.rollout_generation == generation
+        && status.phase == crate::release_agent::RolloutPhase::Committed
+        && status.active_version.as_deref() == Some(version)
+        && status.active_sha256.as_deref() == Some(artifact_sha256)
+}
+
+fn replace_service(
+    document: &Value,
+    logical_service: &str,
+    target: &str,
+) -> Result<(String, String), CmdError> {
+    let directory = crate::service_resolution::directory(document)?
+        .ok_or_else(|| CmdError::click("service directory disappeared"))?;
+    let route = directory
+        .services
+        .get(logical_service)
+        .ok_or_else(|| CmdError::click("release product service disappeared"))?;
+    if route.active_host != target {
+        return Err(CmdError::click(format!(
+            "release product service {logical_service:?} is active on {}, not {target}",
+            route.active_host
+        )));
+    }
+    let managed_service = route.managed_service.clone().ok_or_else(|| {
+        CmdError::click(format!(
+            "release product service {logical_service:?} has no managed service"
+        ))
+    })?;
+    let endpoint = route
+        .endpoints
+        .get(target)
+        .ok_or_else(|| CmdError::click("release product service has no target endpoint"))?;
+    let mut readiness = url::Url::parse(&endpoint.url)
+        .map_err(|error| CmdError::click(format!("invalid release service endpoint: {error}")))?;
+    readiness.set_path(&format!(
+        "{}/readyz",
+        readiness.path().trim_end_matches('/')
+    ));
+    readiness.set_query(None);
+    readiness.set_fragment(None);
+    Ok((managed_service, readiness.to_string()))
+}
+
 async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
     const MAX_ATTEMPTS: usize = 24;
 
@@ -1305,6 +1372,61 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             .iter()
             .find(|t| &t.name == name)
             .ok_or_else(|| CmdError::click(format!("rollout target {name} is absent")))?;
+        let expected = run
+            .platforms
+            .get(&policy.targets[name].platform)
+            .ok_or_else(|| CmdError::click("rollout platform was not built"))?;
+        if policy.strategy.kind == StrategyKind::Replace {
+            let artifact_sha256 = expected
+                .artifact_sha256
+                .as_deref()
+                .ok_or_else(|| CmdError::click("rollout artifact digest was not recorded"))?;
+            let manifest_sha256 = expected
+                .release_manifest_sha256
+                .as_deref()
+                .ok_or_else(|| CmdError::click("rollout manifest digest was not recorded"))?;
+            if !replace_status_exact(
+                &run.product,
+                name,
+                desired.rollout_generation,
+                &run.version,
+                artifact_sha256,
+            )
+            .await
+            {
+                let (service, readiness_url) = replace_service(&document, &policy.service, name)?;
+                super::service::release_pipeline_product(
+                    &service,
+                    name,
+                    &run.product,
+                    &run.version,
+                    &readiness_url,
+                    policy.strategy.readiness_timeout_seconds,
+                )
+                .await?;
+            }
+            if !replace_status_exact(
+                &run.product,
+                name,
+                desired.rollout_generation,
+                &run.version,
+                artifact_sha256,
+            )
+            .await
+            {
+                return Err(CmdError::click(format!(
+                    "target {name} did not publish committed replace status for {} generation {}",
+                    run.version, desired.rollout_generation
+                )));
+            }
+            observed.push(json!({
+                "target": name,
+                "version": run.version,
+                "artifact_sha256": artifact_sha256,
+                "manifest_sha256": manifest_sha256
+            }));
+            continue;
+        }
         let script = format!(
             "set -eu\n\
              if [ -x /bin/systemctl ] && /bin/systemctl is-active --quiet wisent-agent.service; then\n\
@@ -1318,10 +1440,6 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             crate::deploy::shlex_quote(name),
             crate::deploy::shlex_quote(&run.product)
         );
-        let expected = run
-            .platforms
-            .get(&policy.targets[name].platform)
-            .ok_or_else(|| CmdError::click("rollout platform was not built"))?;
         let mut last_observation = "product state was not returned".to_string();
         let mut converged = false;
         for attempt in 1..=MAX_ATTEMPTS {
@@ -1356,12 +1474,7 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                     });
                 // An exact active process is still reversible during Monitoring.
                 // Record deployment only after the rollout window commits.
-                if exact
-                    && matches!(
-                        state.phase,
-                        crate::release_agent::RolloutPhase::Committed
-                    )
-                {
+                if exact && matches!(state.phase, crate::release_agent::RolloutPhase::Committed) {
                     let active = state.active.as_ref().expect("checked above");
                     observed.push(json!({
                         "target": name,
