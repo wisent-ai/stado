@@ -37,7 +37,8 @@ use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
 use super::release_quarantine::{
-    canonical_control, compute_target, remote_read, remote_read_tail, resolve_target,
+    canonical_control, compute_target, remote_read, remote_read_head, remote_read_tail,
+    resolve_target,
 };
 use super::CmdError;
 use crate::deploy::{host_channel, host_gates, production_runner, shlex_quote};
@@ -174,6 +175,9 @@ pub struct ReleaseLogsArgs {
     stream: StreamArg,
     #[arg(long, default_value_t = DEFAULT_LINES)]
     lines: usize,
+    /// Read from the start of each log instead of its tail.
+    #[arg(long)]
+    head: bool,
     #[arg(long)]
     json: bool,
 }
@@ -268,7 +272,7 @@ fn classify(path: String, extension: &'static str, read: Option<(String, u64)>) 
     }
 }
 
-/// Read one release log's tail off the host.
+/// Read one release log from the selected edge of the host file.
 ///
 /// The path is the one [`crate::release_agent`]'s `release_log` opens,
 /// spelled by `release_agent::host_log_path` itself rather than retyped, so
@@ -280,9 +284,14 @@ async fn stream_report(
     version: &str,
     extension: &'static str,
     lines: usize,
+    head: bool,
 ) -> Result<StreamReport, CmdError> {
     let path = host_log_path(logs_root, product, version, extension);
-    let read = remote_read_tail(target, &path, lines).await?;
+    let read = if head {
+        remote_read_head(target, &path, lines).await?
+    } else {
+        remote_read_tail(target, &path, lines).await?
+    };
     Ok(classify(path, extension, read))
 }
 
@@ -325,6 +334,7 @@ async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
                 &version,
                 extension,
                 args.lines,
+                args.head,
             )
             .await?,
         );
@@ -333,6 +343,7 @@ async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
         "product": args.product,
         "target": target_name,
         "version": version,
+        "selection": if args.head { "head" } else { "tail" },
         "streams": streams.iter().map(StreamReport::to_value).collect::<Vec<Value>>(),
     });
     if args.json {
@@ -348,8 +359,9 @@ async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
                 stream.stream, stream.path
             ),
             _ => {
+                let position = if args.head { "first" } else { "last" };
                 println!(
-                    "--- {} ({}): last {} lines of {} bytes",
+                    "--- {} ({}): {position} {} lines of {} bytes",
                     stream.stream,
                     stream.path,
                     stream.lines.len(),
