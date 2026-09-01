@@ -70,6 +70,11 @@ const SEEDED_REGISTRY_GROWN: &str = r#"{
 /// loader TOLERATES it — it models no targets and reports nothing — so this
 /// is the document that proves the cache gate is the contract and not the
 /// loader.
+/// What the authority actually served on 2026-08-31 for about nine minutes.
+/// Schema-valid, contract-clean, and empty.
+const EMPTY_FLEET_REGISTRY: &str =
+    r#"{"schema_version": 2, "coordinators": [], "targets": []}"#;
+
 const CONTRACT_VIOLATING_REGISTRY: &str = r#"{"schema_version": 2, "targets": "not-a-list"}"#;
 
 /// The authority's own words when the store cannot be read, copied from a
@@ -334,21 +339,27 @@ fn the_bundled_snapshot_is_the_last_resort_below_the_copy() {
         stderr(&out)
     );
     assert!(
-        !stdout(&out).contains("control-host"),
+        !stderr(&out).contains("bundled with this binary"),
         "the bundled snapshot answered over a usable copy: {}",
-        stdout(&out)
+        stderr(&out)
     );
 
     // Authority down and no copy: only now is the bundle read, and the
     // sentence says so, because a snapshot as old as the binary answering in
     // silence is how a decommissioned host stays declared for a fortnight.
+    //
+    // The bundle answers nothing here: `d3dbabdf` (2026-08-20) deliberately
+    // emptied the seed this public repository ships, so the fleet's hosts do
+    // not travel in an open binary. Which tier answered is therefore visible
+    // in the sentence, not in the hosts - and this test asserted a host name
+    // that stopped existing that day, so it has been failing ever since.
     fleet.discard_copy();
     let out = fleet.stado(&["identity", "list", "--json"]);
     assert!(out.status.success(), "read refused: {}", stderr(&out));
-    assert!(
-        stdout(&out).contains("control-host"),
-        "the bundled snapshot did not answer: {}",
-        stdout(&out)
+    assert_eq!(
+        stdout(&out).trim(),
+        "[]",
+        "the shipped seed declares no hosts, so no binding can come from it"
     );
     assert!(
         stderr(&out).contains(&format!(
@@ -358,4 +369,48 @@ fn the_bundled_snapshot_is_the_last_resort_below_the_copy() {
         "got: {}",
         stderr(&out)
     );
+}
+
+/// The outage of 2026-08-31: the authority answered 200 with a registry naming
+/// no hosts. It passed the registry-v2 contract, so it was recorded, and it
+/// replaced a copy naming three real machines. Every host-addressed command
+/// then failed with `target '<name>' is not in the canonical registry` --
+/// served by the fallback that exists precisely to survive an outage.
+///
+/// An empty fleet is legal for a fresh install, so the contract cannot refuse
+/// it outright. It is simply never an improvement on a copy that names hosts.
+#[test]
+fn a_registry_naming_no_hosts_never_replaces_a_copy_that_names_some() {
+    let fleet = Fleet::new(SEEDED_REGISTRY);
+    assert!(fleet.stado(&["registry", "beacon-age"]).status.success());
+    let dated = fleet.sidecar();
+    assert_eq!(read(&fleet.copy_path()), SEEDED_REGISTRY);
+
+    fleet.publish(EMPTY_FLEET_REGISTRY);
+    let out = fleet.stado(&["registry", "beacon-age"]);
+    assert!(out.status.success(), "read failed: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("naming no hosts and the recorded copy names 1"),
+        "the refusal was not said out loud: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        read(&fleet.copy_path()),
+        SEEDED_REGISTRY,
+        "an empty registry replaced a copy that named hosts"
+    );
+    assert_eq!(fleet.sidecar(), dated, "the copy was re-dated without being replaced");
+}
+
+/// The other half of the same rule: a machine with no copy yet must still be
+/// able to record one, even from a fleet that genuinely has no hosts.
+#[test]
+fn a_first_read_of_an_empty_fleet_is_still_recorded() {
+    let fleet = Fleet::new(EMPTY_FLEET_REGISTRY);
+    assert!(fleet.stado(&["registry", "beacon-age"]).status.success());
+    assert!(
+        fleet.copy_path().exists(),
+        "a fresh machine could not record the only registry it has"
+    );
+    assert_eq!(read(&fleet.copy_path()), EMPTY_FLEET_REGISTRY);
 }

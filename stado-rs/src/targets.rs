@@ -2695,6 +2695,37 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     }
 }
 
+/// How many hosts a registry document declares.
+fn declared_target_count(document: &Value) -> usize {
+    document
+        .get("targets")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+/// Whether an incoming document may replace the recorded one.
+///
+/// A registry with no targets is schema-valid: a fresh install legitimately
+/// has none, so the contract cannot refuse it outright. It is still never an
+/// improvement on a copy that names hosts. On 2026-08-31 the authority served
+/// `{"schema_version":2,"coordinators":[],"targets":[]}` for about nine
+/// minutes; it passed the contract, replaced a copy naming three hosts, and
+/// every host-addressed command answered `target 'charless-mac-mini' is not in
+/// the canonical registry` - from the fallback that exists to survive exactly
+/// that outage.
+pub(crate) fn may_replace_last_good(incoming: &Value, recorded: Option<&Value>) -> Result<(), String> {
+    let arriving = declared_target_count(incoming);
+    let held = recorded.map_or(0, declared_target_count);
+    if arriving == 0 && held > 0 {
+        return Err(format!(
+            "the authority served a registry naming no hosts and the recorded copy names {held}; \
+             keeping the recorded copy, because an empty fleet is what an outage looks like from \
+             here and the fallback exists for outages"
+        ));
+    }
+    Ok(())
+}
+
 /// Record a document the authority served AND this build validated.
 ///
 /// The gate is the registry-v2 contract ([`validate_registry`]), not the
@@ -2727,6 +2758,15 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
     match serde_json::from_str::<Value>(text) {
         Ok(data) => {
             if let Err(error) = validate_registry(&data) {
+                report(&error);
+                return;
+            }
+            // Valid is not the same as better. A document naming no hosts
+            // never replaces one that names some.
+            let recorded = std::fs::read_to_string(&document)
+                .ok()
+                .and_then(|held| serde_json::from_str::<Value>(&held).ok());
+            if let Err(error) = may_replace_last_good(&data, recorded.as_ref()) {
                 report(&error);
                 return;
             }
