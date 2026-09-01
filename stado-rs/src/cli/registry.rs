@@ -98,17 +98,6 @@ fn service_directory_generation(text: &str) -> Option<u64> {
         .as_u64()
 }
 
-/// The upload half [`push`] and [`push_document`] share: read the current
-/// generation, refuse a write that would delete a top-level key unless the
-/// operator said so, compare-and-swap against it (or atomically create when
-/// the object is absent), then read back and verify BOTH the generation and
-/// the bytes. Returns `(generation, previous_generation)`.
-///
-/// `payload` is written verbatim, so [`push`] still uploads the operator's
-/// exact file bytes rather than a re-serialization of them.
-///
-/// `allow_empty_fleet` is deliberately NOT `--force`: see the floor below.
-
 /// The number of targets a registry document declares, or `None` when the
 /// text is not a document with a `targets` array.
 fn target_count(text: &str) -> Option<usize> {
@@ -121,6 +110,16 @@ fn target_count(text: &str) -> Option<usize> {
     )
 }
 
+/// The upload half [`push`] and [`push_document`] share: read the current
+/// generation, refuse a write that would delete a top-level key unless the
+/// operator said so, compare-and-swap against it (or atomically create when
+/// the object is absent), then read back and verify BOTH the generation and
+/// the bytes. Returns `(generation, previous_generation)`.
+///
+/// `payload` is written verbatim, so [`push`] still uploads the operator's
+/// exact file bytes rather than a re-serialization of them.
+///
+/// `allow_empty_fleet` is deliberately NOT `--force`: see the floor below.
 async fn upload_payload(
     payload: &str,
     allow_removals: bool,
