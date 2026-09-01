@@ -1448,6 +1448,23 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Store one typed item directly in TARGET's owner vault.
+    ///
+    /// The canonical JSON payload is read from stdin and carried only in the
+    /// encrypted host channel's request body. Credential fields never enter a
+    /// local or remote argument vector, and the host's other items are untouched.
+    #[command(name = "vault-item-put")]
+    VaultItemPut {
+        target: String,
+        /// Credential item id.
+        item: String,
+        /// Canonical Skarbiec item kind.
+        #[arg(long = "type")]
+        item_type: String,
+        /// Emit the nonsecret before/after report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Mint one bounded Skarbiec bearer on TARGET's live vault.
     #[command(name = "vault-token-mint")]
     VaultTokenMint {
@@ -2673,6 +2690,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
             HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::VaultItemPut {
+                target,
+                item,
+                item_type,
+                json,
+            } => host::vault_item_put(&target, &item, &item_type, json).await,
             HostCommands::VaultTokenMint {
                 target,
                 consumer,
