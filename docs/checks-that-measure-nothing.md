@@ -284,3 +284,40 @@ are not the bytes on `main`, and nothing in the gate can see it.
 Fixing it changes the shared release rule
 (`https://github.com/lbartoszcze/AutoVersion`) and what every future PR must
 declare. That is a decision to take deliberately, not during an incident.
+
+**#7 stopped being hypothetical on 2026-09-01: `0.13.27` is attested from two
+different revisions, and both attestations are signed and published.** The
+repository has two release paths that write into the same version coordinate
+and neither reads the other's provenance:
+
+| Path | Object | Field | Revision |
+|---|---|---|---|
+| product pipeline (`stado release submit` -> `publish_pipeline_release`) | `stado://releases/stado/0.13.27/darwin-arm64/release.json` | `source_revision` | `d53f10c9228befba188a8b780dce68a041929c50` |
+| tag deploy (`deploy.yml`, `stado-v0.13.27`) | `stado://releases/stado/0.13.27/darwin-arm64/release-manifest-darwin-arm64.json` | `source_commit` | `99e033960d1aa7b426c427027bb445f658b3215b` |
+
+How it was measured, so the next reader can repeat it rather than trust it:
+`stado storage get` each object and read the field. `git rev-list --count
+d53f10c9..99e03396` is **14**, and those fourteen carry #250, #251, #255, #256,
+#257 and #258. Both coordinates are complete: the pipeline objects are 4 of 4 and the
+deploy objects are 9 of 9, on **both** platforms. Neither path is broken and
+neither is lying; they simply answer the same question, "what source is
+`stado` 0.13.27", with different commits.
+
+The consequence is concrete rather than theoretical. `install-stado.sh`,
+`self_update.rs` and `local_install.rs` all resolve
+`release-manifest-<platform>.json`, so an installed binary traces to
+`99e03396`. `host_release.rs` and `stado release status` resolve `release.json`,
+so the fleet's own rollout provenance traces to `d53f10c9`. At three in the
+morning, "which source is this host running" has two correct and different
+answers depending on which command is asked, and nothing anywhere compares
+them.
+
+**The unprotected property, named and left as a decision:** no gate asserts
+that every object published under one `product/version` coordinate attests the
+same `source_revision`. The immutability rule protects each object from being
+rewritten; it does not stop two paths from writing mutually inconsistent
+provenance into one coordinate. Which path should own the coordinate -- or
+whether the second should refuse when the first has already attested a
+different revision -- is a release-integrity decision, and it belongs to
+whoever owns `release_control`, taken deliberately and not during an incident.
+Recording it here is deliberately all this change does.

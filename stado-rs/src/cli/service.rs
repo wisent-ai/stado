@@ -3772,6 +3772,36 @@ async fn directory_port(name: &str, host: &str) -> Option<u16> {
     url::Url::parse(&endpoint.url).ok()?.port()
 }
 
+/// The host's declaration for NAME, accepting the directory's own key for the
+/// service as well as the launchd label the host declares.
+///
+/// [`declared_matching`] matches only the labels a host declares, while
+/// `service verify`'s ownership judgement resolves the unit through
+/// [`crate::targets::Registry::service_unit`] — which reads `managed_service`
+/// and, when a placement profile owns the service instead, that profile's
+/// `units` map. The two disagreed: on 2026-09-01 `service verify` judged
+/// brama's port by label while `service serving brama` refused with "is not a
+/// registry-managed service" on both hosts, because brama carries a
+/// `placement_profile` and no `managed_service`. The command #248 points an
+/// operator at could not answer for the one service the check was written
+/// for. One resolution chain, both commands.
+///
+/// The label path is tried first so a host that declares a unit under a name
+/// the directory also uses keeps resolving to its own declaration.
+async fn declared_for_serving(name: &str, host: &str) -> Result<Vec<ManagedService>, CmdError> {
+    let refusal = match declared_matching(name, Some(host)).await {
+        Ok(found) => return Ok(found),
+        Err(refusal) => refusal,
+    };
+    let Ok(registry) = host_channel::canonical_registry().await else {
+        return Err(refusal);
+    };
+    let Some(unit) = registry.service_unit(name, host) else {
+        return Err(refusal);
+    };
+    declared_matching(unit, Some(host)).await
+}
+
 /// `service serving`: the declared unit against the process on its port.
 ///
 /// The ports come from the unit's own env file by the same derivation
@@ -3787,7 +3817,7 @@ async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError> {
         ports,
         as_json,
     } = options;
-    let services = declared_matching(name, Some(host)).await?;
+    let services = declared_for_serving(name, host).await?;
     let runner = production_runner();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     // Every label this host declares, so a foreign owner is reported as
@@ -4425,6 +4455,10 @@ async fn adopt(
 /// target placeholder and `service_directory.services.<name>` in one registry
 /// update; retire/remove must drop both in the same update or the validator
 /// correctly refuses a directory entry pointing at no managed service.
+///
+/// Dropping an entry is a directory change, so it advances the publication
+/// counter. It did not, and a consumer holding the entry that was just
+/// removed saw a generation telling it its copy was current.
 fn remove_directory_declaration(document: &mut Value, name: &str) {
     let Some(services) = document
         .get_mut("service_directory")
@@ -4434,7 +4468,12 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
     else {
         return;
     };
-    services.remove(name);
+    if services.remove(name).is_none() {
+        return;
+    }
+    // A directory that cannot carry a counter is a document this command did
+    // not write and must not silently repair; the removal still stands.
+    let _ = crate::service_resolution::advance_generation(document);
 }
 
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
@@ -4795,6 +4834,10 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     if !already {
         host_services.push(json!({"name": name, "declared_only": true}));
     }
+    // `declare` writes `service_directory.services.<name>` above, so the
+    // publication counter must advance with it or a consumer's cached copy
+    // never learns the entry exists.
+    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
     let generation = registry::push_document(&document).await?;
     if !as_json {
         println!("declared {name} on {host} (generation {generation})");

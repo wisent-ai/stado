@@ -98,16 +98,17 @@ fn service_directory_generation(text: &str) -> Option<u64> {
         .as_u64()
 }
 
-/// The upload half [`push`] and [`push_document`] share: read the current
-/// generation, refuse a write that would delete a top-level key unless the
-/// operator said so, compare-and-swap against it (or atomically create when
-/// the object is absent), then read back and verify BOTH the generation and
-/// the bytes. Returns `(generation, previous_generation)`.
-///
-/// `payload` is written verbatim, so [`push`] still uploads the operator's
-/// exact file bytes rather than a re-serialization of them.
-///
-/// `allow_empty_fleet` is deliberately NOT `--force`: see the floor below.
+/// The service directory itself, with its counter removed, so two documents
+/// can be compared for whether the DECLARATIONS differ independently of the
+/// number that is supposed to announce that they do.
+fn service_directory_body(text: &str) -> Option<Value> {
+    let mut directory = serde_json::from_str::<Value>(text)
+        .ok()?
+        .get("service_directory")?
+        .clone();
+    directory.as_object_mut()?.remove("generation");
+    Some(directory)
+}
 
 /// The number of targets a registry document declares, or `None` when the
 /// text is not a document with a `targets` array.
@@ -121,6 +122,16 @@ fn target_count(text: &str) -> Option<usize> {
     )
 }
 
+/// The upload half [`push`] and [`push_document`] share: read the current
+/// generation, refuse a write that would delete a top-level key unless the
+/// operator said so, compare-and-swap against it (or atomically create when
+/// the object is absent), then read back and verify BOTH the generation and
+/// the bytes. Returns `(generation, previous_generation)`.
+///
+/// `payload` is written verbatim, so [`push`] still uploads the operator's
+/// exact file bytes rather than a re-serialization of them.
+///
+/// `allow_empty_fleet` is deliberately NOT `--force`: see the floor below.
 async fn upload_payload(
     payload: &str,
     allow_removals: bool,
@@ -171,6 +182,41 @@ async fn upload_payload(
                          so every cached copy older than {before} would start looking \
                          current. Re-pull, re-apply the edit, and push again; pass \
                          --force only if publishing the older directory is the intent."
+                    )));
+                }
+                // The same lost update one notch subtler, and the one that
+                // actually happened. On 2026-09-01 a corrected brama endpoint
+                // was published, and a writer holding a copy from before it
+                // pushed its own directory back at the SAME generation. The
+                // decrease guard above never fired, every consumer's
+                // staleness check agreed with the reverted copy, and the
+                // correction was gone with nothing recording that it had
+                // been.
+                //
+                // `upload_payload` cannot compare-and-swap against the read
+                // the operator's FILE came from -- a file carries no
+                // provenance, which is why read-modify-write callers use
+                // `push_document_if` and the store's real CAS instead. So the
+                // directory states it for itself: changing a declaration
+                // means advancing the counter that announces the change.
+                //
+                // Only a CHANGED directory is refused. A writer that leaves
+                // it byte-identical -- `release promote` rewriting
+                // `release_control`, every fleet and enrollment edit -- is
+                // untouched.
+                if after == before
+                    && service_directory_body(&blob.content) != service_directory_body(payload)
+                {
+                    return Err(CmdError::click(format!(
+                        "registry upload refused: it changes the service directory but leaves \
+                         its generation at {after}, the number the registry already carries. \
+                         Consumers compare that counter against the copy they cached, so a \
+                         changed directory published under an unchanged one is invisible to \
+                         every one of them -- and if your copy predates a correction, this \
+                         write reverts it silently. Re-pull, re-apply the edit, advance \
+                         service_directory.generation, and push again; pass --force only if \
+                         publishing a changed directory under the same generation is the \
+                         intent."
                     )));
                 }
             }
