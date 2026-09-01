@@ -444,9 +444,7 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
                 // exists. Operational commands must not address that
                 // placeholder as a loaded or managed unit; `deploy` replaces
                 // it through `record_declaration` after the host action.
-                .filter(|record| {
-                    record.get("declared_only").and_then(Value::as_bool) != Some(true)
-                })
+                .filter(|record| record.get("declared_only").and_then(Value::as_bool) != Some(true))
                 .map(|record| ManagedService::from_record(&target.name, record))
                 .collect()
         })
