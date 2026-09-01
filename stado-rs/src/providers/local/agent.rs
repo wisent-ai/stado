@@ -1440,6 +1440,21 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     && job.output_uri.contains("/deliveries/")
                     && job.output_uri.ends_with("/output")
             });
+            // A host can accumulate deliveries while it is under pressure.
+            // The newest submission is the current operator intent; replaying
+            // them FIFO briefly downgrades the installed agent before climbing
+            // through every superseded coordinate.
+            let matched_deliveries = queued.len();
+            queued.sort_by(|a, b| {
+                b.created_at
+                    .cmp(&a.created_at)
+                    .then_with(|| b.job_id.cmp(&a.job_id))
+            });
+            queued.truncate(1);
+            agent_diag.insert(
+                "disk_pressure_superseded_deliveries".into(),
+                Value::from(matched_deliveries.saturating_sub(queued.len()) as i64),
+            );
             agent_diag.insert(
                 "disk_pressure_recovery_jobs".into(),
                 Value::from(queued.len() as i64),
