@@ -152,15 +152,27 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Go to each consumer and check the endpoint it is told to use.
+    /// Go to each consumer and check the endpoint it is told to use, and that
+    /// the thing answering is the service that was declared.
     ///
     /// `list` reports what hosts say about their units. This reports whether
     /// the directory's addresses answer, from the machines that must call
     /// them -- the one question every other check in this binary skips.
-    /// States are `observed`, `unreachable`, and `unverified` for a probe
-    /// that could not run; the third is never folded into the other two.
-    /// Exits non-zero only on `unreachable`, so an uninstalled probe cannot
-    /// masquerade as an outage.
+    /// States are `observed`, `unreachable`, `misowned` for a port a different
+    /// declared unit is holding, and `unverified` for a probe that could not
+    /// run; the last is never folded into the others.
+    ///
+    /// `misowned` exists because an answer was once the whole of `observed`'s
+    /// evidence. On the service's active host the port's owner is resolved by
+    /// launchd label through the same reader `service serving` uses, so a
+    /// declaration pointing at a port another job holds is a failure here
+    /// rather than a green row. Other hosts reach the service through their
+    /// own resolver adapter and are not judged on ownership, because that
+    /// socket is owned by the resolver by design.
+    ///
+    /// Exits non-zero on `unreachable` and `misowned`, counted separately: the
+    /// first usually means the service needs attention, the second means the
+    /// declaration does.
     Verify {
         /// Check one host's declarations instead of the whole fleet.
         #[arg(long)]
@@ -1028,6 +1040,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 require_release_version,
                 supersede_unit: supersede_unit.as_deref(),
                 json,
+                emit: true,
             })
             .await
         }
@@ -2189,6 +2202,31 @@ struct ServiceReleaseOptions<'a> {
     require_release_version: bool,
     supersede_unit: Option<&'a str>,
     json: bool,
+    emit: bool,
+}
+
+pub(crate) async fn release_pipeline_product(
+    name: &str,
+    host: &str,
+    product: &str,
+    version: &str,
+    readiness_url: &str,
+    readiness_timeout_seconds: u64,
+) -> Result<(), CmdError> {
+    release(ServiceReleaseOptions {
+        name,
+        host,
+        product,
+        version,
+        readiness_url: Some(readiness_url),
+        readiness_timeout_seconds,
+        reload_unit: false,
+        require_release_version: true,
+        supersede_unit: None,
+        json: false,
+        emit: false,
+    })
+    .await
 }
 
 #[derive(Default, Deserialize)]
@@ -2649,30 +2687,40 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         bundle.previous_version.as_deref(),
         if options.supersede_unit.is_some() {
             "service readiness passed; superseded user LaunchAgent removed"
-        } else {
+        } else if options.readiness_url.is_some() {
             "service restart and readiness passed"
+        } else {
+            "service restarted; no readiness endpoint was requested"
         },
     )
     .await
     .map_err(CmdError::click)?;
-    if options.json {
-        print_json(&json!({
-            "host": options.host,
-            "service": options.name,
-            "product": options.product,
-            "previous_version": bundle.previous_version,
-            "version": options.version,
-            "artifact_sha256": bundle.artifact.artifact_sha256,
-            "artifact_directory": installed_directory,
-            "status": "released",
-            "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
-            "superseded_unit": options.supersede_unit,
-        }))?;
-    } else {
-        println!(
-            "{}: {} released {} {} (restart and readiness passed)",
-            options.host, options.name, options.product, options.version
-        );
+    let report = json!({
+        "host": options.host,
+        "service": options.name,
+        "product": options.product,
+        "previous_version": bundle.previous_version,
+        "version": options.version,
+        "artifact_sha256": bundle.artifact.artifact_sha256,
+        "artifact_directory": installed_directory,
+        "status": "released",
+        "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
+        "superseded_unit": options.supersede_unit,
+    });
+    if options.emit {
+        if options.json {
+            print_json(&report)?;
+        } else {
+            let readiness = if options.readiness_url.is_some() {
+                "restart and readiness passed"
+            } else {
+                "unit restarted; readiness was not requested"
+            };
+            println!(
+                "{}: {} released {} {} ({readiness})",
+                options.host, options.name, options.product, options.version
+            );
+        }
     }
     Ok(())
 }
@@ -3704,10 +3752,23 @@ struct ServingOptions<'a> {
 /// This is the fleet's own statement of what the service answers on, which is
 /// the only source that distinguishes a port a unit SERVES from one it merely
 /// calls. `host_precheck_runner` reads the directory the same way.
+///
+/// `name` may be either the directory's own key for the service or the launchd
+/// label the host declares for it, because this command accepts both and used
+/// to resolve the endpoint for neither: `declared_matching` matches the host's
+/// labels, this looked the same string up as a directory key, and no argument
+/// satisfied both at once. Asked by service name it refused with "is not a
+/// registry-managed service"; asked by label, with "the service directory
+/// declares no endpoint" -- so the declared port of the service whose
+/// declaration was wrong was the one port an operator had to supply by hand.
 async fn directory_port(name: &str, host: &str) -> Option<u16> {
     let registry = host_channel::canonical_registry().await.ok()?;
-    let service = registry.service(name)?;
-    let endpoint = service.address_for(host)?;
+    let key = if registry.service(name).is_some() {
+        name
+    } else {
+        registry.service_named_by_unit(name, host)?
+    };
+    let endpoint = registry.service(key)?.address_for(host)?;
     url::Url::parse(&endpoint.url).ok()?.port()
 }
 

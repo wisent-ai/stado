@@ -79,14 +79,26 @@ pub const UNREACHABLE: &str = "unreachable";
 /// look" and "I looked and it is gone" send an operator to two different
 /// machines.
 pub const UNVERIFIED: &str = "unverified";
+/// Something answered at the declared place and it is the wrong program: the
+/// port is held by a launchd job other than the one declared to serve it.
+///
+/// Deliberately not [`OBSERVED`]: an answer was the whole of that word's
+/// evidence, which is how a declaration naming a port another service had
+/// taken stayed green. On 2026-08-31 `brama` was declared on
+/// `http://127.0.0.1:8080` while it served 18080 and an unrelated FastAPI job
+/// held 8080; every probe read `HTTP 404` as an answer and reported
+/// [`OBSERVED`] for seventeen hours. Deliberately not [`UNREACHABLE`] either,
+/// because the socket is alive and restarting the declared service repairs
+/// nothing — the declaration is what is wrong. This is a failure.
+pub const MISOWNED: &str = "misowned";
 
 /// One look, by one machine, at one fact, at one moment.
 ///
 /// Every field is a `String` because this record crosses a file, a helper
 /// script's stdout and two CLI surfaces, and each place it is narrowed to an
 /// enum is a place an unrecognised state gets flattened into a known one. The
-/// states this tree writes are [`OBSERVED`], [`UNREACHABLE`] and
-/// [`UNVERIFIED`]; a state written by something newer is carried through
+/// states this tree writes are [`OBSERVED`], [`UNREACHABLE`], [`UNVERIFIED`]
+/// and [`MISOWNED`]; a state written by something newer is carried through
 /// verbatim rather than rounded down to the nearest word we already know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observation {
@@ -98,8 +110,8 @@ pub struct Observation {
     /// and not defaultable: an observation whose vantage is unknown cannot be
     /// compared against the next one, so it is not evidence of anything.
     pub vantage: String,
-    /// [`OBSERVED`], [`UNREACHABLE`], [`UNVERIFIED`], or a word from a newer
-    /// writer, passed through.
+    /// [`OBSERVED`], [`UNREACHABLE`], [`UNVERIFIED`], [`MISOWNED`], or a word
+    /// from a newer writer, passed through.
     pub state: String,
     /// Why, in the operating system's own words where there are any. The
     /// difference between "connection refused" and "timed out" is the

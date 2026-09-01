@@ -147,6 +147,7 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|error| DeployError(error.to_string()))?;
     // Ask for the one field this needs. A broker that requires a named field

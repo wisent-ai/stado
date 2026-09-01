@@ -973,6 +973,15 @@ async fn rollback(
     reason: String,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
+    if let Some(record) = &failed {
+        state.quarantined.insert(
+            record.artifact_sha256.clone(),
+            QuarantineRecord {
+                reason: reason.clone(),
+                quarantined_at: Utc::now(),
+            },
+        );
+    }
     if let Some(previous) = state.previous.take() {
         if proxy_alive(state) {
             write_proxy_target(
@@ -1043,7 +1052,25 @@ async fn reconcile_product(
         .artifacts
         .get(&target.platform)
         .ok_or_else(|| format!("desired release has no {} artifact", target.platform))?;
+    let repeats_failed_rollout = state.phase == RolloutPhase::RolledBack
+        && state.rollout_generation == desired.rollout_generation
+        && state.active.is_none()
+        && state.previous.is_none();
     state.rollout_generation = desired.rollout_generation;
+    if repeats_failed_rollout {
+        state.quarantined.insert(
+            artifact.artifact_sha256.clone(),
+            QuarantineRecord {
+                reason: state.detail.clone(),
+                quarantined_at: Utc::now(),
+            },
+        );
+        state.phase = RolloutPhase::Quarantined;
+        state.detail =
+            "desired release digest is quarantined after its previous rollback".to_string();
+        save_state(target, &mut state)?;
+        return Ok(state);
+    }
 
     if state.quarantined.contains_key(&artifact.artifact_sha256) {
         state.phase = RolloutPhase::Quarantined;
@@ -1349,7 +1376,10 @@ async fn reconcile_product(
     Ok(state)
 }
 
-pub async fn reconcile_once(target_name: &str) -> Result<Vec<HostReleaseState>, String> {
+pub async fn reconcile_once(
+    target_name: &str,
+    product_filter: Option<&str>,
+) -> Result<Vec<HostReleaseState>, String> {
     let document = crate::cli::resolver::canonical_document(target_name)
         .await
         .map_err(|error| error.to_string())?;
@@ -1359,6 +1389,9 @@ pub async fn reconcile_once(target_name: &str) -> Result<Vec<HostReleaseState>, 
     };
     let mut states = Vec::new();
     for (product, policy) in &control.products {
+        if product_filter.is_some_and(|selected| selected != product) {
+            continue;
+        }
         if policy.strategy.kind != StrategyKind::BlueGreen {
             // A `replace` policy is delivered by the host-release path: the
             // artefact tree is swapped in place, and there is no stable
@@ -1392,9 +1425,14 @@ pub async fn reconcile_once(target_name: &str) -> Result<Vec<HostReleaseState>, 
     Ok(states)
 }
 
-pub async fn agent(target_name: &str, once: bool, interval_seconds: u64) -> Result<(), String> {
+pub async fn agent(
+    target_name: &str,
+    product_filter: Option<&str>,
+    once: bool,
+    interval_seconds: u64,
+) -> Result<(), String> {
     loop {
-        let states = reconcile_once(target_name).await?;
+        let states = reconcile_once(target_name, product_filter).await?;
         for state in states {
             eprintln!(
                 "stado release agent product={} target={} generation={} phase={:?} detail={}",

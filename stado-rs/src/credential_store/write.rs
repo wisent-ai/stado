@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use super::file::TYPE_METADATA;
 use super::{selected, Backend};
-use crate::skarbiec::{Client, ItemInfo, SkarbiecError};
+use crate::skarbiec::{Client, GrantMode, ItemInfo, SkarbiecError};
 
 fn type_map(document: &Value) -> Option<&Map<String, Value>> {
     document.get(TYPE_METADATA).and_then(Value::as_object)
@@ -23,18 +23,29 @@ fn set_type(document: &mut Value, id: &str, item_type: &str) {
     document[TYPE_METADATA][id] = Value::String(item_type.to_string());
 }
 
+/// A direct client for an explicit backend and an explicit grant.
+///
+/// The mode is a parameter for the same reason the coordinates are: this helper
+/// is handed a grant file it knows nothing about, so it carries the caller's
+/// declaration rather than inventing one.
 fn direct_client(
     backend: &Backend,
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: GrantMode,
 ) -> Result<Client, SkarbiecError> {
     let Backend::Skarbiec { url: store_url } = backend else {
         return Err(SkarbiecError::Deployment(
             "internal error: direct Skarbiec client requested for file backend".to_string(),
         ));
     };
-    Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)
+    Client::direct(
+        store_url.as_deref().unwrap_or(url),
+        consumer,
+        token_file,
+        grant_mode,
+    )
 }
 
 pub(crate) async fn read_item_at(
@@ -42,11 +53,12 @@ pub(crate) async fn read_item_at(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: GrantMode,
     id: &str,
 ) -> Result<Value, SkarbiecError> {
     match backend {
         Backend::Skarbiec { .. } => {
-            direct_client(backend, url, consumer, token_file)?
+            direct_client(backend, url, consumer, token_file, grant_mode)?
                 .read_item(id)
                 .await
         }
@@ -112,10 +124,11 @@ pub(crate) async fn list_items_at(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: GrantMode,
 ) -> Result<Vec<ItemInfo>, SkarbiecError> {
     match backend {
         Backend::Skarbiec { .. } => {
-            direct_client(backend, url, consumer, token_file)?
+            direct_client(backend, url, consumer, token_file, grant_mode)?
                 .list_items()
                 .await
         }
@@ -162,16 +175,18 @@ pub async fn list_items_with(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: GrantMode,
 ) -> Result<Vec<ItemInfo>, SkarbiecError> {
-    list_items_at(&selected()?, url, consumer, token_file).await
+    list_items_at(&selected()?, url, consumer, token_file, grant_mode).await
 }
 
 pub async fn list_ids_with(
     url: &str,
     consumer: &str,
     token_file: &str,
+    grant_mode: GrantMode,
 ) -> Result<Vec<String>, SkarbiecError> {
-    Ok(list_items_with(url, consumer, token_file)
+    Ok(list_items_with(url, consumer, token_file, grant_mode)
         .await?
         .into_iter()
         .map(|item| item.id)

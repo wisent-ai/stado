@@ -539,6 +539,7 @@ pub async fn issue_sign_in_prefill(
     let routed = confirm_routed_item(target, &broker, origin, item, runner).await?;
     let scopes = host_scopes(target, scopes_file, runner).await?;
     let mut unconfirmed = Vec::new();
+    let mut deferred = Vec::new();
     let mut agents = Vec::with_capacity(SIGN_IN_FIELDS.len());
     let mut entries = Vec::with_capacity(SIGN_IN_FIELDS.len());
     for ((fill_target, field_class), routed) in SIGN_IN_FIELDS.iter().zip(&routed) {
@@ -576,15 +577,28 @@ pub async fn issue_sign_in_prefill(
             unconfirmed.push(format!("{}/{}", routed.item, routed.field));
         }
         agents.push(agent.to_string());
-        entries.push(prefill_entry(
-            fill_target,
-            field_class,
-            &capability_id,
-            &resource,
-        ));
+        let reference = prefill_entry(fill_target, field_class, &capability_id, &resource);
+        // Only the identifier step is on the page the run opens. Every SSO this
+        // action drives - Google, Apple, Microsoft - asks for the identifier
+        // first and the secret on a page that does not exist yet, and a runtime
+        // that fills every entry at load spends the secret's one-shot
+        // capability on a field that cannot be there. Charless-mac-mini did
+        // exactly that twice: both capabilities `spent` within two seconds of
+        // the first page load, and the agent that reached the real password
+        // field was denied for a capability nobody had used.
+        //
+        // So the identifier is prefilled and the rest are handed over unspent,
+        // for the agent to redeem on the page that has the field. A runtime
+        // that defers absent fields itself reaches the same place.
+        if entries.is_empty() {
+            entries.push(reference);
+        } else {
+            deferred.push(reference);
+        }
     }
     Ok(SignInPrefill {
         entries,
+        deferred,
         agents,
         unconfirmed,
     })
@@ -592,7 +606,10 @@ pub async fn issue_sign_in_prefill(
 
 /// The references, and what the target could not confirm about them.
 pub struct SignInPrefill {
+    /// Filled by the runtime as soon as the page loads.
     pub entries: Vec<Value>,
+    /// Handed to the agent unspent, for the step whose field appears later.
+    pub deferred: Vec<Value>,
     /// The registered identity each capability was issued to, in the same
     /// order. Reported because it is the fact that decides whether redemption
     /// can verify at all.
@@ -645,6 +662,12 @@ impl BrowserTask<'_> {
     /// `credential_prefill` is added only when there is one, so a run without
     /// a sign-in puts exactly the bytes on the wire it always did.
     pub fn params(&self) -> Value {
+        self.params_with(None, &[])
+    }
+
+    /// The parameter object for a live submission carrying caller-specific
+    /// trajectory identity and capabilities for fields on later pages.
+    pub fn params_with(&self, flow_name: Option<&str>, credential_deferred: &[Value]) -> Value {
         let mut constraints = Map::new();
         constraints.insert("read_only".to_string(), json!(!self.allow_login));
         constraints.insert("no_login".to_string(), json!(!self.allow_login));
@@ -655,10 +678,19 @@ impl BrowserTask<'_> {
                 Value::Array(self.credential_prefill.clone()),
             );
         }
+        if !credential_deferred.is_empty() {
+            constraints.insert(
+                "credential_capabilities".to_string(),
+                Value::Array(credential_deferred.to_vec()),
+            );
+        }
         let mut params = json!({
             "url": self.url,
             "objective": self.objective,
-            "flow_name": format!("stado-browser-task:{}", self.session_label),
+            "flow_name": flow_name.map_or_else(
+                || format!("stado-browser-task:{}", self.session_label),
+                str::to_string,
+            ),
             "session_label": self.session_label,
             "proxy": "none",
             "headless": self.headless,
@@ -703,13 +735,18 @@ impl TaskOutcome {
 /// this command reports an outcome rather than a queue receipt. A caller that
 /// only wanted a receipt would have to poll the action log, and a browser
 /// flow whose result nobody read is how a sign-in silently fails.
-pub async fn submit(target: &str, task: &BrowserTask<'_>) -> Result<TaskOutcome, DeployError> {
+pub async fn submit(
+    target: &str,
+    task: &BrowserTask<'_>,
+    flow_name: Option<&str>,
+    credential_deferred: &[Value],
+) -> Result<TaskOutcome, DeployError> {
     let admission = weles_capture::resolve_admission(target).await?;
     let channel = weles_capture::open_channel(&admission).await?;
     let payload = weles_capture::observe_action_payload(
         &channel,
         task.action,
-        task.params(),
+        task.params_with(flow_name, credential_deferred),
         task.account_id,
         task.fresh_profile,
     )

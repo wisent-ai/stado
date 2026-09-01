@@ -117,14 +117,10 @@ pub struct ReleaseTargetPolicy {
     pub state_dir: String,
     pub runtime_root: String,
     pub logs_root: String,
-    /// Blue-green serving coordinates. Their presence is decided by the
-    /// policy's strategy, not by the target: a `blue-green` rollout cannot
-    /// run without them and a `replace` rollout has no stable bind, no
-    /// candidate port pair and nothing HTTP to readiness-check, so
-    /// [`validate_registry_contract`] requires them on the one and forbids
-    /// them on the other. Declared-that-it-cannot-exist, not
-    /// declared-empty: a `replace` target carrying any of them is a policy
-    /// that misunderstands what it rolls out.
+    /// Serving coordinates. Blue-green targets require the stable bind,
+    /// candidate ports and readiness path. Replace targets require only the
+    /// readiness path: they swap one service tree in place, then prove that
+    /// exact release through the service's own HTTP contract.
     #[serde(default)]
     pub stable_bind: Option<String>,
     #[serde(default)]
@@ -185,10 +181,9 @@ pub struct RolloutStrategy {
 #[serde(rename_all = "kebab-case")]
 pub enum StrategyKind {
     BlueGreen,
-    /// The host-release path swaps the artefact tree in place: there is no
-    /// stable proxy bind, no candidate port pair and no HTTP readiness, so
-    /// the blue-green release agent must never drive it. The policy exists to
-    /// gate who may submit and which version may be promoted.
+    /// The host-release path swaps the artefact tree in place. It has no stable
+    /// proxy bind or candidate port pair, but it still proves the exact release
+    /// through the target's declared readiness path.
     Replace,
 }
 
@@ -508,11 +503,11 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             if !target_names.contains(target.as_str()) {
                 return Err(format!("{location}.targets.{target}: unknown target"));
             }
-            // The strategy decides the serving coordinates, not the target: a
-            // blue-green rollout cannot run without them and a replace rollout
-            // cannot have them. Both directions are errors, so a policy can
-            // neither forget the ports it switches between nor invent a bind
-            // for a product that serves no HTTP.
+            // Blue-green and replace share the readiness contract. Only
+            // blue-green owns serving coordinates for a second candidate.
+            let readiness_path = target_policy.readiness_path.as_deref().ok_or_else(|| {
+                format!("{location}.targets.{target}: rollout target requires readiness_path")
+            })?;
             let serving = match policy.strategy.kind {
                 StrategyKind::BlueGreen => Some(target_policy.blue_green_serving().map_err(
                     |_| {
@@ -524,10 +519,9 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                 StrategyKind::Replace => {
                     if target_policy.stable_bind.is_some()
                         || target_policy.candidate_ports.is_some()
-                        || target_policy.readiness_path.is_some()
                     {
                         return Err(format!(
-                            "{location}.targets.{target}: replace rollout forbids stable_bind, candidate_ports and readiness_path"
+                            "{location}.targets.{target}: replace rollout forbids stable_bind and candidate_ports"
                         ));
                     }
                     None
@@ -543,10 +537,8 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                     .legacy_launchd_plist
                     .as_deref()
                     .is_some_and(|path| !safe_absolute(path))
-                || serving.as_ref().is_some_and(|serving| {
-                    !serving.readiness_path.starts_with('/')
-                        || serving.readiness_path.contains("..")
-                })
+                || !readiness_path.starts_with('/')
+                || readiness_path.contains("..")
             {
                 return Err(format!("{location}.targets.{target}: invalid platform, identity, path, or readiness path"));
             }

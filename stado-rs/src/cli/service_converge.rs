@@ -23,6 +23,12 @@
 //!
 //! Four verdicts, never two:
 //!
+//!   unattested  the host runs bytes whose provenance cannot be shown: the
+//!               version they claim has no delivered copy staged on the host,
+//!               or the installed file is not that copy. Judged BEFORE drift,
+//!               because a version string is not provenance and reading a
+//!               local build as `host-ahead` is how it offers to write its own
+//!               version into the registry.
 //!   in-sync     the host runs exactly the declared version.
 //!   host-behind the host runs a version strictly OLDER than the declared
 //!               one. This is the state that hid behind a passing
@@ -94,6 +100,39 @@ pub const HOST_BEHIND: &str = "host-behind";
 pub const HOST_AHEAD: &str = "host-ahead";
 /// Nothing usable came back, so drift is neither confirmed nor ruled out.
 pub const UNKNOWN: &str = "unknown";
+/// The host runs bytes this fleet cannot attest: the version they claim has
+/// no delivered copy staged on the host, or the installed file differs from
+/// the staged one it should have been installed from.
+///
+/// A version number is not provenance. `--version` prints whatever
+/// `Cargo.toml` said when the file was compiled, so a local build reports a
+/// release number it never came from, and this command used to read exactly
+/// that as [`HOST_AHEAD`] — "the declaration is stale, not the host" — and
+/// offer to write the unverified version into the registry. On 2026-08-31
+/// charless-mac-mini, the always-on Mac every other host reads its registry
+/// from, was running a `stado` answering 0.13.19 written at 21:25Z while the
+/// 0.13.19 coordinate measured present=0 / absent=9 on both platforms: bytes
+/// nobody delivered, one `--apply` away from promoting themselves into the
+/// fleet's own record of what that host runs.
+///
+/// The delivery path stages every release it installs at
+/// `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, digest-
+/// verified against the canonical manifest on the way in. So the attestation
+/// is host-local and needs no network: the staged copy for the claimed
+/// version either exists and matches the installed file byte for byte, or
+/// this verdict says so.
+pub const UNATTESTED: &str = "unattested";
+
+/// The staged copy exists and the installed file matches it.
+const ATTEST_MATCH: &str = "staged-match";
+/// A staged copy for the claimed version exists and the installed file is not
+/// it: the binary was replaced after delivery.
+const ATTEST_DIFFERS: &str = "staged-differs";
+/// No staged copy for the claimed version: these bytes never came through the
+/// delivery path.
+const ATTEST_ABSENT: &str = "no-staged-copy";
+/// The version could not be read, so provenance was never asked.
+const ATTEST_UNKNOWN: &str = "unknown";
 
 /// The reporter's name, for sentences that need to name it.
 const VERSION_HELPER: &str = "report-installed-versions";
@@ -198,6 +237,10 @@ struct Installed {
     root: String,
     unit: String,
     state: String,
+    /// One of [`ATTEST_MATCH`], [`ATTEST_DIFFERS`], [`ATTEST_ABSENT`] or
+    /// [`ATTEST_UNKNOWN`]: whether the installed file is the one the delivery
+    /// path staged for the version it claims.
+    attestation: String,
 }
 
 /// One `host release` invocation, run for one `host-behind` binary.
@@ -726,6 +769,51 @@ async fn artefact_version(
 /// Read-only, and strictly so: nothing is fetched, nothing is written, no
 /// unit is restarted, and no credential is printed — the only values emitted
 /// are binary names, versions, paths, unit labels and launchd state.
+/// Whether the installed artefact is the copy the delivery path staged for
+/// the version it claims.
+///
+/// Host-local and cheap: `cmp -s` against
+/// `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, which
+/// `host release` writes and verifies against the canonical manifest's
+/// SHA-256 before it installs anything. No network, no manifest fetch, and no
+/// second opinion needed about what a version string means — a local build
+/// claiming a released version has no staged copy to match.
+async fn attest_installed(
+    target: &ComputeTarget,
+    runner: &Runner,
+    home: &str,
+    binary: &str,
+    root: &str,
+    version: &str,
+) -> Result<&'static str, DeployError> {
+    if version.is_empty() || root.is_empty() || !host_release::is_exact_semver(version) {
+        return Ok(ATTEST_UNKNOWN);
+    }
+    let platform = target.release_platform.trim();
+    if platform.is_empty() {
+        return Ok(ATTEST_UNKNOWN);
+    }
+    let staged = format!("{home}/.stado/releases/{binary}/{version}/{platform}/{binary}");
+    let quoted_staged = crate::deploy::shlex_quote(&staged);
+    if !host_channel::remote_test(target, &format!("-f {quoted_staged}"), runner).await? {
+        return Ok(ATTEST_ABSENT);
+    }
+    // A byte comparison, not a digest: the two files are already on the same
+    // disk, `cmp -s` reads no further than the first difference, and there is
+    // no hash to agree on between this process and the host.
+    let same = host_channel::run_command(
+        target,
+        &format!(
+            "/usr/bin/cmp -s {} {quoted_staged}",
+            crate::deploy::shlex_quote(root)
+        ),
+        runner,
+    )
+    .await?
+    .ok();
+    Ok(if same { ATTEST_MATCH } else { ATTEST_DIFFERS })
+}
+
 async fn probe_installed_versions(
     target: &ComputeTarget,
     runner: &Runner,
@@ -763,6 +851,14 @@ async fn probe_installed_versions(
                 (root, version)
             };
 
+        // Provenance, asked host-locally: the delivery path stages every
+        // release it installs at
+        // `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`,
+        // digest-verified against the canonical manifest on the way in. If the
+        // version these bytes claim has no staged copy, or the installed file
+        // is not that copy, the bytes did not come through delivery.
+        let attestation = attest_installed(target, runner, &home, binary, &root, &version).await?;
+
         let mut unit = "none".to_string();
         let mut state = "none".to_string();
         if let Some((label, path, kind)) =
@@ -773,7 +869,7 @@ async fn probe_installed_versions(
         }
 
         out.push_str(&format!(
-            "binary={} version={} root={} unit={} state={}\n",
+            "binary={} version={} root={} unit={} state={} attestation={}\n",
             binary,
             if version.is_empty() {
                 UNKNOWN
@@ -783,6 +879,7 @@ async fn probe_installed_versions(
             if root.is_empty() { "none" } else { &root },
             unit,
             state,
+            attestation,
         ));
     }
     out.push_str(&format!("# binaries {count}\n"));
@@ -819,6 +916,8 @@ fn parse_report(stdout: &str) -> BTreeMap<String, Installed> {
                 entry.unit = value.to_string();
             } else if let Some(value) = token.strip_prefix("state=") {
                 entry.state = value.to_string();
+            } else if let Some(value) = token.strip_prefix("attestation=") {
+                entry.attestation = value.to_string();
             }
         }
         let Some(binary) = binary else {
@@ -826,6 +925,9 @@ fn parse_report(stdout: &str) -> BTreeMap<String, Installed> {
         };
         if host_release::is_exact_semver(raw_version) {
             entry.version = Some(raw_version.to_string());
+        }
+        if entry.attestation.is_empty() {
+            entry.attestation = ATTEST_UNKNOWN.to_string();
         }
         reported.insert(binary.to_string(), entry);
     }
@@ -914,6 +1016,44 @@ fn verdict_rows(
                 Err(_) => None,
             };
             let installed = entry.and_then(|entry| entry.version.clone());
+            let attestation = entry
+                .map(|entry| entry.attestation.as_str())
+                .unwrap_or(ATTEST_UNKNOWN);
+            // Provenance is judged before drift, because drift between a
+            // declaration and bytes nobody delivered is not the finding: the
+            // bytes are. Reading these as `host-ahead` is what let a local
+            // build offer to promote its own version into the registry.
+            let unattested = match attestation {
+                ATTEST_ABSENT => Some(format!(
+                    "the host runs {} and no delivered copy of {} is staged at \
+                     $HOME/.stado/releases; these bytes did not come through \
+                     `stado host release`, and --apply will not move the declaration to \
+                     a version it cannot attest",
+                    installed.as_deref().unwrap_or(UNKNOWN),
+                    installed.as_deref().unwrap_or(UNKNOWN)
+                )),
+                ATTEST_DIFFERS => Some(format!(
+                    "the host runs {} and the staged copy of {} does not match the installed \
+                     file byte for byte; the binary was replaced after delivery",
+                    installed.as_deref().unwrap_or(UNKNOWN),
+                    installed.as_deref().unwrap_or(UNKNOWN)
+                )),
+                _ => None,
+            };
+            if let Some(detail) = unattested {
+                return Row {
+                    binary: binary.clone(),
+                    declared: declared_version.clone(),
+                    installed,
+                    verdict: UNATTESTED,
+                    detail,
+                    root: entry.map(|entry| entry.root.clone()).unwrap_or_default(),
+                    unit: entry.map(|entry| entry.unit.clone()).unwrap_or_default(),
+                    state: entry.map(|entry| entry.state.clone()).unwrap_or_default(),
+                    running_binary: None,
+                    binary_matches_process: None,
+                };
+            }
             let (verdict, detail) = match (&installed, reported) {
                 (Some(version), _) if version == declared_version => (IN_SYNC, String::from("-")),
                 (Some(version), _) => match version_order(version, declared_version) {
@@ -1080,6 +1220,22 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 /// command that moves the declaration to the observed version instead.
 async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedPass {
     let mut pass = AppliedPass::default();
+    // Refused for the opposite reason to `host-ahead`, and the remediation is
+    // deliberately not `declare-version`: writing an unattested version into
+    // the registry is the failure, not the fix. The way out is a delivery of a
+    // published version, which restores both provenance and agreement.
+    for row in rows.iter().filter(|row| row.verdict == UNATTESTED) {
+        pass.refused.push(Refused {
+            binary: row.binary.clone(),
+            declared: row.declared.clone(),
+            installed: row.installed_cell().to_string(),
+            remediation: format!(
+                "stado host release {target} --binary {} --version {} (deliver a published \
+                 version; do NOT declare-version onto bytes the fleet cannot attest)",
+                row.binary, row.declared
+            ),
+        });
+    }
     for row in rows.iter().filter(|row| row.verdict == HOST_AHEAD) {
         let remediation = format!(
             "stado host declare-version {target} --binary {} --version {}",
@@ -1261,8 +1417,20 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
     }
     let behind = rows.iter().filter(|row| row.verdict == HOST_BEHIND).count();
     let ahead = rows.iter().filter(|row| row.verdict == HOST_AHEAD).count();
-    if behind + ahead == 0 {
+    let unattested = rows.iter().filter(|row| row.verdict == UNATTESTED).count();
+    if behind + ahead + unattested == 0 {
         return Ok(());
+    }
+    // Named first and loudest: a version the fleet cannot attest outranks a
+    // version it can attest and disagrees with.
+    if unattested != 0 {
+        eprintln!(
+            "{unattested} declared binary/binaries run bytes this fleet cannot attest: \
+             the version they claim has no delivered copy staged on the host, or the \
+             installed file is not the one that was staged. A version string is not \
+             provenance. Deliver a published version with `stado host release`; do not \
+             move the declaration onto them"
+        );
     }
     if behind != 0 {
         eprintln!(

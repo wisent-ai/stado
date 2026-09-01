@@ -89,7 +89,16 @@ async fn agent_grant_checks() -> Vec<Check> {
             "agent.skarbiec is not configured (consumer/token_file missing)".to_string(),
         )];
     }
-    let client = match Client::new(url, consumer, token_file) {
+    // This check runs wherever `fleet doctor` is invoked, so the only thing it
+    // knows about the agent grant is the path it was configured with: on an
+    // agent VM that is the platform's one-shot handoff, and on the control
+    // plane it is a provisioned file that stays put.
+    let client = match Client::new(
+        url,
+        consumer,
+        token_file,
+        crate::skarbiec::GrantMode::for_grant_file(token_file),
+    ) {
         Ok(client) => client,
         Err(exc) => return vec![fail("agent-grant", exc.to_string())],
     };

@@ -379,7 +379,8 @@ fn registry(home: &Path, storage: &Path, public_key: &str, platform: &str) {
                             "home": home,
                             "state_dir": home.join(".stado/release-state"),
                             "runtime_root": home.join(".stado/run"),
-                            "logs_root": home.join(".stado/logs")
+                            "logs_root": home.join(".stado/logs"),
+                            "readiness_path": "/healthz"
                         }
                     }
                 }

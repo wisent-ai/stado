@@ -226,6 +226,7 @@ async fn admin_credential(item: &str, field: &str) -> Result<String, DeployError
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|error| DeployError(error.to_string()))?;
     client

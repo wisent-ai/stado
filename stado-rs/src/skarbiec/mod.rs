@@ -130,19 +130,66 @@ pub(crate) fn read_grant(path: &str) -> Result<String, SkarbiecError> {
     Ok(token)
 }
 
-pub(crate) static AGENT_GRANTS: LazyLock<Mutex<HashMap<(String, String), String>>> =
+/// Bearers of transient handoffs, keyed by consumer and grant file. A transient
+/// grant is handed off once and erased from disk, so this cache is what keeps
+/// the process able to authenticate for the rest of its life.
+pub(crate) static TRANSIENT_GRANTS: LazyLock<Mutex<HashMap<(String, String), String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// The directory the cloud agent extensions hand a grant off in. It is created
+/// and populated by the platform, not named by whoever wrote the deployment
+/// configuration, and a file in it exists to be consumed once and removed.
 const TRANSIENT_AGENT_GRANT_DIR: &str = "/run/stado-agent-credentials";
 
-/// Erase the protected-settings handoff after an agent has cached its grant.
-/// Persistent local/Darwin agent grants live elsewhere and intentionally
-/// survive process restarts.
-pub(crate) fn erase_transient_agent_grant(path: &str, byte_count: usize) {
-    let path = Path::new(path);
-    if path.parent() != Some(Path::new(TRANSIENT_AGENT_GRANT_DIR)) {
-        return;
+/// How a client's grant file is meant to be consumed.
+///
+/// Stated by each construction site, never inferred inside the read path. It
+/// used to be inferred twice, from two different facts, and the two could
+/// disagree: `request_token` keyed caching and erasure on the consumer name
+/// ending in `-agent`, while the erase itself re-derived the same decision from
+/// the grant file's parent directory. Both disagreements were reachable — a
+/// `-agent` consumer whose grant lives outside the handoff directory cached its
+/// bearer for the life of the process while the erase silently did nothing, so
+/// a rotated grant was never picked up; and a consumer not named `-agent` whose
+/// grant *is* the handoff re-read a file that was never erased, leaving a
+/// one-shot bearer readable on disk for the life of the machine. One declared
+/// fact, honoured in one place, is why they can no longer disagree.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GrantMode {
+    /// A one-shot handoff: read once, kept in this process for the rest of its
+    /// life, and erased from disk immediately. The file is gone after the first
+    /// read, so re-reading it would fail every later request.
+    TransientHandoff,
+    /// A grant file that stays where it is: re-read on every request, so a
+    /// rotated grant is picked up without a restart. Never erased.
+    RereadPerRequest,
+}
+
+impl GrantMode {
+    /// The mode implied by where the platform put the grant file.
+    ///
+    /// A site that knows nothing about the grant beyond the path it was
+    /// configured with can state this: the cloud agent extensions write a
+    /// one-shot bearer into [`TRANSIENT_AGENT_GRANT_DIR`] and nothing else
+    /// does, so the placement is a fact about the grant rather than a guess
+    /// about its name. This is a way for a caller to *state* a mode; it is not
+    /// a gate inside the read path.
+    pub fn for_grant_file(token_file: &str) -> Self {
+        if Path::new(token_file.trim()).parent() == Some(Path::new(TRANSIENT_AGENT_GRANT_DIR)) {
+            return Self::TransientHandoff;
+        }
+        Self::RereadPerRequest
     }
+}
+
+/// Erase a one-shot handoff once its bearer has been cached.
+///
+/// The caller has already declared that this file is a transient handoff, so
+/// there is no second gate here. Re-deriving that fact from the path — which is
+/// what this function used to do — is exactly the silent veto that let caching
+/// and erasure disagree, and it made a declared mode unenforceable.
+pub(crate) fn erase_transient_grant(path: &str, byte_count: usize) {
+    let path = Path::new(path);
     if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
         let _ = std::io::copy(
             &mut std::io::repeat(u8::MIN).take(u64::try_from(byte_count).unwrap_or(u64::MAX)),

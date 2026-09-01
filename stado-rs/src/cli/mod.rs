@@ -1513,6 +1513,13 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Repair Skarbiec acquisition state left by a different service user.
+    #[command(name = "recover-skarbiec-acquisition-state")]
+    RecoverSkarbiecAcquisitionState {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -1693,6 +1700,37 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read TARGET's crontab, and optionally prune one entry from it.
+    ///
+    /// The periodic table is the one place a fleet host can declare a
+    /// process that no launchd domain and no registry document mentions.
+    /// charless-mac-mini carried four `@reboot` entries outside both, two of
+    /// which restart duplicates that had just been retired with verified
+    /// postconditions — so every repair on that host was one reboot from
+    /// coming back, and the only way to change the table was a bare
+    /// `crontab -e` over ssh.
+    ///
+    /// `--prune` previews by default and refuses anything but a single
+    /// matching line that references `$HOME/.stado`; `--apply` saves the
+    /// whole table under `$HOME/.stado/cron-backups` first and prints the
+    /// `--restore` command that puts it back.
+    Cron {
+        target: String,
+        /// Literal text naming the ONE entry to remove; usually the script's
+        /// path. Refused when it reaches more than one line.
+        #[arg(long)]
+        prune: Option<String>,
+        /// Install a table saved by an earlier `--prune --apply`.
+        #[arg(long, conflicts_with = "prune")]
+        restore: Option<String>,
+        /// Change the table. Without it, `--prune` only reports what it would
+        /// remove.
+        #[arg(long)]
+        apply: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
     /// register it against the host's fleet vault, then print the reconciled
     /// status.
@@ -1737,6 +1775,20 @@ enum HostCommands {
     WelesActivity {
         target: String,
         /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the authenticated artifact inventory, or one exact artifact, from
+    /// a completed Weles browser run on TARGET.
+    #[command(name = "weles-run-diagnostics")]
+    WelesRunDiagnostics {
+        target: String,
+        /// Weles run identifier returned by the browser task.
+        run_id: String,
+        /// Exact artifact path from the run inventory.
+        #[arg(long)]
+        file: Option<String>,
+        /// Emit the report as JSON. Binary file content is base64 encoded.
         #[arg(long)]
         json: bool,
     },
@@ -1857,6 +1909,37 @@ enum HostCommands {
     ///
     /// The request is held open for the run, so this reports what the run
     /// produced rather than a queue receipt.
+    /// Activate a release already staged on TARGET by running THAT release's
+    /// own installer, once.
+    ///
+    /// A managed host installs its own releases with the installer inside its
+    /// active release. When that copy is broken the host cannot install the
+    /// release that repairs it - the repair is staged, verified and
+    /// unreachable, and every delivery after it piles up behind the same
+    /// unparseable script. This runs the staged copy instead. Same env file,
+    /// same digest contract, same script; only which copy executes differs.
+    ///
+    /// Refuses if the staged archive does not hash to the digest the
+    /// deployment env file declares, and refuses to run an installer that does
+    /// not parse. Reports the API's state either side, and fails if a port
+    /// that was answering before is silent after.
+    #[command(name = "activate-staged-release")]
+    ActivateStagedRelease {
+        /// Registry host holding the staged release.
+        target: String,
+        /// Product whose coordinate the env file declares, e.g. weles-worker.
+        #[arg(long, default_value = "weles-worker")]
+        product: String,
+        /// Deployment env file naming the release coordinate.
+        #[arg(long, default_value = "$HOME/.config/weles/worker.env")]
+        env_file: String,
+        /// Loopback port whose liveness is checked either side of the run.
+        #[arg(long, default_value_t = 8788)]
+        port: u16,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     #[command(name = "weles-browser-task")]
     WelesBrowserTask {
         target: String,
@@ -1879,6 +1962,15 @@ enum HostCommands {
         /// Exact Weles login item for a named credential trajectory.
         #[arg(long)]
         login_item: Option<String>,
+        /// Bind this run to one account identity, which is what keys the
+        /// browser profile. Weles hashes it into a profile directory and the
+        /// API puts it in the trajectory's `ACCOUNT_ID`, so two runs sharing it
+        /// share cookies and a signed-in session. Without it every run is a
+        /// brand-new device to the site being driven, which is how a sign-in
+        /// that succeeded once cannot be built on and why each attempt draws a
+        /// first-visit risk check.
+        #[arg(long)]
+        account_id: Option<String>,
         /// Give the run a new account identity, which makes Weles create a new
         /// browser profile directory instead of clearing or reusing one.
         #[arg(long)]
@@ -1909,6 +2001,22 @@ enum HostCommands {
         /// rather than silently resolved in the route's favour.
         #[arg(long)]
         sign_in_item: Option<String>,
+        /// Hand every sign-in capability to the agent instead of prefilling the
+        /// first one. For hosts whose installed runtime fills at page load
+        /// without waiting for the field: weles before 0.5.41 spends a
+        /// capability whether or not the input has rendered, so a slow
+        /// identifier page silently costs the fill and cannot be retried. The
+        /// agent redeems each reference on the page that has the field.
+        #[arg(long)]
+        defer_fills: bool,
+        /// The saved-trajectory key. Defaults to the session label, which is
+        /// also the browser profile's name - two different things that only
+        /// look alike. A run whose `done` carried an error is still codified
+        /// under that key and replayed verbatim on the next run, so resuming a
+        /// profile means inheriting the failure that last used it unless this
+        /// names a fresh flow.
+        #[arg(long)]
+        flow_name: Option<String>,
         /// Run with a visible window. Some sign-in flows refuse headless.
         #[arg(long)]
         windowed: bool,
@@ -2533,6 +2641,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveFile { target, path, json } => {
                 host::remove_file(&target, &path, json).await
             }
+            HostCommands::Cron {
+                target,
+                prune,
+                restore,
+                apply,
+                json,
+            } => host::cron(&target, prune.as_deref(), restore.as_deref(), apply, json).await,
             HostCommands::SyncAcquisitionScopes { target, source } => {
                 host::sync_acquisition_scopes(&target, &source).await
             }
@@ -2581,6 +2696,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::RecoverSkarbiecCrypto { target, json } => {
                 host::recover_skarbiec_crypto(&target, json).await
+            }
+            HostCommands::RecoverSkarbiecAcquisitionState { target, json } => {
+                host::recover_skarbiec_acquisition_state(&target, json).await
             }
             HostCommands::UnitLog {
                 target,
@@ -2650,6 +2768,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesActivity { target, json } => {
                 host::weles_activity(&target, json).await
             }
+            HostCommands::WelesRunDiagnostics {
+                target,
+                run_id,
+                file,
+                json,
+            } => host::weles_run_diagnostics(&target, &run_id, file.as_deref(), json).await,
             HostCommands::WelesImageInspect { target, url, json } => {
                 host::weles_image_inspect(&target, &url, json).await
             }
@@ -2688,6 +2812,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 })
                 .await
             }
+            HostCommands::ActivateStagedRelease {
+                target,
+                product,
+                env_file,
+                port,
+                json,
+            } => host::activate_staged_release(&target, &product, &env_file, port, json).await,
             HostCommands::WelesBrowserTask {
                 target,
                 url,
@@ -2696,10 +2827,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 action,
                 allowlist_file,
                 login_item,
+                account_id,
                 fresh_profile,
                 allow_login,
                 sign_in_origin,
                 sign_in_item,
+                defer_fills,
+                flow_name,
                 windowed,
                 json,
             } => {
@@ -2711,10 +2845,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     action: &action,
                     allowlist_file: &allowlist_file,
                     login_item: login_item.as_deref(),
+                    account_id: account_id.as_deref(),
                     fresh_profile,
                     allow_login,
                     sign_in_origin: sign_in_origin.as_deref(),
                     sign_in_item: sign_in_item.as_deref(),
+                    defer_fills,
+                    flow_name: flow_name.as_deref(),
                     windowed,
                     json,
                 })

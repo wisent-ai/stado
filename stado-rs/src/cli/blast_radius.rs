@@ -328,6 +328,7 @@ async fn inspect_credential_store() -> CredentialStoreReport {
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
     ) {
         Ok(client) => client,
         Err(error) => {

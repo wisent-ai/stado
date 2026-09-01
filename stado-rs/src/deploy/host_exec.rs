@@ -160,6 +160,23 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               arguments or environment values; it is read-only and cannot expose secret argv",
     },
     ApprovedCommand {
+        argv: &[
+            "/bin/ps",
+            "axww",
+            "-o",
+            "pid",
+            "-o",
+            "ppid",
+            "-o",
+            "cgroup:200",
+            "-o",
+            "comm",
+        ],
+        why: "lists process identifiers, executable names, and their Linux control-group paths \
+              without command arguments or environment values; it is read-only and identifies \
+              the exact systemd unit behind a duplicate queue agent",
+    },
+    ApprovedCommand {
         argv: &["/usr/sbin/netstat", "-anv", "-p", "tcp"],
         why: "reads the kernel TCP socket table without connecting to any endpoint; fixed \
               flags expose listeners and owning processes but accept no remote address",
@@ -171,6 +188,21 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               process holds this port - was answered over ssh instead. The flags fix the \
               selection to listeners and take no argument, so it cannot be pointed at a file, \
               a user, or a remote address",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/crontab", "-l"],
+        why: "prints the calling account's own crontab. `-l` is the read-only verb and takes \
+              no argument: `-e` opens an editor, `-r` deletes the table, and neither is in \
+              this table nor reachable through it; `-u <user>` would read another account's \
+              and is deliberately absent. Added 2026-08-31: a process nobody could name had \
+              been overwriting charless-mac-mini's janitor state file every four minutes \
+              since at least that morning, with the default outcome and no writer \
+              attribution, while the queue agent's own broadcast reported a healthy pass in \
+              the same second. It is not a launchd job - 47 undeclared fleet labels on that \
+              host, none of them a janitor - and it holds the run lock too briefly to be \
+              caught by sampling, which leaves a periodic table as the only remaining place \
+              it can be declared. Every reader in this group could see the file change and \
+              none could name the writer",
     },
     ApprovedCommand {
         argv: &["/usr/bin/uname", "-a"],

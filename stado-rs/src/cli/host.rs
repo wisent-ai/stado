@@ -304,8 +304,16 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     let token_file = crate::config_file::expand_tilde(raw.trim())
         .to_string_lossy()
         .into_owned();
-    let client = crate::skarbiec::Client::new(url.trim(), &consumer, &token_file)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    // The beacon's grant is an operator-provisioned file that stays where it is:
+    // this runs on a schedule for the life of the host, so it must re-read and
+    // pick up a rotated grant, and it must never erase the file it depends on.
+    let client = crate::skarbiec::Client::new(
+        url.trim(),
+        &consumer,
+        &token_file,
+        crate::skarbiec::GrantMode::RereadPerRequest,
+    )
+    .map_err(|error| CmdError::click(error.to_string()))?;
     // One field, named. The whole-item read this used to do is exactly what
     // the broker stopped answering, and the beacon died with it: the host
     // published nothing for twenty-one hours while `stado service list` went
@@ -3736,6 +3744,71 @@ pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), Cmd
     Ok(())
 }
 
+/// `stado host cron TARGET [--prune TEXT] [--apply] [--restore PATH]` — the
+/// periodic table, and the one sanctioned way to change it.
+///
+/// A crontab is the last place on a fleet host where a process can be
+/// declared outside both launchd and the registry, which is why every repair
+/// this product makes to a unit can be undone by a reboot. See
+/// [`crate::deploy::host_cron`] for the guards; they are on the host.
+pub async fn cron(
+    target: &str,
+    prune: Option<&str>,
+    restore: Option<&str>,
+    apply: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    if apply && prune.is_none() {
+        return Err(CmdError::usage(
+            "--apply changes a table, so it needs --prune to say which line",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let outcome = match restore {
+        Some(path) => crate::deploy::host_cron::restore(&resolved, path, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?,
+        None => crate::deploy::host_cron::prune(&resolved, prune.unwrap_or(""), apply, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&outcome.to_json())?);
+    } else {
+        println!("\n{}: crontab {}", outcome.host, outcome.state);
+        if !outcome.detail.is_empty() {
+            println!("  {}", outcome.detail);
+        }
+        if !outcome.table.is_empty() {
+            println!("\nthe table as this host has it:");
+            for row in &outcome.table {
+                println!("  {row}");
+            }
+        }
+        if !outcome.matched.is_empty() {
+            println!("\nwhat the pattern reached:");
+            for row in &outcome.matched {
+                println!("  {row}");
+            }
+        }
+        // Printed with the change, never left for the operator to compose.
+        if let Some(command) = outcome.restore_command() {
+            println!("\nthe table it replaced is saved; this puts it back:\n  {command}");
+        }
+    }
+    if outcome.succeeded() {
+        Ok(())
+    } else {
+        Err(CmdError::click(format!(
+            "{}: crontab {} — {}",
+            outcome.host, outcome.state, outcome.detail
+        )))
+    }
+}
+
 /// A vault item id or tag: the alphabet `release_component` allows, plus the
 /// `:` that every one of these names is built out of
 /// (`provider:kimi:brama-sub-…`, `brama:agent:wisent-app`).
@@ -4803,6 +4876,46 @@ pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<
     Ok(())
 }
 
+/// Repair Skarbiec's short-lived acquisition state after a service-user cutover.
+pub async fn recover_skarbiec_acquisition_state(
+    target: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-acquisition-state.sh"),
+        std::time::Duration::from_secs(90),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec acquisition-state recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    let detail = recovered.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// Restore the core object API without depending on the API being available.
 ///
 /// The checked-in host helper only mutates an unavailable listener. It pins the
@@ -5806,10 +5919,18 @@ pub struct BrowserTaskRequest<'a> {
     pub action: &'a str,
     pub allowlist_file: &'a str,
     pub login_item: Option<&'a str>,
+    /// The account identity that keys the browser profile, when the caller
+    /// pins one so a later run can reuse its session.
+    pub account_id: Option<&'a str>,
     pub fresh_profile: bool,
     pub allow_login: bool,
     pub sign_in_origin: Option<&'a str>,
     pub sign_in_item: Option<&'a str>,
+    /// Give the agent every capability rather than prefilling the first: see
+    /// the flag's own help for the runtime version this exists for.
+    pub defer_fills: bool,
+    /// The saved-trajectory key, when it must differ from the profile's label.
+    pub flow_name: Option<&'a str>,
     pub windowed: bool,
     pub json: bool,
 }
@@ -5828,10 +5949,13 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         action,
         allowlist_file,
         login_item,
+        account_id,
         fresh_profile,
         allow_login,
         sign_in_origin,
         sign_in_item,
+        defer_fills,
+        flow_name,
         windowed,
         json,
     } = request;
@@ -5904,7 +6028,17 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
             return Err(CmdError::usage("--login-item requires --allow-login"));
         }
     }
-    let account_id = fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4()));
+    // A pinned identity is the caller's; otherwise a fresh profile still needs
+    // one, because the API refuses `fresh_profile` without an account to bind
+    // the new directory to.
+    let account_id = match account_id {
+        Some(pinned) => Some(
+            crate::deploy::weles_capture::checked_account_id(pinned)
+                .map_err(|error| CmdError::click(error.to_string()))?
+                .to_string(),
+        ),
+        None => fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4())),
+    };
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -5920,8 +6054,8 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
     // Only now: a capability is single-use and expires, so it is issued after
     // the action has been shown to be one this host accepts, never before.
     // Issued ON that host, because redemption is a socket there.
-    let credential_prefill = match &sign_in {
-        None => Vec::new(),
+    let (credential_prefill, credential_deferred) = match &sign_in {
+        None => (Vec::new(), Vec::new()),
         Some((origin, item)) => {
             // The identity comes from the catalog this host's vault was
             // registered from, never from a constant here: Skarbiec looks a
@@ -5944,6 +6078,12 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                     prefill.agents.join(", "),
                     resolved.name
                 );
+                if !prefill.deferred.is_empty() {
+                    println!(
+                        "deferred:  {} field(s) handed over unspent, for the page that has them",
+                        prefill.deferred.len()
+                    );
+                }
                 if !prefill.unconfirmed.is_empty() {
                     println!(
                         "note:      this channel could not open {} to confirm the field; the \
@@ -5954,7 +6094,17 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                     );
                 }
             }
-            prefill.entries
+            if defer_fills {
+                // Nothing is prefilled: on a runtime that fills at load without
+                // waiting, a capability is spent whether or not the input has
+                // rendered, and a spent one cannot be retried. The agent acts
+                // after the page is up, so it can see the field it fills.
+                let mut all = prefill.entries;
+                all.extend(prefill.deferred);
+                (Vec::new(), all)
+            } else {
+                (prefill.entries, prefill.deferred)
+            }
         }
     };
 
@@ -5970,9 +6120,10 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         headless: !windowed,
         credential_prefill,
     };
-    let outcome = crate::deploy::weles_browser_task::submit(target, &task)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let outcome =
+        crate::deploy::weles_browser_task::submit(target, &task, flow_name, &credential_deferred)
+            .await
+            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
 
     if json {
         println!(
@@ -6007,6 +6158,51 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
             resolved.name, outcome.run_id
         )))
     }
+}
+
+/// Read one completed browser run through Weles' authenticated diagnostic API.
+pub async fn weles_run_diagnostics(
+    target: &str,
+    run_id: &str,
+    file: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let Some(path) = file else {
+        let manifest = crate::deploy::weles_capture::run_diagnostics(&channel, run_id)
+            .await
+            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        print_json(&manifest);
+        return Ok(());
+    };
+    let bytes = crate::deploy::weles_capture::run_diagnostic_file(&channel, run_id, path)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let byte_count = bytes.len();
+    let (encoding, content) = match String::from_utf8(bytes) {
+        Ok(text) => ("utf8", text),
+        Err(error) => ("base64", STANDARD.encode(error.into_bytes())),
+    };
+    if json_output {
+        print_json(&json!({
+            "target": target,
+            "run_id": run_id,
+            "path": path,
+            "bytes": byte_count,
+            "encoding": encoding,
+            "content": content,
+        }));
+    } else if encoding == "utf8" {
+        print!("{content}");
+    } else {
+        println!("base64:{content}");
+    }
+    Ok(())
 }
 
 pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Result<(), CmdError> {
@@ -7494,6 +7690,191 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
         );
     } else {
         print!("{}", output.stdout);
+    }
+    Ok(())
+}
+
+/// `stado host activate-staged-release TARGET --product P` — run the staged
+/// release's OWN installer, once, on a host whose installed one cannot.
+///
+/// The host installs its own releases by running the installer that ships
+/// inside the active release. When that copy is broken the host cannot install
+/// the release that repairs it, and no amount of correct delivery reaches it:
+/// charless-mac-mini sat with 0.5.43 staged in its local release root and an
+/// activator logging a syntax error once a minute. This runs the staged copy
+/// instead of the installed one. Nothing else changes - same env file, same
+/// digest contract, same script.
+pub async fn activate_staged_release(
+    target: &str,
+    product: &str,
+    env_file: &str,
+    port: u16,
+    json: bool,
+) -> Result<(), CmdError> {
+    use crate::deploy::staged_release;
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let click = |error: crate::deploy::DeployError| CmdError::click(error.to_string());
+
+    let fetched = crate::deploy::service_file_fetch::fetch_file(&resolved, env_file, &runner)
+        .await
+        .map_err(click)?;
+    if !fetched.ok() {
+        return Err(CmdError::click(format!(
+            "{}: could not read {env_file}: {}",
+            resolved.name, fetched.report.file_state
+        )));
+    }
+    let body = String::from_utf8_lossy(&fetched.content).into_owned();
+    let coordinate = staged_release::coordinate(&body, product).map_err(click)?;
+
+    let platform = crate::deploy::host_channel::run_script(
+        &resolved,
+        "set -eu\ncase \"$(uname -s)/$(uname -m)\" in\n  Darwin/arm64) echo darwin-arm64 ;;\n  \
+         Darwin/x86_64) echo darwin-x64 ;;\n  Linux/aarch64) echo linux-arm64 ;;\n  \
+         Linux/x86_64) echo linux-x64 ;;\n  *) echo unknown ;;\nesac\n",
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    let platform = platform.stdout.trim().to_string();
+    if platform == "unknown" {
+        return Err(CmdError::click(format!(
+            "{}: could not name this host's release platform",
+            resolved.name
+        )));
+    }
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(click)?;
+    let archive = staged_release::expand_home(
+        &staged_release::archive_path(&coordinate, product, &platform),
+        &home,
+    )
+    .map_err(click)?;
+
+    // Refusal one: the staged bytes must be the bytes the coordinate declares.
+    let hashed = crate::deploy::host_channel::run_script(
+        &resolved,
+        &format!(
+            "set -eu\ntest -f {0} || {{ echo missing; exit 0; }}\nshasum -a 256 {0}\n",
+            crate::deploy::shlex_quote(&archive)
+        ),
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    let Some(observed) = staged_release::parse_shasum(&hashed.stdout) else {
+        return Err(CmdError::click(format!(
+            "{}: no staged archive at {archive} to activate",
+            resolved.name
+        )));
+    };
+    staged_release::digest_verdict(&coordinate.sha256, observed).map_err(click)?;
+
+    let before = staged_release::installed_version(&resolved, &runner)
+        .await
+        .map_err(click)?;
+    let api_before = staged_release::api_answering(&resolved, port, &runner).await;
+    if before == coordinate.version {
+        if !json {
+            println!(
+                "{}: already running {product} {}; nothing to activate",
+                resolved.name, coordinate.version
+            );
+        }
+        return Ok(());
+    }
+
+    let outcome = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &staged_release::activation_script(&archive, &coordinate.version),
+        std::time::Duration::from_secs(900),
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+
+    let after = staged_release::installed_version(&resolved, &runner)
+        .await
+        .map_err(click)?;
+    let api_after = staged_release::api_answering(&resolved, port, &runner).await;
+    let log_tail = outcome
+        .stdout
+        .lines()
+        .chain(outcome.stderr.lines())
+        .filter(|line| line.contains("STADO_ACTIVATE"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "host": resolved.name,
+                "product": product,
+                "declared": coordinate.version,
+                "installed_before": before,
+                "installed_after": after,
+                "api_before": api_before,
+                "api_after": api_after,
+                "log": log_tail,
+            }))?
+        );
+    } else {
+        println!("host:      {}", resolved.name);
+        println!("declared:  {product} {}", coordinate.version);
+        println!("installed: {before} -> {after}");
+        println!(
+            "api:       {} -> {}",
+            if api_before { "answering" } else { "silent" },
+            if api_after { "answering" } else { "silent" }
+        );
+        if !log_tail.is_empty() {
+            println!("{log_tail}");
+        }
+    }
+
+    // The installer restarts what it activates; an API that was serving before
+    // and is silent after is a failed activation, not a completed one.
+    if api_before && !api_after {
+        return Err(CmdError::click(format!(
+            "{}: {product} {after} is installed but the API on {port} stopped answering; \
+             it was answering before this ran",
+            resolved.name
+        )));
+    }
+    // `installed_version` reads the link, so a revert shows up as an unchanged
+    // version even though the installer did everything right. The link either
+    // side of the settle window is what separates the two.
+    let activated = log_tail
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_ACTIVATE_LINK "))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let settled = log_tail
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_ACTIVATE_SETTLED "))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !activated.is_empty() && activated != settled {
+        return Err(CmdError::click(format!(
+            "{}: the staged installer activated {activated}, and something on that host put the \
+             runtime link back to {settled} within thirty seconds; the release is installed and \
+             something else is holding the host on the old one",
+            resolved.name
+        )));
+    }
+    if after != coordinate.version {
+        return Err(CmdError::click(format!(
+            "{}: the staged installer ran but {product} is still {after}, not {}",
+            resolved.name, coordinate.version
+        )));
     }
     Ok(())
 }
