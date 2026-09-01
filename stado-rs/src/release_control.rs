@@ -108,6 +108,16 @@ pub struct ProductReleasePolicy {
     pub previous: Option<DesiredRelease>,
 }
 
+/// The readiness path a `replace` rollout probes when its target declares
+/// none.
+///
+/// `/healthz` is the path every managed Stado service already answers on, and
+/// the one every `readiness_path` in this fleet's registry has ever carried.
+/// It is a default rather than a requirement because requiring the key made
+/// the registry unwritable by the versions running in the fleet — see the
+/// comment at the rollout-target validation.
+pub const DEFAULT_REPLACE_READINESS_PATH: &str = "/healthz";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseTargetPolicy {
@@ -118,9 +128,12 @@ pub struct ReleaseTargetPolicy {
     pub runtime_root: String,
     pub logs_root: String,
     /// Serving coordinates. Blue-green targets require the stable bind,
-    /// candidate ports and readiness path. Replace targets require only the
-    /// readiness path: they swap one service tree in place, then prove that
-    /// exact release through the service's own HTTP contract.
+    /// candidate ports and readiness path. Replace targets swap one service
+    /// tree in place and then prove that exact release through the service's
+    /// own HTTP contract, so they MAY omit `readiness_path` and take
+    /// [`DEFAULT_REPLACE_READINESS_PATH`]: 0.13.20 and 0.13.23 refuse a
+    /// replace target that carries the key at all, so requiring it here left
+    /// no document both they and this version accept.
     #[serde(default)]
     pub stable_bind: Option<String>,
     #[serde(default)]
@@ -503,11 +516,43 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             if !target_names.contains(target.as_str()) {
                 return Err(format!("{location}.targets.{target}: unknown target"));
             }
-            // Blue-green and replace share the readiness contract. Only
+            // Blue-green and replace share the readiness contract, and only
             // blue-green owns serving coordinates for a second candidate.
-            let readiness_path = target_policy.readiness_path.as_deref().ok_or_else(|| {
-                format!("{location}.targets.{target}: rollout target requires readiness_path")
-            })?;
+            //
+            // A replace target may OMIT `readiness_path` and take
+            // [`DEFAULT_REPLACE_READINESS_PATH`]. That is not a convenience:
+            // requiring the key here made this document unwritable by the
+            // fleet that has to obey it. Stado 0.13.20 and 0.13.23 REFUSE a
+            // replace target carrying `readiness_path` at all — "replace
+            // rollout forbids stable_bind, candidate_ports and
+            // readiness_path" — and this validator required it, so on
+            // 2026-09-01 no single registry document satisfied both: with the
+            // key present the always-on Mac's 0.13.20 queue agent could
+            // resolve no policy and stopped scanning its disk for twelve
+            // minutes; with it absent every write from the operator's own
+            // installed 0.13.26 binary was refused. The fleet could only be
+            // written by a build older than the one it was running, and the
+            // workaround was to keep that older build around. Validation is
+            // whole-document, so one field in one product's rollout froze
+            // every domain — instance 16's blast radius with instance 17's
+            // version skew.
+            //
+            // Accepting the absence is the additive shape: it admits both the
+            // old constraint and the new one, and any document written for
+            // either version validates under both for as long as both exist.
+            let readiness_path = match policy.strategy.kind {
+                StrategyKind::Replace => target_policy
+                    .readiness_path
+                    .as_deref()
+                    .unwrap_or(DEFAULT_REPLACE_READINESS_PATH),
+                StrategyKind::BlueGreen => {
+                    target_policy.readiness_path.as_deref().ok_or_else(|| {
+                        format!(
+                            "{location}.targets.{target}: blue-green rollout requires readiness_path"
+                        )
+                    })?
+                }
+            };
             let serving = match policy.strategy.kind {
                 StrategyKind::BlueGreen => Some(target_policy.blue_green_serving().map_err(
                     |_| {
