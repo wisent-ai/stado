@@ -1615,26 +1615,41 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
         .map_err(|exc| CmdError::click(exc.to_string()))?;
 
-    // The ssh half, through the same channel and the same fixed program
-    // `host ping` sends, so the two commands can never disagree about whether
-    // a host answers. A refused connection is this command's answer, not its
-    // failure: "does not answer ssh" is precisely what was asked.
-    let ssh = crate::deploy::host_channel::run_program(
+    // Probe every declared route so a working primary does not hide a broken
+    // fallback. The real command below still chooses in declaration order and
+    // runs once.
+    let (connection_probes, connection_probe_error) =
+        match crate::deploy::host_channel::probe_ssh_connections(resolved, &runner).await {
+            Ok(probes) => (probes, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+    let connection_degraded =
+        connection_probe_error.is_some() || connection_probes.iter().any(|probe| !probe.reachable);
+    let ssh = crate::deploy::host_channel::run_program_with_connection(
         resolved,
         crate::deploy::host_ping::REMOTE_PROGRAM,
         &runner,
     )
     .await;
-    let (ssh_reachable, ssh_error) = match &ssh {
-        Ok(output) if output.ok() => (true, None),
-        Ok(output) => (
+    let (ssh_reachable, ssh_error, selected_connection) = match ssh {
+        Ok((output, used)) if output.ok() => {
+            let selected = match used {
+                crate::deploy::host_channel::UsedConnection::Local => "local".to_string(),
+                crate::deploy::host_channel::UsedConnection::Ssh(connection) => {
+                    connection.name.to_string()
+                }
+            };
+            (true, None, Some(selected))
+        }
+        Ok((output, _)) => (
             false,
             Some(crate::deploy::host_channel::last_error_line(
-                output,
+                &output,
                 "ssh failed",
             )),
+            None,
         ),
-        Err(exc) => (false, Some(exc.to_string())),
+        Err(exc) => (false, Some(exc.to_string()), None),
     };
 
     // The one fact neither surface could state, and the reason the mini takes
@@ -1693,6 +1708,17 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     }
     if let Some(detail) = &ssh_error {
         blockers.push(detail.clone());
+    }
+    if let Some(detail) = &connection_probe_error {
+        blockers.push(format!("connection path probes failed: {detail}"));
+    }
+    for probe in connection_probes.iter().filter(|probe| !probe.reachable) {
+        blockers.push(format!(
+            "{} connection path {} did not answer: {}",
+            probe.name,
+            probe.destination,
+            probe.error.as_deref().unwrap_or("SSH probe failed")
+        ));
     }
     if published.is_none() {
         blockers.push(
@@ -1809,7 +1835,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         } else {
             LINK_SILENT
         }
-    } else if refused {
+    } else if refused || connection_degraded {
         LINK_DEGRADED
     } else {
         LINK_HEALTHY
@@ -1831,6 +1857,9 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         "host": resolved.name,
         "beacon_age_seconds": signal.age_seconds,
         "ssh_reachable": ssh_reachable,
+        "selected_connection": &selected_connection,
+        "connection_paths": &connection_probes,
+        "connection_probe_error": &connection_probe_error,
         "session": session.to_json(),
         "path_kind": path_kind,
         "endpoint": from_link("endpoint"),
@@ -1884,6 +1913,27 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             Some(detail) => format!("did not answer: {detail}"),
         }
     );
+    if let Some(detail) = &connection_probe_error {
+        println!("routes:   could not probe: {detail}");
+    } else {
+        for (index, probe) in connection_probes.iter().enumerate() {
+            let label = if index == 0 { "routes:  " } else { "         " };
+            let selected = if selected_connection.as_deref() == Some(probe.name.as_str()) {
+                ", selected"
+            } else {
+                ""
+            };
+            let state = if probe.reachable {
+                format!("answered{selected}")
+            } else {
+                format!(
+                    "did not answer: {}",
+                    probe.error.as_deref().unwrap_or("SSH probe failed")
+                )
+            };
+            println!("{label} {} ({}) {state}", probe.name, probe.destination);
+        }
+    }
     // The headline in the operator's words first, the resolver's own sentence
     // under it. Reversing those two is how `gui/501` becomes the answer to
     // "is anyone logged in on that host".
@@ -6551,14 +6601,15 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
     // specification and the registry target's exact SSH destination. Matching
     // either one alone could end an unrelated channel.
     if let Some(local) = local_forward_port {
-        let ssh = resolved
-            .ssh
-            .as_deref()
-            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-        let mut argv = crate::deploy::host_channel::ssh_options(ssh);
-        let destination = argv
-            .pop()
-            .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+        let destinations = resolved
+            .ssh_connections()
+            .map(|(_, destination)| destination.to_string())
+            .collect::<Vec<_>>();
+        if destinations.is_empty() {
+            return Err(CmdError::click(
+                "registry target has no SSH connection path",
+            ));
+        }
         let spec_prefix = local_forward_spec_prefix(local);
         let listing = tokio::process::Command::new("/bin/ps")
             .args(["ax", "-o", "pid=", "-o", "command="])
@@ -6572,7 +6623,9 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             if !command.contains("ssh")
                 || !command.contains(" -L ")
                 || !command.contains(&spec_prefix)
-                || !command.contains(&destination)
+                || !destinations
+                    .iter()
+                    .any(|destination| command.contains(destination))
             {
                 continue;
             }
@@ -6748,11 +6801,12 @@ pub async fn forward_local(
             "forward-local requires a remote registry target",
         ));
     }
-    let ssh = resolved
-        .ssh
-        .as_deref()
-        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let runner = crate::deploy::production_runner();
+    let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let connection_path = connection.name.to_string();
+    let mut argv = crate::deploy::host_channel::ssh_options(connection.destination);
     let destination = argv
         .pop()
         .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
@@ -6769,6 +6823,11 @@ pub async fn forward_local(
         format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}"),
         destination,
     ]);
+    let key = crate::deploy::ssh_key::materialize(&resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let argv = crate::deploy::ssh_key::add_identity(argv, &key)
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
@@ -6821,12 +6880,13 @@ pub async fn forward_local(
                 "marker": marker,
                 "local_marker": local_marker_path,
                 "transport": "ssh",
+                "connection_path": connection_path,
                 "status": "forwarding",
             }))?
         );
     } else {
         println!(
-            "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH"
+            "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH via {connection_path}"
         );
     }
     Ok(())
@@ -6854,11 +6914,12 @@ pub async fn forward_remote(
             "forward-remote requires a remote registry target",
         ));
     }
-    let ssh = resolved
-        .ssh
-        .as_deref()
-        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let runner = crate::deploy::production_runner();
+    let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let connection_path = connection.name.to_string();
+    let mut argv = crate::deploy::host_channel::ssh_options(connection.destination);
     let destination = argv
         .pop()
         .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
@@ -6875,6 +6936,11 @@ pub async fn forward_remote(
         format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
         destination,
     ]);
+    let key = crate::deploy::ssh_key::materialize(&resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let argv = crate::deploy::ssh_key::add_identity(argv, &key)
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
@@ -6907,12 +6973,13 @@ pub async fn forward_remote(
                 "local": format!("127.0.0.1:{local_port}"),
                 "marker": marker_path,
                 "transport": "ssh",
+                "connection_path": connection_path,
                 "status": "forwarding",
             }))?
         );
     } else {
         println!(
-            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH"
+            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH via {connection_path}"
         );
     }
     Ok(())
@@ -7151,18 +7218,21 @@ async fn stream_file(
             .map_err(|_| CmdError::click("HOME is not set, so the secret path is unknown"))?;
         std::fs::copy(source, std::path::Path::new(&home).join(&staged))?;
     } else {
-        let ssh_target = resolved.ssh.clone().unwrap_or_default();
-        if ssh_target.is_empty() {
-            return Err(CmdError::click(format!(
-                "{target} declares no ssh destination, so the file cannot be delivered"
-            )));
-        }
-        let mut options = crate::deploy::host_channel::ssh_options(&ssh_target);
+        let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let ssh_target = connection.destination;
+        let mut options = crate::deploy::host_channel::ssh_options(ssh_target);
         options.pop();
         let mut argv = vec!["scp".to_string(), "-q".to_string()];
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(source.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
+        let key = crate::deploy::ssh_key::materialize(&resolved.name)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let argv = crate::deploy::ssh_key::add_identity(argv, &key)
+            .map_err(|error| CmdError::click(error.to_string()))?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;

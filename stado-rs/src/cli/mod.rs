@@ -1086,6 +1086,40 @@ enum RegistryHostCommands {
         #[arg(long, value_parser = parse_release_platform)]
         release_platform: String,
     },
+    /// Manage ordered SSH connection paths for an existing host.
+    Path {
+        #[command(subcommand)]
+        command: RegistryHostPathCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryHostPathCommands {
+    /// List the preferred path and ordered fallbacks.
+    List {
+        host: String,
+        /// Emit the path list as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add or replace one connection path.
+    Set {
+        host: String,
+        /// Path identifier (`primary`, `nebula`, `tailscale`, `lan`, ...).
+        path: String,
+        /// SSH destination ([user@]host[:port]) for this path.
+        #[arg(long)]
+        ssh: String,
+        /// Fallback priority starting at 1; omitted preserves its position or appends.
+        #[arg(long)]
+        priority: Option<usize>,
+    },
+    /// Remove one fallback connection path.
+    Remove {
+        host: String,
+        /// Fallback path identifier.
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2455,12 +2489,28 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
-            RegistryCommands::Host(RegistryHostCommands::Add {
-                host,
-                ssh,
-                kind,
-                release_platform,
-            }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
+            RegistryCommands::Host(command) => match command {
+                RegistryHostCommands::Add {
+                    host,
+                    ssh,
+                    kind,
+                    release_platform,
+                } => registry::host_add(&host, &ssh, &kind, &release_platform).await,
+                RegistryHostCommands::Path { command } => match command {
+                    RegistryHostPathCommands::List { host, json } => {
+                        registry::host_path_list(&host, json).await
+                    }
+                    RegistryHostPathCommands::Set {
+                        host,
+                        path,
+                        ssh,
+                        priority,
+                    } => registry::host_path_set(&host, &path, &ssh, priority).await,
+                    RegistryHostPathCommands::Remove { host, path } => {
+                        registry::host_path_remove(&host, &path).await
+                    }
+                },
+            },
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
         Commands::Builds(sub) => builds::run(sub).await,

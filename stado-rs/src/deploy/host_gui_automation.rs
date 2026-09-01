@@ -51,16 +51,19 @@ fn report(
 ) -> GuiAutomationReport {
     GuiAutomationReport {
         target: target.name.clone(),
-        ssh_target: target.ssh.clone().unwrap_or_default(),
+        ssh_target: target
+            .ssh_connections()
+            .next()
+            .map_or_else(String::new, |(_, destination)| destination.to_string()),
         items,
         error: result.err().map(|error| error.0),
     }
 }
 
 fn require_target(target: &ComputeTarget) -> Result<(), DeployError> {
-    if target.ssh.as_deref().unwrap_or_default().is_empty() {
+    if !target.has_ssh_connection() {
         return Err(DeployError(format!(
-            "target {} has no ssh destination in the registry",
+            "target {} has no SSH connection path in the registry",
             target.name
         )));
     }

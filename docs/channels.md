@@ -19,6 +19,35 @@ The host channel resolves the target from the canonical registry, checks its pin
 
 Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. Mutating workflows use their owning commands, such as `stado service file-sync`, `stado service secret-sync`, `stado release apply`, or `stado host reconcile-object-verifier`. Secret values are read and written on the target; they never appear in the remote argument list or command result.
 
+### Ordered connection paths
+
+`ssh` remains the preferred host-control destination. A target may also declare up to 16 ordered `ssh_fallbacks`; each fallback has a stable lowercase name and an SSH destination:
+
+```json
+{
+  "name": "charless-mac-mini",
+  "ssh": "charles@192.0.2.10",
+  "ssh_fallbacks": [
+    {"name": "nebula", "destination": "charles@192.168.100.10"},
+    {"name": "tailscale", "destination": "charles@charless-mac-mini.tailnet.example"},
+    {"name": "lan", "destination": "charles@charless-mac-mini.local"}
+  ]
+}
+```
+
+The names describe routes, not transport implementations. Nebula, Tailscale, WireGuard, ZeroTier, a private LAN, and a public address all provide an IP path; Stado still supplies the host identity, credential, fixed operation, and audit boundary above that path. Public Tailscale Funnel endpoints remain service publication and do not become host-control routes.
+
+When a target has more than one path, Stado authenticates a side-effect-free `true` command in declaration order and sends the real operation exactly once through the first path that answers. A one-path target keeps the original single connection attempt. `stado host link <target>` probes every declared path and reports the selected path, so a working primary cannot hide a broken fallback.
+
+Manage the declarations without editing the registry document by hand:
+
+```console
+stado registry host path list charless-mac-mini
+stado registry host path set charless-mac-mini nebula --ssh charles@192.168.100.10 --priority 1
+stado registry host path set charless-mac-mini primary --ssh charles@192.0.2.10
+stado registry host path remove charless-mac-mini nebula
+```
+
 `host exec`'s allowlist takes no operator-supplied path, so it reads no files. A managed unit's owner-controlled env file — the one a launcher `.`-sources, not the one the unit file declares — is read with `stado service env-show <service> --host <target> --env-file <path>`, through the same channel and the same `$HOME` confinement `stado service env-set` writes through. Values whose key looks like a credential, and URLs carrying userinfo, are withheld on the target and never cross the channel; endpoints, ports and variable references are shown, because those are what an operator must verify. `stado service endpoint-check` reconciles the loopback endpoints that file declares against the target's own socket table and exits non-zero when a declared dependency is dead.
 
 A configuration surface Stado can write and cannot read is not a boundary, it is a blind spot: on 2026-08-30 a managed unit named a Skarbiec endpoint nothing served, two writes of the correct endpoint were reverted, and no command could show either fact. `stado service env-set` therefore reads the key back through the same channel after writing it and exits non-zero unless the file's effective assignment holds what it wrote. The comparison happens on the target, so a secret is verified exactly without its value returning.

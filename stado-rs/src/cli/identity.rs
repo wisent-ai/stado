@@ -150,19 +150,20 @@ async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Ve
 
 /// Does the approved channel land on the very user this binding names?
 ///
-/// The channel logs in as the `user` half of the target's ssh destination and reads
-/// that account's own preferences. When the binding names somebody else, the probe is
-/// looking at the wrong desk, and a binding that names nobody is taken at the login
-/// user, which is who the channel is.
+/// Every declared connection must log in as the binding's user. A fallback
+/// that lands on another account would make the observation depend on which
+/// network happened to answer first.
 fn probes_own_user(target: &ComputeTarget, binding: &IdentityBinding) -> bool {
     let Some(declared) = binding.user.as_deref() else {
         return true;
     };
-    target
-        .ssh
-        .as_deref()
-        .and_then(|destination| destination.split('@').next())
-        .is_some_and(|login| login == declared)
+    target.has_ssh_connection()
+        && target.ssh_connections().all(|(_, destination)| {
+            destination
+                .split_once('@')
+                .map(|(login, _)| login == declared)
+                .unwrap_or(false)
+        })
 }
 
 /// Is this registry target the machine we are running on?

@@ -186,24 +186,22 @@ pub async fn authorize(target_name: &str) -> Result<Value, DeployError> {
     }
     let target = host_channel::resolve_target(&registry, target_name)?.clone();
     let authority = host_channel::resolve_target(&registry, &authority_name)?.clone();
-    let authority_destination = authority.ssh.clone().ok_or_else(|| {
-        DeployError(format!(
-            "service-directory authority {authority_name:?} has no ssh transport, so no \
-             resolver can read the registry from it"
-        ))
-    })?;
 
     let (public_key, minted) = resolver_public_key(&target).await?;
     // The program is a compile-time constant in argv and the key rides stdin:
     // `run_script` already spends stdin on the script itself, so a script that
     // also needs an argument has to arrive this way round.
-    let authorized = host_channel::run_program_with_stdin(
+    let (authorized, used_connection) = host_channel::run_program_with_stdin_and_connection(
         &authority,
         &["/bin/bash", "-c", AUTHORIZE_PROGRAM],
         &public_key,
         &production_runner(),
     )
     .await?;
+    let (connection_path, authority_destination) = match used_connection {
+        host_channel::UsedConnection::Local => ("local", "local process"),
+        host_channel::UsedConnection::Ssh(path) => (path.name, path.destination),
+    };
     if !authorized.ok() {
         return Err(refused(
             &authorized,
@@ -224,6 +222,7 @@ pub async fn authorize(target_name: &str) -> Result<Value, DeployError> {
         "target": target.name,
         "authority": authority_name,
         "authority_destination": authority_destination,
+        "connection_path": connection_path,
         "key_file": RESOLVER_KEY_FILE,
         "key_state": if minted { "minted" } else { "present" },
         "key_type": public_key.split_whitespace().next().unwrap_or_default(),
