@@ -1343,45 +1343,29 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
-        // Disk pressure suppresses admission exactly the way a paused queue
-        // does, and for the same reason: everything above this point has already
-        // run, so live slots keep advancing, heartbeats keep going out, and the
-        // capacity broadcast above carries real numbers with
-        // `disk_pressure_active` beside them. What stops is starting new work on
-        // a host that is under its own low watermark. The job that would be
-        // claimed here is the thing consuming the disk -- on the always-on mac
-        // the queue drained 19.3 GiB down to 13.8 GiB in forty minutes of
-        // `cargo build` workloads -- and no later gate measures that, so this is
-        // where it belongs.
-        if pressure_active {
-            log_fn(&format!(
-                "loop: disk-pressure-active: {} bytes free is under the {} byte low watermark; \
-                 claiming nothing until the janitor or the operator frees space, and saying so \
-                 in the broadcast rather than going quiet",
-                current_free_bytes.unwrap_or_default(),
-                disk_low_bytes.unwrap_or_default()
-            ));
-            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
-            continue;
-        }
+        // Disk pressure is enforced after the assigned queue is read. One exact
+        // signed release-delivery command remains admissible so Stado can repair
+        // the agent binary that owns this gate; every ordinary workload remains
+        // blocked below the watermark.
 
         // Cooperative yield: if a higher-priority queued job can't fit, evict
         // just enough lower-priority yieldable slots to make room. Runs BEFORE
         // the full-GPU early-return below because that is exactly when it's
         // needed. Inert (single any() over slots) unless a yieldable job runs.
-        if maybe_yield_for_priority(
-            &store,
-            &sizing,
-            &mut slots,
-            &gpu_type,
-            total_vram_gb,
-            free_vram_gb,
-            kind,
-            &consumer_id,
-            log_fn,
-        )
-        .await?
-            > 0
+        if !pressure_active
+            && maybe_yield_for_priority(
+                &store,
+                &sizing,
+                &mut slots,
+                &gpu_type,
+                total_vram_gb,
+                free_vram_gb,
+                kind,
+                &consumer_id,
+                log_fn,
+            )
+            .await?
+                > 0
         {
             continue; // re-loop: recompute free VRAM, then claim the freed room
         }
@@ -1428,6 +1412,42 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 .cmp(&a.priority)
                 .then_with(|| a.created_at.cmp(&b.created_at))
         });
+        if pressure_active {
+            queued.retain(|job| {
+                job.gpu_mem_gb == 0
+                    && job.priority == crate::constants::RELEASE_JOB_PRIORITY
+                    && !job.run_id.is_empty()
+                    && !job.pinned_host.is_empty()
+                    && job.command == crate::constants::RELEASE_DELIVERY_JOB_COMMAND
+                    && job
+                        .output_uri
+                        .starts_with("stado://probierz/runs/release-pipeline/stado/")
+                    && job.output_uri.contains("/deliveries/")
+                    && job.output_uri.ends_with("/output")
+            });
+            agent_diag.insert(
+                "disk_pressure_recovery_jobs".into(),
+                Value::from(queued.len() as i64),
+            );
+            if queued.is_empty() {
+                log_fn(&format!(
+                    "loop: disk-pressure-active: {} bytes free is under the {} byte low \
+                     watermark; ordinary work remains blocked and no signed Stado release \
+                     delivery is assigned to this host",
+                    current_free_bytes.unwrap_or_default(),
+                    disk_low_bytes.unwrap_or_default()
+                ));
+                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+                continue;
+            }
+            log_fn(&format!(
+                "loop: disk-pressure-active: {} bytes free is under the {} byte low watermark; \
+                 admitting {} signed Stado release delivery and no ordinary work",
+                current_free_bytes.unwrap_or_default(),
+                disk_low_bytes.unwrap_or_default(),
+                queued.len()
+            ));
+        }
         let mut started = 0i64;
         let mut diag_vram_rejected = 0i64;
         let mut diag_eligibility_rejected = 0i64;
