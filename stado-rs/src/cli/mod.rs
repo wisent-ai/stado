@@ -1086,6 +1086,46 @@ enum RegistryHostCommands {
         #[arg(long, value_parser = parse_release_platform)]
         release_platform: String,
     },
+    /// Manage ordered SSH connection paths for an existing host.
+    Path {
+        #[command(subcommand)]
+        command: RegistryHostPathCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryHostPathCommands {
+    /// List the preferred path and ordered fallbacks.
+    List {
+        host: String,
+        /// Emit the path list as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add or replace one connection path.
+    Set {
+        host: String,
+        /// Path identifier (`primary`, `nebula`, `tailscale`, `lan`, ...).
+        path: String,
+        /// SSH destination ([user@]host[:port]) for this path.
+        #[arg(long)]
+        ssh: String,
+        /// Fallback priority starting at 1; omitted preserves its position or appends.
+        #[arg(long)]
+        priority: Option<usize>,
+        /// Emit the mutation receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one fallback connection path.
+    Remove {
+        host: String,
+        /// Fallback path identifier.
+        path: String,
+        /// Emit the mutation receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1388,6 +1428,19 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Repair a stale, reachable host whose beacon publisher proves that the
+    /// host-health API verifier is unavailable.
+    ///
+    /// Reconciles the existing least-privilege verifier grant on the object
+    /// API authority, waits for the host's normal publisher to write a newer
+    /// beacon, and closes the recorded silence. Refuses every other diagnosis.
+    #[command(name = "repair-link")]
+    RepairLink {
+        target: String,
+        /// Emit the repair receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Reclaim disk on HOST in declared stages, measuring each one.
     ///
     /// Previews by default: the host's own janitor pass, the release build
@@ -1448,6 +1501,23 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Store one typed item directly in TARGET's owner vault.
+    ///
+    /// The canonical JSON payload is read from stdin and carried only in the
+    /// encrypted host channel's request body. Credential fields never enter a
+    /// local or remote argument vector, and the host's other items are untouched.
+    #[command(name = "vault-item-put")]
+    VaultItemPut {
+        target: String,
+        /// Credential item id.
+        item: String,
+        /// Canonical Skarbiec item kind.
+        #[arg(long = "type")]
+        item_type: String,
+        /// Emit the nonsecret before/after report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Mint one bounded Skarbiec bearer on TARGET's live vault.
     #[command(name = "vault-token-mint")]
     VaultTokenMint {
@@ -1472,7 +1542,8 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
+    /// Make TARGET's dashboard verifier grant match every object namespace
+    /// plus the route-scoped host-health bearer exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
     /// removed and missing reads are added without printing the bearer.
@@ -2020,6 +2091,13 @@ enum HostCommands {
         /// agent redeems each reference on the page that has the field.
         #[arg(long)]
         defer_fills: bool,
+        /// Prefill every sign-in capability on the first loaded page. Use this
+        /// for forms that render the identifier and password together. Weles
+        /// 0.5.41 and newer leave a capability unspent when its field is absent,
+        /// so a later agent step can still redeem it. Mutually exclusive with
+        /// --defer-fills and requires --sign-in-origin.
+        #[arg(long, conflicts_with = "defer_fills", requires = "sign_in_origin")]
+        prefill_all: bool,
         /// The saved-trajectory key. Defaults to the session label, which is
         /// also the browser profile's name - two different things that only
         /// look alike. A run whose `done` carried an error is still codified
@@ -2455,12 +2533,29 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
-            RegistryCommands::Host(RegistryHostCommands::Add {
-                host,
-                ssh,
-                kind,
-                release_platform,
-            }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
+            RegistryCommands::Host(command) => match command {
+                RegistryHostCommands::Add {
+                    host,
+                    ssh,
+                    kind,
+                    release_platform,
+                } => registry::host_add(&host, &ssh, &kind, &release_platform).await,
+                RegistryHostCommands::Path { command } => match command {
+                    RegistryHostPathCommands::List { host, json } => {
+                        registry::host_path_list(&host, json).await
+                    }
+                    RegistryHostPathCommands::Set {
+                        host,
+                        path,
+                        ssh,
+                        priority,
+                        json,
+                    } => registry::host_path_set(&host, &path, &ssh, priority, json).await,
+                    RegistryHostPathCommands::Remove { host, path, json } => {
+                        registry::host_path_remove(&host, &path, json).await
+                    }
+                },
+            },
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
         Commands::Builds(sub) => builds::run(sub).await,
@@ -2586,6 +2681,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
             HostCommands::Link { target, json } => host::link(&target, json).await,
+            HostCommands::RepairLink { target, json } => host::repair_link(&target, json).await,
             // `--dry-run` is the default and needs no argument: `--apply` is
             // the only flag that changes anything, and clap already refuses
             // the two together.
@@ -2673,6 +2769,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
             HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::VaultItemPut {
+                target,
+                item,
+                item_type,
+                json,
+            } => host::vault_item_put(&target, &item, &item_type, json).await,
             HostCommands::VaultTokenMint {
                 target,
                 consumer,
@@ -2848,6 +2950,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 sign_in_origin,
                 sign_in_item,
                 defer_fills,
+                prefill_all,
                 flow_name,
                 windowed,
                 json,
@@ -2866,6 +2969,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     sign_in_origin: sign_in_origin.as_deref(),
                     sign_in_item: sign_in_item.as_deref(),
                     defer_fills,
+                    prefill_all,
                     flow_name: flow_name.as_deref(),
                     windowed,
                     json,

@@ -120,6 +120,7 @@ pub struct ResolvedService {
     pub active_host: String,
     pub endpoint: ServiceEndpoint,
     pub ssh: Option<String>,
+    pub ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
     pub capabilities: Vec<String>,
 }
 
@@ -487,14 +488,18 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             "registry.{DIRECTORY_KEY}.authority.command: must be an absolute path without '..'"
         ));
     }
-    if target_entries
-        .get(&directory.authority.target)
-        .and_then(|target| target.get("ssh"))
+    let authority = target_entries[&directory.authority.target];
+    let has_primary = authority
+        .get("ssh")
         .and_then(Value::as_str)
-        .is_none()
-    {
+        .is_some_and(|destination| !destination.trim().is_empty());
+    let has_fallback = authority
+        .get("ssh_fallbacks")
+        .and_then(Value::as_array)
+        .is_some_and(|paths| !paths.is_empty());
+    if !has_primary && !has_fallback {
         return Err(format!(
-            "registry.{DIRECTORY_KEY}.authority.target: must declare SSH transport"
+            "registry.{DIRECTORY_KEY}.authority.target: must declare an SSH connection path"
         ));
     }
     let profiles = crate::placement::profiles(document)?;
@@ -706,12 +711,20 @@ pub fn resolve(document: &Value, service: &str, consumer: &str) -> Result<Resolv
         .get("ssh")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let ssh_fallbacks = target
+        .get("ssh_fallbacks")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| format!("service {service:?} has invalid SSH fallback paths: {error}"))?
+        .unwrap_or_default();
     Ok(ResolvedService {
         name: service.to_string(),
         generation: directory.generation,
         active_host: route.active_host.clone(),
         endpoint,
         ssh,
+        ssh_fallbacks,
         capabilities: policy.capabilities.clone(),
     })
 }
@@ -753,6 +766,31 @@ pub fn retarget_profile(
             .map_err(|error| format!("could not serialize service directory: {error}"))?;
     }
     Ok(changed)
+}
+
+/// Advance the directory's publication counter and return the new value.
+///
+/// [`ServiceDirectory::generation`] is the number a consumer compares against
+/// the copy it cached, so it detects a stale cache only if EVERY writer that
+/// changes the directory advances it. It was advanced by hand in two places
+/// and not at all by `service declare`, `service retire` and `service
+/// remove`, which add and drop `services.<name>` entries — so a consumer
+/// could hold a directory that had already changed beneath it and read a
+/// generation saying it had not.
+pub fn advance_generation(document: &mut Value) -> Result<u64, String> {
+    let block = document
+        .get_mut(DIRECTORY_KEY)
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| format!("registry.{DIRECTORY_KEY}: is not an object"))?;
+    let current = block
+        .get("generation")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("registry.{DIRECTORY_KEY}.generation is not an unsigned integer"))?;
+    let next = current
+        .checked_add(1)
+        .ok_or_else(|| format!("registry.{DIRECTORY_KEY}.generation overflow"))?;
+    block.insert("generation".to_string(), Value::from(next));
+    Ok(next)
 }
 
 pub fn resolver_config(document: &Value, target: &str) -> Result<ResolverConfig, String> {

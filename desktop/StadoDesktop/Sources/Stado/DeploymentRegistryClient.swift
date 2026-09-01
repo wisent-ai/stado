@@ -45,7 +45,10 @@ actor DeploymentRegistryClient {
         try await get(
             path: "/rest/v1/stado_deployments",
             query: [
-                .init(name: "select", value: "*"),
+                .init(
+                    name: "select",
+                    value: "id,organization_id,target_id,name,provider,status,endpoint,region,target_summary,last_health_at,created_at,updated_at"
+                ),
                 .init(name: "order", value: "updated_at.desc"),
             ],
             identity: identity
@@ -56,20 +59,11 @@ actor DeploymentRegistryClient {
         try await get(
             path: "/rest/v1/stado_infrastructure_targets",
             query: [
-                .init(name: "select", value: "*"),
+                .init(
+                    name: "select",
+                    value: "id,provider,kind,external_id,display_name,metadata,capabilities,last_seen_at"
+                ),
                 .init(name: "order", value: "last_seen_at.desc"),
-            ],
-            identity: identity
-        )
-    }
-
-    func grants(for deploymentID: String, identity: WisentIdentity) async throws -> [DeploymentGrant] {
-        try await get(
-            path: "/rest/v1/stado_deployment_grants",
-            query: [
-                .init(name: "select", value: "*"),
-                .init(name: "deployment_id", value: "eq.\(deploymentID)"),
-                .init(name: "order", value: "created_at.asc"),
             ],
             identity: identity
         )
@@ -78,12 +72,9 @@ actor DeploymentRegistryClient {
     func createDeployment(
         name: String,
         target: InfrastructureTarget,
-        organizationID: String?,
         identity: WisentIdentity
     ) async throws -> StadoDeployment {
         struct Body: Encodable {
-            let createdBy: String
-            let homeOrgID: String?
             let targetID: String
             let name: String
             let provider: DeploymentProvider
@@ -91,8 +82,6 @@ actor DeploymentRegistryClient {
             let targetSummary: [String: String]
 
             enum CodingKeys: String, CodingKey {
-                case createdBy = "created_by"
-                case homeOrgID = "home_org_id"
                 case targetID = "target_id"
                 case name, provider, status
                 case targetSummary = "target_summary"
@@ -102,10 +91,13 @@ actor DeploymentRegistryClient {
         let rows: [StadoDeployment] = try await request(
             method: "POST",
             path: "/rest/v1/stado_deployments",
-            query: [],
+            query: [
+                .init(
+                    name: "select",
+                    value: "id,organization_id,target_id,name,provider,status,endpoint,region,target_summary,last_health_at,created_at,updated_at"
+                ),
+            ],
             body: Body(
-                createdBy: identity.userID,
-                homeOrgID: organizationID,
                 targetID: target.id,
                 name: name,
                 provider: target.provider,
@@ -145,7 +137,13 @@ actor DeploymentRegistryClient {
         let rows: [StadoDeployment] = try await request(
             method: "PATCH",
             path: "/rest/v1/stado_deployments",
-            query: [.init(name: "id", value: "eq.\(id)")],
+            query: [
+                .init(name: "id", value: "eq.\(id)"),
+                .init(
+                    name: "select",
+                    value: "id,organization_id,target_id,name,provider,status,endpoint,region,target_summary,last_health_at,created_at,updated_at"
+                ),
+            ],
             body: Body(
                 endpoint: endpoint,
                 status: status,
@@ -157,62 +155,6 @@ actor DeploymentRegistryClient {
         )
         guard let deployment = rows.first else { throw DeploymentRegistryError.malformedResponse }
         return deployment
-    }
-
-    func upsertGrant(
-        deploymentID: String,
-        subjectKind: String,
-        subjectID: String,
-        subjectRole: String?,
-        permissions: [DeploymentPermission],
-        identity: WisentIdentity
-    ) async throws -> DeploymentGrant {
-        struct Body: Encodable {
-            let deploymentID: String
-            let subjectKind: String
-            let subjectID: String
-            let subjectRole: String?
-            let permissions: [DeploymentPermission]
-            let createdBy: String
-
-            enum CodingKeys: String, CodingKey {
-                case deploymentID = "deployment_id"
-                case subjectKind = "subject_kind"
-                case subjectID = "subject_id"
-                case subjectRole = "subject_role"
-                case permissions
-                case createdBy = "created_by"
-            }
-        }
-
-        let rows: [DeploymentGrant] = try await request(
-            method: "POST",
-            path: "/rest/v1/stado_deployment_grants",
-            query: [.init(name: "on_conflict", value: "deployment_id,subject_kind,subject_id,subject_role")],
-            body: Body(
-                deploymentID: deploymentID,
-                subjectKind: subjectKind,
-                subjectID: subjectID,
-                subjectRole: subjectRole,
-                permissions: permissions,
-                createdBy: identity.userID
-            ),
-            identity: identity,
-            prefer: "resolution=merge-duplicates,return=representation"
-        )
-        guard let grant = rows.first else { throw DeploymentRegistryError.malformedResponse }
-        return grant
-    }
-
-    func deleteGrant(id: String, identity: WisentIdentity) async throws {
-        let _: EmptyResponse = try await request(
-            method: "DELETE",
-            path: "/rest/v1/stado_deployment_grants",
-            query: [.init(name: "id", value: "eq.\(id)")],
-            body: Optional<String>.none,
-            identity: identity,
-            prefer: nil
-        )
     }
 
     private func get<Value: Decodable>(
@@ -251,7 +193,7 @@ actor DeploymentRegistryClient {
         request.timeoutInterval = 30
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue(configuration.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(identity.accessToken)", forHTTPHeaderField: "Authorization")
+        identity.authorize(&request)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let prefer { request.setValue(prefer, forHTTPHeaderField: "Prefer") }
         if let body {
@@ -267,9 +209,6 @@ actor DeploymentRegistryClient {
             let detail = Self.safeServerMessage(data)
             throw DeploymentRegistryError.server(http.statusCode, detail)
         }
-        if Response.self == EmptyResponse.self, data.isEmpty {
-            return EmptyResponse() as! Response
-        }
         do {
             return try JSONDecoder().decode(Response.self, from: data)
         } catch {
@@ -284,8 +223,4 @@ actor DeploymentRegistryClient {
         let raw = object["message"] as? String ?? object["hint"] as? String ?? ""
         return String(raw.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(240))
     }
-}
-
-private struct EmptyResponse: Decodable {
-    init() {}
 }

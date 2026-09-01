@@ -340,10 +340,10 @@ pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
     let target_entry = registry
         .lookup(target)
         .ok_or_else(|| format!("target '{target}' not found in registry"))?;
-    let destination = target_entry
-        .ssh
-        .as_deref()
-        .ok_or_else(|| format!("target '{target}' has no remote channel (ssh=null)"))?;
+    let connection = crate::deploy::host_channel::select_ssh_connection(target_entry, runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = connection.destination;
     let line = authorized_keys_line(&public_key, &item_id(target));
     let command = format!(
         "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
@@ -615,10 +615,10 @@ pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
     let target_entry = registry
         .lookup(target)
         .ok_or_else(|| format!("target '{target}' not found in registry"))?;
-    let destination = target_entry
-        .ssh
-        .as_deref()
-        .ok_or_else(|| format!("target '{target}' has no remote channel (ssh=null)"))?;
+    let connection = crate::deploy::host_channel::select_ssh_connection(target_entry, runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = connection.destination;
     let (argv, _key) = channel_argv(target, destination, "hostname").await?;
     let answered = run_checked(runner, CommandSpec::new(argv), "hostname over the channel").await?;
     println!(

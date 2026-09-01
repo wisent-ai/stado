@@ -980,10 +980,10 @@ async fn delegate_to_registry_authority(
     let authority = registry
         .lookup(&directory.authority.target)
         .ok_or_else(|| CmdError::click("registry authority target disappeared"))?;
-    let ssh = authority
-        .ssh
-        .as_deref()
-        .ok_or_else(|| CmdError::click("registry authority has no SSH transport"))?;
+    let runner = crate::deploy::production_runner();
+    let connection = crate::deploy::host_channel::select_ssh_connection(authority, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let mut argv = vec![
         directory.authority.command,
         "placement".to_string(),
@@ -1000,20 +1000,19 @@ async fn delegate_to_registry_authority(
         .map(|argument| crate::deploy::shlex_quote(argument))
         .collect::<Vec<_>>()
         .join(" ");
-    let status = tokio::process::Command::new("ssh")
-        .args([
-            "-T",
-            "-F",
-            "/dev/null",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "ConnectTimeout=10",
-            ssh,
-        ])
-        .arg(remote_command)
+    let mut ssh_argv = crate::deploy::host_channel::ssh_options(connection.destination);
+    ssh_argv.insert(1, "-T".to_string());
+    ssh_argv.push(remote_command);
+    let key = crate::deploy::ssh_key::materialize(&authority.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let ssh_argv = crate::deploy::ssh_key::add_identity(ssh_argv, &key)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let (program, arguments) = ssh_argv
+        .split_first()
+        .ok_or_else(|| CmdError::click("registry authority SSH channel is empty"))?;
+    let status = tokio::process::Command::new(program)
+        .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

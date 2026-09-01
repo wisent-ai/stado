@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use super::{py_str_repr, shlex_quote, CommandSpec, DeployError, Runner};
+use super::{host_channel, py_str_repr, shlex_quote, DeployError, Runner};
 use crate::targets::{normalize_hostname, ssh_hostname, ComputeTarget, Registry};
 
 /// Python `_TIMEOUT_SECONDS`.
@@ -234,9 +234,11 @@ pub fn identity_values(target: &ComputeTarget) -> Vec<String> {
     let mut values: Vec<String> = Vec::new();
     values.push(normalize_hostname(&target.name));
     values.extend(target.hostnames.iter().map(|v| normalize_hostname(v)));
-    if let Some(ssh) = &target.ssh {
-        values.push(ssh_hostname(ssh));
-    }
+    values.extend(
+        target
+            .ssh_connections()
+            .map(|(_, destination)| ssh_hostname(destination)),
+    );
     values.retain(|v| !v.is_empty());
     values.sort();
     values.dedup();
@@ -508,7 +510,7 @@ fn resolve_target<'a>(
             py_str_repr(target_name)
         )));
     }
-    if target.ssh.as_deref().unwrap_or("").is_empty() {
+    if !target.has_ssh_connection() {
         return Err(DeployError(format!(
             "target {} has no registry-managed ssh destination",
             py_str_repr(target_name)
@@ -525,13 +527,13 @@ pub async fn recover_host_with_registry(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let target = resolve_target(registry, target_name)?;
-    let output = runner(CommandSpec {
-        argv: ssh_argv(target.ssh.as_deref().unwrap_or("")),
-        stdin: Some(remote_script(target)),
-        timeout: Some(Duration::from_secs(TIMEOUT_SECONDS)),
-    })
-    .await
-    .map_err(DeployError)?;
+    let output = host_channel::run_script_with_timeout(
+        target,
+        &remote_script(target),
+        Duration::from_secs(TIMEOUT_SECONDS),
+        runner,
+    )
+    .await?;
     let mut report = parse_output(&output.stdout, target)?;
     report["exit_code"] = json!(output.code);
     if output.code != 0 {

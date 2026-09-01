@@ -671,8 +671,9 @@ final class FleetServicesStore: ObservableObject {
 /// for the same reason `host gates` is read that way — a fleet read serially is
 /// a fleet the operator gives up on and opens a terminal for.
 ///
-/// Read-only. This store performs no write, and nothing here is computed from a
-/// second source: the verdict is the command's, and so are the blockers.
+/// Reads are side-effect-free. The one write is `host repair-link`, exposed
+/// only for the exact publisher diagnosis the CLI marks repairable; the CLI
+/// owns the refusal, verifier reconciliation and fresh-beacon postcondition.
 @MainActor
 final class HostLinkStore: ObservableObject {
     @Published private(set) var links: [HostLink] = []
@@ -683,6 +684,8 @@ final class HostLinkStore: ObservableObject {
     @Published private(set) var failures: [String: String] = [:]
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastUpdated: Date?
+    @Published private(set) var repairMutation: WisentMutationOutcome = .idle
+    @Published private(set) var repairHost: String?
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
@@ -719,6 +722,43 @@ final class HostLinkStore: ObservableObject {
         StadoCLI.commandLine(linkArguments(host: host))
     }
 
+    nonisolated static func repairArguments(host: String) -> [String] {
+        ["host", "repair-link", host, "--json"]
+    }
+
+    func isRepairing(_ host: String) -> Bool {
+        repairHost == host && repairMutation.isWorking
+    }
+
+    func repairOutcome(for host: String) -> WisentMutationOutcome {
+        repairHost == host ? repairMutation : .idle
+    }
+
+    @discardableResult
+    func repair(host: String) async -> Bool {
+        guard !repairMutation.isWorking else { return false }
+        repairHost = host
+        repairMutation = .working("Repairing \(host)'s beacon publication")
+        do {
+            let receipt = try await cli.json(
+                HostLinkRepairReceipt.self,
+                arguments: Self.repairArguments(host: host),
+                timeoutSeconds: 180
+            )
+            repairMutation = .succeeded(receipt.detail)
+            await refresh(hosts: [host])
+            return true
+        } catch {
+            repairMutation = .failed(Self.message(for: error))
+            return false
+        }
+    }
+
+    func clearRepair() {
+        repairMutation = .idle
+        repairHost = nil
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -732,13 +772,18 @@ final class HostLinkStore: ObservableObject {
 
         let reads = await Self.read(hosts: hosts, using: cli)
         guard generation == refreshGeneration else { return }
-        links = reads.compactMap(\.link).sorted { lhs, rhs in
+        let requested = Set(hosts)
+        let refreshedLinks = reads.compactMap(\.link)
+        links = (links.filter { !requested.contains($0.host) } + refreshedLinks).sorted { lhs, rhs in
             Self.attentionRank(lhs) == Self.attentionRank(rhs)
                 ? lhs.host < rhs.host
                 : Self.attentionRank(lhs) < Self.attentionRank(rhs)
         }
-        failures = reads.reduce(into: [:]) { table, read in
-            if let problem = read.problem { table[read.host] = problem }
+        failures = failures.filter { !requested.contains($0.key) }
+        for read in reads {
+            if let problem = read.problem {
+                failures[read.host] = problem
+            }
         }
         lastUpdated = Date()
     }
@@ -769,6 +814,21 @@ final class HostLinkStore: ObservableObject {
         var problem: String?
     }
 
+    private struct HostLinkRepairReceipt: Decodable, Sendable {
+        let target: String
+        let state: String
+        let detail: String
+        let authority: String?
+        let beaconAgeSeconds: Int?
+        let silenceClosed: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case target, state, detail, authority
+            case beaconAgeSeconds = "beacon_age_seconds"
+            case silenceClosed = "silence_closed"
+        }
+    }
+
     private nonisolated static func read(hosts: [String], using cli: StadoCLI) async -> [HostLinkRead] {
         await withTaskGroup(of: HostLinkRead.self) { group in
             for host in hosts {
@@ -793,6 +853,114 @@ final class HostLinkStore: ObservableObject {
             }
             return reads
         }
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+}
+
+/// Registry connection-path writes made through the product CLI.
+///
+/// The Hosts inspector reads route health through `host link`; this store owns
+/// only the two registry mutations behind its editor. Both ask for JSON so the
+/// app reads a typed receipt instead of scraping the terminal sentence.
+@MainActor
+final class HostConnectionPathStore: ObservableObject {
+    @Published private(set) var mutation: WisentMutationOutcome = .idle
+
+    private let cli: StadoCLI
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    nonisolated static func setArguments(
+        host: String,
+        name: String,
+        destination: String,
+        priority: Int?
+    ) -> [String] {
+        var arguments = [
+            "registry", "host", "path", "set", host, name,
+            "--ssh", destination,
+        ]
+        if let priority {
+            arguments += ["--priority", String(priority)]
+        }
+        arguments.append("--json")
+        return arguments
+    }
+
+    nonisolated static func removeArguments(host: String, name: String) -> [String] {
+        ["registry", "host", "path", "remove", host, name, "--json"]
+    }
+
+    @discardableResult
+    func set(host: String, name: String, destination: String, priority: Int?) async -> Bool {
+        mutation = .working("Setting \(host)'s \(name) connection path")
+        do {
+            let receipt = try await cli.json(
+                SetReceipt.self,
+                arguments: Self.setArguments(
+                    host: host,
+                    name: name,
+                    destination: destination,
+                    priority: priority
+                )
+            )
+            mutation = .succeeded(
+                receipt.changed
+                    ? "\(receipt.target) now reaches \(receipt.path) at \(receipt.destination). Registry generation \(receipt.generation)."
+                    : "\(receipt.target)'s \(receipt.path) path already points to \(receipt.destination). Nothing changed."
+            )
+            return true
+        } catch {
+            mutation = .failed(Self.message(for: error))
+            return false
+        }
+    }
+
+    @discardableResult
+    func remove(host: String, name: String) async -> Bool {
+        mutation = .working("Removing \(host)'s \(name) connection path")
+        do {
+            let receipt = try await cli.json(
+                RemoveReceipt.self,
+                arguments: Self.removeArguments(host: host, name: name)
+            )
+            mutation = .succeeded(
+                receipt.removed
+                    ? "\(receipt.target)'s \(receipt.path) fallback is removed. Registry generation \(receipt.generation)."
+                    : "\(receipt.target)'s \(receipt.path) fallback was already absent. Nothing changed."
+            )
+            return true
+        } catch {
+            mutation = .failed(Self.message(for: error))
+            return false
+        }
+    }
+
+    func clearMutation() {
+        mutation = .idle
+    }
+
+    private struct SetReceipt: Decodable, Sendable {
+        let target: String
+        let path: String
+        let destination: String
+        let changed: Bool
+        let generation: String
+    }
+
+    private struct RemoveReceipt: Decodable, Sendable {
+        let target: String
+        let path: String
+        let removed: Bool
+        let generation: String
     }
 
     private nonisolated static func message(for error: Error) -> String {

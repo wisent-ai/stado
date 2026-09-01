@@ -19,8 +19,8 @@
 
 use std::time::Duration;
 
-use crate::deploy::host_users::{ssh_argv, validate_ssh_target, SSH_TIMEOUT_SECONDS};
-use crate::deploy::{shlex_quote, CommandSpec, DeployError, Runner};
+use crate::deploy::host_users::SSH_TIMEOUT_SECONDS;
+use crate::deploy::{host_channel, shlex_quote, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// Marker prefix of the remote script's report lines.
@@ -182,43 +182,31 @@ pub async fn run_on_host(
         report.error = Some(error.0);
         return report;
     }
-    // A target with no ssh destination is either unreachable or this very
-    // machine. Build caches on the local host are the common case — the
-    // macbook is not reachable from itself — so run the same script here
-    // rather than refusing the work.
-    let destination = target.ssh.as_deref().unwrap_or("");
-    let argv = if destination.is_empty() {
-        if !target_is_local(target) {
-            report.error = Some(format!(
-                "target {} has no ssh destination and is not this host",
-                target.name
-            ));
-            return report;
-        }
-        vec![
+    let command = remote_command(root, days, apply, force);
+    let result = if target_is_local(target) {
+        runner(CommandSpec::new(vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            remote_command(root, days, apply, force),
-        ]
+            command,
+        ]))
+        .await
+    } else if !target.has_ssh_connection() {
+        report.error = Some(format!(
+            "target {} has no SSH connection path and is not this host",
+            target.name
+        ));
+        return report;
     } else {
-        if let Err(error) = validate_ssh_target(destination) {
-            report.error = Some(error.0);
-            return report;
-        }
-        ssh_argv(destination, &remote_command(root, days, apply, force))
+        host_channel::run_script_with_timeout(
+            target,
+            &command,
+            Duration::from_secs(SSH_TIMEOUT_SECONDS),
+            runner,
+        )
+        .await
+        .map_err(|error| error.0)
     };
-
-    let mut spec = CommandSpec::new(argv);
-    // The account-provisioning timeout is wrong for this command: a walk of a
-    // developer tree takes minutes, and killing it mid-prune loses the report
-    // while the deletions have already happened — observed on a macbook where
-    // 6 GiB went away and the command still reported nothing. A remote run
-    // keeps a bound because the connection can hang; a local one does not,
-    // since there is a terminal to interrupt it.
-    if !destination.is_empty() {
-        spec.timeout = Some(Duration::from_secs(SSH_TIMEOUT_SECONDS));
-    }
-    match runner(spec).await {
+    match result {
         Ok(output) if output.ok() => report.entries = parse_report(&output.stdout),
         Ok(output) => {
             report.entries = parse_report(&output.stdout);

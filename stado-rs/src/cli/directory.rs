@@ -327,18 +327,9 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
 /// address half is the one this fleet has agreed on. A declared hostname is
 /// accepted after it, for hosts reached by name rather than by number.
 fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
-    if let Some(ssh) = target.ssh.as_deref() {
-        let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
-        if !address.is_empty() {
-            return Some(address.to_string());
-        }
-    }
-    target
-        .hostnames
-        .iter()
-        .map(|name| name.trim())
-        .find(|name| !name.is_empty())
-        .map(str::to_string)
+    let (_, ssh) = target.ssh_connections().next()?;
+    let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
+    (!address.is_empty()).then(|| address.to_string())
 }
 
 /// The port the service listens on.
@@ -1021,22 +1012,8 @@ where
             .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
         edit(entry)?;
     }
-    let block = document
-        .get_mut(DIRECTORY_KEY)
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| click(format!("{DIRECTORY_KEY} is not an object")))?;
-    let generation = block
-        .get("generation")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            click(format!(
-                "{DIRECTORY_KEY}.generation is not an unsigned integer"
-            ))
-        })?;
-    let next_generation = generation
-        .checked_add(1)
-        .ok_or_else(|| click(format!("{DIRECTORY_KEY}.generation overflow")))?;
-    block.insert("generation".to_string(), json!(next_generation));
+    let next_generation =
+        crate::service_resolution::advance_generation(&mut document).map_err(click)?;
     registry::push_document(&document).await?;
     Ok(next_generation)
 }

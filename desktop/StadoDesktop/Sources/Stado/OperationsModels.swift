@@ -1589,6 +1589,17 @@ struct HostLink: Decodable, Identifiable, Sendable {
     /// `nil` when the beacon carried no link block at all.
     let pathKind: HostLinkPathKind?
     let endpoint: String?
+    /// The route the selector would use for one real host operation after all
+    /// declared routes were probed.
+    let selectedConnection: String?
+    /// Preferred route followed by ordered fallbacks, with the answer from the
+    /// side-effect-free SSH probe for each one.
+    let connectionPaths: [HostConnectionPathProbe]
+    /// A resolver failure that prevented the route set itself from being read.
+    let connectionProbeError: String?
+    /// The managed beacon publisher's newest recorded outcome. Present only
+    /// when the beacon is stale while the host itself still answers.
+    let beaconPublisher: HostBeaconPublisherDiagnosis?
     let lastSleepAt: String?
     let lastWakeAt: String?
     let interfaceChanges: [HostLinkInterfaceChange]
@@ -1639,8 +1650,12 @@ struct HostLink: Decodable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case host, endpoint, silences, verdict, blockers, session
+        case beaconPublisher = "beacon_publisher"
         case beaconAgeSeconds = "beacon_age_seconds"
         case sshReachable = "ssh_reachable"
+        case selectedConnection = "selected_connection"
+        case connectionPaths = "connection_paths"
+        case connectionProbeError = "connection_probe_error"
         case pathKind = "path_kind"
         case lastSleepAt = "last_sleep_at"
         case lastWakeAt = "last_wake_at"
@@ -1656,6 +1671,12 @@ struct HostLink: Decodable, Identifiable, Sendable {
         pathKind = (try values.decodeIfPresent(String.self, forKey: .pathKind))
             .map(HostLinkPathKind.init)
         endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint)
+        selectedConnection = try values.decodeIfPresent(String.self, forKey: .selectedConnection)
+        connectionPaths =
+            try values.decodeIfPresent([HostConnectionPathProbe].self, forKey: .connectionPaths) ?? []
+        connectionProbeError = try values.decodeIfPresent(String.self, forKey: .connectionProbeError)
+        beaconPublisher =
+            try values.decodeIfPresent(HostBeaconPublisherDiagnosis.self, forKey: .beaconPublisher)
         lastSleepAt = try values.decodeIfPresent(String.self, forKey: .lastSleepAt)
         lastWakeAt = try values.decodeIfPresent(String.self, forKey: .lastWakeAt)
         interfaceChanges =
@@ -1665,6 +1686,35 @@ struct HostLink: Decodable, Identifiable, Sendable {
         session = try values.decodeIfPresent(HostLinkSession.self, forKey: .session)
         verdict = HostLinkVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
         blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
+    }
+}
+
+/// One declared SSH route in `stado host link <host> --json`.
+///
+/// These are host-control routes, not the beacon's direct/relay network path:
+/// the distinction is visible in the Hosts inspector because one describes
+/// how Stado reaches the machine and the other describes how its beacon left.
+struct HostConnectionPathProbe: Decodable, Identifiable, Sendable {
+    let name: String
+    let destination: String
+    let reachable: Bool
+    let error: String?
+
+    var id: String { name }
+}
+
+/// Why a reachable host stopped publishing beacons, read from the managed
+/// publisher's own declared log by `stado host link`.
+struct HostBeaconPublisherDiagnosis: Decodable, Sendable {
+    let unit: String
+    let code: String
+    let detail: String
+    let repairable: Bool
+    let repairCommand: String?
+
+    enum CodingKeys: String, CodingKey {
+        case unit, code, detail, repairable
+        case repairCommand = "repair_command"
     }
 }
 
