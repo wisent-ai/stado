@@ -152,15 +152,27 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Go to each consumer and check the endpoint it is told to use.
+    /// Go to each consumer and check the endpoint it is told to use, and that
+    /// the thing answering is the service that was declared.
     ///
     /// `list` reports what hosts say about their units. This reports whether
     /// the directory's addresses answer, from the machines that must call
     /// them -- the one question every other check in this binary skips.
-    /// States are `observed`, `unreachable`, and `unverified` for a probe
-    /// that could not run; the third is never folded into the other two.
-    /// Exits non-zero only on `unreachable`, so an uninstalled probe cannot
-    /// masquerade as an outage.
+    /// States are `observed`, `unreachable`, `misowned` for a port a different
+    /// declared unit is holding, and `unverified` for a probe that could not
+    /// run; the last is never folded into the others.
+    ///
+    /// `misowned` exists because an answer was once the whole of `observed`'s
+    /// evidence. On the service's active host the port's owner is resolved by
+    /// launchd label through the same reader `service serving` uses, so a
+    /// declaration pointing at a port another job holds is a failure here
+    /// rather than a green row. Other hosts reach the service through their
+    /// own resolver adapter and are not judged on ownership, because that
+    /// socket is owned by the resolver by design.
+    ///
+    /// Exits non-zero on `unreachable` and `misowned`, counted separately: the
+    /// first usually means the service needs attention, the second means the
+    /// declaration does.
     Verify {
         /// Check one host's declarations instead of the whole fleet.
         #[arg(long)]
@@ -3740,10 +3752,23 @@ struct ServingOptions<'a> {
 /// This is the fleet's own statement of what the service answers on, which is
 /// the only source that distinguishes a port a unit SERVES from one it merely
 /// calls. `host_precheck_runner` reads the directory the same way.
+///
+/// `name` may be either the directory's own key for the service or the launchd
+/// label the host declares for it, because this command accepts both and used
+/// to resolve the endpoint for neither: `declared_matching` matches the host's
+/// labels, this looked the same string up as a directory key, and no argument
+/// satisfied both at once. Asked by service name it refused with "is not a
+/// registry-managed service"; asked by label, with "the service directory
+/// declares no endpoint" -- so the declared port of the service whose
+/// declaration was wrong was the one port an operator had to supply by hand.
 async fn directory_port(name: &str, host: &str) -> Option<u16> {
     let registry = host_channel::canonical_registry().await.ok()?;
-    let service = registry.service(name)?;
-    let endpoint = service.address_for(host)?;
+    let key = if registry.service(name).is_some() {
+        name
+    } else {
+        registry.service_named_by_unit(name, host)?
+    };
+    let endpoint = registry.service(key)?.address_for(host)?;
     url::Url::parse(&endpoint.url).ok()?.port()
 }
 

@@ -2984,6 +2984,53 @@ impl Registry {
             .find(|profile| profile.name == name)
     }
 
+    /// The launchd/systemd label that serves directory service `name` on
+    /// `host`, when the registry says which one does.
+    ///
+    /// The directory keys a service by its logical name -- `brama` -- and a
+    /// host keys the same thing by the label launchd knows,
+    /// `com.wisent.always-on.brama`. Both names are declared, in two places,
+    /// and nothing joined them: every caller that had one and needed the other
+    /// re-derived it, or asked an operator for `--port`. This is that join,
+    /// once, from the declarations that already carry it --
+    /// [`Service::managed_service`] where a service owns its unit outright,
+    /// and the placement profile's own `units` map where a profile moves it.
+    ///
+    /// `None` means the registry does not say, which is not the same as the
+    /// service having no unit: a caller must report that it could not tell
+    /// rather than assume the label equals the service name.
+    pub fn service_unit(&self, name: &str, host: &str) -> Option<&str> {
+        let service = self.service(name)?;
+        if let Some(unit) = service
+            .managed_service
+            .as_deref()
+            .filter(|unit| !unit.is_empty())
+        {
+            return Some(unit);
+        }
+        let profile = self.placement_profile(service.placement_profile.as_deref()?)?;
+        let unit = profile.hosts.get(host)?.units.get(name)?;
+        [unit.unit.as_str(), unit.name.as_str()]
+            .into_iter()
+            .find(|label| !label.is_empty())
+    }
+
+    /// The directory service that `label` serves on `host`, by the join in
+    /// [`Registry::service_unit`].
+    ///
+    /// The inverse direction, for callers holding the launchd label and
+    /// needing the declaration -- which is the direction `service serving` was
+    /// missing when it refused a unit label with "the service directory
+    /// declares no endpoint".
+    pub fn service_named_by_unit(&self, label: &str, host: &str) -> Option<&str> {
+        self.service_directory
+            .as_ref()?
+            .services
+            .keys()
+            .map(String::as_str)
+            .find(|name| self.service_unit(name, host) == Some(label))
+    }
+
     /// The document as JSON, including every top-level key this build does
     /// not model.
     ///

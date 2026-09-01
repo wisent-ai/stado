@@ -19,8 +19,10 @@
 //! by a process its label does not own is never reported as serving; a port
 //! nothing listens on is `not_serving` and says which port; a holder whose
 //! owning label cannot be read is `unknown` and never `serving`; the command
-//! exits non-zero on anything but `serving`; and it refuses when no port was
-//! named instead of inventing an empty pass.
+//! exits non-zero on anything but `serving`; it refuses when no port was
+//! named instead of inventing an empty pass; and the declared port is found
+//! even when the directory and the host spell the service differently, which
+//! is the shape every real placement-backed service has.
 
 use std::net::TcpListener;
 use std::process::{Command, Output};
@@ -106,6 +108,48 @@ impl Fleet {
                 }
             }
         });
+        std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    }
+
+    /// Declare the endpoint the way the real fleet does: the directory keyed
+    /// by the service's LOGICAL name, and a placement profile carrying the
+    /// launchd label that serves it on this host.
+    ///
+    /// The fixture above deliberately spells the directory key and the unit
+    /// label with one string, which is how `brama` -- declared as `brama` and
+    /// running as `com.wisent.always-on.brama` -- had no test at all: with one
+    /// name there are no two namespaces to disagree.
+    fn declare_endpoint_under_logical_name(&self, logical: &str, port: u16) {
+        let path = self.storage.path().join("registry.json");
+        let mut document: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        document["service_directory"] = serde_json::json!({
+            "authority": { "target": "here", "command": "/usr/bin/true" },
+            "generation": 1,
+            "services": {
+                logical: {
+                    "active_host": "here",
+                    "placement_profile": "test-profile",
+                    "endpoints": { "here": { "url": format!("http://127.0.0.1:{port}/") } }
+                }
+            }
+        });
+        document["placement_profiles"] = serde_json::json!([{
+            "name": "test-profile",
+            "services": [logical],
+            "hosts": {
+                "here": {
+                    "units": {
+                        logical: {
+                            "name": SERVICE,
+                            "unit": SERVICE,
+                            "kind": "launchd",
+                            "path": format!("$HOME/Library/LaunchAgents/{SERVICE}.plist")
+                        }
+                    }
+                }
+            }
+        }]);
         std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
     }
 
@@ -291,6 +335,37 @@ fn the_port_comes_from_the_declared_endpoint_when_none_is_named() {
         "{row}"
     );
     assert_ne!(row["serving"], "serving", "{row}");
+}
+
+/// The declared port must resolve when the directory and the host spell the
+/// service differently, because that is how the fleet actually spells it.
+///
+/// `brama` is declared in the service directory as `brama` and runs on its
+/// host as `com.wisent.always-on.brama`. This command took one `name` and used
+/// it for both lookups: `declared_matching` against the host's labels and
+/// `directory_port` against the directory's keys. Asked by service name it
+/// refused with "is not a registry-managed service"; asked by label, with "the
+/// service directory declares no endpoint ... name it with --port". So the one
+/// service whose declared port was wrong was a service whose declared port
+/// this command could not read, and on 2026-08-31 that port pointed at another
+/// job for seventeen hours.
+#[test]
+fn the_declared_endpoint_resolves_when_the_directory_and_the_host_name_it_differently() {
+    let fleet = Fleet::new();
+    let (_held, port) = live_port();
+    fleet.declare_endpoint_under_logical_name("weles", port);
+    // Addressed by the launchd label, which is what the host declares, while
+    // the endpoint is declared under the logical name.
+    let out = fleet.serving(&["--json"]);
+    assert!(
+        !stderr(&out).contains("declares no endpoint"),
+        "the declared endpoint must be found through the placement profile: {}",
+        stderr(&out)
+    );
+    let row = report(&out);
+    let ports = row["ports"].as_array().unwrap();
+    assert_eq!(ports.len(), 1, "{row}");
+    assert_eq!(ports[0]["port"], serde_json::json!(port), "{row}");
 }
 
 #[test]
