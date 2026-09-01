@@ -709,6 +709,30 @@ say verify ok
 /bin/chmod 755 "$pending"
 /bin/mv -f "$pending" "$active_path"
 say activated "$version"
+
+# The receipt, beside the artefact it describes.
+#
+# `converge` can already prove WHETHER these bytes were delivered, by
+# comparing the installed file against this staged copy. It could not say
+# WHO, and on 2026-08-31 that is exactly where an investigation stopped: a
+# `stado` answering 0.13.19 appeared in `$HOME/.stado/bin` on the always-on
+# Mac at 21:25Z, the release channel was ruled out, both operator sessions
+# were ruled out, the repository's automation was ruled out, and nothing on
+# the host recorded who had installed it.
+#
+# It lives in the version/platform directory rather than beside the active
+# binary, so a receipt cannot outlive the artefact it describes or be read
+# for a different one. A delivery made before this format simply has none,
+# and its absence means "installed before receipts", never "suspicious":
+# `staged-match` and `no-staged-copy` answer correctly without it.
+receipt_dir="$stado_home/releases/$binary/$version/$platform"
+if [ -d "$receipt_dir" ]; then
+  printf '{"binary":"%s","version":"%s","platform":"%s","source_commit":"%s","sha256":"%s","installed_at":"%s","delivered_by":"%s"}\n' \
+    "$binary" "$version" "$platform" "${source_commit:-}" "${expected_sha256:-}" \
+    "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${delivered_by:-}" \
+    > "$receipt_dir/release-receipt.json" 2>/dev/null || true
+  /bin/chmod 600 "$receipt_dir/release-receipt.json" 2>/dev/null || true
+fi
 say step activate
 "##;
 
@@ -1057,6 +1081,30 @@ if [ "$read_version_state" != reported ] || [ "$read_version_value" != "$version
   exit 1
 fi
 say activated "$version"
+
+# The receipt, beside the artefact it describes.
+#
+# `converge` can already prove WHETHER these bytes were delivered, by
+# comparing the installed file against this staged copy. It could not say
+# WHO, and on 2026-08-31 that is exactly where an investigation stopped: a
+# `stado` answering 0.13.19 appeared in `$HOME/.stado/bin` on the always-on
+# Mac at 21:25Z, the release channel was ruled out, both operator sessions
+# were ruled out, the repository's automation was ruled out, and nothing on
+# the host recorded who had installed it.
+#
+# It lives in the version/platform directory rather than beside the active
+# binary, so a receipt cannot outlive the artefact it describes or be read
+# for a different one. A delivery made before this format simply has none,
+# and its absence means "installed before receipts", never "suspicious":
+# `staged-match` and `no-staged-copy` answer correctly without it.
+receipt_dir="$stado_home/releases/$binary/$version/$platform"
+if [ -d "$receipt_dir" ]; then
+  printf '{"binary":"%s","version":"%s","platform":"%s","source_commit":"%s","sha256":"%s","installed_at":"%s","delivered_by":"%s"}\n' \
+    "$binary" "$version" "$platform" "${source_commit:-}" "${expected_sha256:-}" \
+    "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${delivered_by:-}" \
+    > "$receipt_dir/release-receipt.json" 2>/dev/null || true
+  /bin/chmod 600 "$receipt_dir/release-receipt.json" 2>/dev/null || true
+fi
 say step activate
 "##;
 
@@ -1071,7 +1119,7 @@ say step activate
 fn bindings(plan: &ReleasePlan) -> String {
     let mut bound = format!(
         "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nexpected_sha256={}\n\
-         release_api={}\nmember={}\ninstall_root=\"{}\"\n",
+         release_api={}\nmember={}\nsource_commit={}\ndelivered_by={}\ninstall_root=\"{}\"\n",
         shlex_quote(&plan.product.name),
         shlex_quote(&plan.product.source.product),
         shlex_quote(&plan.version),
@@ -1080,6 +1128,13 @@ fn bindings(plan: &ReleasePlan) -> String {
         shlex_quote(&plan.sha256),
         shlex_quote(&plan.release_api),
         shlex_quote(&plan.member),
+        shlex_quote(&plan.source_commit),
+        // Who asked for this delivery, in the spelling the queue's own
+        // `paused by` uses: the control plane that ran the command, not the
+        // host that received it. A receipt that only says "a delivery
+        // happened" answers the question tonight already answered - whether -
+        // and leaves the one that stayed open: who.
+        shlex_quote(&crate::watchdog::hostname()),
         plan.product.root(),
     );
     match &plan.product.readback {

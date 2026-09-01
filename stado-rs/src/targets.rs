@@ -2695,6 +2695,40 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     }
 }
 
+/// How many hosts a registry document declares.
+fn declared_target_count(document: &Value) -> usize {
+    document
+        .get("targets")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+/// Whether an incoming document may replace the recorded one.
+///
+/// A registry with no targets is schema-valid: a fresh install legitimately
+/// has none, so the contract cannot refuse it outright. It is still never an
+/// improvement on a copy that names hosts. On 2026-08-31 the authority served
+/// `{"schema_version":2,"coordinators":[],"targets":[]}` for about nine
+/// minutes; it passed the contract, replaced a copy naming three hosts, and
+/// every host-addressed command answered `target 'charless-mac-mini' is not in
+/// the canonical registry` - from the fallback that exists to survive exactly
+/// that outage.
+pub(crate) fn may_replace_last_good(
+    incoming: &Value,
+    recorded: Option<&Value>,
+) -> Result<(), String> {
+    let arriving = declared_target_count(incoming);
+    let held = recorded.map_or(0, declared_target_count);
+    if arriving == 0 && held > 0 {
+        return Err(format!(
+            "the authority served a registry naming no hosts and the recorded copy names {held}; \
+             keeping the recorded copy, because an empty fleet is what an outage looks like from \
+             here and the fallback exists for outages"
+        ));
+    }
+    Ok(())
+}
+
 /// Record a document the authority served AND this build validated.
 ///
 /// The gate is the registry-v2 contract ([`validate_registry`]), not the
@@ -2730,23 +2764,25 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
                 report(&error);
                 return;
             }
-            // The sanity floor the contract does not carry: a document with
-            // no targets is schema-valid and is never a fleet. On 2026-09-01
-            // a forced push replaced the canonical registry with a 65-byte
-            // skeleton, and this cache - the product's own recovery path -
-            // recorded it as the last KNOWN GOOD registry moments later,
-            // destroying the one copy it exists to provide. Recovery came
-            // from an operator's own snapshot instead.
+            // Valid is not the same as better. A document naming no hosts
+            // never replaces one that names some.
             //
-            // A genuinely empty fleet loses nothing by not being cached:
-            // there is nothing to serve from it during an outage.
-            let targets = data
-                .get("targets")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default();
-            if targets == 0 {
-                report(&"it declares no targets, which is a lost document rather than a fleet");
+            // Measured on 2026-09-01: a forced push replaced the canonical
+            // registry with a 65-byte skeleton, and seventeen minutes later
+            // this cache - the product's own recovery path - recorded that
+            // skeleton as the last KNOWN GOOD registry, destroying the one
+            // copy it exists to provide. Recovery came from an operator's
+            // private snapshot instead.
+            //
+            // The rule is relative rather than an absolute "never cache an
+            // empty document" floor, and that is deliberate: a fresh install
+            // legitimately declares no targets and must still be cacheable.
+            // What is refused is LOSING hosts, not being empty.
+            let recorded = std::fs::read_to_string(&document)
+                .ok()
+                .and_then(|held| serde_json::from_str::<Value>(&held).ok());
+            if let Err(error) = may_replace_last_good(&data, recorded.as_ref()) {
+                report(&error);
                 return;
             }
         }
@@ -3001,6 +3037,53 @@ impl Registry {
         self.placement_profiles
             .iter()
             .find(|profile| profile.name == name)
+    }
+
+    /// The launchd/systemd label that serves directory service `name` on
+    /// `host`, when the registry says which one does.
+    ///
+    /// The directory keys a service by its logical name -- `brama` -- and a
+    /// host keys the same thing by the label launchd knows,
+    /// `com.wisent.always-on.brama`. Both names are declared, in two places,
+    /// and nothing joined them: every caller that had one and needed the other
+    /// re-derived it, or asked an operator for `--port`. This is that join,
+    /// once, from the declarations that already carry it --
+    /// [`Service::managed_service`] where a service owns its unit outright,
+    /// and the placement profile's own `units` map where a profile moves it.
+    ///
+    /// `None` means the registry does not say, which is not the same as the
+    /// service having no unit: a caller must report that it could not tell
+    /// rather than assume the label equals the service name.
+    pub fn service_unit(&self, name: &str, host: &str) -> Option<&str> {
+        let service = self.service(name)?;
+        if let Some(unit) = service
+            .managed_service
+            .as_deref()
+            .filter(|unit| !unit.is_empty())
+        {
+            return Some(unit);
+        }
+        let profile = self.placement_profile(service.placement_profile.as_deref()?)?;
+        let unit = profile.hosts.get(host)?.units.get(name)?;
+        [unit.unit.as_str(), unit.name.as_str()]
+            .into_iter()
+            .find(|label| !label.is_empty())
+    }
+
+    /// The directory service that `label` serves on `host`, by the join in
+    /// [`Registry::service_unit`].
+    ///
+    /// The inverse direction, for callers holding the launchd label and
+    /// needing the declaration -- which is the direction `service serving` was
+    /// missing when it refused a unit label with "the service directory
+    /// declares no endpoint".
+    pub fn service_named_by_unit(&self, label: &str, host: &str) -> Option<&str> {
+        self.service_directory
+            .as_ref()?
+            .services
+            .keys()
+            .map(String::as_str)
+            .find(|name| self.service_unit(name, host) == Some(label))
     }
 
     /// The document as JSON, including every top-level key this build does

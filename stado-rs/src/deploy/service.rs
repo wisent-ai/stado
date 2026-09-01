@@ -2839,10 +2839,6 @@ if [ -n \"$stado_check_item\" ]; then
   fi
   [ -n \"$resolved\" ] || { resolve_err=$(src=$src; /usr/bin/tail -c 300 \"$probe_log\" 2>/dev/null); fail_check \"bearer unavailable via $src${resolve_err:+: $resolve_err}\"; }
 elif [ -n \"$stado_check_var\" ]; then
-      fail_check \"bearer unavailable${resolve_err:+: $resolve_err}\"
-    fi
-  fi
-elif [ -n \"$stado_check_var\" ]; then
   check_env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid environment path payload'
   case \"$check_env_path\" in
     \\$HOME/*) check_env_path=\"$HOME/${check_env_path#\\$HOME/}\" ;;
