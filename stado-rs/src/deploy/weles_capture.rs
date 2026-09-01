@@ -71,9 +71,13 @@ const QUERY_ROUTE: &str = "/v1/echo/action-logs/query";
 const QUERY_LIMIT: usize = 5000;
 const MAX_STEPS: usize = 100;
 
-/// The Weles API executes captures synchronously. The removed database-backed
-/// admission API used to cap batches; there is no queue or chunk boundary now.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Weles executes browser trajectories synchronously. Planning and running one
+/// complete browser flow may legitimately take tens of minutes, so the worker
+/// gets the same 45-minute window as other host-side product executions. The
+/// HTTP client stays alive one minute longer so the worker can return its
+/// timeout envelope instead of racing the transport deadline.
+const RUN_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(46 * 60);
 
 /// How long the forward gets to start accepting connections. The ssh connect
 /// half is already bounded by the inherited `ConnectTimeout`, so this bounds
@@ -784,7 +788,7 @@ pub async fn run_action_payload(
                 "action": action,
                 "params": params,
                 "creds": "redact",
-                "timeout_ms": REQUEST_TIMEOUT.as_millis(),
+                "timeout_ms": RUN_TIMEOUT.as_millis(),
             }),
         )
         .await
@@ -822,7 +826,7 @@ pub fn run_request(
         "action": action,
         "params": params,
         "creds": "redact",
-        "timeout_ms": REQUEST_TIMEOUT.as_millis(),
+        "timeout_ms": RUN_TIMEOUT.as_millis(),
     });
     if let Some(account_id) = account_id {
         request["account_id"] = json!(account_id);
