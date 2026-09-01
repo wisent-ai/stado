@@ -5660,10 +5660,8 @@ const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
 const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
 const home = os.homedir();
 const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
-const managedWorkerRoot = path.join(
-  home,
-  '.stado/services/weles-admission/current',
-);
+const managedServiceRoot = path.join(home, '.stado/services/weles-admission');
+const managedWorkerRoot = path.join(managedServiceRoot, 'current');
 
 const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
 const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
@@ -5703,19 +5701,35 @@ const addRecordingSource = (release, platform, recordings, priority) => {
   releaseVersions.add(release);
   recordingSources.push({ release, platform, recordings, priority });
 };
-const addManagedRuntime = (runtime, platform) => {
+const addManagedRuntime = (runtime, platform, priority) => {
   const manifest = readJson(path.join(runtime, 'package.json'));
-  addRecordingSource(manifest?.version, platform, path.join(runtime, 'recordings'), 1);
+  const release = typeof manifest?.version === 'string' && manifest.version
+    ? manifest.version
+    : null;
+  if (release) releaseVersions.add(release);
+  addRecordingSource(release, platform, path.join(runtime, 'recordings'), priority);
 };
 
-// Current fleet-managed Weles releases unpack their runtime beside the launcher.
-// Some service artifacts carry a platform directory and older ones do not, so
-// inspect both layouts. The `current` link is the declaration Stado reconciles.
-addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed');
+// `current` is the active immutable coordinate. Count its release even before
+// the first browser run creates a recordings directory.
+addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed', 2);
+
+// Also report every immutable release Stado installed. The service store is
+// digest-addressed (`sha256-*/<platform>/runtime`), not version-addressed, and
+// tying release discovery to a recordings directory hid fresh installations
+// until their first browser artifact existed.
 try {
-  for (const entry of fs.readdirSync(managedWorkerRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    addManagedRuntime(path.join(managedWorkerRoot, entry.name, 'runtime'), entry.name);
+  for (const releaseEntry of fs.readdirSync(managedServiceRoot, { withFileTypes: true })) {
+    if (!releaseEntry.isDirectory() || !releaseEntry.name.startsWith('sha256-')) continue;
+    const releaseRoot = path.join(managedServiceRoot, releaseEntry.name);
+    for (const platformEntry of fs.readdirSync(releaseRoot, { withFileTypes: true })) {
+      if (!platformEntry.isDirectory()) continue;
+      addManagedRuntime(
+        path.join(releaseRoot, platformEntry.name, 'runtime'),
+        platformEntry.name,
+        1,
+      );
+    }
   }
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
@@ -5947,9 +5961,12 @@ try {
       }
     }
 
+    const release = typeof document.release_version === 'string' && document.release_version
+      ? document.release_version
+      : null;
     const durable = {
       id,
-      release: null,
+      release,
       platform: process.platform,
       action,
       status,
