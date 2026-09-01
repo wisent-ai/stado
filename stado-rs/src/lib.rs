@@ -42,6 +42,7 @@ pub mod queue;
 pub mod rate_limit;
 pub mod release;
 pub mod release_agent;
+pub mod release_cause;
 pub mod release_control;
 pub mod release_pipeline;
 pub mod scheduler;
