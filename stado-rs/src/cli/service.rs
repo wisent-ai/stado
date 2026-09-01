@@ -2492,14 +2492,125 @@ async fn rollback_service_release(
     }
 }
 
+/// Move the service directory's immutable source with a successful product
+/// release. Without this write the release runner advances `current` on the
+/// host while `service converge` keeps the old artifact in the declaration and
+/// can later put that old release back.
+async fn record_released_service_source(
+    options: &ServiceReleaseOptions<'_>,
+    artifact: &crate::release_control::ReleaseArtifactRef,
+) -> Result<(), CmdError> {
+    let source_ref = artifact
+        .archive_uri
+        .strip_suffix("/release.tar.gz")
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release archive URI {:?} has no service artifact coordinate",
+                artifact.archive_uri
+            ))
+        })?;
+    let mut document = registry::fetch_document().await?;
+    let services = document
+        .get("service_directory")
+        .and_then(|directory| directory.get("services"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| CmdError::click("registry carries no service directory"))?;
+    let matching = services
+        .iter()
+        .filter(|(logical, entry)| {
+            logical.as_str() == options.name
+                || entry.get("managed_service").and_then(Value::as_str) == Some(options.name)
+        })
+        .map(|(logical, _)| logical.clone())
+        .collect::<Vec<_>>();
+    let logical = match matching.as_slice() {
+        [logical] => logical.clone(),
+        [] => {
+            return Err(CmdError::click(format!(
+                "service directory carries no route for managed service {:?}",
+                options.name
+            )))
+        }
+        several => {
+            return Err(CmdError::click(format!(
+                "managed service {:?} is shared by {} directory routes ({}); refusing to \
+                 change an ambiguous declaration",
+                options.name,
+                several.len(),
+                several.join(", ")
+            )))
+        }
+    };
+    let changed = {
+        let entry = document
+            .get_mut("service_directory")
+            .and_then(|directory| directory.get_mut("services"))
+            .and_then(|services| services.get_mut(&logical))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| CmdError::click("release service route disappeared"))?;
+        let source = entry
+            .get_mut("declaration")
+            .and_then(Value::as_object_mut)
+            .and_then(|declaration| declaration.get_mut("source"))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "service directory route {logical:?} has no declaration source"
+                ))
+            })?;
+        let changed = source.get("artifact").and_then(Value::as_str) != Some(source_ref)
+            || source.get("sha256").and_then(Value::as_str)
+                != Some(artifact.artifact_sha256.as_str());
+        if changed {
+            source.insert("artifact".to_string(), json!(source_ref));
+            source.insert(
+                "sha256".to_string(),
+                json!(artifact.artifact_sha256.as_str()),
+            );
+        }
+        changed
+    };
+    if changed {
+        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        registry::push_document(&document).await?;
+    }
+    Ok(())
+}
+
 async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(options.host)
         .await
         .map_err(click)?;
-    let services = declared_matching(options.name, Some(options.host)).await?;
-    let Some(declared) = services.first() else {
+    let mut services = declared_matching(options.name, Some(options.host)).await?;
+    let Some(current) = services.first() else {
         return Err(CmdError::click(format!(
             "{} does not manage {}; deploy it first",
+            options.host, options.name
+        )));
+    };
+    if service::requires_daemon_domain(&target)
+        && UnitDomain::from_path(&current.path).is_per_login()
+    {
+        let reason = format!(
+            "release {} {} requires an always-on system service",
+            options.product, options.version
+        );
+        ensure(EnsureOptions {
+            name: options.name,
+            host: options.host,
+            from: None,
+            args: &[],
+            reason: &reason,
+            as_daemon: true,
+            as_launch_agent: false,
+            as_json: false,
+        })
+        .await?;
+        services = declared_matching(options.name, Some(options.host)).await?;
+    }
+    let Some(declared) = services.first() else {
+        return Err(CmdError::click(format!(
+            "{} lost the managed {} declaration during domain convergence",
             options.host, options.name
         )));
     };
@@ -2708,6 +2819,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     )
     .await
     .map_err(CmdError::click)?;
+    record_released_service_source(&options, &bundle.artifact).await?;
     let report = json!({
         "host": options.host,
         "service": options.name,
