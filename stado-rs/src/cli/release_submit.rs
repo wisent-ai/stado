@@ -1969,8 +1969,52 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     write_receipt(&receipt)
 }
 
+async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdError> {
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot prove the current release coordinate before delivery: {error}"
+            ))
+        })?;
+    let control = release_control::control(&registry.to_document())
+        .map_err(CmdError::click)?
+        .ok_or_else(|| CmdError::click("registry has no release control declaration"))?;
+    let policy = control.products.get(&request.product).ok_or_else(|| {
+        CmdError::click(format!(
+            "registry has no release policy for {}",
+            request.product
+        ))
+    })?;
+    let desired = policy.desired.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "registry has no desired release for {}",
+            request.product
+        ))
+    })?;
+    let artifact = desired.artifacts.get(&request.platform).ok_or_else(|| {
+        CmdError::click(format!(
+            "desired {} {} has no {} artifact",
+            request.product, desired.version, request.platform
+        ))
+    })?;
+    let exact = desired.version == request.version
+        && artifact.archive_uri == request.archive_uri
+        && artifact.artifact_sha256 == request.archive_sha256
+        && artifact.manifest_uri == request.manifest_uri
+        && artifact.manifest_sha256 == request.manifest_sha256;
+    if !exact {
+        return Err(CmdError::click(format!(
+            "delivery {} {} {} was superseded by desired {} {:?}; refusing the stale coordinate",
+            request.product, request.version, request.platform, desired.version, desired.channel
+        )));
+    }
+    Ok(())
+}
+
 pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> {
     let request: DeliveryRequest = serde_json::from_slice(&std::fs::read(&args.request)?)?;
+    require_current_delivery(&request).await?;
     let archive = std::fs::read(&request.archive_path)?;
     let source_archive = std::fs::read(&request.source_path)?;
     if request.schema_version != 1
