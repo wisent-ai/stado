@@ -5100,9 +5100,39 @@ match=@MATCH@
 set -- @ROOTS@
 # The pids the DECLARED labels hold, and their descendants. Everything else
 # under a managed root is a process the document does not account for.
+#
+# `launchctl list` prints only the domain this login can print, so a declared
+# SYSTEM LaunchDaemon's pid was never in this set and every process it owns read
+# as unowned. On charless-mac-mini on 2026-09-01 that made a fleet-wide
+# `reap --command 'stado agent'` propose ending pid 3963 -- the queue agent
+# `service ensure` had just installed as `com.wisent.compute.service.stado-agent-mini`
+# in the system domain, thirty seconds earlier, and the only DECLARED agent the
+# host had. Its argv is byte-identical to the undeclared duplicate beside it, so
+# no `--command` substring could separate them and the operator's only options
+# were to end the declared agent too or not to reap at all.
+#
+# So the keep-set asks launchd for the label when the listing does not have it.
+# `launchctl print <domain>/<label>` reads the system domain without privilege
+# and states the `pid` the job holds; only the `pid` line is taken. This is the
+# same blindness the loaded-label scan had against `com.wisent.*` and the same
+# remedy: ask the host about the whole world, not about the part one command
+# happens to print.
 keep=''
+uid=$(/usr/bin/id -u)
+listing=$(/bin/launchctl list)
 for label in @LABELS@; do
-  pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l && $1 ~ /^[0-9]+$/ { print $1 }')
+  pid=$(printf '%s\\n' \"$listing\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l && $1 ~ /^[0-9]+$/ { print $1 }')
+  if [ -z \"$pid\" ]; then
+    for domain in system \"user/$uid\" \"gui/$uid\"; do
+      pid=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null |
+        /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*pid$/ { print $2; exit }' |
+        /usr/bin/tr -d ' ')
+      case \"$pid\" in
+        ''|*[!0-9]*) pid='' ;;
+        *) break ;;
+      esac
+    done
+  fi
   if [ -n \"$pid\" ]; then keep=\"$keep $pid\"; fi
 done
 kept() {
