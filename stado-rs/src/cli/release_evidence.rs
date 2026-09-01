@@ -43,8 +43,10 @@ use super::release_quarantine::{
 use super::CmdError;
 use crate::deploy::{host_channel, host_gates, production_runner, shlex_quote};
 use crate::release_agent::{
-    self, host_log_path, release_status_uri, HostReleaseState, RolloutPhase,
+    self, host_log_path, release_status_uri, HostReleaseState, QuarantineRecord, RepeatingCause,
+    RolloutPhase,
 };
+use crate::release_cause::{self, Classification, QuarantineCause};
 
 /// The tail every operator wanted in the incident: enough to carry a panic
 /// and its backtrace's first frames, short enough to read in a terminal.
@@ -96,6 +98,19 @@ pub const BLOCKER_DESIRED_DIGEST_QUARANTINED: &str = "desired_digest_quarantined
 /// the rollout is still inside its readiness window and the next thing that
 /// happens to it is a quarantine.
 pub const BLOCKER_CANDIDATE_NOT_READY: &str = "candidate_not_ready";
+/// The last few quarantines on this host all failed for one named cause, so
+/// the agent will refuse the next candidate rather than spend it on the same
+/// wall. Reported here because the only other way to discover the refusal is
+/// to promote a candidate and read it afterwards, which costs the candidate
+/// this rule exists to save.
+pub const BLOCKER_REPEATING_CAUSE: &str = "repeating_quarantine_cause";
+
+/// The command that retires [`BLOCKER_DESIRED_DIGEST_QUARANTINED`]. Named here
+/// rather than left to the operator, because a verdict that identifies a
+/// permanent blocker and withholds the one command that clears it is half a
+/// diagnosis.
+pub const REMEDY_DESIRED_DIGEST_QUARANTINED: &str =
+    "stado release quarantine clear --digest <digest> --reason <text>";
 
 /// The marker the candidate probe prints, in the tab-delimited `STADO_*`
 /// family every script on this channel speaks.
@@ -429,8 +444,32 @@ async fn candidate_section(
     }))
 }
 
-/// The host's quarantine map, each entry told whether it is the digest the
-/// registry currently desires.
+/// The named cause one quarantine record carries, deriving it from the reason
+/// when the record has none of its own.
+///
+/// Every record already on the fleet was written before the agent classified
+/// anything, so reading only the stored field would report this host's entire
+/// month of history as unclassified. Re-deriving costs one pass over a string
+/// the command already holds and is idempotent: the stored name came from the
+/// same classifier over a superset of the same text, so a record that really
+/// is unclassified stays unclassified.
+///
+/// What re-derivation cannot recover is what the truncated reason no longer
+/// contains. That is a property of the old records, not of this function, and
+/// it is why the agent now classifies from the whole log at the moment it
+/// quarantines.
+pub(crate) fn record_cause(record: &QuarantineRecord) -> Classification {
+    if record.cause.is_classified() {
+        return Classification {
+            cause: record.cause,
+            evidence: record.evidence.clone(),
+        };
+    }
+    release_cause::classify(&record.reason)
+}
+
+/// The host's quarantine map, each entry told what it failed for and whether it
+/// is the digest the registry currently desires.
 ///
 /// `is_desired_digest` is the whole point of showing the map: a quarantined
 /// digest that nobody desires is history, and the one that matches desired
@@ -445,15 +484,70 @@ fn quarantine_entries(
             .quarantined
             .iter()
             .map(|(digest, record)| {
+                let classified = record_cause(record);
                 json!({
                     "digest": digest,
                     "reason": record.reason,
                     "quarantined_at": record.quarantined_at.to_rfc3339(),
                     "is_desired_digest": desired_digest == Some(digest.as_str()),
+                    "cause": classified.cause.as_str(),
+                    "evidence": classified.evidence,
+                    "remedy": classified.cause.remedy(),
                 })
             })
             .collect()
     })
+}
+
+/// How many quarantines share each cause, which one dominates, and what to do
+/// about it.
+///
+/// The table this sits above had twenty rows of truncated stderr on the host
+/// that prompted it, and reading it was the operator's job: several of those
+/// rows were one thing, and nothing said so. This is that sentence, computed.
+///
+/// `unclassified` is carried in `causes` like any other count and excluded from
+/// `dominant`. On a host with history it is usually the largest bucket, and an
+/// operator asking what dominates wants a cause they can act on -- but hiding
+/// the count would misrepresent how much of the table is actually understood.
+fn cause_summary(quarantined: &[Value]) -> Value {
+    let causes: Vec<QuarantineCause> = quarantined
+        .iter()
+        .map(|entry| {
+            entry["cause"]
+                .as_str()
+                .map_or(QuarantineCause::Unclassified, parse_cause)
+        })
+        .collect();
+    let total = causes.len();
+    let tally = release_cause::tally(causes);
+    let dominant = release_cause::dominant(&tally);
+    json!({
+        "total": total,
+        "causes": tally
+            .iter()
+            .map(|(cause, count)| json!({
+                "cause": cause.as_str(),
+                "count": count,
+                "remedy": cause.remedy(),
+            }))
+            .collect::<Vec<Value>>(),
+        "dominant_cause": dominant.map(|(cause, _)| cause.as_str()),
+        "dominant_count": dominant.map(|(_, count)| count),
+        "unclassified": tally
+            .iter()
+            .find(|(cause, _)| !cause.is_classified())
+            .map_or(0, |(_, count)| *count),
+    })
+}
+
+/// The cause behind a word this module just wrote.
+///
+/// The summary counts the rendered entries rather than the records, so that the
+/// table and the totals above it can never disagree about one row. That means
+/// reading the word back, and the word is this crate's own serialization.
+fn parse_cause(word: &str) -> QuarantineCause {
+    serde_json::from_value(Value::String(word.to_string())).unwrap_or(QuarantineCause::Unclassified)
 }
 
 /// Every fact the verdict is computed from, so the rule itself holds no I/O
@@ -471,6 +565,9 @@ struct Facts<'a> {
     /// The blockers the host's own queue agent published, in its words.
     gate_blockers: Vec<String>,
     disk_pressure_unresolved: bool,
+    /// The agent's own repeat-cause refusal, as it would apply on the next
+    /// tick.
+    repeating: Option<RepeatingCause>,
     /// A candidate is recorded, or the phase says one is being staged.
     in_flight: bool,
 }
@@ -478,9 +575,10 @@ struct Facts<'a> {
 /// The verdict and the report around it.
 ///
 /// `blocked` is the only verdict that says the rollout will not move on its
-/// own, and it has exactly two causes: the agent refuses a quarantined
-/// desired digest on every pass, and a host with an unresolved disk gate
-/// fails admission closed and claims nothing at all. Everything short of
+/// own, and it now has three causes: the agent refuses a quarantined desired
+/// digest on every pass, a host with an unresolved disk gate fails admission
+/// closed and claims nothing at all, and the agent refuses to spend another
+/// candidate on a cause the last few all failed for. Everything short of
 /// converged is `rolling`, because the agent's next tick is what advances it.
 fn diagnosis(facts: &Facts<'_>) -> Value {
     let mut blockers = facts.gate_blockers.clone();
@@ -503,17 +601,52 @@ fn diagnosis(facts: &Facts<'_>) -> Value {
     {
         blockers.push(BLOCKER_CANDIDATE_NOT_READY.to_string());
     }
+    if facts.repeating.is_some() {
+        blockers.push(BLOCKER_REPEATING_CAUSE.to_string());
+    }
     blockers.sort();
     blockers.dedup();
     let converged =
         facts.observed_version.is_some() && facts.observed_version == facts.desired_version;
-    let verdict = if desired_quarantined || facts.disk_pressure_unresolved {
-        VERDICT_BLOCKED
-    } else if facts.in_flight || !converged {
-        VERDICT_ROLLING
-    } else {
-        VERDICT_SETTLED
-    };
+    let verdict =
+        if desired_quarantined || facts.disk_pressure_unresolved || facts.repeating.is_some() {
+            VERDICT_BLOCKED
+        } else if facts.in_flight || !converged {
+            VERDICT_ROLLING
+        } else {
+            VERDICT_SETTLED
+        };
+    let summary = cause_summary(&facts.quarantined);
+    // Remedies are for what is blocking *now*, not for every cause in the
+    // host's history. A settled product with an old quarantine was printing
+    // "declare rollback compatibility, then promote it again" under a verdict
+    // of `settled`, which reads as work to do where there is none. The
+    // historical repairs stay in the per-cause table, where they are framed as
+    // history.
+    let mut remedies = Vec::new();
+    if desired_quarantined {
+        // The cause first, the clear second, in that order and for that
+        // reason: clearing the digest without repairing what it failed on just
+        // spends another candidate on the same wall. This is the mistake the
+        // incident repeated.
+        if let Some(remedy) = facts
+            .quarantined
+            .iter()
+            .find(|entry| entry["is_desired_digest"] == Value::Bool(true))
+            .and_then(|entry| entry["remedy"].as_str())
+        {
+            remedies.push(remedy.to_string());
+        }
+        remedies.push(REMEDY_DESIRED_DIGEST_QUARANTINED.to_string());
+    }
+    if let Some(remedy) = facts
+        .repeating
+        .as_ref()
+        .and_then(|repeating| repeating.cause.remedy())
+    {
+        remedies.push(remedy.to_string());
+    }
+    remedies.dedup();
     json!({
         "product": facts.product,
         "target": facts.target,
@@ -522,10 +655,20 @@ fn diagnosis(facts: &Facts<'_>) -> Value {
         "phase": facts.phase,
         "detail": facts.detail,
         "candidate": facts.candidate,
+        "quarantine_summary": summary,
+        "repeating_cause": facts.repeating.as_ref().map(|repeating| json!({
+            "cause": repeating.cause.as_str(),
+            "quarantines": repeating.digests.len(),
+            "since": repeating.since.to_rfc3339(),
+            "evidence": repeating.evidence,
+            "digests": repeating.digests,
+            "detail": repeating.sentence(),
+        })),
         "quarantined": facts.quarantined,
         "gates": facts.gates,
         "verdict": verdict,
         "blockers": blockers,
+        "remedies": remedies,
     })
 }
 
@@ -615,6 +758,10 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         gates: host_gates::gates_section(&gates),
         gate_blockers: gates.blockers.clone(),
         disk_pressure_unresolved: gates.disk_pressure_unresolved,
+        // Computed from the state file this command already read, by the
+        // agent's own function, so the blocker reported here and the refusal
+        // the agent would apply cannot be two different rules.
+        repeating: state.as_ref().and_then(release_agent::repeating_cause),
         in_flight: state
             .as_ref()
             .is_some_and(|state| state.candidate.is_some() || phase_is_rolling(state.phase)),
@@ -661,13 +808,72 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
             blockers.join(", ")
         }
     );
+    // The refusal, spelled out where the operator is already looking. This is
+    // the line that turns "the rollout is not moving" into "the rollout is
+    // being held, on purpose, for this, and here is how to overrule it".
+    if let Some(repeating) = report["repeating_cause"].as_object() {
+        println!(
+            "held              {} quarantines share {} since {}",
+            cell(&repeating["quarantines"]),
+            cell(&repeating["cause"]),
+            cell(&repeating["since"])
+        );
+        println!("                  {}", cell(&repeating["evidence"]));
+    }
+    let remedies: Vec<String> = report["remedies"]
+        .as_array()
+        .map(|remedies| remedies.iter().map(cell).collect())
+        .unwrap_or_default();
+    for (index, remedy) in remedies.iter().enumerate() {
+        // One line each, all of them: the first is not necessarily the one
+        // this operator needs, and a verdict that prints only the top remedy
+        // hides the rest of what it just diagnosed.
+        let label = if index == 0 { "remedy" } else { "" };
+        println!("{label:<18}{remedy}");
+    }
     let quarantined = report["quarantined"]
         .as_array()
         .cloned()
         .unwrap_or_default();
     if !quarantined.is_empty() {
+        // The summary, then the detail. Twenty rows of truncated stderr is not
+        // a thing an operator can read, and the finding in it -- that several
+        // of those rows are one cause -- was a pattern they had to spot. It is
+        // a line now, and the table below still holds every row it counts.
+        let summary = &report["quarantine_summary"];
+        println!(
+            "\nquarantined       {} on this host, {} unclassified",
+            cell(&summary["total"]),
+            cell(&summary["unclassified"])
+        );
+        match summary["dominant_cause"].as_str() {
+            Some(dominant) => println!(
+                "dominant cause    {dominant} ({} of {})",
+                cell(&summary["dominant_count"]),
+                cell(&summary["total"])
+            ),
+            // Said outright rather than left as an absent line: "no cause
+            // dominates" and "nothing here is classified" are different
+            // findings, and only the second one is about this host's evidence.
+            None => println!("dominant cause    none classified"),
+        }
         super::table::print(
-            &["DIGEST", "DESIRED", "QUARANTINED AT", "REASON"],
+            &["CAUSE", "COUNT", "REMEDY"],
+            &summary["causes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|entry| {
+                    vec![
+                        cell(&entry["cause"]),
+                        cell(&entry["count"]),
+                        cell(&entry["remedy"]),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+        super::table::print(
+            &["DIGEST", "DESIRED", "QUARANTINED AT", "CAUSE", "REASON"],
             &quarantined
                 .iter()
                 .map(|entry| {
@@ -675,6 +881,7 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
                         cell(&entry["digest"]),
                         cell(&entry["is_desired_digest"]),
                         cell(&entry["quarantined_at"]),
+                        cell(&entry["cause"]),
                         cell(&entry["reason"]),
                     ]
                 })

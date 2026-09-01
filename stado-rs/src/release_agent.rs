@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::release_cause::{self, QuarantineCause};
 use crate::release_control::{
     self, BlueGreenServing, DesiredRelease, ProductReleasePolicy, QualificationStatus,
     ReleaseArtifactRef, ReleaseControl, ReleaseManifest, ReleaseTargetPolicy, StrategyKind,
@@ -61,11 +62,58 @@ pub struct ProcessRecord {
     pub started_at: DateTime<Utc>,
 }
 
+/// One digest this host refuses to roll out again, why, and what that reason
+/// actually means.
+///
+/// `reason` is the sentence the agent composed at the moment it gave up, and it
+/// leads with what the agent saw from outside the candidate. `cause` is the
+/// name derived from it and from the candidate's own log, and `evidence` is the
+/// one line that name was read from. All three are kept: a record that stored
+/// only the cause could not be re-read when the vocabulary grows, and a record
+/// that stored only the reason is what left twenty rows of truncated stderr
+/// unreadable for a month.
+///
+/// `cause` and `evidence` default, because every record already on the fleet
+/// was written without them and this struct refuses unknown fields — a missing
+/// name has to read as [`QuarantineCause::Unclassified`], not as a parse
+/// failure that would strand the rollout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuarantineRecord {
     pub reason: String,
     pub quarantined_at: DateTime<Utc>,
+    #[serde(default)]
+    pub cause: QuarantineCause,
+    #[serde(default)]
+    pub evidence: String,
+}
+
+impl QuarantineRecord {
+    /// Record one refusal, naming its cause from the reason itself.
+    ///
+    /// For the sites that never read a candidate log — a rollback, a rejected
+    /// rollback-compatibility declaration, a fetch that failed — the reason is
+    /// the whole of the available evidence.
+    fn new(reason: String) -> Self {
+        let classified = release_cause::classify(&reason);
+        Self {
+            reason,
+            quarantined_at: Utc::now(),
+            cause: classified.cause,
+            evidence: classified.evidence,
+        }
+    }
+
+    /// Record one refusal whose cause was read from more of the candidate's
+    /// own output than the reason could carry.
+    fn classified(reason: String, classified: release_cause::Classification) -> Self {
+        Self {
+            reason,
+            quarantined_at: Utc::now(),
+            cause: classified.cause,
+            evidence: classified.evidence,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,33 +417,94 @@ fn release_log(
         .map_err(|error| format!("cannot open release log {}: {error}", path.display()))
 }
 
-/// The last `lines` lines of a release log, for a failure record that has to
-/// explain itself.
+/// One release log as a failure record uses it.
 ///
 /// A quarantine reason used to say only what the agent observed from outside --
 /// "pid is gone", "refused the connection" -- and the product's own account of
-/// why it exited sat in a file nobody had opened. Two days of this session went
+/// why it exited sat in a file nobody had opened. Two days of one session went
 /// into reading those files by hand, one candidate at a time, so the reason now
 /// carries the tail with it. Missing or unreadable is reported, never silently
 /// dropped: a reason that mentions no log at all would send the next reader
 /// hunting for one.
-fn log_tail(path: &Path, lines: usize, max_chars: usize) -> String {
+struct LogEvidence {
+    /// `<path>: <tail>` for the reason string, or a bracketed note when there
+    /// is nothing to quote.
+    rendered: String,
+    /// Every byte the product wrote, for the classifier. Empty exactly when
+    /// the file was missing, unreadable or empty.
+    body: String,
+}
+
+/// Quote a bounded window of `text` that keeps both of its ends.
+///
+/// This used to keep the first `max_chars` characters and drop everything
+/// after them, and eight of the twenty live `brama` records were clipped that
+/// way. Measured against those records the head-clip did not actually lose a
+/// cause: every decisive sentence present sits in the first 57% of its tail,
+/// the latest being `brama-0.2.55`'s `no value at ...#value`. So this is not a
+/// fix for an observed misclassification, and the fix for that is elsewhere --
+/// the cause is now derived from the whole log rather than from this window.
+///
+/// It is still the wrong end to drop. Nothing holds a decisive line near the
+/// head: 57% of a 1200-character budget is already past the midpoint, and the
+/// end of a dying process's log is exactly where a panic, an abort message or a
+/// final error lands. Keeping both ends costs the same width and cannot lose
+/// either. The elision carries the count of what went rather than a bare
+/// ellipsis, because a reader who cannot see how much was dropped cannot tell a
+/// trimmed line from a whole one.
+fn clip_middle(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    let head_chars = max_chars / 2;
+    let tail_chars = max_chars - head_chars;
+    let head_end = text
+        .char_indices()
+        .nth(head_chars)
+        .map_or(text.len(), |(index, _)| index);
+    let tail_start = text
+        .char_indices()
+        .nth(total - tail_chars)
+        .map_or(text.len(), |(index, _)| index);
+    format!(
+        "{} …{} elided… {}",
+        &text[..head_end],
+        total - max_chars,
+        &text[tail_start..]
+    )
+}
+
+/// Read one release log once, for both the reason and the classifier.
+///
+/// Read once rather than twice on purpose: the reason quotes a bounded tail and
+/// the classifier wants every byte, and opening the file a second time would
+/// let the two disagree about what the product said.
+fn log_evidence(path: &Path, lines: usize, max_chars: usize) -> LogEvidence {
+    let note = |text: String| LogEvidence {
+        rendered: text,
+        body: String::new(),
+    };
     let body = match std::fs::read_to_string(path) {
         Ok(body) => body,
-        Err(error) => return format!("[{} unreadable: {error}]", path.display()),
+        Err(error) => return note(format!("[{} unreadable: {error}]", path.display())),
     };
     let trimmed = body.trim_end();
     if trimmed.is_empty() {
-        return format!("[{} is empty]", path.display());
+        return note(format!("[{} is empty]", path.display()));
     }
     let mut kept: Vec<&str> = trimmed.lines().rev().take(lines).collect();
     kept.reverse();
-    let joined = kept.join(" | ");
-    let clipped = match joined.char_indices().nth(max_chars) {
-        None => joined.clone(),
-        Some((cut, _)) => format!("{}…", &joined[..cut]),
-    };
-    format!("{}: {clipped}", path.display())
+    let clipped = clip_middle(&kept.join(" | "), max_chars);
+    LogEvidence {
+        rendered: format!("{}: {clipped}", path.display()),
+        body,
+    }
+}
+
+/// The bounded tail alone, for a record with nothing to classify from.
+fn log_tail(path: &Path, lines: usize, max_chars: usize) -> String {
+    log_evidence(path, lines, max_chars).rendered
 }
 
 fn expand_home(value: &str, home: &str) -> String {
@@ -976,10 +1085,7 @@ async fn rollback(
     if let Some(record) = &failed {
         state.quarantined.insert(
             record.artifact_sha256.clone(),
-            QuarantineRecord {
-                reason: reason.clone(),
-                quarantined_at: Utc::now(),
-            },
+            QuarantineRecord::new(reason.clone()),
         );
     }
     if let Some(previous) = state.previous.take() {
@@ -1025,6 +1131,132 @@ async fn rollback(
     save_state(target, state)
 }
 
+/// How many consecutive quarantines sharing one named cause count as a wall
+/// rather than a bad attempt.
+///
+/// Chosen by measuring the live data, not by taste. Classifying all twenty
+/// `brama` records on `charless-mac-mini` gives a longest run of one classified
+/// cause of **two** -- `brama-0.2.42` and `brama-0.2.43`, four days apart, both
+/// refused at capability redemption. Two is ordinary: a candidate fails,
+/// someone changes something, the next candidate fails the same way because the
+/// change was wrong. Refusing at two would block that loop on its first honest
+/// iteration.
+///
+/// Three is therefore the smallest threshold that fires on nothing in a month
+/// of real history -- it raises no refusal anywhere in those twenty records --
+/// while catching the first step past the worst run the fleet has actually
+/// produced. Calibrating it against the data rather than the anecdote matters:
+/// the 2026-09-01 sequence looks like a run of three and is not one, because
+/// 0.2.49, 0.2.50 and 0.2.51 wrote no failure line and cannot be named.
+///
+/// The reason no historical window trips this is that twelve of the twenty rows
+/// are unclassified. The threshold is worth having anyway, because from here on
+/// a cause is recorded at the moment of quarantine from the whole log, so runs
+/// become visible instead of being invisible in a column that did not exist.
+const REPEAT_CAUSE_LIMIT: usize = 3;
+
+/// Is this product about to walk into a wall it has already walked into?
+///
+/// `None` when there is no such wall.
+///
+/// **The "has anything changed" test.** The most recent [`REPEAT_CAUSE_LIMIT`]
+/// quarantines must all name the same classified cause, and that is the whole
+/// test, because of what it takes for a record to leave this map. The agent
+/// only ever adds; the one thing that removes an entry is
+/// `stado release quarantine clear --digest ... --reason ...`, which is an
+/// operator stating, on the audit trail beside this file, that something
+/// changed. So a run that is still intact *is* the assertion that nothing has
+/// changed, and it needs no extra state to record.
+///
+/// A new digest is deliberately not a change. That is the exact mistake the
+/// incident made: new digest, new version number, same unserved credential, and
+/// every rollout treated the new digest as a new situation.
+///
+/// Consecutive, not "the last three classified": an unclassified quarantine
+/// between two members is a candidate that failed in a way this agent could not
+/// match to the others, and claiming it as more of the same is precisely the
+/// overreach the cause vocabulary exists to avoid. It breaks the run.
+///
+/// Three ways out, none of them new and none of them a bypass flag:
+///
+/// - clear any one of the run's digests, which is the audited override and
+///   immediately shortens the run below the limit;
+/// - promote a candidate that fails for a *different* cause, which breaks the
+///   run on its own;
+/// - fix the cause, after which nothing quarantines and the run stops growing.
+///
+/// [`QuarantineCause::Unclassified`] never triggers this. Twelve of the twenty
+/// live records are unclassified, seven of them consecutively, and refusing on a
+/// cause the agent could not name would have frozen this product for a month on
+/// no evidence at all.
+pub fn repeating_cause(state: &HostReleaseState) -> Option<RepeatingCause> {
+    let mut recent: Vec<&QuarantineRecord> = state.quarantined.values().collect();
+    // The map is keyed by digest, so its own order is the digest's. Recency is
+    // the question being asked.
+    recent.sort_by_key(|record| std::cmp::Reverse(record.quarantined_at));
+    let run = recent.get(..REPEAT_CAUSE_LIMIT)?;
+    let cause = run[0].cause;
+    if !cause.is_classified() || !run.iter().all(|record| record.cause == cause) {
+        return None;
+    }
+    Some(RepeatingCause {
+        cause,
+        evidence: run[0].evidence.clone(),
+        since: run[run.len() - 1].quarantined_at,
+        digests: state
+            .quarantined
+            .iter()
+            .filter(|(_, record)| run.iter().any(|member| std::ptr::eq(*member, *record)))
+            .map(|(digest, _)| digest.clone())
+            .collect(),
+    })
+}
+
+/// A run of quarantines that all failed the same named way.
+///
+/// Public and structured rather than a formatted sentence because two callers
+/// need it: the agent records it as the reason it stopped, and
+/// `stado release doctor` reports it as a blocker *before* the agent's next
+/// tick, so an operator finds out that the next promotion will be refused
+/// without having to spend one to discover it.
+#[derive(Debug, Clone)]
+pub struct RepeatingCause {
+    pub cause: QuarantineCause,
+    /// The decisive line from the most recent member of the run.
+    pub evidence: String,
+    /// When the oldest member of the run was quarantined.
+    pub since: DateTime<Utc>,
+    /// Every digest in the run, so the override names a real digest.
+    pub digests: Vec<String>,
+}
+
+impl RepeatingCause {
+    /// The sentence recorded on the host and printed to the operator.
+    ///
+    /// Ends with the override, always. A refusal that does not say how to
+    /// overrule it is a refusal an operator works around by editing the state
+    /// file, which is the unaudited write this whole area exists to remove.
+    pub fn sentence(&self) -> String {
+        let mut sentence = format!(
+            "refusing to promote another candidate: the last {} quarantines on this host all \
+             failed for {} since {}, and nothing about it has changed. {}",
+            REPEAT_CAUSE_LIMIT,
+            self.cause.as_str(),
+            self.since.to_rfc3339(),
+            self.evidence
+        );
+        if let Some(remedy) = self.cause.remedy() {
+            sentence.push_str(&format!(" Remedy: {remedy}."));
+        }
+        sentence.push_str(&format!(
+            " Override by retiring one of these digests with: stado release quarantine clear \
+             --digest {} --reason <text>.",
+            self.digests.first().map_or("<digest>", String::as_str)
+        ));
+        sentence
+    }
+}
+
 async fn reconcile_product(
     control: &ReleaseControl,
     product: &str,
@@ -1060,10 +1292,7 @@ async fn reconcile_product(
     if repeats_failed_rollout {
         state.quarantined.insert(
             artifact.artifact_sha256.clone(),
-            QuarantineRecord {
-                reason: state.detail.clone(),
-                quarantined_at: Utc::now(),
-            },
+            QuarantineRecord::new(state.detail.clone()),
         );
         state.phase = RolloutPhase::Quarantined;
         state.detail =
@@ -1188,6 +1417,16 @@ async fn reconcile_product(
         return Ok(state);
     }
 
+    // Everything below stages and burns a new candidate. Before spending one,
+    // ask whether the last few were spent against a condition that has not
+    // moved.
+    if let Some(wall) = repeating_cause(&state) {
+        state.phase = RolloutPhase::Quarantined;
+        state.detail = wall.sentence();
+        save_state(target, &mut state)?;
+        return Ok(state);
+    }
+
     if let Some(incomplete) = state.candidate.take() {
         terminate(&incomplete);
         state.detail = "discarded incomplete candidate from an interrupted rollout".to_string();
@@ -1203,10 +1442,7 @@ async fn reconcile_product(
             Err(reason) => {
                 state.quarantined.insert(
                     artifact.artifact_sha256.clone(),
-                    QuarantineRecord {
-                        reason: reason.clone(),
-                        quarantined_at: Utc::now(),
-                    },
+                    QuarantineRecord::new(reason.clone()),
                 );
                 state.phase = RolloutPhase::Quarantined;
                 state.detail = reason;
@@ -1230,10 +1466,7 @@ async fn reconcile_product(
             );
             state.quarantined.insert(
                 artifact.artifact_sha256.clone(),
-                QuarantineRecord {
-                    reason: reason.clone(),
-                    quarantined_at: Utc::now(),
-                },
+                QuarantineRecord::new(reason.clone()),
             );
             state.phase = RolloutPhase::Quarantined;
             state.detail = reason;
@@ -1265,26 +1498,42 @@ async fn reconcile_product(
     .await
     {
         terminate(&process);
+        let stderr = log_evidence(
+            &release_log_path(target, product, &manifest.version, "err"),
+            20,
+            1200,
+        );
+        let stdout = log_evidence(
+            &release_log_path(target, product, &manifest.version, "out"),
+            5,
+            400,
+        );
         let reason = format!(
             "candidate did not become ready within {}s: {why}; stderr {}; stdout {}",
-            policy.strategy.readiness_timeout_seconds,
-            log_tail(
-                &release_log_path(target, product, &manifest.version, "err"),
-                20,
-                1200,
-            ),
-            log_tail(
-                &release_log_path(target, product, &manifest.version, "out"),
-                5,
-                400,
-            )
+            policy.strategy.readiness_timeout_seconds, stderr.rendered, stdout.rendered
         );
+        // Classified from every byte the candidate wrote, not from the bounded
+        // tail that went into the reason, so a name is never withheld because
+        // the quote was trimmed. On the live records the two happen to agree;
+        // that is luck about where those products put their decisive line, not
+        // a property worth depending on, and the whole log costs one read that
+        // has already happened.
+        //
+        // It does not manufacture a name where the product wrote none. The
+        // three candidates burned on 2026-09-01 (`brama` 0.2.49, 0.2.50 and
+        // 0.2.51) wrote no failure line anywhere in their logs -- they stop
+        // after `issuing runtime capabilities` and say nothing -- and they stay
+        // unclassified when the whole file is read. That is a gap in what the
+        // product reports about itself, and this classifier must not paper over
+        // it with the nearest-looking label.
+        let classified = release_cause::classify(&format!(
+            "{why}\n{}\n{}",
+            stderr.body.trim_end(),
+            stdout.body.trim_end()
+        ));
         state.quarantined.insert(
             process.artifact_sha256.clone(),
-            QuarantineRecord {
-                reason: reason.clone(),
-                quarantined_at: Utc::now(),
-            },
+            QuarantineRecord::classified(reason.clone(), classified),
         );
         state.candidate = None;
         state.phase = RolloutPhase::Quarantined;
@@ -1490,5 +1739,163 @@ pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
                 eprintln!("stado release proxy connection failed: {error}");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_with(quarantines: &[(&str, QuarantineCause, &str)]) -> HostReleaseState {
+        let mut state = HostReleaseState::new("brama", "charless-mac-mini");
+        for (index, (digest, cause, stamp)) in quarantines.iter().enumerate() {
+            state.quarantined.insert(
+                (*digest).to_string(),
+                QuarantineRecord {
+                    reason: format!("candidate did not become ready within 90s: reason {index}"),
+                    quarantined_at: DateTime::parse_from_rfc3339(stamp)
+                        .expect("fixture stamp parses")
+                        .with_timezone(&Utc),
+                    cause: *cause,
+                    evidence: format!("evidence {index}"),
+                },
+            );
+        }
+        state
+    }
+
+    /// The digests and stamps are the live `brama` rows from
+    /// `charless-mac-mini` for 0.2.49, 0.2.50 and 0.2.51 — the three candidates
+    /// burned inside five hours on 2026-09-01, at the interval this rule is
+    /// meant for.
+    ///
+    /// The cause is supplied. On the real host those three wrote no failure
+    /// line anywhere in their logs and classify as `unclassified`, so no
+    /// refusal arms there and none should. The run is constructed because the
+    /// rule has to be exercised somewhere, and inventing the timestamps too
+    /// would have hidden that the real sequence is this tight.
+    const RUN: &[(&str, QuarantineCause, &str)] = &[
+        (
+            "217167ef",
+            QuarantineCause::CredentialCannotServe,
+            "2026-09-01T10:34:46Z",
+        ),
+        (
+            "d862fb1b",
+            QuarantineCause::CredentialCannotServe,
+            "2026-09-01T10:54:23Z",
+        ),
+        (
+            "4c2bb7c3",
+            QuarantineCause::CredentialCannotServe,
+            "2026-09-01T15:40:50Z",
+        ),
+    ];
+
+    #[test]
+    fn three_quarantines_on_one_cause_hold_the_next_candidate() {
+        let held = repeating_cause(&state_with(RUN)).expect("a run of three is a wall");
+        assert_eq!(held.cause, QuarantineCause::CredentialCannotServe);
+        assert_eq!(held.digests.len(), REPEAT_CAUSE_LIMIT);
+        // The oldest member, not the newest: "since" is how long this has been
+        // true.
+        assert_eq!(held.since.to_rfc3339(), "2026-09-01T10:34:46+00:00");
+    }
+
+    #[test]
+    fn two_is_iterating_and_is_not_refused() {
+        // A candidate fails, someone changes something, the next fails the same
+        // way. Refusing here would block the first honest repair attempt, and
+        // two is the longest run the live host actually produced.
+        assert!(repeating_cause(&state_with(&RUN[..2])).is_none());
+    }
+
+    #[test]
+    fn a_run_of_unnamed_causes_never_holds_anything() {
+        // Twelve of the twenty live records are unclassified, seven of them
+        // consecutively. Refusing on a cause the agent could not name would
+        // have frozen this product for a month on no evidence at all.
+        let unnamed: Vec<(&str, QuarantineCause, &str)> = RUN
+            .iter()
+            .map(|(digest, _, stamp)| (*digest, QuarantineCause::Unclassified, *stamp))
+            .collect();
+        assert!(repeating_cause(&state_with(&unnamed)).is_none());
+    }
+
+    #[test]
+    fn one_different_cause_in_the_run_breaks_it() {
+        let mut mixed = RUN.to_vec();
+        mixed[0].1 = QuarantineCause::RollbackCompatibilityUndeclared;
+        assert!(repeating_cause(&state_with(&mixed)).is_none());
+    }
+
+    #[test]
+    fn recency_is_read_from_the_stamp_not_from_the_digest_order() {
+        // The map is keyed by digest, so its iteration order is alphabetical.
+        // A rule that trusted that order would pick the wrong three.
+        let mut rows = RUN.to_vec();
+        rows.push((
+            "0000aaaa",
+            QuarantineCause::RollbackCompatibilityUndeclared,
+            "2026-08-06T15:49:52Z",
+        ));
+        let held = repeating_cause(&state_with(&rows))
+            .expect("the oldest row sorts first by digest and must not join the run");
+        assert_eq!(held.cause, QuarantineCause::CredentialCannotServe);
+        assert!(!held.digests.iter().any(|digest| digest == "0000aaaa"));
+    }
+
+    #[test]
+    fn the_refusal_always_names_a_way_out() {
+        let sentence = repeating_cause(&state_with(RUN))
+            .expect("a run of three is a wall")
+            .sentence();
+        assert!(
+            sentence.contains("stado release quarantine clear --digest 217167ef"),
+            "refusal must name the existing override and a real digest: {sentence}"
+        );
+        assert!(
+            sentence.contains("skarbiec routes verify"),
+            "refusal must carry the cause's remedy: {sentence}"
+        );
+    }
+
+    /// Retention: the clip used to keep the head and drop the end, and both
+    /// ends carry decisive lines in the live records.
+    #[test]
+    fn a_clipped_tail_keeps_both_of_its_ends() {
+        let text = format!("HEAD-MARKER{}TAIL-MARKER", "x".repeat(4000));
+        let clipped = clip_middle(&text, 200);
+        assert!(clipped.starts_with("HEAD-MARKER"), "{clipped}");
+        assert!(clipped.ends_with("TAIL-MARKER"), "{clipped}");
+        assert!(
+            clipped.contains("elided"),
+            "an elision must say how much it dropped: {clipped}"
+        );
+        assert_eq!(clip_middle("short", 200), "short");
+    }
+
+    #[test]
+    fn a_quarantine_record_names_its_cause_from_its_reason() {
+        let record = QuarantineRecord::new(
+            "release 0.2.54 does not declare rollback compatibility with 0.2.53".to_string(),
+        );
+        assert_eq!(
+            record.cause,
+            QuarantineCause::RollbackCompatibilityUndeclared
+        );
+        assert!(!record.evidence.is_empty());
+    }
+
+    /// The twenty records already on the live host carry neither field, and
+    /// this struct refuses unknown fields. Both directions have to work.
+    #[test]
+    fn a_record_written_before_this_change_still_parses() {
+        let legacy = r#"{"reason":"candidate did not become ready before deadline",
+            "quarantined_at":"2026-08-06T15:49:52.887004+00:00"}"#;
+        let record: QuarantineRecord =
+            serde_json::from_str(legacy).expect("a legacy record must still parse");
+        assert_eq!(record.cause, QuarantineCause::Unclassified);
+        assert!(record.evidence.is_empty());
     }
 }
