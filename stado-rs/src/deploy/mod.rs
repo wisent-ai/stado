@@ -121,10 +121,10 @@ pub mod service_env_file;
 pub mod service_file_fetch;
 pub mod service_serving;
 pub mod ssh_key;
+pub mod staged_release;
 pub mod stream;
 pub mod weles_browser_runtime;
 pub mod weles_browser_task;
-pub mod staged_release;
 pub mod weles_capture;
 
 /// Deploy-layer failure carrying the exact Python exception message

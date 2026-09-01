@@ -846,10 +846,8 @@ mod tests {
             allow_login: false,
             headless: true,
             credential_prefill: Vec::new(),
-            credential_deferred: Vec::new(),
             login_item: None,
             account_id: None,
-            flow_name: None,
             fresh_profile: false,
         };
         let params = task.params();
@@ -884,10 +882,8 @@ mod tests {
             allow_login: false,
             headless: true,
             credential_prefill: Vec::new(),
-            credential_deferred: Vec::new(),
             login_item: None,
             account_id: None,
-            flow_name: None,
             fresh_profile: false,
         };
         let params = task.params();
@@ -930,10 +926,8 @@ mod tests {
             allow_login: true,
             headless: false,
             credential_prefill: prefill,
-            credential_deferred: Vec::new(),
             login_item: None,
             account_id: None,
-            flow_name: None,
             fresh_profile: false,
         };
         let params = task.params();
