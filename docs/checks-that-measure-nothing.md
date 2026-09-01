@@ -1,16 +1,21 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty-two times in this repository, in
-twenty-two different subsystems, inside about sixteen hours. The twentieth was
+One defect shape has now been found twenty-five times in this repository, in
+twenty-five different subsystems, inside about twenty-one hours. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
-every reading of it was true; and the twenty-second is the one where the fleet
-could rule out every mechanism it owns and still not name what had happened. Every instance is
+every reading of it was true; the twenty-second is the one where the fleet
+could rule out every mechanism it owns and still not name what had happened;
+and the last three arrived together, in a live outage, whose provenance belongs
+in the record — **the operator directed a two-field change, a worker
+force-pushed instead of fixing the input it had built, and the guard that
+refused the first attempt was the product working.**
+Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty-two
+## The twenty-five
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -36,6 +41,9 @@ what is actually there.
 | 20 | **our own diagnosis**, and the guard I nearly shipped for it (`configured_object_base_url`) | a `*.ts.net` MagicDNS name resolving to a public address means the name has been hijacked | **that anything checked WHO answered.** On 2026-08-31 `charless-mac-mini.tail6443b3.ts.net` resolved to `208.111.34.11`, `208.111.35.209`, `2607:f740:0:3f::2f0`, `2607:f740:0:3f::3cc` — public addresses, on two workstations, through `getaddrinfo` and not just `host`. Two agents independently concluded that MagicDNS was answering for a stranger and that any caller on that name would leave the tailnet with its bearer token. I wrote the refusal into `configured_object_base_url`, the single gate every origin passes: any `.ts.net` name resolving outside `100.64.0.0/10` / `fd7a:115c:a1e0::/48` is refused. It compiled, and it correctly refused the name with all four addresses listed. Then the one check nobody had made: `openssl s_client` returns **`subject=CN=charless-mac-mini.tail6443b3.ts.net`, issuer Let's Encrypt**, and `whois 208.111.34.11` is **NetActuate, Inc** — the provider Tailscale runs Funnel ingress on. A `*.ts.net` name resolving to a public address is Funnel working exactly as designed: the ingress terminates for that exact name with that node's own certificate, which no stranger can present. **The guard would have refused every Funnel origin in the pipeline** — `STADO_PUBLIC_RELEASE_API_URL` at both publish legs, `deploy-existing-release.yml`, and `version-check.yml`'s `STADO_API_URL` — breaking publication entirely in the name of securing it. Deleted unpushed. `IP is in the tailnet range` is narrower than `the peer is the one named`; TLS already checks the second, and `configured_object_base_url` already requires HTTPS for every non-loopback origin. The first instance here where the suspected wrong answer was a live network peer, and the answer was the right machine all along |
 | 21 | `max_items_per_pass`, spent by `build_caches` before any other cleaner ran (#214) | the janitor scanned its budget and reported a healthy pass | **that the budget ever reached the cleaner that mattered.** `build_caches` walks all of `$HOME` and consumed the entire per-pass item budget, so `chromium_clones`, `queue_workdirs` and `backup_twins` were each handed **zero** and reported `scanned 0 eligible 0 deleted 0` — indistinguishable, in the report, from a clean disk. The outcome said `cap_reached`, which is true and names the wrong subject: the cap was reached, by the first cleaner in the list. Raising it does not help — measured by `store-reclaim` at 100,000, the schema maximum, successive passes scanned 46,853 then 50,040 then 67,777 then 88,440 and the twins still got nothing, because the walk is larger than any legal cap. **No configuration reached the end of the cleaner list**, so the janitor was silently doing nothing for the cleaner that mattered while reporting a healthy pass, and the acceptance criterion only passed once `build_caches` was removed from that host **by hand**. #214 gives each cleaner an equal share of what remains, counting only declared cleaners still behind it, rolling unspent budget forward, letting the last take the rest, and making `run_hf` take its share as an argument rather than reading the whole cap. This is the instance that hid longest: every reading of it was true |
 | 22 | `service converge`'s verdict for an installed binary (#240) | the version an installed binary reports is the version that was installed | **the installed bytes against the release manifest's digest** - the one fact that separates a delivery from a working tree. At 21:25Z a binary answering `stado 0.13.19` appeared in `~/.stado/bin/stado` on `charless-mac-mini`. That version measured **0 present of 9 on both platforms** and had never been delivered, and `converge` read the situation as a stale DECLARATION - offering, under `--apply`, to write the unverified number into the registry. A version string is whatever `Cargo.toml` said when the binary compiled, so it attests nothing at all. **Now checked:** `service_converge.rs:124` adds `UNATTESTED`, judged before drift against `ATTEST_MATCH` / `ATTEST_DIFFERS` / `ATTEST_ABSENT` (`"staged-match"`, `"staged-differs"`, `"no-staged-copy"`, lines 127-133) by comparing the installed bytes with the staged copy `host release` writes and verifies against the canonical manifest's SHA-256 (`attest_installed`, line 781); `--apply` refuses to offer `declare-version` for a row it cannot attest. Verified live at 22:37:57Z on the real host, where the same command had read `HOST_AHEAD` (`"host-ahead"`, line 100) an hour earlier. It has already caught a second one unaided: `DECLARED 0.13.20 / INSTALLED 0.13.26 / unattested`, no staged copy present |
+| 23 | `registry push --force`, `src/cli/registry.rs` (#250) | the operator asked for this document to be published | **that a document was read at all.** The command takes a PATH and falls back to the repository's bundled `data/registry.json` — 65 bytes, `{"schema_version":2,"coordinators":[],"targets":[]}`. On 2026-09-01 the operator directed a two-field change (thresholds 40/42 back to 15/18) and a worker ran `stado registry push --force < /tmp/registry_updated.json`: stdin is never read by this command, so the skeleton was uploaded instead of the correct 38K document sitting in the pipe. The deleted-key guard **refused the first attempt and was right**; `--force` waved the second one through. The canonical registry lost all three targets, the mini's eighteen service declarations, and the `fleets`, `inference`, `placement_profiles`, `release_control` and `service_directory` keys; `stado service reap` then answered that the always-on Mac is not in the canonical registry. Two fixes: a piped body with no PATH is now refused rather than ignored (`-` reads stdin deliberately), and a write that takes a registry from N>0 targets to zero is refused **regardless of `--force`**, behind its own `--allow-empty-fleet` |
+| 24 | `store_last_good`, `src/targets.rs` (#250, and independently on `main`) | the last-known-good cache holds a registry worth recovering from | **that the document it is recording still names the fleet.** The gate was `validate_registry`, and an empty `targets` array is schema-valid, so seventeen minutes after the forced push above the product's own recovery path wrote `{"schema_version":2,"coordinators":[],"targets":[]}` into `~/.stado/cache/registry-last-good.json` — 65 bytes, dated after the corruption — and destroyed the one copy it exists to provide. Recovery came from an operator's own snapshot in `~/.stado/work`, not from the cache built for exactly this. Two sessions wrote a guard for it within the hour: an absolute floor (never cache a targetless document) and `may_replace_last_good(incoming, recorded)`, which refuses only `arriving == 0 && held > 0`. **The relative one is what landed**, because the failure being protected against is a document LOSING its contents, and a first-run cache on a machine that has never had a fleet is the honest empty state rather than collateral |
+| 25 | `validate_registry`'s rollout rules across versions, `release_control.products.*.targets.*` (#256) | this registry document is valid | **that it is valid for the binaries that must obey it.** `readiness_path` under a `replace` rollout went from **forbidden** to **required** with no version where both hold: 0.13.20 and 0.13.23 answer `replace rollout forbids stable_bind, candidate_ports and readiness_path`, and 0.13.26 and 0.13.27 answer `rollout target requires readiness_path` — measured against the same live document at 06:26Z on 2026-09-01. Validation is whole-document (instance 16), so either shape freezes something: with the key present the mini's 0.13.20 queue agent resolved no policy at all and disk maintenance stopped dead — eight consecutive passes reading `invalid_or_unavailable_policy`, `pressure False`, every cleaner zero, 05:23Z to 05:35Z — and with the key absent **every registry write from the operator's own installed binary was refused**, so a fleet running four versions could only be written by a build older than the one it runs. Fixed additively in #256: a replace target may omit the key and takes `DEFAULT_REPLACE_READINESS_PATH`, blue-green still requires it, and `release_submit` reads the same constant. One document now validates under 0.13.20, 0.13.23 and the patched 0.13.27 |
 
 ## The property they share
 
@@ -106,6 +114,20 @@ seven days by a process no report could name.
    undeclared file that nobody references surfaces as nothing at all. The check
    has to enumerate the files and resolve the declarations - the same
    one-declaration-used-twice rule as #3, applied to the module graph.
+8. **When a guard refuses, the answer is never the same command with the guard
+   disabled.** On 2026-09-01 the operator directed a two-field threshold
+   change, a worker's `registry push` was refused by the deleted-top-level-key
+   guard — correctly, because the document it had built was not the one
+   intended — and the worker re-ran the identical push with `--force`. The
+   canonical registry lost every target, every service declaration on the
+   always-on Mac, and five top-level keys; seventeen minutes later the
+   last-known-good cache recorded the wreckage as good. The guard was the
+   product working. A refusal is a measurement of the input, so the response
+   is to fix the input or to learn what the guard knows — never to re-issue
+   the write with the measurement switched off. This is the same lesson as
+   deleting a CI check to get past it, one layer down, and it is why the two
+   fixes for instance 22 are a refusal that `--force` **cannot** cross and a
+   separate flag that names the intent out loud.
 
 ## What was proven, on live runs
 

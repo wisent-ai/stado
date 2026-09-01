@@ -106,7 +106,26 @@ fn service_directory_generation(text: &str) -> Option<u64> {
 ///
 /// `payload` is written verbatim, so [`push`] still uploads the operator's
 /// exact file bytes rather than a re-serialization of them.
-async fn upload_payload(payload: &str, allow_removals: bool) -> Result<(String, String), CmdError> {
+///
+/// `allow_empty_fleet` is deliberately NOT `--force`: see the floor below.
+
+/// The number of targets a registry document declares, or `None` when the
+/// text is not a document with a `targets` array.
+fn target_count(text: &str) -> Option<usize> {
+    Some(
+        serde_json::from_str::<Value>(text)
+            .ok()?
+            .get("targets")?
+            .as_array()?
+            .len(),
+    )
+}
+
+async fn upload_payload(
+    payload: &str,
+    allow_removals: bool,
+    allow_empty_fleet: bool,
+) -> Result<(String, String), CmdError> {
     let store = RegistryStore::open()
         .await
         .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?;
@@ -157,6 +176,39 @@ async fn upload_payload(payload: &str, allow_removals: bool) -> Result<(String, 
             }
         }
     }
+    // The floor `--force` may not cross. Every other guard here answers "did
+    // the caller mean to drop this?"; this one answers "is this a fleet at
+    // all?", and no legitimate edit to a three-host registry leaves zero
+    // targets. On 2026-09-01 a worker ran
+    // `stado registry push --force < /tmp/registry_updated.json`: the command
+    // takes a PATH, so stdin was never read, `source_path(None)` resolved to
+    // the repository's bundled `data/registry.json` - 65 bytes,
+    // `{"schema_version":2,"coordinators":[],"targets":[]}` - and `--force`
+    // waved it past the deleted-key guard that had refused the first attempt.
+    // The live document lost all three targets, all eighteen of the mini's
+    // service declarations, and the `fleets`, `inference`,
+    // `placement_profiles`, `release_control` and `service_directory` keys.
+    // `stado service reap` then answered that the always-on Mac is not in the
+    // canonical registry.
+    if !allow_empty_fleet {
+        if let Some(blob) = current.as_ref() {
+            if let (Some(before), Some(after)) =
+                (target_count(&blob.content), target_count(payload))
+            {
+                if before > 0 && after == 0 {
+                    return Err(CmdError::click(format!(
+                        "registry upload refused: generation {} declares {before} target(s) and \
+                         this document declares none. A fleet does not shrink to zero by edit, \
+                         so this is an empty or wrong file, not an intention - most often the \
+                         bundled skeleton reached through a missing path argument. --force does \
+                         NOT cross this floor: pass --allow-empty-fleet if erasing every target \
+                         is genuinely what you mean.",
+                        blob.version
+                    )));
+                }
+            }
+        }
+    }
     let generation = match current {
         Some(blob) => store
             .compare_and_swap(&blob.version, payload)
@@ -193,13 +245,39 @@ async fn upload_payload(payload: &str, allow_removals: bool) -> Result<(String, 
     Ok((generation, previous_generation))
 }
 
-pub async fn push(path: Option<String>, force: bool) -> Result<(), CmdError> {
-    let source = source_path(path);
-    let payload = std::fs::read_to_string(&source)?;
+pub async fn push(
+    path: Option<String>,
+    force: bool,
+    allow_empty_fleet: bool,
+) -> Result<(), CmdError> {
+    // This command takes a PATH, and with no path it falls back to the
+    // repository's bundled document. A caller who pipes a body is therefore
+    // silently ignored and something else is uploaded in its place - which is
+    // exactly how the bundled 65-byte skeleton reached the canonical registry
+    // on 2026-09-01. Refuse the ambiguity rather than resolve it silently,
+    // and let `-` mean stdin for a caller who meant to pipe.
+    let from_stdin = path.as_deref() == Some("-");
+    if !from_stdin && path.is_none() && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(CmdError::usage(
+            "a document was piped to `registry push` but this command reads a PATH, so the \
+             piped bytes would be ignored and the bundled registry uploaded instead. Pass the \
+             file's path, or `-` to read stdin deliberately.",
+        ));
+    }
+    let (source, payload) = if from_stdin {
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+        (PathBuf::from("<stdin>"), body)
+    } else {
+        let source = source_path(path);
+        let payload = std::fs::read_to_string(&source)?;
+        (source, payload)
+    };
     let document: Value = serde_json::from_str(&payload)
         .map_err(|exc| CmdError::click(format!("{}: {exc}", source.display())))?;
     warn_scoped_validation(validate_for_write(&document).await?);
-    let (generation, previous_generation) = upload_payload(&payload, force).await?;
+    let (generation, previous_generation) =
+        upload_payload(&payload, force, allow_empty_fleet).await?;
     println!(
         "pushed {} -> {} generation={generation} replaced={previous_generation}",
         source.display(),
@@ -218,7 +296,7 @@ pub async fn push(path: Option<String>, force: bool) -> Result<(), CmdError> {
 pub async fn push_document(document: &Value) -> Result<String, CmdError> {
     warn_scoped_validation(validate_for_write(document).await?);
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
-    let (generation, _) = upload_payload(&payload, false).await?;
+    let (generation, _) = upload_payload(&payload, false, false).await?;
     Ok(generation)
 }
 

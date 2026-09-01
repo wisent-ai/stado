@@ -2766,6 +2766,18 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
             }
             // Valid is not the same as better. A document naming no hosts
             // never replaces one that names some.
+            //
+            // Measured on 2026-09-01: a forced push replaced the canonical
+            // registry with a 65-byte skeleton, and seventeen minutes later
+            // this cache - the product's own recovery path - recorded that
+            // skeleton as the last KNOWN GOOD registry, destroying the one
+            // copy it exists to provide. Recovery came from an operator's
+            // private snapshot instead.
+            //
+            // The rule is relative rather than an absolute "never cache an
+            // empty document" floor, and that is deliberate: a fresh install
+            // legitimately declares no targets and must still be cacheable.
+            // What is refused is LOSING hosts, not being empty.
             let recorded = std::fs::read_to_string(&document)
                 .ok()
                 .and_then(|held| serde_json::from_str::<Value>(&held).ok());
