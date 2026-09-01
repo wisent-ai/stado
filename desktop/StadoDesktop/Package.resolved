@@ -1,5 +1,5 @@
 {
-  "originHash" : "a7ccffeaed03e3d2bd633ffe11e8f17a25090d0a19a4ef2f77bbdbffff6558b7",
+  "originHash" : "afe2a38b848f8ad9014e5b22fc2bda437cec281e1a4b3eb0f6136af2f9c10c99",
   "pins" : [
     {
       "identity" : "echo",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wisent-ai/wisent-components.git",
       "state" : {
-        "revision" : "f88802e242de766816c914b5480ac21ac9588948",
-        "version" : "0.7.0"
+        "revision" : "4b84974ecaef87372f5837e6069fa489c0d05832",
+        "version" : "0.7.1"
       }
     },
     {
@@ -24,7 +24,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wisent-ai/wisent-desktop-auth.git",
       "state" : {
-        "revision" : "de393f399b86140c0bd0121695d2f489d52d3720"
+        "revision" : "2ea0e92e1b48e6efb8d6668fc8f468fbe8f4fad4"
       }
     },
     {
