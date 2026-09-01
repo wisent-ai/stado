@@ -7,15 +7,16 @@
 
 use std::collections::BTreeMap;
 
-use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::catalog::GPU_SIZING;
 use crate::config;
 use crate::models::{
     activation_extraction_must_share_gpu, deprecated_activation_command_reason, Job, JobSecretRef,
 };
-use crate::queue::runs::{generate_run_id, write_run_manifest, RunManifest};
+use crate::queue::runs::{generate_run_id, ALL_PREFIXES, RUN_PREFIX};
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
@@ -35,7 +36,7 @@ pub enum SubmitError {
 /// Every `submit_job` keyword argument from the Python signature, with the
 /// same defaults. Callers start from [`SubmitOptions::default`] and set
 /// what they need.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitOptions {
     pub provider: String,
     pub batch_id: String,
@@ -180,78 +181,315 @@ fn submitter() -> String {
     }
     std::env::var("LOGNAME").unwrap_or_default()
 }
+fn digest_value(value: &Value) -> String {
+    hex::encode(Sha256::digest(json_dumps_sorted_compact(value).as_bytes()))
+}
 
-/// Submit many commands concurrently as one run.
-///
-/// Generates one run_id for the whole invocation, threads it onto every
-/// job, then writes the immutable runs/<run_id>.json manifest with all
-/// member job_ids. The compute-API path skips the manifest since it has no
-/// queue storage to track against.
-///
-/// Batches of more than 4 commands fan out 64 ways (Python
-/// `ThreadPoolExecutor(max_workers=64)` → `buffer_unordered(64)`); smaller
-/// batches submit sequentially. Returns the submitted jobs (the Python
-/// `return_jobs=True` form — the CLI's single-job path echoes the id so
-/// callers can watch the job, not the batch).
+/// Canonical semantic request. Submitter display fields and random IDs are
+/// deliberately absent; every option that changes placement, source, secrets,
+/// inputs or execution is included.
+pub fn submission_request(commands: &[String], options: &SubmitOptions) -> Result<Value, SubmitError> {
+    let options_value = serde_json::to_value(options)
+        .map_err(|error| SubmitError::Validation(format!("serialize submission options: {error}")))?;
+    Ok(serde_json::json!({
+        "schema": "stado.submission-request.v2",
+        "commands": commands,
+        "effective_bucket": if options.bucket.is_empty() { config::bucket() } else { options.bucket.as_str() },
+        "options": options_value,
+    }))
+}
+
+pub fn submission_request_digest(
+    commands: &[String],
+    options: &SubmitOptions,
+) -> Result<String, SubmitError> {
+    Ok(digest_value(&submission_request(commands, options)?))
+}
+
+pub fn submission_source_digest(options: &SubmitOptions) -> String {
+    digest_value(&serde_json::json!({
+        "repo": options.repo,
+        "repo_ref": options.repo_ref,
+        "repo_workdir": options.repo_workdir,
+        "repo_extras": options.repo_extras,
+        "pre_command": options.pre_command,
+        "apt_packages": options.apt_packages,
+    }))
+}
+
+pub fn submission_input_digest(commands: &[String], options: &SubmitOptions) -> String {
+    digest_value(&serde_json::json!({
+        "commands": commands,
+        "secret_env": options.secret_env,
+        "input_artifacts": options.input_artifacts,
+        "resolved_input_artifacts": options.resolved_input_artifacts,
+    }))
+}
+
+fn validate_run_manifest(
+    manifest: &Value,
+    run_id: &str,
+    request: &Value,
+    request_digest: &str,
+) -> Result<Vec<Job>, SubmitError> {
+    if manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v2")
+        || manifest.get("run_id").and_then(Value::as_str) != Some(run_id)
+        || manifest.get("request_digest").and_then(Value::as_str) != Some(request_digest)
+        || manifest.get("request") != Some(request)
+    {
+        return Err(SubmitError::Validation(format!(
+            "run id {run_id} already belongs to a different or legacy submission request"
+        )));
+    }
+    let entries = manifest
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SubmitError::Validation("run manifest entries are missing".into()))?;
+    let mut jobs = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64) {
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} has a non-canonical command mapping"
+            )));
+        }
+        let job: Job = serde_json::from_value(
+            entry
+                .get("planned_job")
+                .cloned()
+                .ok_or_else(|| SubmitError::Validation("run entry has no planned job".into()))?,
+        )
+        .map_err(|error| SubmitError::Validation(format!("invalid planned job: {error}")))?;
+        if entry.get("job_id").and_then(Value::as_str) != Some(job.job_id.as_str())
+            || entry.get("command").and_then(Value::as_str) != Some(job.command.as_str())
+            || job.run_id != run_id
+            || job.submission_request_digest != request_digest
+            || job.submission_command_index != Some(index)
+        {
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} has a corrupt planned command-to-job mapping"
+            )));
+        }
+        jobs.push(job);
+    }
+    Ok(jobs)
+}
+
+async fn checkpoint_accepted(
+    store: &JobStorage,
+    run_id: &str,
+    request_digest: &str,
+    index: usize,
+    job_id: &str,
+) -> Result<(), SubmitError> {
+    let path = format!("{RUN_PREFIX}/{run_id}.json");
+    for _ in 0..16 {
+        let versioned = store
+            .read_text_versioned(&path)
+            .await?
+            .ok_or_else(|| SubmitError::Validation(format!("run manifest {run_id} disappeared")))?;
+        let mut manifest: Value = serde_json::from_str(&versioned.content)
+            .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
+        if manifest.get("request_digest").and_then(Value::as_str) != Some(request_digest) {
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} changed to a different request"
+            )));
+        }
+        let entry = manifest
+            .get_mut("entries")
+            .and_then(Value::as_array_mut)
+            .and_then(|entries| entries.get_mut(index))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
+        if entry.get("job_id").and_then(Value::as_str) != Some(job_id) {
+            return Err(SubmitError::Validation(
+                "run checkpoint job mapping changed".into(),
+            ));
+        }
+        if entry.get("state").and_then(Value::as_str) == Some("accepted") {
+            return Ok(());
+        }
+        entry.insert("state".into(), Value::from("accepted"));
+        entry.insert("accepted_at".into(), Value::from(chrono::Utc::now().to_rfc3339()));
+        match store
+            .compare_and_swap_text(
+                &path,
+                &versioned.version,
+                &serde_json::to_string_pretty(&manifest)
+                    .map_err(|error| SubmitError::Validation(error.to_string()))?,
+            )
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(SubmitError::Validation(format!(
+        "run manifest {run_id} remained contended during checkpoint"
+    )))
+}
+
+async fn find_job(store: &JobStorage, job_id: &str) -> Result<Option<Job>, SubmitError> {
+    for prefix in ALL_PREFIXES {
+        if let Some(job) = store.read_job(prefix, job_id).await? {
+            return Ok(Some(job));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_recovered_job(
+    job: &Job,
+    planned: &Job,
+    request_digest: &str,
+    index: usize,
+) -> Result<(), SubmitError> {
+    if job.job_id != planned.job_id
+        || job.command != planned.command
+        || job.run_id != planned.run_id
+        || job.repo != planned.repo
+        || job.repo_ref != planned.repo_ref
+        || job.output_uri != planned.output_uri
+        || job.submission_request_digest != request_digest
+        || job.submission_command_index != Some(index)
+    {
+        return Err(SubmitError::Validation(format!(
+            "stable job key {} belongs to different submission content",
+            planned.job_id
+        )));
+    }
+    Ok(())
+}
+
+/// Persist a complete immutable plan before any queue write, then create each
+/// stable command job exactly once and CAS-checkpoint acceptance in order.
 pub async fn submit_batch(
     commands: &[String],
     options: &SubmitOptions,
 ) -> Result<Vec<Job>, SubmitError> {
+    if commands.is_empty() {
+        return Err(SubmitError::Validation("at least one command is required".into()));
+    }
     let mut options = options.clone();
     if options.run_id.is_empty() {
         options.run_id = generate_run_id();
     }
+    for command in commands {
+        validate_submission(command, &options)?;
+    }
     let run_id = options.run_id.clone();
-
-    let jobs: Vec<Job> = if commands.len() <= 4 {
-        let mut out = Vec::with_capacity(commands.len());
-        for command in commands {
-            out.push(submit_job(command, &options).await?);
-        }
-        out
-    } else {
-        let results: Vec<Result<Job, SubmitError>> = futures::stream::iter(commands)
-            .map(|command| submit_job(command, &options))
-            .buffer_unordered(64)
-            .collect()
-            .await;
-        results.into_iter().collect::<Result<Vec<_>, _>>()?
-    };
-
+    let request = submission_request(commands, &options)?;
+    let request_digest = digest_value(&request);
     let bucket = if options.bucket.is_empty() {
         config::bucket()
     } else {
         options.bucket.as_str()
     };
     let store = JobStorage::with_bucket(bucket).await?;
-    write_run_manifest(
-        &store,
-        &RunManifest {
-            run_id: &run_id,
-            name: Some(&std::env::var("WC_RUN_NAME").unwrap_or_default()),
-            submitter_app: Some(&std::env::var("WC_SUBMITTER_APP").unwrap_or_default()),
-            submitted_by: &submitter(),
-            submitted_from: &hostname(),
-            commands,
-            job_ids: &jobs
-                .iter()
-                .map(|job| job.job_id.clone())
-                .collect::<Vec<_>>(),
-        },
-    )
-    .await?;
-    Ok(jobs)
+    let path = format!("{RUN_PREFIX}/{run_id}.json");
+
+    let manifest = match store.download_text(&path).await? {
+        Some(raw) => serde_json::from_str::<Value>(&raw)
+            .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?,
+        None => {
+            let mut entries = Vec::with_capacity(commands.len());
+            let mut job_ids = Vec::with_capacity(commands.len());
+            for (index, command) in commands.iter().enumerate() {
+                let key = digest_value(&serde_json::json!({
+                    "request_digest": request_digest,
+                    "command_index": index,
+                    "command": command,
+                }));
+                let job_id = format!("job-{}", &key[..24]);
+                let mut effective = options.clone();
+                effective.exclusive =
+                    effective.exclusive && !activation_extraction_must_share_gpu(command);
+                let mut job = build_job(command, &effective, &job_id).await?;
+                job.submission_request_digest = request_digest.clone();
+                job.submission_command_index = Some(index);
+                job_ids.push(Value::from(job_id.clone()));
+                entries.push(serde_json::json!({
+                    "command_index": index,
+                    "command": command,
+                    "job_key": key,
+                    "job_id": job_id,
+                    "state": "planned",
+                    "planned_job": job,
+                }));
+            }
+            let candidate = serde_json::json!({
+                "schema": "stado.run-submission.v2",
+                "run_id": run_id,
+                "request_digest": request_digest,
+                "source_digest": submission_source_digest(&options),
+                "input_digest": submission_input_digest(commands, &options),
+                "request": request,
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "submitter_app": std::env::var("WC_SUBMITTER_APP").unwrap_or_default(),
+                "submitted_by": submitter(),
+                "submitted_from": hostname(),
+                "n_jobs": commands.len(),
+                "job_ids": job_ids,
+                "commands": commands,
+                "entries": entries,
+            });
+            let created = store
+                .create_text_if_absent(
+                    &path,
+                    &serde_json::to_string_pretty(&candidate)
+                        .map_err(|error| SubmitError::Validation(error.to_string()))?,
+                )
+                .await?;
+            if created {
+                candidate
+            } else {
+                let raw = store
+                    .download_text(&path)
+                    .await?
+                    .ok_or_else(|| SubmitError::Validation("run manifest creation raced and disappeared".into()))?;
+                serde_json::from_str::<Value>(&raw)
+                    .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?
+            }
+        }
+    };
+    let planned = validate_run_manifest(&manifest, &run_id, &request, &request_digest)?;
+    let mut accepted = Vec::with_capacity(planned.len());
+    for (index, planned_job) in planned.iter().enumerate() {
+        let job = if let Some(existing) = find_job(&store, &planned_job.job_id).await? {
+            validate_recovered_job(&existing, planned_job, &request_digest, index)?;
+            existing
+        } else if store.create_queued_job_if_absent(planned_job).await? {
+            planned_job.clone()
+        } else {
+            let existing = find_job(&store, &planned_job.job_id)
+                .await?
+                .ok_or_else(|| {
+                    SubmitError::Validation(format!(
+                        "stable job {} was concurrently created but is unreadable",
+                        planned_job.job_id
+                    ))
+                })?;
+            validate_recovered_job(&existing, planned_job, &request_digest, index)?;
+            existing
+        };
+        checkpoint_accepted(&store, &run_id, &request_digest, index, &job.job_id).await?;
+        accepted.push(job);
+    }
+    Ok(accepted)
 }
 
-/// Submit a job through Stado's provider-neutral queue.
-pub async fn submit_job(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
-    // Cooperative-yield contract: a yieldable job MUST declare how to save
-    // and step aside. No silent kill-and-lose-progress path — refuse here so
-    // the error surfaces at submit, not mid-eviction in prod.
+fn validate_submission(command: &str, options: &SubmitOptions) -> Result<(), SubmitError> {
+    if command.trim().is_empty() {
+        return Err(SubmitError::Validation("command cannot be empty".into()));
+    }
+    if !options.max_cost_per_hour_usd.is_finite() || options.max_cost_per_hour_usd < 0.0 {
+        return Err(SubmitError::Validation(
+            "max_cost_per_hour_usd must be finite and nonnegative".into(),
+        ));
+    }
     if options.yieldable && options.yield_command.trim().is_empty() {
         return Err(SubmitError::Validation(
-            "yieldable=True requires a yield_command (the save-and-sync hook \
-             run on eviction). Pass --on-yield '<command>' or drop --yieldable."
+            "yieldable=True requires a yield_command (the save-and-sync hook run on eviction)"
                 .into(),
         ));
     }
@@ -284,6 +522,12 @@ pub async fn submit_job(command: &str, options: &SubmitOptions) -> Result<Job, S
             ))
         })?;
     }
+    Ok(())
+}
+
+/// Submit a job through Stado's provider-neutral queue.
+pub async fn submit_job(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
+    validate_submission(command, options)?;
     let options = SubmitOptions {
         exclusive: options.exclusive && !activation_extraction_must_share_gpu(command),
         ..options.clone()
@@ -317,14 +561,11 @@ async fn estimate_gpu_mem(command: &str) -> Result<i64, SubmitError> {
 ///      GPU_SIZING when machine_type is not also explicit.
 ///   4. machine_type argument — caller-pinned GCE machine type, taken
 ///      verbatim. Use this for non-cataloged SKUs.
-async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
-    let bucket = if options.bucket.is_empty() {
-        config::bucket().to_string()
-    } else {
-        options.bucket.clone()
-    };
-    let job_id = generate_job_id();
-
+async fn build_job(
+    command: &str,
+    options: &SubmitOptions,
+    job_id: &str,
+) -> Result<Job, SubmitError> {
     let caller_asked_for_gpu =
         !options.gpu_type.is_empty() || options.vram_gb > 0 || !options.machine_type.is_empty();
     let mut gpu_mem = if options.vram_gb > 0 {
@@ -376,7 +617,7 @@ async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, 
     // the coordinator's centralized matcher (see _assign_jobs_to_agents
     // in coordinator.py), not by mutating the priority field at submit
     // time.
-    let mut job = Job::new(&job_id, command);
+    let mut job = Job::new(job_id, command);
     job.gpu_mem_gb = gpu_mem;
     job.gpu_type = accel_type;
     job.machine_type = machine_type;
@@ -413,6 +654,16 @@ async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, 
     job.input_artifacts = options.input_artifacts.clone();
     job.resolved_input_artifacts = options.resolved_input_artifacts.clone();
 
+    Ok(job)
+}
+
+async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
+    let bucket = if options.bucket.is_empty() {
+        config::bucket().to_string()
+    } else {
+        options.bucket.clone()
+    };
+    let job = build_job(command, options, &generate_job_id()).await?;
     let store = JobStorage::with_bucket(&bucket).await?;
     store.write_job("queue", &job).await?;
     Ok(job)

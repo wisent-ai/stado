@@ -382,6 +382,24 @@ impl JobStorage {
         Ok(())
     }
 
+    /// Create a queued job exactly once. Existing content is never overwritten;
+    /// callers must read it back and verify its submission identity.
+    pub async fn create_queued_job_if_absent(&self, job: &Job) -> Result<bool, StorageError> {
+        let blob_path = format!("queue/{}.json", job.job_id);
+        let created = self
+            .backend
+            .upload_text_if_absent(&blob_path, &job.to_json())
+            .await?;
+        if created || self.backend.exists(&blob_path).await? {
+            let meta = Self::job_metadata(job);
+            self.backend.set_metadata(&blob_path, &meta).await?;
+            if job.priority > 0 {
+                self.write_priority_marker(job).await?;
+            }
+        }
+        Ok(created)
+    }
+
     /// Atomically claim a queued job by creating its `running/` record.
     /// Exactly one agent can win the create-if-absent race. A concurrent
     /// cancellation marker fences the winner before workload execution.

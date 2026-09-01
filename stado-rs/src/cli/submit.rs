@@ -6,7 +6,10 @@ use clap::Args;
 use serde_json::{Map, Value};
 
 use crate::profiles;
-use crate::queue::submit::{submit_batch, SubmitOptions};
+use crate::queue::submit::{
+    submission_input_digest, submission_request_digest, submission_source_digest, submit_batch,
+    SubmitOptions,
+};
 
 use super::CmdError;
 
@@ -124,6 +127,10 @@ pub struct SubmitArgs {
     /// matcher never reassigns it.
     #[arg(long, default_value = "")]
     pinned_host: String,
+    /// Stable caller identity for exactly-once submission. Repeating the same
+    /// run id and command returns the original job id; a different command is refused.
+    #[arg(long, default_value = "")]
+    run_id: String,
 }
 
 /// Python `_resolve_input_artifacts`: validates the NAME=REF shape and
@@ -435,7 +442,11 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             .collect(),
         None => vec![args.command.clone()],
     };
-    let batch_id = format!("batch-{}", chrono::Utc::now().timestamp());
+    let batch_id = if args.run_id.is_empty() {
+        format!("batch-{}", chrono::Utc::now().timestamp())
+    } else {
+        format!("run-{}", args.run_id)
+    };
 
     let options = SubmitOptions {
         provider,
@@ -462,6 +473,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         yield_command: args.on_yield.clone(),
         yield_grace_seconds: args.yield_grace,
         pinned_host,
+        run_id: args.run_id.clone(),
         secret_env,
         input_artifacts: requested_artifacts,
         resolved_input_artifacts: resolved_artifacts,
@@ -526,5 +538,31 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         "\nSubmitted {} job(s) via {mode}{flag_str}. Batch: {batch_id}",
         commands.len()
     );
+    let mut receipt_options = options.clone();
+    receipt_options.run_id = jobs
+        .first()
+        .map(|job| job.run_id.clone())
+        .unwrap_or_else(|| options.run_id.clone());
+    let request_digest = submission_request_digest(&commands, &receipt_options)?;
+    let receipt = serde_json::json!({
+        "schema": "stado.submission-receipt.v2",
+        "run_id": jobs.first().map(|job| job.run_id.as_str()).unwrap_or(options.run_id.as_str()),
+        "request_digest": request_digest,
+        "source_digest": submission_source_digest(&receipt_options),
+        "input_digest": submission_input_digest(&commands, &receipt_options),
+        "repo": receipt_options.repo,
+        "repo_ref": receipt_options.repo_ref,
+        "source_revision": receipt_options.repo_ref,
+        "jobs": jobs.iter().enumerate().map(|(index, job)| serde_json::json!({
+            "command_index": index,
+            "command": job.command,
+            "job_key": job.job_id.strip_prefix("job-").unwrap_or(&job.job_id),
+            "job_id": job.job_id,
+            "output_uri": job.output_uri,
+            "repo_ref": job.repo_ref,
+            "submission_request_digest": job.submission_request_digest,
+        })).collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
 }

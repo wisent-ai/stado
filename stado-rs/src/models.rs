@@ -175,6 +175,12 @@ pub struct Job {
     /// Orchestrator name from $WC_SUBMITTER_APP.
     #[serde(default)]
     pub submitter_app: String,
+    /// Stable digest of the complete semantic submission request.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_request_digest: String,
+    /// Stable command position inside the immutable run request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_command_index: Option<usize>,
     // Optional source repo to git clone before running command.
     #[serde(default)]
     pub repo: String,
