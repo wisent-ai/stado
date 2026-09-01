@@ -1354,7 +1354,14 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                             && Some(active.manifest_sha256.as_str())
                                 == expected.release_manifest_sha256.as_deref()
                     });
-                if exact {
+                // An exact active process is still reversible during Monitoring.
+                // Record deployment only after the rollout window commits.
+                if exact
+                    && matches!(
+                        state.phase,
+                        crate::release_agent::RolloutPhase::Committed
+                    )
+                {
                     let active = state.active.as_ref().expect("checked above");
                     observed.push(json!({
                         "target": name,
