@@ -24,6 +24,15 @@ name: Version check
 # GitHub-hosted runner. A configured public origin remains mandatory: without it,
 # `stado storage stat` could answer from a runner-local empty store and manufacture
 # a false absence.
+#
+# This workflow now carries a SECOND verdict, in the `release-quality-gate` job
+# below: the quality steps `.wisent-release.json` declares for the release
+# worker, run on the pull request instead of on the release. It lives here, in
+# this file, rather than in a new workflow, for one concrete reason -- deploy.yml
+# gates the release train on this workflow's RUN conclusion, not on one job, so a
+# tree that cannot format or cannot compile its own tests now stops the train at
+# the tag as well as at the pull request. A new workflow file would have been
+# invisible to that gate.
 
 on:
   pull_request:
@@ -227,3 +236,139 @@ jobs:
             false
           fi
           echo "The gate refused all four of its refusal cases and passed this revision."
+
+  release-quality-gate:
+    # Run the quality steps the release worker runs, on the change that
+    # introduces them.
+    #
+    # Before this job a pull request in this repository was judged by
+    # `version-check` and nothing else: no formatting check, no clippy, and no
+    # compilation of anything except `--bin stado`. Four defects reached `main`
+    # through that hole inside one week, each of them found by the RELEASE
+    # instead:
+    #
+    #   #212  nine `pub mod` declarations deleted while their files stayed on
+    #         disk, so `main` did not compile
+    #   #249  `stado-rs/src/targets.rs` and `stado-rs/tests/registry_cache/main.rs`
+    #         merged unformatted; the 0.13.27 product-release run refused on
+    #         them at 06:13Z on 2026-09-01, six hours before anyone was looking
+    #   #250  `clippy::empty_line_after_doc_comments` in
+    #         `src/cli/registry.rs`, which left `main` unable to pass its own
+    #         release gate at all
+    #   and a test tree that nothing in CI had ever compiled
+    #
+    # The definition of "good" is NOT restated here. `.wisent-release.json` is
+    # the product's own release-pipeline manifest: `stado release submit` reads
+    # `platforms.<platform>.quality` out of it and the release worker executes
+    # exactly those argv, in order, before it builds
+    # (`cli::release_submit::worker`). This job reads the same key out of the
+    # same file and executes the same argv. There is one declaration and it is
+    # used twice, so this check cannot drift from the gate it is standing in
+    # for -- add a quality step for the release and the pull request runs it
+    # with no edit here.
+    #
+    # What this job deliberately does NOT do is re-run the manifest's `build`
+    # step. That step is `cargo build --manifest-path stado-rs/Cargo.toml
+    # --locked --release --bin stado`, and the `version-check` job above
+    # already builds precisely that, in this same workflow run, because it
+    # needs the binary to read the advertised surface. A second twelve-minute
+    # release build would buy no signal, and `--all-targets` below type-checks
+    # every bin, test and example the crate declares -- including the seven
+    # `[[bin]]` targets and the 27 integration tests that `--bin stado` never
+    # touches.
+    #
+    # It also does not run the test suite, and that is not an oversight: the
+    # release gate does not run it either, and this repository's integration
+    # tests are Probierz journeys against live fleet resources. `tests/channel`
+    # says so in its own first line -- "deliberately ignored by a plain `cargo
+    # test`: it needs the public control origin and one immutable release
+    # coordinate. Probierz supplies both". A hosted `cargo test` would fail on
+    # the fleet's absence rather than on the change, and a check that is red
+    # for reasons the author cannot fix is a check the next person deletes. So
+    # this job refuses a test tree that cannot COMPILE, which is the defect
+    # that actually reached `main`, and leaves the running of journeys to
+    # Probierz, which owns it.
+    runs-on: ubuntu-latest
+    # Hosted, not `[self-hosted, stado-control-plane]`. Exactly one runner
+    # carries that label and both publish legs of the release train queue on
+    # it; putting a per-pull-request gate there would make every PR compete
+    # with publication for the fleet's only publisher.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the components the declared steps need
+        # `rust-toolchain.toml` pins 1.97.1 with `profile = "minimal"`, which
+        # carries neither rustfmt nor clippy, so a bare `cargo fmt` here fails
+        # with "no such command" rather than with a formatting verdict. rustup
+        # reads the pin from the working directory, so this lands the components
+        # on exactly the toolchain the steps below will use -- the same reason
+        # and the same mechanism as `release_submit::ensure_rust_components`,
+        # which does this for the release worker on the build host.
+        run: rustup component add rustfmt clippy
+
+      - name: Run every quality step the release manifest declares
+        env:
+          MANIFEST: .wisent-release.json
+        run: |
+          set -euo pipefail
+
+          # The runner's own platform, not a hardcoded one, so moving this job
+          # to a macOS runner runs the darwin-arm64 steps rather than silently
+          # judging the wrong ones.
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)  platform=linux-amd64 ;;
+            Darwin-arm64)  platform=darwin-arm64 ;;
+            *)
+              echo "::error::$MANIFEST declares no release platform for" \
+                "$(uname -s)-$(uname -m), so there is no declared gate to run here."
+              exit 1 ;;
+          esac
+          echo "platform: $platform"
+
+          # A gate that can only say yes is worth nothing, and the cheapest way
+          # to reach that state is to empty the array this job reads. An absent
+          # platform, an absent `quality` key or an empty one is a refusal, not
+          # a pass with zero steps: whoever removes the release's quality steps
+          # has to come here and say so out loud.
+          steps="$(jq -er --arg p "$platform" '
+            .platforms[$p].quality // [] | length' "$MANIFEST")"
+          if [ "$steps" -lt 1 ]; then
+            echo "::error::$MANIFEST declares $steps quality step(s) for $platform." \
+              "This job exists to run the release gate on the pull request; with" \
+              "nothing declared there is no gate, and a green tick here would be a" \
+              "lie. Restore the declaration or delete this job deliberately."
+            exit 1
+          fi
+          echo "$MANIFEST declares $steps quality step(s) for $platform"
+
+          # Executed verbatim from the manifest -- NUL-delimited, so an argv
+          # element containing a space or a glob reaches the program the way the
+          # release worker passes it, not the way a shell would re-split it.
+          index=0
+          while [ "$index" -lt "$steps" ]; do
+            name="$(jq -er --arg p "$platform" --argjson i "$index" '
+              .platforms[$p].quality[$i].name' "$MANIFEST")"
+            argv=()
+            while IFS= read -r -d '' element; do
+              argv+=("$element")
+            done < <(jq -j --arg p "$platform" --argjson i "$index" '
+              .platforms[$p].quality[$i].argv[] | . + "\u0000"' "$MANIFEST")
+            if [ "${#argv[@]}" -lt 1 ]; then
+              echo "::error::quality step '$name' declares no argv"
+              exit 1
+            fi
+            echo "::group::$name: ${argv[*]}"
+            if ! "${argv[@]}"; then
+              echo "::endgroup::"
+              echo "::error::the release quality step '$name' refused this revision." \
+                "It is declared in $MANIFEST and the release worker runs the same" \
+                "argv, so this is the failure the release would have hit -- with a" \
+                "version already spent on it. Fix the tree; do not narrow the step."
+              exit 1
+            fi
+            echo "::endgroup::"
+            index=$((index + 1))
+          done
+
+          echo "Every quality step $MANIFEST declares for $platform passed."
