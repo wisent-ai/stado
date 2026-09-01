@@ -1428,10 +1428,14 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             )
             .await
             {
+                // Same default the validator applies, read through the same
+                // constant: a replace target may omit the key, and a submit
+                // that refused what validation accepts would be the second
+                // reader of one contract disagreeing with the first.
                 let readiness_path = policy.targets[name]
                     .readiness_path
                     .as_deref()
-                    .ok_or_else(|| CmdError::click("replace rollout has no readiness path"))?;
+                    .unwrap_or(crate::release_control::DEFAULT_REPLACE_READINESS_PATH);
                 let (service, readiness_url) =
                     replace_service(&document, &policy.service, name, readiness_path)?;
                 super::service::release_pipeline_product(
