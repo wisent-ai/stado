@@ -1804,6 +1804,12 @@ async fn cleanup_once(
     } else {
         Some(state_dir.as_path())
     };
+    // Registry and queue reads are network operations and have no filesystem
+    // side effects. Resolve them before taking the exclusive janitor lock: one
+    // stalled store request must not prevent every other agent and cleanup
+    // process on this host from reading policy or reclaiming disk.
+    let registry = fetch_canonical_registry().await;
+    let live_jobs = fetch_live_job_ids().await;
     let lock = match acquire_lock(&state_dir) {
         Ok(lock) => lock,
         Err(exc) => {
@@ -1817,8 +1823,6 @@ async fn cleanup_once(
         report.outcome = "lock_busy".to_string();
         return finish(report, started, Some(&home), None, attempted_at, log_fn);
     };
-    let registry = fetch_canonical_registry().await;
-    let live_jobs = fetch_live_job_ids().await;
     run_with_lock(
         &home,
         &state_dir,

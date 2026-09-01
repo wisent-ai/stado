@@ -790,6 +790,21 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
             disk_low_bytes = Some(reported_low);
         }
+        // Admission reads the canonical declaration directly as well as the
+        // janitor report. Cleanup deliberately uses a cross-process lock; a
+        // busy lock or an older writer's invalid report must not erase a
+        // perfectly readable low watermark and close the queue forever.
+        let registry_target = lookup_self_auto(&hostname).await?;
+        if let Some(declared_low) = registry_target
+            .as_ref()
+            .and_then(|target| target.disk_cleanup.as_ref())
+            .map(|policy| policy.low_free_gb.saturating_mul(disk_cleanup::GIB))
+        {
+            if disk_low_bytes != Some(declared_low) {
+                log_fn("loop: loaded disk low watermark from the canonical registry");
+            }
+            disk_low_bytes = Some(declared_low);
+        }
         // Python: shutil.disk_usage(expanduser("~")).free, OSError -> None.
         let current_free_bytes =
             disk_cleanup::free_bytes(&crate::config_file::expand_tilde("~")).ok();
@@ -892,7 +907,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             last_fleet_flush = Instant::now();
         }
         let mut gpu_power_policy_ok = true;
-        if let Some(t) = lookup_self_auto(&hostname).await? {
+        if let Some(t) = registry_target.as_ref() {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 // Env overrides are now owned by systemd (/etc/wisent/wisent-agent.env).
                 // Ignore registry env deltas so an external registry push cannot
