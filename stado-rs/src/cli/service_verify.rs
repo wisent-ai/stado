@@ -96,7 +96,7 @@ use crate::cli::CmdError;
 // out of it, so a private copy that drifted by one letter would file rows
 // nothing matches -- a fact with no reader, which is the defect this change
 // exists to remove.
-use crate::observations::{service_fact, Observation, OBSERVED, UNREACHABLE, UNVERIFIED};
+use crate::observations::{service_fact, Observation, MISOWNED, OBSERVED, UNREACHABLE, UNVERIFIED};
 use crate::targets::{
     load_registry_auto, Registry, Service, ServiceDirectory, VerifyDescriptor,
     VERIFY_FROM_ACTIVE_HOST, VERIFY_FROM_ENDPOINT_HOLDERS, VERIFY_KIND_HTTP, VERIFY_KIND_TCP,
@@ -611,6 +611,111 @@ fn field(row: &Value, key: &str) -> String {
         .to_string()
 }
 
+/// Did the thing that answered turn out to be the service that was declared?
+///
+/// A probe proves a socket is alive and nothing more. That was the whole of
+/// [`OBSERVED`]'s evidence, and it is why a wrong declaration can read green
+/// indefinitely: on 2026-08-31 the directory put `brama` on
+/// `http://127.0.0.1:8080` while brama served 18080, an unrelated FastAPI job
+/// held 8080, and every sweep recorded `HTTP 404` as an answer. Seventeen
+/// hours of a documentation gate failing on a 404 followed, and no check in
+/// this binary contradicted the declaration, because none of them asked who
+/// owned the port.
+///
+/// [`crate::deploy::service_serving`] already answers exactly that, by launchd
+/// label and never by argv, so this reuses it rather than growing a second
+/// opinion about ownership.
+///
+/// Two deliberate narrowings:
+///
+/// * Only [`Service::active_host`]. Every other host holding an endpoint
+///   reaches this service through its own resolver adapter, whose loopback
+///   socket is owned by the resolver on purpose; judging those would file a
+///   foreign-owner row against every healthy consumer, and a report that cries
+///   wolf gets read like one.
+/// * Only rows that already came back [`OBSERVED`]. Where nothing answered,
+///   [`UNREACHABLE`] is the finding and who owns the silence adds nothing.
+///
+/// Ownership that cannot be established leaves the row exactly as it was and
+/// says so in the detail. "I could not tell" is not evidence of a foreign
+/// owner, and this command's rule is that an unchecked declaration is not a
+/// failure.
+async fn judge_ownership(registry: &Registry, findings: &mut [Finding]) {
+    let runner = crate::deploy::production_runner();
+    for finding in findings.iter_mut() {
+        if finding.state != OBSERVED || !finding.probed {
+            continue;
+        }
+        let Some(service) = registry.service(&finding.service) else {
+            continue;
+        };
+        if service.active_host != finding.host {
+            continue;
+        }
+        let Some(port) = url::Url::parse(&finding.endpoint)
+            .ok()
+            .and_then(|url| url.port())
+        else {
+            continue;
+        };
+        let Some(unit) = registry.service_unit(&finding.service, &finding.host) else {
+            finding.detail = format!(
+                "{}; the registry names no unit for it on this host, so the port's owner was \
+                 not judged",
+                finding.detail
+            );
+            continue;
+        };
+        let Some(target) = registry
+            .local_targets()
+            .into_iter()
+            .find(|target| target.name == finding.host)
+        else {
+            continue;
+        };
+        let Some(declared) = crate::deploy::service::declared_services(target)
+            .into_iter()
+            .find(|found| found.unit_id() == unit)
+        else {
+            finding.detail = format!(
+                "{}; {unit} is not declared on this host, so the port's owner was not judged",
+                finding.detail
+            );
+            continue;
+        };
+        let report = match crate::deploy::service_serving::read_serving(
+            target,
+            unit,
+            &declared.path,
+            &[port],
+            &runner,
+        )
+        .await
+        {
+            Ok(report) => report,
+            Err(error) => {
+                finding.detail = format!(
+                    "{}; the port's owner could not be read: {error}",
+                    finding.detail
+                );
+                continue;
+            }
+        };
+        let verdicts = crate::deploy::service_serving::port_verdicts(&report);
+        let Some(taken) = verdicts.iter().find(|verdict| {
+            verdict.verdict == crate::deploy::service_serving::PORT_SERVED_BY_OTHER
+        }) else {
+            continue;
+        };
+        finding.state = MISOWNED;
+        finding.detail = format!(
+            "{} answered, but {port} is held by {} and not by {unit}",
+            finding.detail,
+            taken.holder_cell()
+        );
+    }
+}
+
 /// Collect and persist one reachability sweep without rendering it. The
 /// coordinator uses this before service reconciliation so every mutation is
 /// based on a fresh external observation, not yesterday's local cache.
@@ -662,6 +767,7 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
         }
     }
     findings.extend(standby);
+    judge_ownership(&registry, &mut findings).await;
     record_observations(&findings);
     Ok(findings)
 }
@@ -695,24 +801,42 @@ fn emit(findings: &[Finding], json_output: bool) {
 }
 
 /// A false declaration is a failure, an unchecked one is not. Exiting non-zero
-/// only on `unreachable` is what makes this usable as a gate without making an
-/// uninstalled probe look like an outage.
+/// on `unreachable` and `misowned` is what makes this usable as a gate without
+/// making an uninstalled probe look like an outage.
 ///
-/// A standby row is `unverified` for the same reason and is exempt by the same
-/// rule: nothing looked, because there is nothing there to look at yet. It has
-/// to stay visible in the table and out of the count, and one state word does
-/// both.
+/// The two failures are counted apart because they send an operator to
+/// different places. `unreachable` says nothing answered, and the service is
+/// usually what needs attention. `misowned` says the wrong program answered,
+/// and the DECLARATION is what needs attention -- restarting the service it
+/// names repairs nothing, which is why folding the two into one number would
+/// cost the reader the only thing that tells them apart.
+///
+/// A standby row is `unverified` and is exempt by the same rule: nothing
+/// looked, because there is nothing there to look at yet. It has to stay
+/// visible in the table and out of the count, and one state word does both.
 fn fail_on_unreachable(findings: &[Finding]) -> Result<(), CmdError> {
-    let broken = findings
-        .iter()
-        .filter(|finding| finding.state == UNREACHABLE)
-        .count();
-    if broken == 0 {
+    let count = |state: &str| {
+        findings
+            .iter()
+            .filter(|finding| finding.state == state)
+            .count()
+    };
+    let broken = count(UNREACHABLE);
+    let misowned = count(MISOWNED);
+    if broken == 0 && misowned == 0 {
         return Ok(());
     }
-    eprintln!(
-        "{broken} declaration(s) point at an endpoint that answered nothing from the host \
-         that is told to call it"
-    );
+    if broken > 0 {
+        eprintln!(
+            "{broken} declaration(s) point at an endpoint that answered nothing from the host \
+             that is told to call it"
+        );
+    }
+    if misowned > 0 {
+        eprintln!(
+            "{misowned} declaration(s) name a port a different declared unit is holding; the \
+             declaration is wrong, not the service it names"
+        );
+    }
     Err(CmdError::silent(1))
 }
