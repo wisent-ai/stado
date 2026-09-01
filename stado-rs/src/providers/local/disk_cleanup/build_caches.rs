@@ -184,6 +184,15 @@ struct Walk<'a> {
     reserved: Vec<PathBuf>,
     /// Bytes this pass expects to have freed, against `max_bytes_per_pass`.
     deleted_bytes: i64,
+    /// Path components, relative to the scan root, at which the previous
+    /// pass stopped, and whether this walk is still skipping forward to
+    /// reach them. Empty and `false` mean "start at the root".
+    resume: Vec<OsString>,
+    catching_up: bool,
+    /// The directory this pass could not get to, recorded the moment a
+    /// budget refuses it, so the next pass starts there instead of at the
+    /// root. `None` once the walk has crossed the whole tree.
+    halted_at: Option<PathBuf>,
 }
 
 impl<'a> Walk<'a> {
@@ -346,6 +355,22 @@ impl<'a> Walk<'a> {
         report: &mut CleanupReport,
     ) -> Result<Progress, JanitorError> {
         for name in entry_names(dir_fd)? {
+            // Skip forward to where the previous pass stopped. `entry_names`
+            // is a `BTreeSet`, so "before the cursor" is decidable and stable
+            // across passes; a cursor naming a directory that has since been
+            // deleted simply resumes at the next surviving sibling.
+            if self.catching_up {
+                match self.resume.get(depth) {
+                    // Already examined by an earlier pass.
+                    Some(target) if &name < target => continue,
+                    // The cursor's own branch: descend into it still catching
+                    // up, because the stopping point is somewhere below.
+                    Some(target) if &name == target => {}
+                    // Past the cursor at this level, or deeper than it
+                    // reaches: everything from here on is unexamined.
+                    _ => self.catching_up = false,
+                }
+            }
             let info = match safefs::fstatat_nofollow(dir_fd, &name) {
                 Ok(info) => info,
                 Err(_) => {
@@ -375,6 +400,7 @@ impl<'a> Walk<'a> {
                 continue;
             }
             if let Progress::Halt = self.charge(report) {
+                self.halted_at.get_or_insert(child_path);
                 return Ok(Progress::Halt);
             }
             if depth + 1 > MAX_DEPTH {
@@ -440,6 +466,10 @@ impl<'a> Walk<'a> {
                 Tag::Absent => self.descend(child.as_raw_fd(), &child_path, depth + 1, report)?,
             };
             if let Progress::Halt = progress {
+                // A deeper frame records first, so the innermost refusal is
+                // the one kept: resuming above it would re-cross a subtree
+                // this pass already paid for.
+                self.halted_at.get_or_insert(child_path);
                 return Ok(Progress::Halt);
             }
         }
@@ -514,21 +544,42 @@ fn remove_contents(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), J
 /// cleaners that ran before it, and `deadline` is the pass deadline the HF
 /// scan also honours: unlike the other two roots, this one can be the whole
 /// of `$HOME`, where the walk — not the deletion — is the expensive half.
+///
+/// `resume_from` is where the previous pass stopped, and the walk continues
+/// from there rather than restarting at the root. Without it the two budgets
+/// above are not a throttle but a ceiling on how much of the tree can ever be
+/// seen: on 2026-09-01 `lukasz-macbook` declared this cleaner over a root
+/// holding 879,559 directories, `max_scan_items` is capped at 100,000 by
+/// `targets::validate_registry`, and one pass crossed exactly that many in
+/// its 30-second deadline. The same first eleven percent was scanned every
+/// hour, `build_caches` reported one eligible directory of 160 KiB, and the
+/// 62 GiB `target/` further down the same tree was unreachable by
+/// construction while the volume sat at 100%.
+///
+/// The cursor changes only the ORDER in which directories are examined.
+/// Every deletion criterion — the tag, the age, the reserved roots, the
+/// ownership and device checks — is applied exactly as it would be on a walk
+/// that started at the root.
 pub fn scan_build_caches(
     home: &Path,
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
     deadline: Instant,
+    resume_from: Option<String>,
     report: &mut CleanupReport,
 ) {
+    // Seeded before the early returns: a pass that declines to walk must
+    // leave the cursor where it was, not clear it. Only a walk that actually
+    // ran may say where the next one starts.
+    report.builds_resume_from = resume_from.clone();
     let Some(configured) = policy.cleaners.get("build_caches") else {
         return;
     };
     if remaining_scan <= 0 {
         return;
     }
-    let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
+    let body = |report: &mut CleanupReport| -> Result<Option<PathBuf>, JanitorError> {
         // Default root is `$HOME` itself: build trees live wherever the
         // operator checked the repository out, and no fixed subdirectory of
         // home describes that. `root` narrows the walk for a host whose
@@ -538,7 +589,10 @@ pub fn scan_build_caches(
                 let expanded = crate::config_file::expand_tilde(configured_root);
                 if !expanded.is_dir() {
                     report.skip_builds("root_absent", 1);
-                    return Ok(());
+                    // A root that is not there this pass says nothing about
+                    // how far the last walk got, so the cursor is handed
+                    // back unchanged rather than cleared.
+                    return Ok(resume_from.as_deref().map(PathBuf::from));
                 }
                 // Resolved, because the reserved roots below are named
                 // relative to the resolved home: a root spelled through a
@@ -555,6 +609,16 @@ pub fn scan_build_caches(
         if root_info.st_uid != euid() {
             return Err(JanitorError::os("build cache root ownership mismatch"));
         }
+        let resume: Vec<OsString> = resume_from
+            .as_deref()
+            .map(|value| {
+                Path::new(value)
+                    .components()
+                    .map(|part| part.as_os_str().to_os_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let catching_up = !resume.is_empty();
         let mut walk = Walk {
             home,
             policy,
@@ -565,15 +629,27 @@ pub fn scan_build_caches(
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home, policy),
             deleted_bytes: 0,
+            resume,
+            catching_up,
+            halted_at: None,
         };
         // The root itself is never a candidate, tagged or not: the cleaner
         // deletes caches inside the root it was given, and a root it
         // deleted would leave the next pass reporting `root_absent` about a
         // home directory.
         walk.descend(root_fd.as_raw_fd(), &root, 0, report)?;
-        Ok(())
+        Ok(walk.halted_at.and_then(|path| {
+            path.strip_prefix(&root)
+                .ok()
+                .map(std::path::Path::to_path_buf)
+        }))
     };
-    if let Err(exc) = body(report) {
-        report.add_error("build_caches", &exc);
+    match body(report) {
+        // A walk that reached the end of the tree clears the cursor, so the
+        // next pass starts over and re-examines what has changed since.
+        Ok(halted) => {
+            report.builds_resume_from = halted.map(|path| path.to_string_lossy().into_owned());
+        }
+        Err(exc) => report.add_error("build_caches", &exc),
     }
 }

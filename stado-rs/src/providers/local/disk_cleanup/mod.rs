@@ -262,6 +262,10 @@ pub struct CleanupReport {
     pub lock_busy: bool,
     pub active_slot_count: i64,
     pub last_success_at: Option<String>,
+    /// Where the build-cache walk stopped, relative to its scan root, or
+    /// `None` when it crossed the whole tree. Carried across passes through
+    /// the state file: see [`build_caches::scan_build_caches`].
+    pub builds_resume_from: Option<String>,
     pub errors: Vec<String>,
 }
 
@@ -294,6 +298,7 @@ impl CleanupReport {
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
             last_success_at: None,
+            builds_resume_from: None,
             errors: Vec::new(),
         }
     }
@@ -394,6 +399,7 @@ impl CleanupReport {
             "lock_busy": self.lock_busy,
             "active_slot_count": self.active_slot_count,
             "last_success_at": self.last_success_at,
+            "build_caches_resume_from": self.builds_resume_from,
             "errors": self.errors,
         })
     }
@@ -1373,6 +1379,16 @@ fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("last_success_at"))
         .and_then(|v| v.as_str().map(str::to_string));
+    // Where the previous pass's build-cache walk stopped. Without this the
+    // walk restarts at its root every pass and a tree larger than one pass's
+    // budget is never crossed: on 2026-09-01 `lukasz-macbook` held 879,559
+    // directories under the declared root against a `max_scan_items` ceiling
+    // of 100,000, so the same first eleven percent was scanned hourly and the
+    // caches in the rest were unreachable by construction.
+    report.builds_resume_from = previous_report
+        .as_ref()
+        .and_then(|r| r.get("build_caches_resume_from"))
+        .and_then(|v| v.as_str().map(str::to_string));
     // THIS writer's last attempt, not the file's.
     //
     // This read used to be `previous["last_attempt_at"]` - the last attempt by
@@ -1533,7 +1549,9 @@ fn run_with_lock(
     }
     // The build-cache scan is the only one whose root can be the whole of
     // `$HOME`: it walks with its share of whatever the fixed-layout cleaners
-    // left, and with the same pass deadline the HF scan honours.
+    // left, and with the same pass deadline the HF scan honours. It is also
+    // the only one that cannot finish in one pass on a large tree, so it
+    // resumes from where the last pass stopped instead of restarting.
     build_caches::scan_build_caches(
         home,
         &policy,
@@ -1547,6 +1565,7 @@ fn run_with_lock(
             ]),
         ),
         deadline,
+        report.builds_resume_from.clone(),
         &mut report,
     );
     let remaining_after_builds = (policy.max_scan_items
