@@ -6,7 +6,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::{py_str_repr, CommandSpec, DeployError, Runner};
+use super::{host_channel, py_str_repr, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 fn resolve_target<'a>(
@@ -25,7 +25,7 @@ fn resolve_target<'a>(
             py_str_repr(target_name)
         )));
     }
-    if target.ssh.as_deref().unwrap_or("").is_empty() {
+    if !target.has_ssh_connection() {
         return Err(DeployError(format!(
             "target {} has no registry-managed ssh destination",
             py_str_repr(target_name)
@@ -55,21 +55,27 @@ pub fn ssh_reboot_argv(ssh_target: &str) -> Vec<String> {
 /// (the canonical store, or the last-known-good copy with its age announced;
 /// never an empty registry, and an unknown name still fails).
 pub async fn reboot_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
-    let registry = super::host_channel::canonical_registry().await?;
+    let registry = host_channel::canonical_registry().await?;
     let target = resolve_target(&registry, target_name)?;
-    let output = runner(CommandSpec {
-        argv: ssh_reboot_argv(target.ssh.as_deref().unwrap_or("")),
-        stdin: None,
-        timeout: None,
-    })
-    .await
-    .map_err(DeployError)?;
+    let (output, connection) = host_channel::run_program_with_connection(
+        target,
+        &["sudo", "-n", "/sbin/shutdown", "-r", "now"],
+        runner,
+    )
+    .await?;
 
     let mut report = Map::new();
     report.insert("target".to_string(), json!(target.name));
     report.insert(
         "ssh".to_string(),
         target.ssh.as_ref().map_or(Value::Null, |ssh| json!(ssh)),
+    );
+    report.insert(
+        "connection_path".to_string(),
+        json!(match connection {
+            host_channel::UsedConnection::Local => "local",
+            host_channel::UsedConnection::Ssh(path) => path.name,
+        }),
     );
     report.insert("exit_code".to_string(), json!(output.code));
     report.insert(
@@ -81,9 +87,6 @@ pub async fn reboot_host(target_name: &str, runner: &Runner) -> Result<Value, De
         }),
     );
     if !output.ok() {
-        // The common failure is sudo requiring a password; surface the last
-        // stderr line verbatim so the operator knows whether to grant
-        // passwordless shutdown or reboot the box physically.
         let detail = output.detail().trim();
         let last = match detail.lines().next_back() {
             Some(line) => line.to_string(),

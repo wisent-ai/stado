@@ -377,6 +377,73 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     Ok(())
 }
 
+fn validate_ssh_fallbacks(
+    target: &Map<String, Value>,
+    location: &str,
+) -> Result<Vec<(String, String)>, RegistryValidationError> {
+    let Some(value) = target.get("ssh_fallbacks") else {
+        return Ok(Vec::new());
+    };
+    let paths = value
+        .as_array()
+        .ok_or_else(|| verr(&format!("{location}.ssh_fallbacks"), "must be an array"))?;
+    if paths.len() > 16 {
+        return Err(verr(
+            &format!("{location}.ssh_fallbacks"),
+            "must contain at most 16 paths",
+        ));
+    }
+
+    let mut names: HashSet<&str> = HashSet::new();
+    let mut identities = Vec::with_capacity(paths.len());
+    for (index, value) in paths.iter().enumerate() {
+        let path_location = format!("{location}.ssh_fallbacks[{index}]");
+        let path = value
+            .as_object()
+            .ok_or_else(|| verr(&path_location, "must be an object"))?;
+        const KEYS: [&str; 2] = ["destination", "name"];
+        let mut unknown = path
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !KEYS.contains(key))
+            .collect::<Vec<_>>();
+        unknown.sort_unstable();
+        if !unknown.is_empty() {
+            return Err(verr(
+                &path_location,
+                &format!("unknown keys {}", py_list_repr(&unknown)),
+            ));
+        }
+
+        let name_location = format!("{path_location}.name");
+        let name = path.get("name").and_then(Value::as_str).unwrap_or("");
+        if !is_target_name(name) || name == PRIMARY_SSH_CONNECTION {
+            return Err(verr(
+                &name_location,
+                "must be a lowercase path identifier other than 'primary'",
+            ));
+        }
+        if !names.insert(name) {
+            return Err(verr(
+                &name_location,
+                &format!("duplicate SSH path name '{name}'"),
+            ));
+        }
+
+        let destination_location = format!("{path_location}.destination");
+        let destination = path
+            .get("destination")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let identity = ssh_hostname(destination);
+        if identity.is_empty() {
+            return Err(verr(&destination_location, "must include a host"));
+        }
+        identities.push((identity, destination_location));
+    }
+    Ok(identities)
+}
+
 /// (identity, location) pairs declared by one target.
 fn target_identities(
     target: &Map<String, Value>,
@@ -431,6 +498,7 @@ fn target_identities(
             identities.push((ssh_identity, format!("{location}.ssh")));
         }
     }
+    identities.extend(validate_ssh_fallbacks(target, location)?);
     Ok(identities)
 }
 
@@ -1194,6 +1262,23 @@ impl DiskCleanupPolicy {
     }
 }
 
+/// One named alternative route for the target's SSH host-control channel.
+///
+/// The destination is still ordinary OpenSSH syntax. The name identifies the
+/// network underneath it (`nebula`, `tailscale`, `wireguard`, `lan`, or any
+/// fleet-specific path); list order is failover order. Keeping the network
+/// label separate from the SSH transport lets Stado add routes without
+/// duplicating remote-execution policy or host credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshConnectionPath {
+    pub name: String,
+    pub destination: String,
+}
+
+/// Stable name of the existing `ssh` destination when it is rendered beside
+/// named fallback paths.
+pub const PRIMARY_SSH_CONNECTION: &str = "primary";
+
 /// One routable box. Unknown registry keys land in
 /// [`ComputeTarget::extra`] (Python's `extra` dict), via `#[serde(flatten)]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1211,6 +1296,14 @@ pub struct ComputeTarget {
     pub slots: i64,
     #[serde(default)]
     pub ssh: Option<String>,
+    /// Ordered alternative network routes for the same SSH host channel.
+    ///
+    /// `ssh` remains the preferred route and the compatibility surface for
+    /// older fleet binaries. These paths are tried only after a side-effect-free
+    /// SSH handshake says an earlier route is unavailable; the real remote
+    /// operation is sent exactly once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ssh_fallbacks: Vec<SshConnectionPath>,
     #[serde(default)]
     pub region: Option<String>,
     #[serde(default)]
@@ -1293,6 +1386,26 @@ pub struct ComputeTarget {
 }
 
 impl ComputeTarget {
+    /// Preferred SSH destination followed by its declared fallback routes.
+    ///
+    /// This iterator borrows registry storage: selecting a route does not copy
+    /// destinations on the normal path.
+    pub fn ssh_connections(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.ssh
+            .as_deref()
+            .filter(|destination| !destination.trim().is_empty())
+            .map(|destination| (PRIMARY_SSH_CONNECTION, destination))
+            .into_iter()
+            .chain(
+                self.ssh_fallbacks
+                    .iter()
+                    .map(|path| (path.name.as_str(), path.destination.as_str())),
+            )
+    }
+
+    pub fn has_ssh_connection(&self) -> bool {
+        self.ssh_connections().next().is_some()
+    }
     pub fn provider(&self) -> Option<crate::capabilities::ProviderId> {
         crate::capabilities::variant(crate::capabilities::RuntimeFacet::HostTarget, &self.kind)
             .and_then(|variant| variant.provider)
@@ -3102,8 +3215,8 @@ impl Registry {
 
     /// Find the unique target declaring the normalized host identity.
     ///
-    /// Names, explicit hostname aliases, and the host part of legacy SSH
-    /// destinations are identities. Ambiguous registry data is rejected
+    /// Names, explicit hostname aliases, and the host part of every declared
+    /// SSH connection path are identities. Ambiguous registry data is rejected
     /// rather than allowing target order to decide which configuration a
     /// host receives.
     pub fn lookup_self(&self, hostname: &str) -> Result<Option<&ComputeTarget>, RegistryError> {
@@ -3121,9 +3234,11 @@ impl Registry {
                     .iter()
                     .map(|alias| normalize_hostname(alias)),
             );
-            if let Some(ssh) = &target.ssh {
-                identities.insert(ssh_hostname(ssh));
-            }
+            identities.extend(
+                target
+                    .ssh_connections()
+                    .map(|(_, destination)| ssh_hostname(destination)),
+            );
             if identities.contains(&identity) {
                 matches.push(target);
             }

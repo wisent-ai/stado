@@ -1568,6 +1568,63 @@ const LINK_DEGRADED: &str = "degraded";
 /// know how this host is reachable" is the answer that sends an operator to
 /// look, and a guess is the answer that does not.
 const PATH_KIND_UNKNOWN: &str = "unknown";
+const HOST_HEALTH_BEACON_UNIT: &str = "com.wisent.host-health-beacon";
+const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
+const HOST_HEALTH_LOG_LINES: u32 = 80;
+const OBJECT_API_SERVICE: &str = "stado-object-api";
+const LINK_REPAIR_WAIT_SECONDS: u64 = 90;
+const LINK_REPAIR_POLL_SECONDS: u64 = 5;
+
+/// The beacon publisher's newest outcome, read from the managed unit's own
+/// declared log. A later successful host-name line supersedes an older error;
+/// otherwise an incident that was already repaired would keep advertising the
+/// old cause forever.
+fn host_health_publisher_diagnosis(report: &UnitLogReport) -> Value {
+    let lines = report.log.lines().collect::<Vec<_>>();
+    let last_success = lines.iter().rposition(|line| line.trim() == report.target);
+    let last_error = lines
+        .iter()
+        .rposition(|line| line.contains("Error:") || line.contains(HOST_HEALTH_AUTH_UNAVAILABLE));
+    if matches!(
+        (last_success, last_error),
+        (Some(success), Some(error)) if success > error
+    ) || matches!((last_success, last_error), (Some(_), None))
+    {
+        return json!({
+            "unit": report.unit,
+            "code": "published",
+            "detail": "The beacon publisher's newest recorded attempt succeeded.",
+            "repairable": false,
+        });
+    }
+    if let Some(index) = last_error {
+        if lines[index].contains(HOST_HEALTH_AUTH_UNAVAILABLE) {
+            return json!({
+                "unit": report.unit,
+                "code": "verifier_unavailable",
+                "detail": format!(
+                    "The beacon publisher reached the host-health API, but that API could not read \
+                     {}/token through its dedicated verifier.",
+                    crate::config::HOST_HEALTH_API_ITEM
+                ),
+                "repairable": true,
+                "repair_command": format!("stado host repair-link {}", report.target),
+            });
+        }
+        return json!({
+            "unit": report.unit,
+            "code": "publisher_failed",
+            "detail": lines[index].trim(),
+            "repairable": false,
+        });
+    }
+    json!({
+        "unit": report.unit,
+        "code": "publisher_silent",
+        "detail": "The beacon is stale, the host answers, and its publisher log names no failed publish.",
+        "repairable": false,
+    })
+}
 
 /// `stado host link TARGET [--json]` — why this host went quiet, in one
 /// payload.
@@ -1615,26 +1672,41 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
         .map_err(|exc| CmdError::click(exc.to_string()))?;
 
-    // The ssh half, through the same channel and the same fixed program
-    // `host ping` sends, so the two commands can never disagree about whether
-    // a host answers. A refused connection is this command's answer, not its
-    // failure: "does not answer ssh" is precisely what was asked.
-    let ssh = crate::deploy::host_channel::run_program(
+    // Probe every declared route so a working primary does not hide a broken
+    // fallback. The real command below still chooses in declaration order and
+    // runs once.
+    let (connection_probes, connection_probe_error) =
+        match crate::deploy::host_channel::probe_ssh_connections(resolved, &runner).await {
+            Ok(probes) => (probes, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+    let connection_degraded =
+        connection_probe_error.is_some() || connection_probes.iter().any(|probe| !probe.reachable);
+    let ssh = crate::deploy::host_channel::run_program_with_connection(
         resolved,
         crate::deploy::host_ping::REMOTE_PROGRAM,
         &runner,
     )
     .await;
-    let (ssh_reachable, ssh_error) = match &ssh {
-        Ok(output) if output.ok() => (true, None),
-        Ok(output) => (
+    let (ssh_reachable, ssh_error, selected_connection) = match ssh {
+        Ok((output, used)) if output.ok() => {
+            let selected = match used {
+                crate::deploy::host_channel::UsedConnection::Local => "local".to_string(),
+                crate::deploy::host_channel::UsedConnection::Ssh(connection) => {
+                    connection.name.to_string()
+                }
+            };
+            (true, None, Some(selected))
+        }
+        Ok((output, _)) => (
             false,
             Some(crate::deploy::host_channel::last_error_line(
-                output,
+                &output,
                 "ssh failed",
             )),
+            None,
         ),
-        Err(exc) => (false, Some(exc.to_string())),
+        Err(exc) => (false, Some(exc.to_string()), None),
     };
 
     // The one fact neither surface could state, and the reason the mini takes
@@ -1682,6 +1754,37 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // — counts as past the threshold. An absent beacon is the strongest form of
     // "nothing has been heard from this host", not an exemption from it.
     let stale = signal.age_seconds.is_none_or(|age| age > threshold);
+    // A reachable host with a stale beacon is a publisher failure, not a
+    // network mystery. Read the managed publisher's own log here so `link`
+    // carries the cause an operator previously had to discover with a second
+    // command.
+    let beacon_publisher = if stale && ssh_reachable {
+        match collect_unit_log(
+            resolved,
+            HOST_HEALTH_BEACON_UNIT,
+            HOST_HEALTH_LOG_LINES,
+            &runner,
+        )
+        .await
+        {
+            Ok(report) => Some(host_health_publisher_diagnosis(&report)),
+            Err(error) => Some(json!({
+                "unit": HOST_HEALTH_BEACON_UNIT,
+                "code": "diagnostic_unavailable",
+                "detail": error.to_string(),
+                "repairable": false,
+            })),
+        }
+    } else {
+        None
+    };
+    if let Some(detail) = beacon_publisher
+        .as_ref()
+        .and_then(|publisher| publisher.get("detail"))
+        .and_then(Value::as_str)
+    {
+        blockers.push(detail.to_string());
+    }
 
     if let Some(detail) = &signal.error {
         blockers.push(detail.clone());
@@ -1693,6 +1796,17 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     }
     if let Some(detail) = &ssh_error {
         blockers.push(detail.clone());
+    }
+    if let Some(detail) = &connection_probe_error {
+        blockers.push(format!("connection path probes failed: {detail}"));
+    }
+    for probe in connection_probes.iter().filter(|probe| !probe.reachable) {
+        blockers.push(format!(
+            "{} connection path {} did not answer: {}",
+            probe.name,
+            probe.destination,
+            probe.error.as_deref().unwrap_or("SSH probe failed")
+        ));
     }
     if published.is_none() {
         blockers.push(
@@ -1809,7 +1923,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         } else {
             LINK_SILENT
         }
-    } else if refused {
+    } else if refused || connection_degraded {
         LINK_DEGRADED
     } else {
         LINK_HEALTHY
@@ -1831,7 +1945,11 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         "host": resolved.name,
         "beacon_age_seconds": signal.age_seconds,
         "ssh_reachable": ssh_reachable,
+        "selected_connection": &selected_connection,
+        "connection_paths": &connection_probes,
+        "connection_probe_error": &connection_probe_error,
         "session": session.to_json(),
+        "beacon_publisher": &beacon_publisher,
         "path_kind": path_kind,
         "endpoint": from_link("endpoint"),
         "last_sleep_at": from_link("last_sleep_at"),
@@ -1877,6 +1995,15 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         ),
         _ => println!("beacon:   nothing readable for this host"),
     }
+    if let Some(publisher) = &beacon_publisher {
+        println!(
+            "publisher:{}",
+            publisher.get("detail").and_then(Value::as_str).map_or_else(
+                || " no diagnosis".to_string(),
+                |detail| format!(" {detail}")
+            )
+        );
+    }
     println!(
         "ssh:      {}",
         match &ssh_error {
@@ -1884,6 +2011,27 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             Some(detail) => format!("did not answer: {detail}"),
         }
     );
+    if let Some(detail) = &connection_probe_error {
+        println!("routes:   could not probe: {detail}");
+    } else {
+        for (index, probe) in connection_probes.iter().enumerate() {
+            let label = if index == 0 { "routes:  " } else { "         " };
+            let selected = if selected_connection.as_deref() == Some(probe.name.as_str()) {
+                ", selected"
+            } else {
+                ""
+            };
+            let state = if probe.reachable {
+                format!("answered{selected}")
+            } else {
+                format!(
+                    "did not answer: {}",
+                    probe.error.as_deref().unwrap_or("SSH probe failed")
+                )
+            };
+            println!("{label} {} ({}) {state}", probe.name, probe.destination);
+        }
+    }
     // The headline in the operator's words first, the resolver's own sentence
     // under it. Reversing those two is how `gui/501` becomes the answer to
     // "is anyone logged in on that host".
@@ -1958,6 +2106,175 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         }
     }
     link_outcome(&resolved.name, verdict, blockers.len())
+}
+
+/// Repair one stale, reachable host whose publisher is being refused because
+/// the dashboard cannot read its route-scoped bearer.
+///
+/// The repair is deliberately narrow. It reads the publisher's own declared
+/// log, refuses every other cause, resolves the object API authority from the
+/// service directory, reconciles that authority's existing verifier grant
+/// without rotating its bearer, then waits for the host's normal one-minute
+/// publisher to prove the repair with a newer beacon. No service is restarted.
+pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .clone();
+    let store = beacon_store().await?;
+    let initial_health = crate::monitor::host_health::load_host_health(&store, &resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let initial_signal =
+        crate::deploy::host_ping::grade_beacon(&initial_health, chrono::Utc::now());
+    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
+    if initial_signal
+        .age_seconds
+        .is_some_and(|age| age <= threshold)
+    {
+        let report = json!({
+            "target": resolved.name,
+            "state": "already_healthy",
+            "detail": "The newest beacon is inside the fleet silence threshold; no repair changed the verifier.",
+            "beacon_age_seconds": initial_signal.age_seconds,
+            "beacon_reported_at": initial_signal.reported_at,
+        });
+        if json_output {
+            print_json(&report);
+        } else {
+            println!(
+                "{}: beacon is already fresh; no repair changed the verifier",
+                resolved.name
+            );
+        }
+        return Ok(());
+    }
+
+    let runner = crate::deploy::production_runner();
+    let publisher_log = collect_unit_log(
+        &resolved,
+        HOST_HEALTH_BEACON_UNIT,
+        HOST_HEALTH_LOG_LINES,
+        &runner,
+    )
+    .await?;
+    let diagnosis = host_health_publisher_diagnosis(&publisher_log);
+    let diagnosis_code = diagnosis
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if diagnosis_code != "verifier_unavailable" {
+        let detail = diagnosis
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or("the publisher log names no supported repair");
+        return Err(CmdError::click(format!(
+            "{}: automatic link repair refused because the diagnosed publisher state is \
+             {diagnosis_code}: {detail}",
+            resolved.name
+        )));
+    }
+
+    let authority = registry
+        .service(OBJECT_API_SERVICE)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "service directory declares no {OBJECT_API_SERVICE}; refusing to guess which \
+                 host owns host-health authorization"
+            ))
+        })?
+        .active_host
+        .clone();
+    crate::deploy::host_channel::resolve_target(&registry, &authority)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let verifier = reconcile_object_verifier_report(&authority).await?;
+
+    let previous_reported_at = initial_signal.reported_at.clone();
+    let started = std::time::Instant::now();
+    let mut last_observation = format!("beacon remained {:?}s old", initial_signal.age_seconds);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(LINK_REPAIR_POLL_SECONDS)).await;
+        match crate::monitor::host_health::load_host_health(&store, &resolved.name).await {
+            Ok(health) => {
+                let signal = crate::deploy::host_ping::grade_beacon(&health, chrono::Utc::now());
+                last_observation = format!(
+                    "newest beacon is {:?}s old and was reported at {}",
+                    signal.age_seconds,
+                    signal.reported_at.as_deref().unwrap_or("an unknown time")
+                );
+                let newer = signal.reported_at != previous_reported_at;
+                let fresh = signal.age_seconds.is_some_and(|age| age <= threshold);
+                if newer && fresh {
+                    let newest_beacon_at = signal
+                        .reported_at
+                        .as_deref()
+                        .and_then(crate::deploy::host_ping::parse_timestamp);
+                    crate::monitor::host_silence::observe_beacon_age(
+                        &store,
+                        &resolved.name,
+                        newest_beacon_at,
+                        crate::monitor::host_silence::READER_CLI,
+                        None,
+                    )
+                    .await
+                    .map_err(|error| CmdError::click(error.to_string()))?;
+                    let silences = crate::monitor::host_silence::recent_silences(
+                        &store,
+                        &resolved.name,
+                        NEWEST_SILENCES,
+                    )
+                    .await
+                    .map_err(|error| CmdError::click(error.to_string()))?;
+                    let silence_closed = silences.iter().all(|record| record.ended_at.is_some());
+                    let report = json!({
+                        "target": resolved.name,
+                        "state": "repaired",
+                        "detail": if silence_closed {
+                            "The verifier was reconciled, the host published a fresh beacon, and its open silence is closed."
+                        } else {
+                            "The verifier was reconciled and the host published a fresh beacon."
+                        },
+                        "authority": authority,
+                        "diagnosis": diagnosis,
+                        "verifier": verifier,
+                        "previous_beacon_reported_at": previous_reported_at,
+                        "beacon_reported_at": signal.reported_at,
+                        "beacon_age_seconds": signal.age_seconds,
+                        "silence_closed": silence_closed,
+                        "waited_seconds": started.elapsed().as_secs(),
+                    });
+                    if json_output {
+                        print_json(&report);
+                    } else {
+                        println!(
+                            "{}: dashboard verifier reconciled on {}; a fresh beacon arrived \
+                             and the open silence is {}",
+                            resolved.name,
+                            authority,
+                            if silence_closed {
+                                "closed"
+                            } else {
+                                "not recorded"
+                            }
+                        );
+                    }
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                last_observation = error.to_string();
+            }
+        }
+        if started.elapsed().as_secs() >= LINK_REPAIR_WAIT_SECONDS {
+            return Err(CmdError::click(format!(
+                "{}: reconciled the dashboard verifier on {authority}, but no fresh beacon \
+                 arrived within {LINK_REPAIR_WAIT_SECONDS}s; {last_observation}",
+                resolved.name
+            )));
+        }
+    }
 }
 
 /// One silence instant, spelled the way the record on disk spells it.
@@ -4085,6 +4402,148 @@ pub async fn retag_vault_item(
     }
     Ok(())
 }
+/// Store one canonical credential item in TARGET's owner vault.
+///
+/// The payload is accepted only on stdin and remains stdin across the host
+/// channel. The command reports encrypted-record metadata before and after the
+/// write; it never decrypts the value for reporting and never rewrites the
+/// surrounding vault.
+pub async fn vault_item_put(
+    target: &str,
+    item: &str,
+    item_type: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("vault item", item)?;
+    vault_word("credential type", item_type)?;
+
+    let mut payload = String::new();
+    std::io::stdin().lock().read_to_string(&mut payload)?;
+    if payload.is_empty() || payload.len() > usize::from(u16::MAX) {
+        return Err(CmdError::usage(
+            "vault item payload must contain between one and 65535 bytes",
+        ));
+    }
+    let document: Value = serde_json::from_str(&payload).map_err(|error| {
+        CmdError::usage(format!("vault item payload is not valid JSON: {error}"))
+    })?;
+    let payload_type = document
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::usage("vault item payload requires a string kind"))?;
+    if payload_type != item_type {
+        return Err(CmdError::usage(format!(
+            "vault item payload kind {payload_type:?} does not match --type {item_type:?}"
+        )));
+    }
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the Skarbiec environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
+    let gnupg_home = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let tool_path = skarbiec_tool_path(&home);
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let invocation = [
+        "/usr/bin/env",
+        tool_path.as_str(),
+        gnupg_environment.as_str(),
+        vault_environment.as_str(),
+        skarbiec.as_str(),
+        "set-json",
+        item,
+        "--type",
+        item_type,
+    ];
+
+    let before = read_vault_phase(&resolved, vault, item, &runner)
+        .await
+        .map_err(CmdError::click)?;
+    let stored = crate::deploy::host_channel::run_program_with_stdin(
+        &resolved,
+        &invocation,
+        &payload,
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !stored.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec set-json failed for {item}: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
+        )));
+    }
+    let after = read_vault_phase(&resolved, vault, item, &runner)
+        .await
+        .map_err(CmdError::click)?;
+    if after.state != "active" || after.revision == before.revision {
+        return Err(CmdError::click(format!(
+            "{}: {item} write was not visible in the encrypted vault",
+            resolved.name
+        )));
+    }
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "item": item,
+                "kind": item_type,
+                "before": {
+                    "state": before.state,
+                    "revision": before.revision,
+                },
+                "after": {
+                    "state": after.state,
+                    "revision": after.revision,
+                },
+            }))?
+        );
+    } else {
+        println!(
+            "{}: stored {item} as {item_type}; state {} -> {}, revision {} -> {}",
+            resolved.name, before.state, after.state, before.revision, after.revision
+        );
+    }
+    Ok(())
+}
+
+fn skarbiec_tool_path(home: &str) -> String {
+    format!(
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/local/MacGPG2/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    )
+}
+
 /// Run one Skarbiec command on TARGET and parse its JSON answer.
 ///
 /// The vault and GnuPG paths are resolved by the target itself. Arguments stay
@@ -4132,9 +4591,10 @@ async fn remote_skarbiec_json(
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let tool_path = skarbiec_tool_path(&home);
     let mut invocation = vec![
         "/usr/bin/env",
-        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        tool_path.as_str(),
         gnupg_environment.as_str(),
         vault_environment.as_str(),
         skarbiec.as_str(),
@@ -4289,23 +4749,45 @@ pub async fn vault_token_mint(
     Ok(())
 }
 
-/// Reconcile the object verifier on TARGET to the exact configured namespace set.
-pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+fn render_verifier_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+    let target = report.get("target").and_then(Value::as_str).unwrap_or("-");
+    let consumer = report
+        .get("consumer")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let items = report
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let verb = if report.get("exact").and_then(Value::as_bool) == Some(true) {
+        "reads exactly"
+    } else {
+        "can read"
+    };
+    println!("{target}: {consumer} {verb} {items}");
+    Ok(())
+}
+
+async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         CmdError::click(format!(
             "invalid object_api.namespaces: {}",
             problems.join("; ")
         ))
     })?;
-    let items = namespaces
-        .values()
-        .map(|policy| policy.item().to_string())
-        .collect::<std::collections::BTreeSet<_>>();
+    let items = crate::config::object_verifier_items(namespaces);
     reconcile_verifier(
         target,
-        json_output,
         "object",
-        "object_api.namespaces",
+        "object_api.namespaces and the host-health route",
         crate::config::OBJECT_API_VERIFIER_CONSUMER,
         "WC_OBJECT_SKARBIEC_TOKEN_FILE",
         "stado-object-api-verifier-skarbiec-token",
@@ -4313,6 +4795,13 @@ pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Resul
         true,
     )
     .await
+}
+
+/// Reconcile the dashboard verifier on TARGET to every configured object
+/// namespace and the route-scoped host-health bearer.
+pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let report = reconcile_object_verifier_report(target).await?;
+    render_verifier_report(&report, json_output)
 }
 
 /// Reconcile one product's release verifier dependency on TARGET.
@@ -4333,9 +4822,8 @@ pub async fn reconcile_release_verifier(
         ))
     })?;
     let items = std::collections::BTreeSet::from([publisher.item().to_string()]);
-    reconcile_verifier(
+    let report = reconcile_verifier(
         target,
-        json_output,
         "release",
         &format!("release_api.publishers.{product}"),
         crate::config::RELEASE_API_VERIFIER_CONSUMER,
@@ -4344,7 +4832,8 @@ pub async fn reconcile_release_verifier(
         items,
         false,
     )
-    .await
+    .await?;
+    render_verifier_report(&report, json_output)
 }
 
 /// Reconcile the service verifier on TARGET to the exact configured deployer set.
@@ -4359,9 +4848,8 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<std::collections::BTreeSet<_>>();
-    reconcile_verifier(
+    let report = reconcile_verifier(
         target,
-        json_output,
         "service",
         "service_api.deployers",
         crate::config::SERVICE_API_VERIFIER_CONSUMER,
@@ -4370,7 +4858,8 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         items,
         true,
     )
-    .await
+    .await?;
+    render_verifier_report(&report, json_output)
 }
 
 /// Read one nonsecret Skarbiec metadata report on a managed host.
@@ -4423,7 +4912,6 @@ async fn remote_skarbiec_metadata(
 #[allow(clippy::too_many_arguments)]
 async fn reconcile_verifier(
     target: &str,
-    json_output: bool,
     kind: &str,
     config_name: &str,
     consumer: &str,
@@ -4431,7 +4919,7 @@ async fn reconcile_verifier(
     token_file_default: &str,
     items: std::collections::BTreeSet<String>,
     replace_capabilities: bool,
-) -> Result<(), CmdError> {
+) -> Result<Value, CmdError> {
     if items.is_empty() {
         return Err(CmdError::click(format!(
             "{config_name} is empty; refusing to mint an unusable verifier grant"
@@ -4775,31 +5263,17 @@ async fn reconcile_verifier(
     }
 
     let item_list = items.iter().cloned().collect::<Vec<_>>();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "consumer": consumer,
-                "items": item_list,
-                "publisher_lifecycles": publisher_lifecycles,
-                "bearer_preserved": bearer_preserved,
-                "expires_at": expires_at,
-            }))?
-        );
-    } else {
-        let verb = if replace_capabilities {
-            "reads exactly"
-        } else {
-            "can read"
-        };
-        println!(
-            "{}: {consumer} {verb} {}",
-            resolved.name,
-            item_list.join(",")
-        );
-    }
-    Ok(())
+    let report = json!({
+        "target": resolved.name,
+        "kind": kind,
+        "consumer": consumer,
+        "items": item_list,
+        "publisher_lifecycles": publisher_lifecycles,
+        "bearer_preserved": bearer_preserved,
+        "expires_at": expires_at,
+        "exact": replace_capabilities,
+    });
+    Ok(report)
 }
 
 /// Recover a local Skarbiec audit-lock stall and restart only its loaded dependants.
@@ -5006,6 +5480,132 @@ async fn unit_log_path(
     Ok((output.ok() && !declared.is_empty()).then(|| declared.to_string()))
 }
 
+/// One collected managed-unit log, before the CLI or a higher-level
+/// diagnostic chooses how to render it.
+struct UnitLogReport {
+    target: String,
+    unit: String,
+    lines: u32,
+    declared: Vec<Value>,
+    log: String,
+}
+
+impl UnitLogReport {
+    fn to_json(&self) -> Value {
+        json!({
+            "target": self.target,
+            "unit": self.unit,
+            "lines": self.lines,
+            "declared": self.declared,
+            "log": self.log,
+        })
+    }
+}
+
+/// Collect a managed unit's declared logs without rendering them.
+///
+/// `host unit-log` and higher-level diagnostics share this collector so the
+/// first one never knows a failure sentence the second one cannot see.
+async fn collect_unit_log(
+    resolved: &ComputeTarget,
+    unit: &str,
+    lines: u32,
+    runner: &crate::deploy::Runner,
+) -> Result<UnitLogReport, CmdError> {
+    let home = crate::deploy::host_channel::remote_home(resolved, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    // The unit file is found, never guessed: the daemon directory first, then
+    // both agent directories, exactly the retired reader's search order.
+    let mut plist = None;
+    for candidate in [
+        format!("/Library/LaunchDaemons/{unit}.plist"),
+        format!("{home}/Library/LaunchAgents/{unit}.plist"),
+        format!("/Library/LaunchAgents/{unit}.plist"),
+    ] {
+        if crate::deploy::host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            plist = Some(candidate);
+            break;
+        }
+    }
+    let Some(plist) = plist else {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
+             directories",
+            resolved.name
+        )));
+    };
+
+    let mut sources = vec![json!({"kind": "plist", "path": plist})];
+    let mut body = String::new();
+
+    // One reader for both keys: a unit that sends stdout and stderr to the
+    // same file must not be tailed twice, and a unit that separates them must
+    // not have half of its account silently dropped.
+    let out_path = unit_log_path(resolved, "Print :StandardOutPath", &plist, runner).await?;
+    let err_path = unit_log_path(resolved, "Print :StandardErrorPath", &plist, runner).await?;
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(path) = &out_path {
+        declared.push(path.clone());
+    }
+    if let Some(path) = &err_path {
+        if out_path.as_ref() != Some(path) {
+            declared.push(path.clone());
+        }
+    }
+    if declared.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: {unit} declares no log path",
+            resolved.name
+        )));
+    }
+
+    for log in &declared {
+        if crate::deploy::host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(log)),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            sources.push(json!({"kind": "file", "path": log}));
+            body.push_str(&format!("=== {log} (last {lines} lines)\n"));
+            let tail = crate::deploy::host_channel::run_program(
+                resolved,
+                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
+                runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if tail.ok() {
+                body.push_str(&tail.stdout);
+            } else {
+                body.push_str("    unreadable\n");
+            }
+        } else {
+            sources.push(json!({"kind": "absent", "path": log}));
+            body.push_str(&format!("=== {log} (absent)\n"));
+        }
+    }
+
+    Ok(UnitLogReport {
+        target: resolved.name.clone(),
+        unit: unit.to_string(),
+        lines,
+        declared: sources,
+        log: body.trim_end().to_string(),
+    })
+}
+
 /// The tail of one managed unit's own log, from the paths its unit file
 /// declares.
 ///
@@ -5029,123 +5629,11 @@ pub async fn unit_log(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-
-    // The unit file is found, never guessed: the daemon directory first, then
-    // both agent directories, exactly the retired reader's search order.
-    let mut plist = None;
-    for candidate in [
-        format!("/Library/LaunchDaemons/{unit}.plist"),
-        format!("{home}/Library/LaunchAgents/{unit}.plist"),
-        format!("/Library/LaunchAgents/{unit}.plist"),
-    ] {
-        if crate::deploy::host_channel::remote_test(
-            &resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
-            &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            plist = Some(candidate);
-            break;
-        }
-    }
-    let Some(plist) = plist else {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
-             directories",
-            resolved.name
-        )));
-    };
-
-    // The report is composed here, in the wire text the retired reader
-    // printed: STADO_UNITLOG marker lines interleaved with the prefixed
-    // tails, so the JSON and text renderings below parse it unchanged.
-    let mut report = format!("STADO_UNITLOG\tplist\t{plist}\n");
-
-    // One reader for both keys: a unit that sends stdout and stderr to the
-    // same file must not be tailed twice, and a unit that separates them must
-    // not have half of its account silently dropped.
-    let out_path = unit_log_path(&resolved, "Print :StandardOutPath", &plist, &runner).await?;
-    let err_path = unit_log_path(&resolved, "Print :StandardErrorPath", &plist, &runner).await?;
-    let mut declared: Vec<String> = Vec::new();
-    if let Some(path) = &out_path {
-        declared.push(path.clone());
-    }
-    if let Some(path) = &err_path {
-        if out_path.as_ref() != Some(path) {
-            declared.push(path.clone());
-        }
-    }
-    if declared.is_empty() {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: {unit} declares no log path",
-            resolved.name
-        )));
-    }
-
-    for log in &declared {
-        if crate::deploy::host_channel::remote_test(
-            &resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(log)),
-            &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            report.push_str(&format!("STADO_UNITLOG\tfile\t{log}\n"));
-            report.push_str(&format!("=== {log} (last {lines} lines)\n"));
-            let tail = crate::deploy::host_channel::run_program(
-                &resolved,
-                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
-                &runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-            if tail.ok() {
-                report.push_str(&tail.stdout);
-            } else {
-                report.push_str("    unreadable\n");
-            }
-        } else {
-            report.push_str(&format!("STADO_UNITLOG\tabsent\t{log}\n"));
-            report.push_str(&format!("=== {log} (absent)\n"));
-        }
-    }
-
-    let body: String = report
-        .lines()
-        .filter(|line| !line.starts_with("STADO_UNITLOG\t"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let report = collect_unit_log(&resolved, unit, lines, &runner).await?;
     if json {
-        let files: Vec<serde_json::Value> = report
-            .lines()
-            .filter_map(
-                |line| match crate::deploy::host_channel::marker_fields(line).as_slice() {
-                    ["STADO_UNITLOG", kind, value] => Some(json!({
-                        "kind": kind,
-                        "path": value,
-                    })),
-                    _ => None,
-                },
-            )
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "unit": unit,
-                "lines": lines,
-                "declared": files,
-                "log": body,
-            }))?
-        );
+        println!("{}", serde_json::to_string_pretty(&report.to_json())?);
     } else {
-        println!("{body}");
+        println!("{}", report.log);
     }
     Ok(())
 }
@@ -5171,7 +5659,11 @@ const path = require('node:path');
 const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
 const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
 const home = os.homedir();
-const workerRoot = path.join(home, '.local/share/weles-worker');
+const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
+const managedWorkerRoot = path.join(
+  home,
+  '.stado/services/weles-admission/current',
+);
 
 const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
 const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
@@ -5189,17 +5681,6 @@ const readJson = (file) => {
   }
 };
 
-// The version marker names the release the activator staged; the directories say
-// which releases actually ran here. The two disagree while a deploy is mid
-// flight, and a report that carried only one of them would hide that.
-const releaseMarker = (() => {
-  try {
-    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
-  } catch {
-    return null;
-  }
-})();
-
 const compareVersions = (left, right) => {
   const parts = (value) => String(value).split('.').map((piece) => Number.parseInt(piece, 10) || 0);
   const [a, b] = [parts(left), parts(right)];
@@ -5210,16 +5691,68 @@ const compareVersions = (left, right) => {
   return 0;
 };
 
-let releases = [];
+const releaseVersions = new Set();
+const recordingSources = [];
+const addRecordingSource = (release, platform, recordings, priority) => {
+  if (typeof release !== 'string' || !release) return;
+  try {
+    if (!fs.statSync(recordings).isDirectory()) return;
+  } catch {
+    return;
+  }
+  releaseVersions.add(release);
+  recordingSources.push({ release, platform, recordings, priority });
+};
+const addManagedRuntime = (runtime, platform) => {
+  const manifest = readJson(path.join(runtime, 'package.json'));
+  addRecordingSource(manifest?.version, platform, path.join(runtime, 'recordings'), 1);
+};
+
+// Current fleet-managed Weles releases unpack their runtime beside the launcher.
+// Some service artifacts carry a platform directory and older ones do not, so
+// inspect both layouts. The `current` link is the declaration Stado reconciles.
+addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed');
 try {
-  releases = fs
-    .readdirSync(workerRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort(compareVersions);
+  for (const entry of fs.readdirSync(managedWorkerRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    addManagedRuntime(path.join(managedWorkerRoot, entry.name, 'runtime'), entry.name);
+  }
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
 }
+
+// Keep reporting recordings written by the retired per-version installer while
+// hosts complete their cutover to the fleet-managed service.
+try {
+  for (const releaseEntry of fs.readdirSync(legacyWorkerRoot, { withFileTypes: true })) {
+    if (!releaseEntry.isDirectory()) continue;
+    const release = releaseEntry.name;
+    const releaseRoot = path.join(legacyWorkerRoot, release);
+    for (const platformEntry of fs.readdirSync(releaseRoot, { withFileTypes: true })) {
+      if (!platformEntry.isDirectory()) continue;
+      addRecordingSource(
+        release,
+        platformEntry.name,
+        path.join(releaseRoot, platformEntry.name, 'recordings'),
+        0,
+      );
+    }
+  }
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+const releases = [...releaseVersions].sort(compareVersions);
+
+// The version marker names the release the retired activator staged. It can
+// disagree with the active fleet-managed release and remains useful evidence
+// that the old delivery path has not been removed from a host yet.
+const releaseMarker = (() => {
+  try {
+    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+})();
 
 const ARTIFACT_CLASSES = [
   ['screenshots', /\.png$/i],
@@ -5244,6 +5777,10 @@ const describeRun = (release, platform, runDirectory) => {
   let bytes = 0;
   let action = null;
   let resultOk = null;
+  let resultHealthy = null;
+  let resultSignal = null;
+  let resultAt = null;
+  let uploadProof = null;
   let startedAt = null;
   let completedAt = null;
 
@@ -5273,6 +5810,16 @@ const describeRun = (release, platform, runDirectory) => {
         const document = readJson(full);
         if (document && typeof document.ok === 'boolean') resultOk = document.ok;
         if (typeof document?.completed_at === 'string') completedAt = document.completed_at;
+      } else if (entry.name === 'ban_signal.json') {
+        const document = readJson(full);
+        if (typeof document?.healthy === 'boolean') resultHealthy = document.healthy;
+        if (typeof document?.signal === 'string' && document.signal) resultSignal = document.signal;
+        if (typeof document?.ts === 'string') resultAt = document.ts;
+      } else if (entry.name === '.uploaded.json') {
+        const document = readJson(full);
+        if (typeof document?.sha256 === 'string' && typeof document?.destination === 'string') {
+          uploadProof = { sha256: document.sha256, destination: document.destination };
+        }
       } else if (entry.name === 'session_meta.json') {
         const document = readJson(full);
         if (typeof document?.started_at === 'string') startedAt = document.started_at;
@@ -5281,13 +5828,18 @@ const describeRun = (release, platform, runDirectory) => {
   };
   walk(runDirectory, 0);
 
-  const uploaded = fs.existsSync(path.join(runDirectory, '.uploaded.json'));
+  if (!uploadProof) {
+    const document = readJson(path.join(runDirectory, '.uploaded.json'));
+    if (typeof document?.sha256 === 'string' && typeof document?.destination === 'string') {
+      uploadProof = { sha256: document.sha256, destination: document.destination };
+    }
+  }
   const costs = readJson(path.join(path.dirname(runDirectory), '_costs', `${path.basename(runDirectory)}.json`));
   const isFresh = Date.now() - stat.mtimeMs < RUNNING_WINDOW_MS;
 
   let status = 'recorded';
-  if (resultOk === true) status = 'succeeded';
-  else if (resultOk === false) status = 'failed';
+  if (resultHealthy === true || resultOk === true) status = 'succeeded';
+  else if (resultHealthy === false || resultOk === false || resultSignal) status = 'failed';
   else if (isFresh) status = 'running';
 
   return {
@@ -5302,40 +5854,36 @@ const describeRun = (release, platform, runDirectory) => {
     artifact_counts: counts,
     artifact_bytes: bytes,
     cost_usd: typeof costs?.cost_usd === 'number' ? costs.cost_usd : null,
-    uploaded,
+    result: resultHealthy !== null || resultSignal
+      ? { healthy: resultHealthy, signal: resultSignal, recorded_at: resultAt }
+      : null,
+    uploaded: uploadProof !== null,
+    upload_proof: uploadProof,
   };
 };
 
-const runs = [];
-let runTotal = 0;
-for (const release of releases) {
-  const releaseRoot = path.join(workerRoot, release);
-  let platforms = [];
+const runsById = new Map();
+for (const source of recordingSources) {
+  let entries = [];
   try {
-    platforms = fs
-      .readdirSync(releaseRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
+    entries = fs.readdirSync(source.recordings, { withFileTypes: true });
   } catch {
     continue;
   }
-  for (const platform of platforms) {
-    const recordings = path.join(releaseRoot, platform, 'recordings');
-    let entries = [];
-    try {
-      entries = fs.readdirSync(recordings, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      // `_costs` is the sidecar ledger of the runs beside it, not a run.
-      if (!entry.isDirectory() || entry.name === '_costs') continue;
-      runTotal += 1;
-      runs.push({ release, platform, directory: path.join(recordings, entry.name) });
-    }
+  for (const entry of entries) {
+    // `_costs` is the sidecar ledger of the runs beside it, not a run.
+    if (!entry.isDirectory() || entry.name === '_costs') continue;
+    const candidate = {
+      release: source.release,
+      platform: source.platform,
+      directory: path.join(source.recordings, entry.name),
+      priority: source.priority,
+    };
+    const existing = runsById.get(entry.name);
+    if (!existing || candidate.priority > existing.priority) runsById.set(entry.name, candidate);
   }
 }
-
+const runs = [...runsById.values()];
 runs.sort((left, right) => {
   const time = (row) => {
     try {
@@ -5347,7 +5895,98 @@ runs.sort((left, right) => {
   return time(right) - time(left);
 });
 
-const described = runs.slice(0, runLimit).map((row) => describeRun(row.release, row.platform, row.directory));
+const describedById = new Map();
+for (const row of runs) {
+  const summary = describeRun(row.release, row.platform, row.directory);
+  describedById.set(summary.id, summary);
+}
+
+// Weles API requests keep their process result outside a release runtime so an
+// update cannot erase it. Fold those durable records into the live recording
+// inventory: a cleaned recording loses its artifact counts, not the fact that
+// the run happened or how its process ended.
+const detachedRoot = path.join(home, '.stado/weles-detached-runs');
+try {
+  for (const entry of fs.readdirSync(detachedRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const file = path.join(detachedRoot, entry.name);
+    const document = readJson(file);
+    if (!document || typeof document !== 'object') continue;
+    const stat = fs.statSync(file);
+    const fallbackId = entry.name.slice(0, -'.json'.length);
+    const id = typeof document.run_id === 'string' && document.run_id
+      ? document.run_id
+      : fallbackId;
+    const action = typeof document.action === 'string' && document.action
+      ? document.action
+      : null;
+
+    let status = 'recorded';
+    if (document.status === 'running' || document.ok === null) status = 'running';
+    else if (document.ok === true) status = 'succeeded';
+    else if (document.ok === false || document.status === 'failed') status = 'failed';
+
+    const resultCandidates = [
+      document.result,
+      document.result && typeof document.result === 'object' ? document.result.result : null,
+    ];
+    let result = null;
+    for (const candidate of resultCandidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      const healthy = typeof candidate.healthy === 'boolean' ? candidate.healthy : null;
+      const signal = typeof candidate.signal === 'string' && candidate.signal ? candidate.signal : null;
+      if (healthy !== null || signal) {
+        result = {
+          healthy,
+          signal,
+          recorded_at: typeof candidate.ts === 'string'
+            ? candidate.ts
+            : (typeof document.completed_at === 'string' ? document.completed_at : null),
+        };
+        break;
+      }
+    }
+
+    const durable = {
+      id,
+      release: null,
+      platform: process.platform,
+      action,
+      status,
+      started_at: typeof document.started_at === 'string'
+        ? document.started_at
+        : isoOrNull(stat.birthtimeMs),
+      completed_at: typeof document.completed_at === 'string' ? document.completed_at : null,
+      updated_at: isoOrNull(stat.mtimeMs),
+      artifact_counts: { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 },
+      artifact_bytes: 0,
+      cost_usd: null,
+      result,
+      uploaded: false,
+      upload_proof: null,
+    };
+    const live = describedById.get(id);
+    describedById.set(id, live
+      ? {
+          ...live,
+          action: live.action ?? durable.action,
+          status: durable.status === 'recorded' ? live.status : durable.status,
+          started_at: live.started_at ?? durable.started_at,
+          completed_at: durable.completed_at ?? live.completed_at,
+          updated_at: durable.updated_at ?? live.updated_at,
+          result: durable.result ?? live.result,
+        }
+      : durable);
+  }
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+
+const allDescribed = [...describedById.values()].sort(
+  (left, right) => (Date.parse(right.updated_at ?? '') || 0) - (Date.parse(left.updated_at ?? '') || 0),
+);
+const runTotal = allDescribed.length;
+const described = allDescribed.slice(0, runLimit);
 
 const probePort = (port) =>
   new Promise((resolve) => {
@@ -5929,6 +6568,8 @@ pub struct BrowserTaskRequest<'a> {
     /// Give the agent every capability rather than prefilling the first: see
     /// the flag's own help for the runtime version this exists for.
     pub defer_fills: bool,
+    /// Prefill both same-page sign-in fields before the agent runs.
+    pub prefill_all: bool,
     /// The saved-trajectory key, when it must differ from the profile's label.
     pub flow_name: Option<&'a str>,
     pub windowed: bool,
@@ -5955,6 +6596,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         sign_in_origin,
         sign_in_item,
         defer_fills,
+        prefill_all,
         flow_name,
         windowed,
         json,
@@ -6102,6 +6744,14 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                 let mut all = prefill.entries;
                 all.extend(prefill.deferred);
                 (Vec::new(), all)
+            } else if prefill_all {
+                // Same-page forms can be completed without a model handling
+                // either credential. Weles 0.5.41+ checks field presence before
+                // redemption, so an absent later field remains available in
+                // the constraints for the agent.
+                let mut all = prefill.entries;
+                all.extend(prefill.deferred);
+                (all, Vec::new())
             } else {
                 (prefill.entries, prefill.deferred)
             }
@@ -6400,14 +7050,15 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
     // specification and the registry target's exact SSH destination. Matching
     // either one alone could end an unrelated channel.
     if let Some(local) = local_forward_port {
-        let ssh = resolved
-            .ssh
-            .as_deref()
-            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-        let mut argv = crate::deploy::host_channel::ssh_options(ssh);
-        let destination = argv
-            .pop()
-            .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+        let destinations = resolved
+            .ssh_connections()
+            .map(|(_, destination)| destination.to_string())
+            .collect::<Vec<_>>();
+        if destinations.is_empty() {
+            return Err(CmdError::click(
+                "registry target has no SSH connection path",
+            ));
+        }
         let spec_prefix = local_forward_spec_prefix(local);
         let listing = tokio::process::Command::new("/bin/ps")
             .args(["ax", "-o", "pid=", "-o", "command="])
@@ -6421,7 +7072,9 @@ pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), C
             if !command.contains("ssh")
                 || !command.contains(" -L ")
                 || !command.contains(&spec_prefix)
-                || !command.contains(&destination)
+                || !destinations
+                    .iter()
+                    .any(|destination| command.contains(destination))
             {
                 continue;
             }
@@ -6597,11 +7250,12 @@ pub async fn forward_local(
             "forward-local requires a remote registry target",
         ));
     }
-    let ssh = resolved
-        .ssh
-        .as_deref()
-        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let runner = crate::deploy::production_runner();
+    let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let connection_path = connection.name.to_string();
+    let mut argv = crate::deploy::host_channel::ssh_options(connection.destination);
     let destination = argv
         .pop()
         .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
@@ -6618,6 +7272,11 @@ pub async fn forward_local(
         format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}"),
         destination,
     ]);
+    let key = crate::deploy::ssh_key::materialize(&resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let argv = crate::deploy::ssh_key::add_identity(argv, &key)
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
@@ -6670,12 +7329,13 @@ pub async fn forward_local(
                 "marker": marker,
                 "local_marker": local_marker_path,
                 "transport": "ssh",
+                "connection_path": connection_path,
                 "status": "forwarding",
             }))?
         );
     } else {
         println!(
-            "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH"
+            "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH via {connection_path}"
         );
     }
     Ok(())
@@ -6703,11 +7363,12 @@ pub async fn forward_remote(
             "forward-remote requires a remote registry target",
         ));
     }
-    let ssh = resolved
-        .ssh
-        .as_deref()
-        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let runner = crate::deploy::production_runner();
+    let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let connection_path = connection.name.to_string();
+    let mut argv = crate::deploy::host_channel::ssh_options(connection.destination);
     let destination = argv
         .pop()
         .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
@@ -6724,6 +7385,11 @@ pub async fn forward_remote(
         format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
         destination,
     ]);
+    let key = crate::deploy::ssh_key::materialize(&resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let argv = crate::deploy::ssh_key::add_identity(argv, &key)
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
@@ -6756,12 +7422,13 @@ pub async fn forward_remote(
                 "local": format!("127.0.0.1:{local_port}"),
                 "marker": marker_path,
                 "transport": "ssh",
+                "connection_path": connection_path,
                 "status": "forwarding",
             }))?
         );
     } else {
         println!(
-            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH"
+            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH via {connection_path}"
         );
     }
     Ok(())
@@ -7000,18 +7667,21 @@ async fn stream_file(
             .map_err(|_| CmdError::click("HOME is not set, so the secret path is unknown"))?;
         std::fs::copy(source, std::path::Path::new(&home).join(&staged))?;
     } else {
-        let ssh_target = resolved.ssh.clone().unwrap_or_default();
-        if ssh_target.is_empty() {
-            return Err(CmdError::click(format!(
-                "{target} declares no ssh destination, so the file cannot be delivered"
-            )));
-        }
-        let mut options = crate::deploy::host_channel::ssh_options(&ssh_target);
+        let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let ssh_target = connection.destination;
+        let mut options = crate::deploy::host_channel::ssh_options(ssh_target);
         options.pop();
         let mut argv = vec!["scp".to_string(), "-q".to_string()];
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(source.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
+        let key = crate::deploy::ssh_key::materialize(&resolved.name)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let argv = crate::deploy::ssh_key::add_identity(argv, &key)
+            .map_err(|error| CmdError::click(error.to_string()))?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;

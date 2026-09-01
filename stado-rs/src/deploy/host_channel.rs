@@ -37,6 +37,32 @@ use crate::targets::{ComputeTarget, Registry};
 /// The `status` value every command in this family reports when the remote
 /// side did not exit clean. The success value is command-specific.
 pub const FAILED_STATUS: &str = "failed";
+const CONNECTION_PROBE_PROGRAM: [&str; 1] = ["true"];
+const CONNECTION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// One declared route for the SSH host-control transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SshConnection<'a> {
+    pub name: &'a str,
+    pub destination: &'a str,
+}
+
+/// The result of a side-effect-free authentication probe on one route.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SshConnectionProbe {
+    pub name: String,
+    pub destination: String,
+    pub reachable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The route that carried one command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsedConnection<'a> {
+    Local,
+    Ssh(SshConnection<'a>),
+}
 
 /// True when the registry entry names THIS machine, matched the way the
 /// registry matches identities elsewhere: case-insensitively, on the short
@@ -85,7 +111,7 @@ pub fn resolve_target<'a>(
             py_str_repr(target_name)
         )));
     }
-    if target.ssh.as_deref().unwrap_or("").is_empty() && !target_is_this_host(target) {
+    if !target.has_ssh_connection() && !target_is_this_host(target) {
         return Err(DeployError(format!(
             "target {} has no registry-managed ssh destination and is not this host",
             py_str_repr(target_name)
@@ -170,6 +196,153 @@ pub fn remote_timeout() -> Duration {
     Duration::from_secs(host_recovery::TIMEOUT_SECONDS)
 }
 
+fn declared_connections(target: &ComputeTarget) -> impl Iterator<Item = SshConnection<'_>> {
+    target
+        .ssh_connections()
+        .map(|(name, destination)| SshConnection { name, destination })
+}
+
+async fn probe_connection(
+    connection: SshConnection<'_>,
+    key: &ssh_key::KeyFile,
+    runner: &Runner,
+) -> SshConnectionProbe {
+    let argv = match ssh_key::add_identity(
+        ssh_program_argv(connection.destination, &CONNECTION_PROBE_PROGRAM),
+        key,
+    ) {
+        Ok(argv) => argv,
+        Err(error) => {
+            return SshConnectionProbe {
+                name: connection.name.to_string(),
+                destination: connection.destination.to_string(),
+                reachable: false,
+                error: Some(error.to_string()),
+            };
+        }
+    };
+    let result = runner(CommandSpec {
+        argv,
+        stdin: None,
+        timeout: Some(CONNECTION_PROBE_TIMEOUT),
+    })
+    .await;
+    match result {
+        Ok(output) if output.ok() => SshConnectionProbe {
+            name: connection.name.to_string(),
+            destination: connection.destination.to_string(),
+            reachable: true,
+            error: None,
+        },
+        Ok(output) => SshConnectionProbe {
+            name: connection.name.to_string(),
+            destination: connection.destination.to_string(),
+            reachable: false,
+            error: Some(last_error_line(&output, "SSH path refused the connection")),
+        },
+        Err(error) => SshConnectionProbe {
+            name: connection.name.to_string(),
+            destination: connection.destination.to_string(),
+            reachable: false,
+            error: Some(error),
+        },
+    }
+}
+
+async fn select_connection_with_key<'a>(
+    target: &'a ComputeTarget,
+    key: &ssh_key::KeyFile,
+    runner: &Runner,
+) -> Result<SshConnection<'a>, DeployError> {
+    let mut connections = declared_connections(target);
+    let Some(first) = connections.next() else {
+        return Err(DeployError(format!(
+            "target {} has no registry-managed SSH connection path",
+            py_str_repr(&target.name)
+        )));
+    };
+    let Some(second) = connections.next() else {
+        return Ok(first);
+    };
+
+    let mut failures = Vec::new();
+    for connection in std::iter::once(first)
+        .chain(std::iter::once(second))
+        .chain(connections)
+    {
+        let probe = probe_connection(connection, key, runner).await;
+        if probe.reachable {
+            return Ok(connection);
+        }
+        failures.push(format!(
+            "{}: {}",
+            connection.name,
+            probe
+                .error
+                .as_deref()
+                .unwrap_or("connection probe returned no detail")
+        ));
+    }
+    Err(DeployError(format!(
+        "target {} has no reachable SSH connection path ({})",
+        py_str_repr(&target.name),
+        failures.join("; ")
+    )))
+}
+
+/// Select the first declared path that authenticates without sending the real
+/// operation. A single-path target keeps the old one-connection behavior.
+pub async fn select_ssh_connection<'a>(
+    target: &'a ComputeTarget,
+    runner: &Runner,
+) -> Result<SshConnection<'a>, DeployError> {
+    let key = ssh_key::materialize(&target.name).await?;
+    select_connection_with_key(target, &key, runner).await
+}
+
+/// Probe every declared route in order. This is a diagnostic operation; normal
+/// commands stop probing as soon as one route answers.
+pub async fn probe_ssh_connections(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Vec<SshConnectionProbe>, DeployError> {
+    let local = target_is_this_host(target);
+    let connections = declared_connections(target).collect::<Vec<_>>();
+    let mut probes = Vec::with_capacity(connections.len() + usize::from(local));
+    if local {
+        probes.push(SshConnectionProbe {
+            name: "local".to_string(),
+            destination: "local process".to_string(),
+            reachable: true,
+            error: None,
+        });
+    }
+    if connections.is_empty() {
+        return Ok(probes);
+    }
+    let key = match ssh_key::materialize(&target.name).await {
+        Ok(key) => key,
+        Err(error) if local => {
+            probes.extend(
+                connections
+                    .into_iter()
+                    .map(|connection| SshConnectionProbe {
+                        name: connection.name.to_string(),
+                        destination: connection.destination.to_string(),
+                        reachable: false,
+                        error: Some(error.to_string()),
+                    }),
+            );
+            return Ok(probes);
+        }
+        Err(error) => return Err(error),
+    };
+    for connection in connections {
+        probes.push(probe_connection(connection, &key, runner).await);
+    }
+    Ok(probes)
+}
+
 /// Run one fixed program on a resolved target.
 ///
 /// A target that IS this machine runs the program directly. The words are
@@ -180,23 +353,40 @@ pub async fn run_program(
     program: &[&str],
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let (argv, _key) = if target_is_this_host(target) {
-        (program.iter().map(|word| word.to_string()).collect(), None)
-    } else {
-        let key = ssh_key::materialize(&target.name).await?;
-        let argv = ssh_key::add_identity(
-            ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program),
-            &key,
-        )?;
-        (argv, Some(key))
-    };
-    runner(CommandSpec {
+    run_program_with_connection(target, program, runner)
+        .await
+        .map(|(output, _)| output)
+}
+
+/// Run one fixed program and return which route carried it. The route is
+/// selected before the real command, so failover never repeats a side effect.
+pub async fn run_program_with_connection<'a>(
+    target: &'a ComputeTarget,
+    program: &[&str],
+    runner: &Runner,
+) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
+    if target_is_this_host(target) {
+        let output = runner(CommandSpec {
+            argv: program.iter().map(|word| word.to_string()).collect(),
+            stdin: None,
+            timeout: Some(remote_timeout()),
+        })
+        .await
+        .map_err(DeployError)?;
+        return Ok((output, UsedConnection::Local));
+    }
+
+    let key = ssh_key::materialize(&target.name).await?;
+    let connection = select_connection_with_key(target, &key, runner).await?;
+    let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
+    let output = runner(CommandSpec {
         argv,
         stdin: None,
         timeout: Some(remote_timeout()),
     })
     .await
-    .map_err(DeployError)
+    .map_err(DeployError)?;
+    Ok((output, UsedConnection::Ssh(connection)))
 }
 
 /// Run one fixed program while feeding an opaque value on stdin.
@@ -209,23 +399,39 @@ pub async fn run_program_with_stdin(
     stdin: &str,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let (argv, _key) = if target_is_this_host(target) {
-        (program.iter().map(|word| word.to_string()).collect(), None)
-    } else {
-        let key = ssh_key::materialize(&target.name).await?;
-        let argv = ssh_key::add_identity(
-            ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program),
-            &key,
-        )?;
-        (argv, Some(key))
-    };
-    runner(CommandSpec {
+    run_program_with_stdin_and_connection(target, program, stdin, runner)
+        .await
+        .map(|(output, _)| output)
+}
+
+pub async fn run_program_with_stdin_and_connection<'a>(
+    target: &'a ComputeTarget,
+    program: &[&str],
+    stdin: &str,
+    runner: &Runner,
+) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
+    if target_is_this_host(target) {
+        let output = runner(CommandSpec {
+            argv: program.iter().map(|word| word.to_string()).collect(),
+            stdin: Some(stdin.to_string()),
+            timeout: Some(remote_timeout()),
+        })
+        .await
+        .map_err(DeployError)?;
+        return Ok((output, UsedConnection::Local));
+    }
+
+    let key = ssh_key::materialize(&target.name).await?;
+    let connection = select_connection_with_key(target, &key, runner).await?;
+    let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
+    let output = runner(CommandSpec {
         argv,
         stdin: Some(stdin.to_string()),
         timeout: Some(remote_timeout()),
     })
     .await
-    .map_err(DeployError)
+    .map_err(DeployError)?;
+    Ok((output, UsedConnection::Ssh(connection)))
 }
 
 /// Run one single-line command on a resolved target, through the same shell
@@ -416,21 +622,40 @@ pub async fn run_script_with_timeout(
     timeout: Duration,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let (argv, _key) = if target_is_this_host(target) {
-        (vec!["/bin/bash".to_string(), "-s".to_string()], None)
+    Ok(
+        run_script_with_timeout_and_connection(target, script, timeout, runner)
+            .await?
+            .0,
+    )
+}
+
+/// Run a fixed script and report which declared connection carried it.
+pub async fn run_script_with_timeout_and_connection<'a>(
+    target: &'a ComputeTarget,
+    script: &str,
+    timeout: Duration,
+    runner: &Runner,
+) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
+    let (argv, _key, used_connection) = if target_is_this_host(target) {
+        (
+            vec!["/bin/bash".to_string(), "-s".to_string()],
+            None,
+            UsedConnection::Local,
+        )
     } else {
         let key = ssh_key::materialize(&target.name).await?;
-        let argv =
-            ssh_key::add_identity(ssh_script_argv(target.ssh.as_deref().unwrap_or("")), &key)?;
-        (argv, Some(key))
+        let connection = select_connection_with_key(target, &key, runner).await?;
+        let argv = ssh_key::add_identity(ssh_script_argv(connection.destination), &key)?;
+        (argv, Some(key), UsedConnection::Ssh(connection))
     };
-    runner(CommandSpec {
+    let output = runner(CommandSpec {
         argv,
         stdin: Some(script.to_string()),
         timeout: Some(timeout),
     })
     .await
-    .map_err(DeployError)
+    .map_err(DeployError)?;
+    Ok((output, used_connection))
 }
 
 /// The `target` / `ssh` head every report in this family opens with,
@@ -442,6 +667,7 @@ pub fn base_report(target: &ComputeTarget) -> Map<String, Value> {
         "ssh".to_string(),
         target.ssh.as_ref().map_or(Value::Null, |ssh| json!(ssh)),
     );
+    report.insert("ssh_fallbacks".to_string(), json!(target.ssh_fallbacks));
     report
 }
 

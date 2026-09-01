@@ -22,7 +22,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::local_install::{self, TokenFetcher};
-use super::{runner_fn, shlex_quote, ssh_key, CommandSpec, DeployError, Runner};
+use super::{host_channel, runner_fn, shlex_quote, ssh_key, CommandSpec, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 /// Remote install script BODY (fed as the remote command argument, not
@@ -285,10 +285,10 @@ pub fn sibling_bin(stado_bin: &str, name: &str) -> String {
 /// the resolved remote stado path and WC_PYTHON.
 pub fn unit_installs(
     target: &ComputeTarget,
+    ssh_target: &str,
     stado_bin: &str,
     wc_python: &str,
 ) -> Vec<(String, String, CommandSpec)> {
-    let ssh_target = target.ssh.as_deref().unwrap_or("");
     let user = remote_user(ssh_target);
     let agent_text = agent_unit_text(&target.name, target.slots, stado_bin, wc_python, &user);
     let watchdog_text = watchdog_unit_text(
@@ -330,14 +330,25 @@ pub async fn provision_target(
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
-    let ssh_target = target.ssh.clone().unwrap_or_default();
-    if ssh_target.is_empty() {
+    if !target.has_ssh_connection() {
         echo(&format!(
-            "[skip] {}: ssh=null (no host configured)",
+            "[skip] {}: no SSH connection path is configured",
             target.name
         ));
         return Ok(());
     }
+    let ssh_target = if dry_run {
+        target
+            .ssh_connections()
+            .next()
+            .map(|(_, destination)| destination.to_string())
+            .unwrap_or_default()
+    } else {
+        host_channel::select_ssh_connection(target, runner)
+            .await?
+            .destination
+            .to_string()
+    };
 
     let (platform, wc_python, stado_bin) = if dry_run {
         (
@@ -528,7 +539,7 @@ pub async fn provision_target(
         return Ok(());
     }
 
-    let installs = unit_installs(target, &stado_bin, &wc_python);
+    let installs = unit_installs(target, &ssh_target, &stado_bin, &wc_python);
 
     if dry_run {
         let [(agent_name, agent_text, _), (watchdog_name, watchdog_text, _)] = &installs[..] else {

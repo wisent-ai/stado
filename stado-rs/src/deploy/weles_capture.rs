@@ -512,13 +512,10 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
             token,
         });
     }
-    let ssh = admission
-        .target
-        .ssh
-        .as_deref()
-        .ok_or_else(|| DeployError("registry target has no SSH destination".to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let connection = host_channel::select_ssh_connection(&admission.target, &runner).await?;
     let local_port = free_loopback_port()?;
-    let mut argv = host_channel::ssh_options(ssh);
+    let mut argv = host_channel::ssh_options(connection.destination);
     let destination = argv
         .pop()
         .ok_or_else(|| DeployError("SSH channel has no destination".to_string()))?;
@@ -534,6 +531,8 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
         format!("127.0.0.1:{local_port}:127.0.0.1:{}", admission.port),
         destination,
     ]);
+    let key = crate::deploy::ssh_key::materialize(&admission.target.name).await?;
+    let argv = crate::deploy::ssh_key::add_identity(argv, &key)?;
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| DeployError("SSH channel is empty".to_string()))?;
@@ -550,6 +549,7 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
             ))
         })?;
     await_forward(&mut child, local_port).await?;
+    drop(key);
     Ok(Channel {
         forward: Some(child),
         base_url: format!("http://127.0.0.1:{local_port}"),

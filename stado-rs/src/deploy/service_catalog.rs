@@ -108,15 +108,14 @@ pub fn resolve_entry(
     )
 }
 
-/// The approved account's home on a target, derived from the registry's own
-/// channel declaration: the user half of `ssh: user@host`, placed where the
-/// target's platform puts homes. A target with no ssh destination is this
-/// machine, whose home the process already knows.
+/// The approved account's home on a target, derived from the preferred
+/// connection declaration's `user@host` user. A target with no explicit
+/// remote user is this machine, whose home the process already knows.
 pub fn home_for(target: &crate::targets::ComputeTarget) -> String {
     let user = target
-        .ssh
-        .as_deref()
-        .and_then(|ssh| ssh.split('@').next())
+        .ssh_connections()
+        .next()
+        .and_then(|(_, destination)| destination.split_once('@').map(|(user, _)| user))
         .filter(|user| !user.is_empty());
     match user {
         None => std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),

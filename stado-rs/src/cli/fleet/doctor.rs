@@ -208,7 +208,7 @@ async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Ch
                 ));
             }
             Err(exc) => {
-                if unverifiable_registration(target.ssh.is_some(), false) {
+                if unverifiable_registration(target.has_ssh_connection(), false) {
                     checks.push(fail(
                         "registration",
                         format!(

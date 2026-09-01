@@ -277,10 +277,14 @@ pub fn failure(host: &str, report: &ServingReport, ports: &[PortVerdict]) -> Opt
 
 /// The remote program.
 ///
-/// One `launchctl list` is read once and reused for every owner walk: the
+/// One launchd-domain scan is read once and reused for every owner walk: the
 /// question "which job owns this pid" is asked per holder, and forking a
 /// `launchctl` per holder would make the answer depend on how many processes
-/// happened to hold the port.
+/// happened to hold the port. `launchctl list` sees only the caller's login
+/// domain; the service manager on the always-on Mac owns jobs in `gui/<uid>`,
+/// `user/<uid>`, and `system`. Reading the printable service tables is what
+/// turns the pid that `service list --unowned` already proves is owned into the
+/// exact label `service serving` needs.
 const REMOTE_SERVING_BODY: &str = r##"
 decode_flag=-D
 if [ "$os" = "Linux" ]; then decode_flag=--decode; fi
@@ -288,14 +292,29 @@ ports_raw=$(printf '%s' '@PORTS_B64@' | /usr/bin/base64 "$decode_flag")
 
 stado_launchd_state
 
-# Read once. Every owner walk below consults this same table, so two holders of
-# one port cannot get answers from two different moments.
-lc_table=$(/bin/launchctl list 2>/dev/null || true)
+# Read every printable launchd domain once. Each row is `pid<TAB>label`; a job
+# whose pid is zero has no process to own and is deliberately omitted.
+lc_table=''
+if [ "$os" = "Darwin" ]; then
+  uid=$(/usr/bin/id -u)
+  for lc_domain in "gui/$uid" "user/$uid" system; do
+    lc_rows=$(/bin/launchctl print "$lc_domain" 2>/dev/null | /usr/bin/awk '
+      /services = \{/ { inside = 1; next }
+      inside && /^[[:space:]]*\}/ { inside = 0 }
+      inside && $1 ~ /^[1-9][0-9]*$/ && NF >= 3 {
+        print $1 "\t" $3
+      }
+    ')
+    lc_table="$lc_table${lc_table:+
+}$lc_rows"
+  done
+fi
 
 # The launchd job that owns a pid: the first pid on its own parent chain that
-# `launchctl list` claims. Walking the chain is required, not defensive — a
-# launcher script is the job and the server it starts is the child that holds
-# the socket, so the listening pid is usually NOT the pid launchd recorded.
+# one of the printable domains claims. Walking the chain is required, not
+# defensive — a launcher script is the job and the server it starts is the
+# child that holds the socket, so the listening pid is usually NOT the pid
+# launchd recorded.
 owner_label=''
 owner_state=''
 resolve_owner() {
@@ -304,7 +323,7 @@ resolve_owner() {
   owner_label=''
   owner_state='unknown'
   while [ -n "$ro_pid" ] && [ "$ro_pid" != "1" ] && [ "$ro_depth" -lt @MAX_DEPTH@ ]; do
-    ro_found=$(printf '%s\n' "$lc_table" | /usr/bin/awk -F'\t' -v P="$ro_pid" '$1 == P { print $3; exit }')
+    ro_found=$(printf '%s\n' "$lc_table" | /usr/bin/awk -F'\t' -v P="$ro_pid" '$1 == P { print $2; exit }')
     if [ -n "$ro_found" ]; then
       owner_label="$ro_found"
       owner_state='resolved'

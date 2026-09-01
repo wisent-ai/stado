@@ -374,7 +374,7 @@ pub async fn recover_with_client(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let target = super::host_channel::resolve_target(registry, target_name)?;
-    if target.ssh.as_deref().unwrap_or("").is_empty() {
+    if !target.has_ssh_connection() {
         return Err(DeployError(format!(
             "target {target_name:?} has no registry-managed ssh destination"
         )));
@@ -483,6 +483,15 @@ pub async fn recover_with_client(
         ),
     ));
 
+    let connection = match super::host_channel::select_ssh_connection(target, runner).await {
+        Ok(connection) => connection,
+        Err(error) => {
+            let detail = error.to_string();
+            steps.push(step("install", "failed", &detail));
+            return Ok(failed(target_name, version, steps, detail, 1));
+        }
+    };
+
     let key = match super::ssh_key::materialize(&target.name).await {
         Ok(key) => std::sync::Arc::new(key),
         Err(error) => {
@@ -504,7 +513,7 @@ pub async fn recover_with_client(
         }
     });
     let installed = match keyed_runner(CommandSpec {
-        argv: host_recovery::ssh_argv(target.ssh.as_deref().unwrap_or("")),
+        argv: host_recovery::ssh_argv(connection.destination),
         stdin: Some(install_script(target, &binary, &binary_digest)),
         timeout: Some(Duration::from_secs(host_recovery::TIMEOUT_SECONDS)),
     })

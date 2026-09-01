@@ -440,6 +440,11 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
             records
                 .iter()
                 .filter_map(Value::as_object)
+                // `service declare` records desired state before a unit
+                // exists. Operational commands must not address that
+                // placeholder as a loaded or managed unit; `deploy` replaces
+                // it through `record_declaration` after the host action.
+                .filter(|record| record.get("declared_only").and_then(Value::as_bool) != Some(true))
                 .map(|record| ManagedService::from_record(&target.name, record))
                 .collect()
         })
@@ -4690,19 +4695,53 @@ fn parse_unowned(host: &str, stdout: &str) -> Vec<UnownedProcess> {
 /// installed it: `local_install::LABEL_PREFIX` mints
 /// `com.wisent.compute.<kind>.<name>` and the always-on set is
 /// `com.wisent.always-on.<name>`, so one prefix covers both.
+///
+/// It NAMES a finding and never decides what gets looked at. It used to do
+/// both, in three places at once — the `launchctl list` filter in
+/// [`LOADED_LABELS_SCRIPT`], that script's `com.wisent.*.plist` glob, and a
+/// `starts_with` in [`loaded_units`] — and a process outside the prefix could
+/// therefore not be reported as undeclared, because it was never enumerated.
+/// On 2026-09-01 charless-mac-mini had `com.stado.agent.charless-mac-mini`
+/// loaded, the only label on the host outside `com.wisent.`, holding the pid
+/// that was overwriting the janitor's state file — and
+/// `service list --undeclared` answered that the host had no undeclared unit.
+/// That answer was true about a window and false about the host.
+///
+/// This is the same shape as every other defect this module records: a
+/// declaration checked against something narrower than the world. The fix is
+/// not a wider prefix, because any prefix has an outside. The enumeration
+/// walks every loaded label and every unit file, and the prefix survives only
+/// as [`UndeclaredUnit::classification`] — `undeclared` and
+/// `outside-fleet-prefix` are different sentences about a row, not different
+/// decisions about whether to look.
 const FLEET_LABEL_PREFIX: &str = "com.wisent.";
 
-/// One launchd job loaded on a host that the registry does not declare.
+/// One launchd job loaded on a host, with everything the host could say about
+/// it. The registry decides whether it is declared; the label's spelling
+/// decides nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndeclaredUnit {
     pub host: String,
     pub label: String,
+    /// Does the registry declare a service at this exact label on this host?
+    ///
+    /// The one question that decides whether a loaded job is accounted for.
+    /// It is asked of the registry document, never of the label's spelling.
+    pub declared: bool,
     /// The pid launchd holds for the label, or empty when it holds none.
     pub pid: String,
     /// The label's last exit status as launchd reports it.
     pub status: String,
     /// The unit file the host found for the label, or empty when it found none.
     pub path: String,
+    /// Where `path` came from: `fleet-directory` for one of the three launchd
+    /// directories this fleet installs into, `launchd` when only launchd knew
+    /// and the host had to ask it, empty when no unit file was found at all.
+    ///
+    /// `com.stado.agent.charless-mac-mini` is loaded on charless-mac-mini from
+    /// none of those three directories, so every reader that looked only there
+    /// saw a label with no file and no program behind it.
+    pub path_source: String,
     /// The argument vector that unit file declares, flattened to one line. A
     /// label alone is not actionable: three naming conventions produce three
     /// unrelated-looking labels for one job, and only the program says they are
@@ -4740,13 +4779,83 @@ impl UndeclaredUnit {
             "label": self.label,
             "pid": self.pid,
             "status": self.status,
+            "declared": self.declared,
             "path": self.path,
+            "path_source": self.path_source,
+            "classification": self.classification(),
             "program": self.program,
             "declaring_paths": self.declaring_paths,
             "running_program": self.running_program,
             "started_epoch": self.started_epoch,
             "binary_written_epoch": self.binary_written_epoch,
         })
+    }
+
+    /// Does this label carry the prefix every unit this fleet installs
+    /// carries?
+    ///
+    /// A fact about the name, kept out of every path that decides what to
+    /// enumerate. See [`FLEET_LABEL_PREFIX`].
+    pub fn in_fleet_prefix(&self) -> bool {
+        self.label.starts_with(FLEET_LABEL_PREFIX)
+    }
+
+    /// Is there evidence tying this label to this fleet, independent of what it
+    /// is called?
+    ///
+    /// Two facts, both read off the host: its unit file sits in one of the
+    /// three launchd directories this fleet installs into, or the program it is
+    /// running executes out of a declared product root.
+    ///
+    /// This exists because the widened enumeration has to stay readable.
+    /// charless-mac-mini loads 537 labels and 494 of them are `com.apple.*`;
+    /// a report that prints all of them equally has buried its finding as
+    /// effectively as the prefix filter did, and burying a finding in noise is
+    /// the failure this whole change is about. So the noise is separated by
+    /// EVIDENCE rather than by spelling: every one of the six rows that
+    /// mattered on that host — `com.stado.agent.charless-mac-mini`, three
+    /// `ai.wisent.oko.*` agents and two `actions.runner.*` runners — has its
+    /// plist in `~/Library/LaunchAgents` or `/Library/LaunchDaemons`, and not
+    /// one `application.com.apple.*` row does.
+    pub fn fleet_affiliated(&self) -> bool {
+        !self.declaring_paths.is_empty()
+            || (!self.running_program.is_empty()
+                && product_guess(&self.running_program) != UNKNOWN_PRODUCT)
+    }
+
+    /// The sentence a report should use about this row, once the registry has
+    /// been asked whether it declares the label.
+    ///
+    /// `declared` is the registry's own unit. `undeclared` is a label the
+    /// registry does not declare that is spelled like one of ours — a
+    /// duplicate agent, a superseded convention, a unit somebody bootstrapped
+    /// by hand. `outside-fleet-prefix` is a label the registry does not declare
+    /// and did not name either, yet which this host ties to the fleet anyway:
+    /// the class that used to be invisible, and the one the janitor's writer
+    /// was in. `unaffiliated` is a loaded job with no tie to this fleet at all
+    /// — the platform's own agents.
+    ///
+    /// All four are enumerated and counted. The class chooses the sentence and
+    /// the order rows are printed in, never whether the host was asked.
+    pub fn classification(&self) -> &'static str {
+        match (
+            self.declared,
+            self.in_fleet_prefix(),
+            self.fleet_affiliated(),
+        ) {
+            (true, _, _) => "declared",
+            (false, true, _) => "undeclared",
+            (false, false, true) => "outside-fleet-prefix",
+            (false, false, false) => "unaffiliated",
+        }
+    }
+
+    /// Is this a row an operator has to act on? `declared` is the answer the
+    /// document promised; `unaffiliated` is somebody else's job on the same
+    /// machine. What is left is what this fleet put there and cannot account
+    /// for.
+    pub fn accounted_for(&self) -> bool {
+        self.declared || self.classification() == "unaffiliated"
     }
 
     /// The first word of an argument vector: the program, without its flags.
@@ -4843,8 +4952,9 @@ impl UndeclaredUnit {
     }
 }
 
-/// Read-only: `launchctl list`, the unit files it names, and nothing else. It
-/// starts nothing, stops nothing, signals nothing and needs no sudo.
+/// Read-only: `launchctl list`, the unit files it names, `launchctl print` for
+/// a label whose file is in none of them, and nothing else. It starts nothing,
+/// stops nothing, signals nothing and needs no sudo.
 const LOADED_LABELS_SCRIPT: &str = "set -u
 if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
   printf 'STADO_LOADED_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
@@ -4861,11 +4971,21 @@ fi
 # how a stale queue agent stayed unnameable while three separate reports called
 # the host healthy. A label whose file exists is a label that can be acted on,
 # listed or not.
+#
+# EVERY label, with no prefix in either half of the union. Both halves used to
+# carry `com.wisent.`, so a job outside that prefix was not merely unreported,
+# it was never read: on 2026-09-01 `com.stado.agent.charless-mac-mini` was the
+# one label on the always-on mac outside the prefix, it held the pid rewriting
+# the janitor's state file every interval, and `service list --undeclared`
+# answered that the host had nothing undeclared. Classification belongs to the
+# reader; enumeration answers to the host.
+listing=$(/bin/launchctl list)
 labels=$(
   {
-    /bin/launchctl list | /usr/bin/awk -F'\\t' 'NF == 3 && $3 ~ /^com\\.wisent\\./ { print $3 }'
+    printf '%s\\n' \"$listing\" |
+      /usr/bin/awk -F'\\t' 'NF == 3 && $3 != \"Label\" { print $3 }'
     for directory in /Library/LaunchDaemons \"$HOME/Library/LaunchAgents\" /Library/LaunchAgents; do
-      for file in \"$directory\"/com.wisent.*.plist; do
+      for file in \"$directory\"/*.plist; do
         [ -f \"$file\" ] || continue
         base=${file##*/}
         printf '%s\\n' \"${base%.plist}\"
@@ -4873,10 +4993,19 @@ labels=$(
     done
   } | /usr/bin/sort -u
 )
+uid=$(/usr/bin/id -u)
+# One `launchctl list`, read once. It used to be re-run twice per label, which
+# cost nothing while the prefix held the set to a handful and would cost two
+# subprocesses per label on a host that has hundreds.
 for label in $labels; do
-  pid=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $1 }')
-  status=$(/bin/launchctl list | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $2 }')
+  # launchd prints the pid and the last exit status as `-` or as an integer,
+  # so one space is a safe separator between them and neither can contain one.
+  row=$(printf '%s\\n' \"$listing\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$3 == l { print $1, $2; exit }')
+  pid=${row%% *}
+  status=${row#* }
+  if [ -z \"$row\" ]; then pid=''; status=''; fi
   plist=''
+  source=''
   # EVERY domain the label has a unit file in, not the first one. The `break`
   # this replaces is why a label declared as a system LaunchDaemon AND as a
   # user LaunchAgent looked like one unit from here: the first candidate won,
@@ -4886,12 +5015,36 @@ for label in $labels; do
   domains=''
   for candidate in \"/Library/LaunchDaemons/$label.plist\" \"$HOME/Library/LaunchAgents/$label.plist\" \"/Library/LaunchAgents/$label.plist\"; do
     if [ -f \"$candidate\" ]; then
-      if [ -z \"$plist\" ]; then plist=\"$candidate\"; fi
+      if [ -z \"$plist\" ]; then plist=\"$candidate\"; source='fleet-directory'; fi
       domains=\"${domains:+$domains }$candidate\"
     fi
   done
+  # A loaded label whose file is in none of the three directories this fleet
+  # installs into. launchd knows where it loaded the job from, so the host asks
+  # launchd, one label at a time, and extracts the `path` line alone.
+  # `launchctl dumpstate` would answer the same question for every job at once
+  # and carry each one's environment with it; nothing but the path crosses the
+  # channel here.
+  #
+  # Only an absolute path is accepted. For a label with no unit file at all
+  # -- every `application.com.apple.*` row on a mac -- `launchctl print`
+  # answers `path = (submitted by runningboardd.190)`, and reporting that in a
+  # UNIT_FILE column is a sentence that reads like a location and is not one.
+  if [ -z \"$plist\" ] && [ -n \"$pid\" ]; then
+    for domain in system \"user/$uid\" \"gui/$uid\"; do
+      resolved=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null |
+        /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*path$/ { print $2; exit }')
+      case \"$resolved\" in
+        /*)
+          plist=\"$resolved\"
+          source='launchd'
+          break
+          ;;
+      esac
+    done
+  fi
   program=''
-  if [ -n \"$plist\" ]; then
+  if [ -n \"$plist\" ] && [ -r \"$plist\" ]; then
     program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \
       | /usr/bin/tr -d '[]\"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\\t\\r\\n' ' ')
   fi
@@ -4914,7 +5067,7 @@ for label in $labels; do
       if [ -f \"$binary\" ]; then written=$(/usr/bin/stat -f %m \"$binary\" 2>/dev/null); fi
       ;;
   esac
-  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\" \"${running:--}\" \"${started:--}\" \"${written:--}\"
+  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\" \"${running:--}\" \"${started:--}\" \"${written:--}\" \"${source:--}\"
 done
 ";
 
@@ -5426,8 +5579,8 @@ pub async fn reap_undeclared_processes(
     Ok((reaped, kept))
 }
 
-/// Every launchd job loaded on TARGET under [`FLEET_LABEL_PREFIX`] that the
-/// registry does not declare, with the unit file and program each one runs.
+/// Every launchd job loaded on TARGET that the registry does not declare, with
+/// the unit file and program each one runs.
 ///
 /// This is the direction nothing in the product looked. `service list` walks
 /// the declaration and asks the host about each entry; `list --unowned` walks
@@ -5443,31 +5596,44 @@ pub async fn reap_undeclared_processes(
 /// published capacity for the same consumer id, so the oldest binary on the
 /// box decided what the host answered, and 55 pinned jobs were refused for
 /// seven days by a process no report could name.
+///
+/// Scope is the registry's declaration and nothing else. This used to be
+/// "every job under [`FLEET_LABEL_PREFIX`] that the registry does not declare",
+/// and the prefix was the entire hiding place: `com.stado.agent.charless-mac-mini`
+/// was loaded on that same host on 2026-09-01, was the only label on it outside
+/// the prefix, held the pid overwriting the janitor's state file — and this
+/// function answered that the host had no undeclared unit. Callers that want to
+/// treat an out-of-prefix row differently read
+/// [`UndeclaredUnit::classification`]; nothing decides that by filtering.
 pub async fn undeclared_units(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<Vec<UndeclaredUnit>, DeployError> {
-    let declared: std::collections::BTreeSet<String> = declared_services(target)
-        .iter()
-        .map(|service| service.unit_id().to_string())
-        .collect();
     Ok(loaded_units(target, runner)
         .await?
         .into_iter()
-        .filter(|unit| !declared.contains(&unit.label))
+        .filter(|unit| !unit.declared)
         .collect())
 }
 
-/// EVERY fleet label loaded on TARGET, declared or not, with every domain that
-/// declares it.
+/// EVERY launchd label loaded on TARGET, plus every label with a unit file in
+/// the three directories this fleet installs into — declared or not, fleet-named
+/// or not, with every domain that declares it and the registry's verdict on each.
 ///
-/// [`undeclared_units`] is this list minus the registry's own labels, and that
-/// subtraction is why one class of duplicate hid for a whole evening: a label
-/// declared once as a system LaunchDaemon and once as a user LaunchAgent is
-/// DECLARED, so it never appears in the undeclared view, while launchd runs
+/// [`undeclared_units`] is this list minus the rows the registry declares, and
+/// that subtraction is why one class of duplicate hid for a whole evening: a
+/// label declared once as a system LaunchDaemon and once as a user LaunchAgent
+/// is DECLARED, so it never appears in the undeclared view, while launchd runs
 /// both copies. Three processes served one declared port on the always-on mac
 /// behind exactly that. Callers that need to reason about duplication read this
 /// one; callers that need to reason about ownership read the other.
+///
+/// Neither list is filtered by label any more. This function used to drop every
+/// row outside [`FLEET_LABEL_PREFIX`] before returning, so the sweep and the
+/// undeclared view were both blind to the same set, and the one job on
+/// charless-mac-mini that mattered on 2026-09-01 was in it. A check that wants
+/// a narrower population states that narrowing itself, from evidence it holds,
+/// and says so where an operator can read it.
 pub async fn loaded_units(
     target: &ComputeTarget,
     runner: &Runner,
@@ -5479,6 +5645,10 @@ pub async fn loaded_units(
             "the loaded-unit scan did not complete",
         )));
     }
+    let declared: std::collections::BTreeSet<String> = declared_services(target)
+        .iter()
+        .map(|service| service.unit_id().to_string())
+        .collect();
     Ok(output
         .stdout
         .lines()
@@ -5494,26 +5664,27 @@ pub async fn loaded_units(
                 running,
                 started,
                 written,
+                path_source,
             ] => {
                 let label = (*label).trim().to_string();
-                label
-                    .starts_with(FLEET_LABEL_PREFIX)
-                    .then(|| UndeclaredUnit {
-                        host: target.name.clone(),
-                        label,
-                        pid: (*pid).trim().trim_matches('-').to_string(),
-                        status: (*status).trim().to_string(),
-                        path: (*path).trim().trim_matches('-').to_string(),
-                        program: (*program).trim().to_string(),
-                        declaring_paths: (*domains)
-                            .split_whitespace()
-                            .filter(|path| *path != "-")
-                            .map(str::to_string)
-                            .collect(),
-                        running_program: (*running).trim().trim_matches('-').trim().to_string(),
-                        started_epoch: started.trim().parse().ok(),
-                        binary_written_epoch: written.trim().parse().ok(),
-                    })
+                Some(UndeclaredUnit {
+                    host: target.name.clone(),
+                    declared: declared.contains(&label),
+                    label,
+                    pid: (*pid).trim().trim_matches('-').to_string(),
+                    status: (*status).trim().to_string(),
+                    path: (*path).trim().trim_matches('-').to_string(),
+                    path_source: (*path_source).trim().trim_matches('-').to_string(),
+                    program: (*program).trim().to_string(),
+                    declaring_paths: (*domains)
+                        .split_whitespace()
+                        .filter(|path| *path != "-")
+                        .map(str::to_string)
+                        .collect(),
+                    running_program: (*running).trim().trim_matches('-').trim().to_string(),
+                    started_epoch: started.trim().parse().ok(),
+                    binary_written_epoch: written.trim().parse().ok(),
+                })
             }
             _ => None,
         })

@@ -296,7 +296,7 @@ pub enum ServiceCommands {
         /// the plist was repointed from a legacy path to managed `current`.
         #[arg(long)]
         reload_unit: bool,
-        /// Require readiness JSON field `releaseVersion` to equal `--version`.
+        /// Require readiness JSON field `releaseVersion` or `build.version` to equal `--version`.
         #[arg(long)]
         require_release_version: bool,
         /// Replace one legacy user LaunchAgent atomically with this release.
@@ -1568,6 +1568,15 @@ async fn list_unowned(json: bool) -> Result<(), CmdError> {
 ///
 /// An empty answer means the hosts were asked and had nothing, because a host
 /// that will not answer is named on stderr and makes the command fail.
+///
+/// It also means the whole host was asked. Until 2026-09-01 this command
+/// enumerated only labels under `com.wisent.`, so its empty answer was a fact
+/// about that prefix and was read as a fact about the machine:
+/// `com.stado.agent.charless-mac-mini` was loaded on the always-on mac, was the
+/// only label on it outside the prefix, held the pid rewriting the janitor's
+/// state file every interval — and this command said the host had nothing
+/// undeclared. Every row is now enumerated and classified; the prefix chooses
+/// the sentence, never the population.
 async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
     let runner = production_runner();
@@ -1579,23 +1588,90 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
             Err(exc) => failures.push(format!("{}: {exc}", target.name)),
         }
     }
+    // A label the fleet never named but the host ties to the fleet anyway is
+    // the more interesting class and used to be the invisible one, so it reads
+    // first. This is the order rows are printed in and nothing else.
+    found.sort_by(|left, right| {
+        let rank = |unit: &service::UndeclaredUnit| match unit.classification() {
+            "outside-fleet-prefix" => 0,
+            "undeclared" => 1,
+            _ => 2,
+        };
+        rank(left)
+            .cmp(&rank(right))
+            .then_with(|| left.host.cmp(&right.host))
+            .then_with(|| left.label.cmp(&right.label))
+    });
     if json {
+        // Every row, every class. The JSON answer is the complete one, so
+        // nothing below can be the only place a label exists.
         let payload: Vec<Value> = found.iter().map(service::UndeclaredUnit::to_json).collect();
         print_json(&json!({"undeclared": payload}))?;
     } else {
-        let cells: Vec<Vec<String>> = found
+        // The table prints the jobs this fleet put on the host and cannot
+        // account for. `unaffiliated` rows are counted below instead: on
+        // charless-mac-mini they are 494 of 537 loaded labels, all of them the
+        // platform's own, and printing them beside six real findings is the
+        // same disservice the prefix filter did by another route. They are read,
+        // classified and counted, and `--json` carries every one of them.
+        let actionable: Vec<&service::UndeclaredUnit> =
+            found.iter().filter(|unit| !unit.accounted_for()).collect();
+        let cells: Vec<Vec<String>> = actionable
             .iter()
             .map(|unit| {
                 vec![
                     unit.host.clone(),
+                    unit.classification().to_string(),
                     unit.label.clone(),
                     dash(&unit.pid),
                     unit.status.clone(),
-                    unit.program.clone(),
+                    // What the process IS running, and only then what its file
+                    // declares. Reading only the declaration is how a job could
+                    // be seen and not identified: the pid rewriting the
+                    // janitor's state file on charless-mac-mini is named
+                    // `com.stado.agent.charless-mac-mini`, and only its argv
+                    // says it is `python3.12 -m stado.cli agent`, a program no
+                    // release of this binary can ever change.
+                    dash(if unit.running_program.is_empty() {
+                        &unit.program
+                    } else {
+                        &unit.running_program
+                    }),
+                    dash(&unit.path),
                 ]
             })
             .collect();
-        table::print(&["HOST", "LABEL", "PID", "LAST_EXIT", "RUNS"], &cells);
+        table::print(
+            &[
+                "HOST",
+                "CLASS",
+                "LABEL",
+                "PID",
+                "LAST_EXIT",
+                "RUNS",
+                "UNIT_FILE",
+            ],
+            &cells,
+        );
+        // The census, so an empty table and a table whose interesting rows are
+        // outnumbered both read honestly — and so that the widening is
+        // auditable: these numbers are the proof the host was asked about every
+        // label rather than about one prefix.
+        let count = |wanted: &str| {
+            found
+                .iter()
+                .filter(|unit| unit.classification() == wanted)
+                .count()
+        };
+        println!(
+            "{} loaded label(s) the registry does not declare: {} outside the fleet prefix but \
+             tied to it by unit file or program, {} under the prefix, {} unaffiliated with this \
+             fleet and not listed above (`--json` carries every row)",
+            found.len(),
+            count("outside-fleet-prefix"),
+            count("undeclared"),
+            count("unaffiliated"),
+        );
     }
     fail_if_any(&failures, "scan for undeclared units")
 }
@@ -2418,6 +2494,9 @@ async fn wait_for_service_readiness(
              reported=\n\
              if [ -n \"$expected\" ]; then\n\
                reported=\"$(printf '%s' \"$body\" | /usr/bin/plutil -extract releaseVersion raw -o - - 2>/dev/null)\" || reported=\n\
+               if [ -z \"$reported\" ]; then\n\
+                 reported=\"$(printf '%s' \"$body\" | /usr/bin/plutil -extract build.version raw -o - - 2>/dev/null)\" || reported=\n\
+               fi\n\
              fi\n\
              if [ -z \"$expected\" ] || [ \"$reported\" = \"$expected\" ]; then\n\
                printf '%s\\n' ready\n\
@@ -2427,7 +2506,7 @@ async fn wait_for_service_readiness(
            /bin/sleep 1\n\
          done\n\
          detail=\"readiness timed out after {}s: $url\"\n\
-         if [ -n \"$expected\" ]; then detail=\"$detail did not report releaseVersion $expected\"; fi\n\
+         if [ -n \"$expected\" ]; then detail=\"$detail did not report releaseVersion or build.version $expected\"; fi\n\
          printf '%s\\n' \"$detail\" >&2\n\
          exit 1",
         crate::deploy::shlex_quote(url),
@@ -2513,9 +2592,19 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     }
     let runner = production_runner();
     if let Some(label) = options.supersede_unit {
-        if label == declared.unit_id() {
+        // One launchd label may exist in both the system and user domains.
+        // A managed system daemon superseding its same-named legacy
+        // LaunchAgent is safe because every operation below is explicitly
+        // scoped: the legacy bootout/restore/delete uses the user domain and
+        // the managed restart uses the daemon path. Keep rejecting the same
+        // name everywhere else, where the two references would identify one
+        // unit rather than the migration pair.
+        if label == declared.unit_id()
+            && !UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
+        {
             return Err(CmdError::usage(
-                "--supersede-unit must name the legacy user LaunchAgent, not the managed unit",
+                "--supersede-unit may match the managed unit only when that unit is a system \
+                 LaunchDaemon replacing its same-named legacy user LaunchAgent",
             ));
         }
         service::check_user_launchagent(&target, label, &runner)
@@ -3772,6 +3861,36 @@ async fn directory_port(name: &str, host: &str) -> Option<u16> {
     url::Url::parse(&endpoint.url).ok()?.port()
 }
 
+/// The host's declaration for NAME, accepting the directory's own key for the
+/// service as well as the launchd label the host declares.
+///
+/// [`declared_matching`] matches only the labels a host declares, while
+/// `service verify`'s ownership judgement resolves the unit through
+/// [`crate::targets::Registry::service_unit`] — which reads `managed_service`
+/// and, when a placement profile owns the service instead, that profile's
+/// `units` map. The two disagreed: on 2026-09-01 `service verify` judged
+/// brama's port by label while `service serving brama` refused with "is not a
+/// registry-managed service" on both hosts, because brama carries a
+/// `placement_profile` and no `managed_service`. The command #248 points an
+/// operator at could not answer for the one service the check was written
+/// for. One resolution chain, both commands.
+///
+/// The label path is tried first so a host that declares a unit under a name
+/// the directory also uses keeps resolving to its own declaration.
+async fn declared_for_serving(name: &str, host: &str) -> Result<Vec<ManagedService>, CmdError> {
+    let refusal = match declared_matching(name, Some(host)).await {
+        Ok(found) => return Ok(found),
+        Err(refusal) => refusal,
+    };
+    let Ok(registry) = host_channel::canonical_registry().await else {
+        return Err(refusal);
+    };
+    let Some(unit) = registry.service_unit(name, host) else {
+        return Err(refusal);
+    };
+    declared_matching(unit, Some(host)).await
+}
+
 /// `service serving`: the declared unit against the process on its port.
 ///
 /// The ports come from the unit's own env file by the same derivation
@@ -3787,7 +3906,7 @@ async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError> {
         ports,
         as_json,
     } = options;
-    let services = declared_matching(name, Some(host)).await?;
+    let services = declared_for_serving(name, host).await?;
     let runner = production_runner();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     // Every label this host declares, so a foreign owner is reported as
@@ -4425,6 +4544,10 @@ async fn adopt(
 /// target placeholder and `service_directory.services.<name>` in one registry
 /// update; retire/remove must drop both in the same update or the validator
 /// correctly refuses a directory entry pointing at no managed service.
+///
+/// Dropping an entry is a directory change, so it advances the publication
+/// counter. It did not, and a consumer holding the entry that was just
+/// removed saw a generation telling it its copy was current.
 fn remove_directory_declaration(document: &mut Value, name: &str) {
     let Some(services) = document
         .get_mut("service_directory")
@@ -4434,7 +4557,12 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
     else {
         return;
     };
-    services.remove(name);
+    if services.remove(name).is_none() {
+        return;
+    }
+    // A directory that cannot carry a counter is a document this command did
+    // not write and must not silently repair; the removal still stands.
+    let _ = crate::service_resolution::advance_generation(document);
 }
 
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
@@ -4795,6 +4923,10 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     if !already {
         host_services.push(json!({"name": name, "declared_only": true}));
     }
+    // `declare` writes `service_directory.services.<name>` above, so the
+    // publication counter must advance with it or a consumer's cached copy
+    // never learns the entry exists.
+    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
     let generation = registry::push_document(&document).await?;
     if !as_json {
         println!("declared {name} on {host} (generation {generation})");
@@ -5685,13 +5817,10 @@ async fn install_from_archive(
         }
         std::fs::copy(path, destination)?;
     } else {
-        let ssh_target = target.ssh.clone().unwrap_or_default();
-        if ssh_target.is_empty() {
-            return Err(CmdError::click(format!(
-                "{} declares no ssh destination",
-                target.name
-            )));
-        }
+        let connection = host_channel::select_ssh_connection(target, runner)
+            .await
+            .map_err(click)?;
+        let ssh_target = connection.destination;
         let prepare = host_channel::run_script(
             target,
             "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
@@ -5705,12 +5834,16 @@ async fn install_from_archive(
                 target.name
             )));
         }
-        let mut options = host_channel::ssh_options(&ssh_target);
+        let mut options = host_channel::ssh_options(ssh_target);
         options.pop();
         let mut argv = vec!["scp".to_string(), "-q".to_string()];
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(path.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
+        let key = crate::deploy::ssh_key::materialize(&target.name)
+            .await
+            .map_err(click)?;
+        let argv = crate::deploy::ssh_key::add_identity(argv, &key).map_err(click)?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
             .map_err(CmdError::click)?;

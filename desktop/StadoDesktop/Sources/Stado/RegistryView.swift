@@ -96,7 +96,7 @@ struct RegistryView: View {
         if fleetStore.isRefreshing {
             WisentLoadingPanel(
                 title: "Reading canonical fleet policy",
-                detail: "The dashboard projects three policy fields per target. Routing and credential material never leaves the registry document."
+                detail: "The dashboard projects three policy fields per target. The Hosts screen reads control routes separately through stado host link; SSH credentials never cross this projection."
             )
         } else if !fleetStore.isConfigured {
             WisentEmptyPanel(

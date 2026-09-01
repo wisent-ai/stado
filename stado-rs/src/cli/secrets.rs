@@ -79,7 +79,7 @@ pub enum SecretsCommands {
     /// the product could answer "does that host hold this item" without
     /// copying an encrypted vault around.
     ///
-    /// Names, kinds and states only, never a field value.
+    /// Names, kinds, states and tags only, never a field value.
     #[command(name = "inspect-vault")]
     InspectVault {
         /// Encrypted Skarbiec vault file. Omit with `--host`.
@@ -508,7 +508,7 @@ async fn inspect_host_vault(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    let mut rows: Vec<(String, String, String)> = inventory
+    let mut rows: Vec<(String, String, String, Vec<String>)> = inventory
         .iter()
         .filter_map(|item| {
             let name = item.get("id").and_then(Value::as_str)?.to_string();
@@ -517,6 +517,14 @@ async fn inspect_host_vault(
                     return None;
                 }
             }
+            let tags = item
+                .get("tags")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
             Some((
                 name,
                 item.get("kind")
@@ -527,6 +535,7 @@ async fn inspect_host_vault(
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                tags,
             ))
         })
         .collect();
@@ -542,10 +551,11 @@ async fn inspect_host_vault(
                 "matched": rows.len(),
                 "items": rows
                     .iter()
-                    .map(|(name, kind, state)| json!({
+                    .map(|(name, kind, state, tags)| json!({
                         "name": name,
                         "kind": kind,
                         "state": state,
+                        "tags": tags,
                     }))
                     .collect::<Vec<Value>>(),
             }))?
@@ -555,8 +565,8 @@ async fn inspect_host_vault(
     println!("host:      {}", resolved.name);
     println!("vault:     {}", broker.vault);
     println!("items:     {} total, {} shown", inventory.len(), rows.len());
-    for (name, kind, state) in &rows {
-        println!("  {name:<52} {kind:<12} {state}");
+    for (name, kind, state, tags) in &rows {
+        println!("  {name:<52} {kind:<12} {state:<8} {}", tags.join(","));
     }
     Ok(())
 }

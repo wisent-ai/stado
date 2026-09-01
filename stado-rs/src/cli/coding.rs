@@ -72,8 +72,7 @@ pub async fn connect_jeden(
             .filter(|target| {
                 target.is_provider(crate::capabilities::ProviderId::Local)
                     && (host_channel::target_is_this_host(target)
-                        || (canonical
-                            && target.ssh.as_deref().is_some_and(|value| !value.is_empty())))
+                        || (canonical && target.has_ssh_connection()))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -219,10 +218,14 @@ async fn attach(target: ComputeTarget, workspace: &str, checkout: &str) -> Resul
             .status()
             .await?
     } else {
+        let connection =
+            host_channel::select_ssh_connection(&target, &crate::deploy::production_runner())
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
         let key = ssh_key::materialize(&target.name)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
-        let mut argv = host_channel::ssh_options(target.ssh.as_deref().unwrap_or_default());
+        let mut argv = host_channel::ssh_options(connection.destination);
         argv.insert(1, "-T".to_string());
         argv.push(format!(
             "cd \"$HOME\"/{checkout}; export JEDEN_STADO_BIN=\"$HOME\"/{MANAGED_STADO} JEDEN_BIN=\"$HOME\"/{MANAGED_JEDEN}; exec \"$HOME\"/{MANAGED_JEDEN_LAUNCHER} rpc"

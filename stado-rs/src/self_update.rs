@@ -13,6 +13,11 @@
 //!
 //! After a successful update the agent calls [`reexec`], replacing the process
 //! image with the new binary while preserving argv and the environment.
+//!
+//! `reexec` covers the process that ran the update and nothing else. Every
+//! OTHER long-running unit installed from the same directory keeps executing
+//! the inode it started with, so [`recycle_replaced_units`] restarts those in
+//! place once the new binaries are on disk.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -415,10 +420,234 @@ async fn install_release_with(
         log_fn(&format!("self-update: installed {name} {to}"));
     }
     std::fs::File::open(install_dir)?.sync_all()?;
+    recycle_replaced_units(install_dir, &targets, log_fn).await;
     Ok(UpdateOutcome::Updated {
         from: installed,
         to,
     })
+}
+
+/// Restart the OTHER managed units that were executing the binaries this
+/// update just replaced.
+///
+/// Why this exists: [`replace_verified`] renames a new binary over the old
+/// one, and only the process that ran the update re-execs itself. A unit that
+/// is not that process keeps executing the inode it started with, for as long
+/// as it lives, because neither launchd nor systemd has any reason to notice
+/// that the file underneath it changed.
+///
+/// That is not theoretical. On 2026-09-01 the disk-cleanup janitor on
+/// `lukasz-macbook` was executing a 68,977,488-byte image of
+/// `~/.stado/bin/stado` while the file at that exact path was 70,892,848
+/// bytes: the process had been up since 2026-08-27 and the binary was
+/// replaced under it. Its reports named four cleaners and carried no
+/// `writer_version`, while the installed build declares six and sets that
+/// field, so the registry policy it was handed no longer validated. It
+/// answered `invalid_or_unavailable_policy` 8,460 times out of 12,009 passes,
+/// freed zero bytes across all of them, and the volume reached 100% with a
+/// janitor running every minute the whole way down.
+///
+/// In place only. `launchctl kickstart -k` and `systemctl --user try-restart`
+/// replace the process without unloading the unit, so there is no window in
+/// which the job does not exist. The unload-and-bootstrap sequence took the
+/// always-on host down once already and is deliberately not reached from here.
+///
+/// Best effort by construction. The binaries are installed and fsynced before
+/// this runs, so a unit that cannot be restarted must not fail the update that
+/// already succeeded; it is named in the log and left holding the old image.
+async fn recycle_replaced_units(
+    install_dir: &Path,
+    replaced: &[String],
+    log_fn: &mut dyn FnMut(&str),
+) {
+    let paths: Vec<String> = replaced
+        .iter()
+        .map(|name| install_dir.join(name).to_string_lossy().into_owned())
+        .collect();
+    let ours = std::process::id();
+    let restarted = if cfg!(target_os = "macos") {
+        recycle_launchd(&paths, ours, log_fn).await
+    } else {
+        recycle_systemd(&paths, ours, log_fn).await
+    };
+    if restarted == 0 {
+        log_fn("self-update: no other managed unit was running a replaced binary");
+    }
+}
+
+/// Stdout of a successful command, or `None` for a missing binary, a spawn
+/// failure, a nonzero exit, or non-UTF-8 output. The caller treats all four
+/// the same way: it did not happen, and the log says so.
+async fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = tokio::process::Command::new(program)
+        .args(args)
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+/// This account's uid, read from the ownership of its own home directory, so
+/// that naming a launchd domain costs neither a new crate feature nor a
+/// subprocess.
+fn unix_uid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let home = std::env::var_os("HOME")?;
+    Some(std::fs::metadata(home).ok()?.uid())
+}
+
+/// `ProgramArguments[0]`, else `Program`, of one launchd unit. Read through
+/// `plutil`, which every macOS carries, so no plist parser joins the
+/// dependency set for the sake of a single field.
+async fn launchd_program(plist: &Path) -> Option<String> {
+    let path = plist.to_string_lossy().into_owned();
+    let rendered =
+        command_stdout("/usr/bin/plutil", &["-convert", "json", "-o", "-", &path]).await?;
+    let value: serde_json::Value = serde_json::from_str(&rendered).ok()?;
+    value
+        .get("ProgramArguments")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|arguments| arguments.first())
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| value.get("Program").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+}
+
+/// `launchctl list` prints `PID\tStatus\tLabel` after one header row. A job
+/// that is loaded but not running prints `-` for the PID and holds no image,
+/// so it is skipped: it will pick up the new binary the next time launchd
+/// starts it.
+async fn recycle_launchd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&str)) -> usize {
+    let Some(uid) = unix_uid() else {
+        log_fn("self-update: this account's uid is unreadable, so no launchd unit was restarted");
+        return 0;
+    };
+    let Some(listing) = command_stdout("/bin/launchctl", &["list"]).await else {
+        log_fn("self-update: launchctl list failed, so no launchd unit was restarted");
+        return 0;
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let domains = [
+        (
+            PathBuf::from(&home).join("Library").join("LaunchAgents"),
+            format!("gui/{uid}"),
+        ),
+        (
+            PathBuf::from("/Library/LaunchDaemons"),
+            "system".to_string(),
+        ),
+    ];
+    let mut restarted = 0usize;
+    for line in listing.lines().skip(1) {
+        let mut columns = line.split('\t');
+        let (Some(pid), Some(_status), Some(label)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            continue;
+        };
+        let Ok(pid) = pid.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid == ours {
+            continue;
+        }
+        for (directory, domain) in &domains {
+            let plist = directory.join(format!("{label}.plist"));
+            if !plist.is_file() {
+                continue;
+            }
+            let Some(program) = launchd_program(&plist).await else {
+                continue;
+            };
+            if !paths.iter().any(|path| path == &program) {
+                continue;
+            }
+            let service = format!("{domain}/{label}");
+            if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
+                .await
+                .is_some()
+            {
+                log_fn(&format!(
+                    "self-update: restarted {service} in place; pid {pid} was running the replaced {program}"
+                ));
+                restarted += 1;
+            } else {
+                log_fn(&format!(
+                    "self-update: {service} is running the replaced {program} and this account could not restart it; \
+                     it keeps the old image until launchd replaces the process"
+                ));
+            }
+            break;
+        }
+    }
+    restarted
+}
+
+/// systemd holds a replaced image for exactly the same reason launchd does.
+/// `try-restart` acts only on units that are already running and never starts
+/// a stopped one, which is the in-place equivalent of `kickstart -k` here.
+async fn recycle_systemd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&str)) -> usize {
+    let Some(listing) = command_stdout(
+        "systemctl",
+        &[
+            "--user",
+            "list-units",
+            "--type=service",
+            "--state=running",
+            "--no-legend",
+            "--plain",
+        ],
+    )
+    .await
+    else {
+        log_fn("self-update: systemctl --user is unavailable, so no systemd unit was restarted");
+        return 0;
+    };
+    let mut restarted = 0usize;
+    for line in listing.lines() {
+        let Some(unit) = line.split_whitespace().next() else {
+            continue;
+        };
+        let Some(exec) = command_stdout(
+            "systemctl",
+            &["--user", "show", "-p", "ExecStart", "--value", unit],
+        )
+        .await
+        else {
+            continue;
+        };
+        let Some(program) = paths.iter().find(|path| exec.contains(path.as_str())) else {
+            continue;
+        };
+        let main_pid = command_stdout(
+            "systemctl",
+            &["--user", "show", "-p", "MainPID", "--value", unit],
+        )
+        .await
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+        if main_pid == ours {
+            continue;
+        }
+        if command_stdout("systemctl", &["--user", "try-restart", unit])
+            .await
+            .is_some()
+        {
+            log_fn(&format!(
+                "self-update: restarted {unit} in place; pid {main_pid} was running the replaced {program}"
+            ));
+            restarted += 1;
+        } else {
+            log_fn(&format!(
+                "self-update: {unit} is running the replaced {program} and could not be restarted; \
+                 it keeps the old image"
+            ));
+        }
+    }
+    restarted
 }
 
 /// Copy the verified staging file next to `dest` as `<name>.new`, chmod

@@ -190,6 +190,13 @@ jobs:
       # that resolves the deprecation rather than the newest one published, because
       # this job publishes create-only release objects and a checkout that changes
       # behaviour under it cannot be corrected after the fact.
+      - name: Reclaim declared release capacity
+        run: |
+          stado="$HOME/.stado/bin/stado"
+          "$stado" host reclaim lukasz-macbook --apply \
+            --reason "stado $STADO_VERSION release build requires declared scratch capacity" \
+            --json
+          "$stado" host disk lukasz-macbook --json
       - uses: actions/checkout@v5
       - name: Ensure daemonless cross-build toolchain
         run: |
@@ -477,6 +484,14 @@ jobs:
               false
             fi
           done
+      - name: Reclaim Rust release cache
+        if: always()
+        run: |
+          manifest="$GITHUB_WORKSPACE/stado-rs/Cargo.toml"
+          if [ -f "$manifest" ]; then
+            cargo clean --manifest-path "$manifest"
+          fi
+
 
   # The darwin platform, and the control-plane delivery that follows it.
   #
@@ -510,6 +525,13 @@ jobs:
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
     steps:
+      - name: Reclaim declared release capacity
+        run: |
+          stado="$HOME/.stado/bin/stado"
+          "$stado" host reclaim lukasz-macbook --apply \
+            --reason "stado ${{ needs.identity.outputs.version }} native release build requires declared scratch capacity" \
+            --json
+          "$stado" host disk lukasz-macbook --json
       - name: Check out exact source revision
         env:
           GH_TOKEN: ${{ github.token }}
@@ -773,3 +795,13 @@ jobs:
           caddy reload \
             --config "$STADO_SOURCE_DIR/deploy/azure/Caddyfile.example" \
             --adapter caddyfile
+
+      - name: Reclaim native Rust release cache
+        if: always()
+        run: |
+          if [ -n "${STADO_SOURCE_DIR:-}" ]; then
+            manifest="$STADO_SOURCE_DIR/stado-rs/Cargo.toml"
+            if [ -f "$manifest" ]; then
+              cargo clean --manifest-path "$manifest"
+            fi
+          fi
