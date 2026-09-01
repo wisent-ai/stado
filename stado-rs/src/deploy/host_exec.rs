@@ -96,6 +96,12 @@ impl ApprovedCommand {
 /// ships inside the application bundle instead, which is why the entry needs
 /// [`PROGRAM_CANDIDATES`]: one program, two install layouts, one spelling.
 const TAILSCALE_PROGRAM: &str = "/usr/bin/tailscale";
+const APPIUM_PROGRAM: &str = "/usr/local/bin/appium";
+const CUA_DRIVER_PROGRAM: &str = "/usr/local/bin/cua-driver";
+const TMUX_PROGRAM: &str = "/usr/bin/tmux";
+const CARGO_PROGRAM: &str = "/usr/bin/cargo";
+const NODE_PROGRAM: &str = "/usr/bin/node";
+const ADB_PROGRAM: &str = "/usr/local/bin/adb";
 
 /// Every absolute path a program in this table is installed at, for the
 /// programs whose location differs per platform.
@@ -108,15 +114,23 @@ const TAILSCALE_PROGRAM: &str = "/usr/bin/tailscale";
 ///
 /// A program absent from this table has exactly one path — its `argv[0]` — and
 /// keeps the plain [`host_channel::run_program`] transport.
-const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[(
-    TAILSCALE_PROGRAM,
-    &[
-        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-        "/usr/local/bin/tailscale",
-        "/opt/homebrew/bin/tailscale",
+const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
+    (
         TAILSCALE_PROGRAM,
-    ],
-)];
+        &[
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/usr/local/bin/tailscale",
+            "/opt/homebrew/bin/tailscale",
+            TAILSCALE_PROGRAM,
+        ],
+    ),
+    (APPIUM_PROGRAM, &["/opt/homebrew/bin/appium", "/usr/local/bin/appium"]),
+    (CUA_DRIVER_PROGRAM, &["/opt/homebrew/bin/cua-driver", "/usr/local/bin/cua-driver"]),
+    (TMUX_PROGRAM, &["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]),
+    (CARGO_PROGRAM, &["/Users/Shared/.cargo/bin/cargo", "/opt/homebrew/bin/cargo", "/usr/local/bin/cargo", "/usr/bin/cargo"]),
+    (NODE_PROGRAM, &["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]),
+    (ADB_PROGRAM, &["/opt/homebrew/bin/adb", "/usr/local/bin/adb", "/usr/bin/adb"]),
+];
 
 /// The allowlist.
 ///
@@ -355,6 +369,54 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               that dropped is the one that is no longer listed by default. There is no \
               interface operand and no address, and every configuring form of ifconfig requires \
               one, so this entry cannot change an address, a route, or an interface's state",
+    },
+    ApprovedCommand {
+        argv: &[APPIUM_PROGRAM, "--version"],
+        why: "prints the installed Appium version without starting a server or creating a device session",
+    },
+    ApprovedCommand {
+        argv: &[APPIUM_PROGRAM, "driver", "list", "--installed"],
+        why: "reads the installed Appium driver manifest; it does not install, update, or start a driver",
+    },
+    ApprovedCommand {
+        argv: &[ADB_PROGRAM, "version"],
+        why: "prints the Android Debug Bridge client version without connecting to or changing a device",
+    },
+    ApprovedCommand {
+        argv: &[ADB_PROGRAM, "devices", "-l"],
+        why: "lists attached Android transports and their read-only identity metadata",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/xcrun", "simctl", "listapps", "booted"],
+        why: "reads the application identifiers installed in the already-booted simulator and does not boot, launch, install, or modify an application",
+    },
+    ApprovedCommand {
+        argv: &[ADB_PROGRAM, "shell", "pm", "list", "packages"],
+        why: "reads package identifiers from the attached Android device without launching, installing, removing, or changing an application",
+    },
+    ApprovedCommand {
+        argv: &[CUA_DRIVER_PROGRAM, "doctor", "--json"],
+        why: "reports driver availability and existing accessibility/screen-recording permission state without requesting permissions or opening system settings",
+    },
+    ApprovedCommand {
+        argv: &[TMUX_PROGRAM, "-V"],
+        why: "prints the tmux version without creating a terminal session",
+    },
+    ApprovedCommand {
+        argv: &[CARGO_PROGRAM, "--version"],
+        why: "prints the Cargo toolchain version without compiling or changing a workspace",
+    },
+    ApprovedCommand {
+        argv: &[NODE_PROGRAM, "--version"],
+        why: "prints the Node.js runtime version without executing application code",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/git", "--version"],
+        why: "prints the Git client version without reading or changing a repository",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/curl", "--version"],
+        why: "prints the curl client and protocol capabilities without making a network request",
     },
 ];
 
