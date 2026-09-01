@@ -648,6 +648,32 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
                 "release platforms were not built from one source revision",
             ));
         }
+        let channel = ReleaseChannel::from(args.channel);
+        if let Some(desired) = policy.desired.as_ref() {
+            if desired.version == args.version
+                && desired.channel == channel
+                && desired.artifacts == artifacts
+            {
+                let report = json!({
+                    "product": args.product,
+                    "version": args.version,
+                    "channel": channel,
+                    "rollout_generation": desired.rollout_generation,
+                    "registry_generation": control.generation,
+                    "store_generation": expected_generation,
+                    "status": "already_promoted",
+                });
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "{} {} is already promoted at rollout-generation={}",
+                        args.product, args.version, desired.rollout_generation
+                    );
+                }
+                return Ok(());
+            }
+        }
         let policy = control
             .products
             .get_mut(&args.product)
