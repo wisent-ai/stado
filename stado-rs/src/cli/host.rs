@@ -5367,7 +5367,7 @@ const home = os.homedir();
 const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
 const managedWorkerRoot = path.join(
   home,
-  '.stado/services/com.wisent.always-on.weles-api/current',
+  '.stado/services/weles-admission/current',
 );
 
 const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
