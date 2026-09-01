@@ -1588,16 +1588,14 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
             Err(exc) => failures.push(format!("{}: {exc}", target.name)),
         }
     }
-    // A label the fleet never named is the more interesting of the two classes
-    // and used to be the invisible one, so it reads first. This is the order
-    // rows are printed in and nothing else: no row is dropped by it.
+    // A label the fleet never named but the host ties to the fleet anyway is
+    // the more interesting class and used to be the invisible one, so it reads
+    // first. This is the order rows are printed in and nothing else.
     found.sort_by(|left, right| {
-        let rank = |unit: &service::UndeclaredUnit| {
-            if unit.classification() == "outside-fleet-prefix" {
-                0
-            } else {
-                1
-            }
+        let rank = |unit: &service::UndeclaredUnit| match unit.classification() {
+            "outside-fleet-prefix" => 0,
+            "undeclared" => 1,
+            _ => 2,
         };
         rank(left)
             .cmp(&rank(right))
@@ -1605,10 +1603,20 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
             .then_with(|| left.label.cmp(&right.label))
     });
     if json {
+        // Every row, every class. The JSON answer is the complete one, so
+        // nothing below can be the only place a label exists.
         let payload: Vec<Value> = found.iter().map(service::UndeclaredUnit::to_json).collect();
         print_json(&json!({"undeclared": payload}))?;
     } else {
-        let cells: Vec<Vec<String>> = found
+        // The table prints the jobs this fleet put on the host and cannot
+        // account for. `unaffiliated` rows are counted below instead: on
+        // charless-mac-mini they are 494 of 537 loaded labels, all of them the
+        // platform's own, and printing them beside six real findings is the
+        // same disservice the prefix filter did by another route. They are read,
+        // classified and counted, and `--json` carries every one of them.
+        let actionable: Vec<&service::UndeclaredUnit> =
+            found.iter().filter(|unit| !unit.accounted_for()).collect();
+        let cells: Vec<Vec<String>> = actionable
             .iter()
             .map(|unit| {
                 vec![
@@ -1618,10 +1626,12 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
                     dash(&unit.pid),
                     unit.status.clone(),
                     // What the process IS running, and only then what its file
-                    // declares. A label loaded from outside the three
-                    // directories this fleet installs into has no declared
-                    // program to print, and printing nothing there is how a
-                    // job could be seen and not identified.
+                    // declares. Reading only the declaration is how a job could
+                    // be seen and not identified: the pid rewriting the
+                    // janitor's state file on charless-mac-mini is named
+                    // `com.stado.agent.charless-mac-mini`, and only its argv
+                    // says it is `python3.12 -m stado.cli agent`, a program no
+                    // release of this binary can ever change.
                     dash(if unit.running_program.is_empty() {
                         &unit.program
                     } else {
@@ -1643,18 +1653,24 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
             ],
             &cells,
         );
-        // The counts, so an empty table and a table whose interesting rows are
-        // outnumbered both read honestly.
-        let outside = found
-            .iter()
-            .filter(|unit| unit.classification() == "outside-fleet-prefix")
-            .count();
+        // The census, so an empty table and a table whose interesting rows are
+        // outnumbered both read honestly — and so that the widening is
+        // auditable: these numbers are the proof the host was asked about every
+        // label rather than about one prefix.
+        let count = |wanted: &str| {
+            found
+                .iter()
+                .filter(|unit| unit.classification() == wanted)
+                .count()
+        };
         println!(
-            "{} loaded label(s) the registry does not declare: {} outside the fleet prefix, \
-             {} under it",
+            "{} loaded label(s) the registry does not declare: {} outside the fleet prefix but \
+             tied to it by unit file or program, {} under the prefix, {} unaffiliated with this \
+             fleet and not listed above (`--json` carries every row)",
             found.len(),
-            outside,
-            found.len() - outside
+            count("outside-fleet-prefix"),
+            count("undeclared"),
+            count("unaffiliated"),
         );
     }
     fail_if_any(&failures, "scan for undeclared units")

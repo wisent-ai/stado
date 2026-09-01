@@ -4795,6 +4795,29 @@ impl UndeclaredUnit {
         self.label.starts_with(FLEET_LABEL_PREFIX)
     }
 
+    /// Is there evidence tying this label to this fleet, independent of what it
+    /// is called?
+    ///
+    /// Two facts, both read off the host: its unit file sits in one of the
+    /// three launchd directories this fleet installs into, or the program it is
+    /// running executes out of a declared product root.
+    ///
+    /// This exists because the widened enumeration has to stay readable.
+    /// charless-mac-mini loads 537 labels and 494 of them are `com.apple.*`;
+    /// a report that prints all of them equally has buried its finding as
+    /// effectively as the prefix filter did, and burying a finding in noise is
+    /// the failure this whole change is about. So the noise is separated by
+    /// EVIDENCE rather than by spelling: every one of the six rows that
+    /// mattered on that host — `com.stado.agent.charless-mac-mini`, three
+    /// `ai.wisent.oko.*` agents and two `actions.runner.*` runners — has its
+    /// plist in `~/Library/LaunchAgents` or `/Library/LaunchDaemons`, and not
+    /// one `application.com.apple.*` row does.
+    pub fn fleet_affiliated(&self) -> bool {
+        !self.declaring_paths.is_empty()
+            || (!self.running_program.is_empty()
+                && product_guess(&self.running_program) != UNKNOWN_PRODUCT)
+    }
+
     /// The sentence a report should use about this row, once the registry has
     /// been asked whether it declares the label.
     ///
@@ -4802,21 +4825,32 @@ impl UndeclaredUnit {
     /// registry does not declare that is spelled like one of ours — a
     /// duplicate agent, a superseded convention, a unit somebody bootstrapped
     /// by hand. `outside-fleet-prefix` is a label the registry does not declare
-    /// and did not name either, which is the more interesting of the two and
-    /// used to be the invisible one.
+    /// and did not name either, yet which this host ties to the fleet anyway:
+    /// the class that used to be invisible, and the one the janitor's writer
+    /// was in. `unaffiliated` is a loaded job with no tie to this fleet at all
+    /// — the platform's own agents.
+    ///
+    /// All four are enumerated and counted. The class chooses the sentence and
+    /// the order rows are printed in, never whether the host was asked.
     pub fn classification(&self) -> &'static str {
-        match (self.declared, self.in_fleet_prefix()) {
-            (true, _) => "declared",
-            (false, true) => "undeclared",
-            (false, false) => "outside-fleet-prefix",
+        match (
+            self.declared,
+            self.in_fleet_prefix(),
+            self.fleet_affiliated(),
+        ) {
+            (true, _, _) => "declared",
+            (false, true, _) => "undeclared",
+            (false, false, true) => "outside-fleet-prefix",
+            (false, false, false) => "unaffiliated",
         }
     }
 
     /// Is this a row an operator has to act on? `declared` is the answer the
-    /// document promised; everything else is something the document does not
-    /// account for.
+    /// document promised; `unaffiliated` is somebody else's job on the same
+    /// machine. What is left is what this fleet put there and cannot account
+    /// for.
     pub fn accounted_for(&self) -> bool {
-        self.declared
+        self.declared || self.classification() == "unaffiliated"
     }
 
     /// The first word of an argument vector: the program, without its flags.
@@ -4981,23 +5015,27 @@ for label in $labels; do
     fi
   done
   # A loaded label whose file is in none of the three directories this fleet
-  # installs into. `com.stado.agent.charless-mac-mini` is exactly that, and a
-  # reader that stops at those directories reports it with no file and no
-  # program -- visible and still unidentifiable.
+  # installs into. launchd knows where it loaded the job from, so the host asks
+  # launchd, one label at a time, and extracts the `path` line alone.
+  # `launchctl dumpstate` would answer the same question for every job at once
+  # and carry each one's environment with it; nothing but the path crosses the
+  # channel here.
   #
-  # launchd knows where it loaded the job from, so the host asks launchd, one
-  # label at a time, and extracts the `path` line alone. `launchctl dumpstate`
-  # would answer the same question for every job at once and carry each one's
-  # environment with it; nothing but the path crosses the channel here.
+  # Only an absolute path is accepted. For a label with no unit file at all
+  # -- every `application.com.apple.*` row on a mac -- `launchctl print`
+  # answers `path = (submitted by runningboardd.190)`, and reporting that in a
+  # UNIT_FILE column is a sentence that reads like a location and is not one.
   if [ -z \"$plist\" ] && [ -n \"$pid\" ]; then
     for domain in system \"user/$uid\" \"gui/$uid\"; do
       resolved=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null |
         /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*path$/ { print $2; exit }')
-      if [ -n \"$resolved\" ]; then
-        plist=\"$resolved\"
-        source='launchd'
-        break
-      fi
+      case \"$resolved\" in
+        /*)
+          plist=\"$resolved\"
+          source='launchd'
+          break
+          ;;
+      esac
     done
   fi
   program=''
