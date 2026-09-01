@@ -1113,12 +1113,18 @@ enum RegistryHostPathCommands {
         /// Fallback priority starting at 1; omitted preserves its position or appends.
         #[arg(long)]
         priority: Option<usize>,
+        /// Emit the mutation receipt as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Remove one fallback connection path.
     Remove {
         host: String,
         /// Fallback path identifier.
         path: String,
+        /// Emit the mutation receipt as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2522,9 +2528,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                         path,
                         ssh,
                         priority,
-                    } => registry::host_path_set(&host, &path, &ssh, priority).await,
-                    RegistryHostPathCommands::Remove { host, path } => {
-                        registry::host_path_remove(&host, &path).await
+                        json,
+                    } => registry::host_path_set(&host, &path, &ssh, priority, json).await,
+                    RegistryHostPathCommands::Remove { host, path, json } => {
+                        registry::host_path_remove(&host, &path, json).await
                     }
                 },
             },
