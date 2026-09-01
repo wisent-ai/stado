@@ -5171,7 +5171,11 @@ const path = require('node:path');
 const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
 const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
 const home = os.homedir();
-const workerRoot = path.join(home, '.local/share/weles-worker');
+const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
+const managedWorkerRoot = path.join(
+  home,
+  '.stado/services/com.wisent.always-on.weles-api/current',
+);
 
 const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
 const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
@@ -5189,17 +5193,6 @@ const readJson = (file) => {
   }
 };
 
-// The version marker names the release the activator staged; the directories say
-// which releases actually ran here. The two disagree while a deploy is mid
-// flight, and a report that carried only one of them would hide that.
-const releaseMarker = (() => {
-  try {
-    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
-  } catch {
-    return null;
-  }
-})();
-
 const compareVersions = (left, right) => {
   const parts = (value) => String(value).split('.').map((piece) => Number.parseInt(piece, 10) || 0);
   const [a, b] = [parts(left), parts(right)];
@@ -5210,16 +5203,68 @@ const compareVersions = (left, right) => {
   return 0;
 };
 
-let releases = [];
+const releaseVersions = new Set();
+const recordingSources = [];
+const addRecordingSource = (release, platform, recordings, priority) => {
+  if (typeof release !== 'string' || !release) return;
+  try {
+    if (!fs.statSync(recordings).isDirectory()) return;
+  } catch {
+    return;
+  }
+  releaseVersions.add(release);
+  recordingSources.push({ release, platform, recordings, priority });
+};
+const addManagedRuntime = (runtime, platform) => {
+  const manifest = readJson(path.join(runtime, 'package.json'));
+  addRecordingSource(manifest?.version, platform, path.join(runtime, 'recordings'), 1);
+};
+
+// Current fleet-managed Weles releases unpack their runtime beside the launcher.
+// Some service artifacts carry a platform directory and older ones do not, so
+// inspect both layouts. The `current` link is the declaration Stado reconciles.
+addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed');
 try {
-  releases = fs
-    .readdirSync(workerRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort(compareVersions);
+  for (const entry of fs.readdirSync(managedWorkerRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    addManagedRuntime(path.join(managedWorkerRoot, entry.name, 'runtime'), entry.name);
+  }
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
 }
+
+// Keep reporting recordings written by the retired per-version installer while
+// hosts complete their cutover to the fleet-managed service.
+try {
+  for (const releaseEntry of fs.readdirSync(legacyWorkerRoot, { withFileTypes: true })) {
+    if (!releaseEntry.isDirectory()) continue;
+    const release = releaseEntry.name;
+    const releaseRoot = path.join(legacyWorkerRoot, release);
+    for (const platformEntry of fs.readdirSync(releaseRoot, { withFileTypes: true })) {
+      if (!platformEntry.isDirectory()) continue;
+      addRecordingSource(
+        release,
+        platformEntry.name,
+        path.join(releaseRoot, platformEntry.name, 'recordings'),
+        0,
+      );
+    }
+  }
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+const releases = [...releaseVersions].sort(compareVersions);
+
+// The version marker names the release the retired activator staged. It can
+// disagree with the active fleet-managed release and remains useful evidence
+// that the old delivery path has not been removed from a host yet.
+const releaseMarker = (() => {
+  try {
+    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+})();
 
 const ARTIFACT_CLASSES = [
   ['screenshots', /\.png$/i],
@@ -5244,6 +5289,10 @@ const describeRun = (release, platform, runDirectory) => {
   let bytes = 0;
   let action = null;
   let resultOk = null;
+  let resultHealthy = null;
+  let resultSignal = null;
+  let resultAt = null;
+  let uploadProof = null;
   let startedAt = null;
   let completedAt = null;
 
@@ -5273,6 +5322,16 @@ const describeRun = (release, platform, runDirectory) => {
         const document = readJson(full);
         if (document && typeof document.ok === 'boolean') resultOk = document.ok;
         if (typeof document?.completed_at === 'string') completedAt = document.completed_at;
+      } else if (entry.name === 'ban_signal.json') {
+        const document = readJson(full);
+        if (typeof document?.healthy === 'boolean') resultHealthy = document.healthy;
+        if (typeof document?.signal === 'string' && document.signal) resultSignal = document.signal;
+        if (typeof document?.ts === 'string') resultAt = document.ts;
+      } else if (entry.name === '.uploaded.json') {
+        const document = readJson(full);
+        if (typeof document?.sha256 === 'string' && typeof document?.destination === 'string') {
+          uploadProof = { sha256: document.sha256, destination: document.destination };
+        }
       } else if (entry.name === 'session_meta.json') {
         const document = readJson(full);
         if (typeof document?.started_at === 'string') startedAt = document.started_at;
@@ -5281,13 +5340,18 @@ const describeRun = (release, platform, runDirectory) => {
   };
   walk(runDirectory, 0);
 
-  const uploaded = fs.existsSync(path.join(runDirectory, '.uploaded.json'));
+  if (!uploadProof) {
+    const document = readJson(path.join(runDirectory, '.uploaded.json'));
+    if (typeof document?.sha256 === 'string' && typeof document?.destination === 'string') {
+      uploadProof = { sha256: document.sha256, destination: document.destination };
+    }
+  }
   const costs = readJson(path.join(path.dirname(runDirectory), '_costs', `${path.basename(runDirectory)}.json`));
   const isFresh = Date.now() - stat.mtimeMs < RUNNING_WINDOW_MS;
 
   let status = 'recorded';
-  if (resultOk === true) status = 'succeeded';
-  else if (resultOk === false) status = 'failed';
+  if (resultHealthy === true || resultOk === true) status = 'succeeded';
+  else if (resultHealthy === false || resultOk === false || resultSignal) status = 'failed';
   else if (isFresh) status = 'running';
 
   return {
@@ -5302,40 +5366,36 @@ const describeRun = (release, platform, runDirectory) => {
     artifact_counts: counts,
     artifact_bytes: bytes,
     cost_usd: typeof costs?.cost_usd === 'number' ? costs.cost_usd : null,
-    uploaded,
+    result: resultHealthy !== null || resultSignal
+      ? { healthy: resultHealthy, signal: resultSignal, recorded_at: resultAt }
+      : null,
+    uploaded: uploadProof !== null,
+    upload_proof: uploadProof,
   };
 };
 
-const runs = [];
-let runTotal = 0;
-for (const release of releases) {
-  const releaseRoot = path.join(workerRoot, release);
-  let platforms = [];
+const runsById = new Map();
+for (const source of recordingSources) {
+  let entries = [];
   try {
-    platforms = fs
-      .readdirSync(releaseRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
+    entries = fs.readdirSync(source.recordings, { withFileTypes: true });
   } catch {
     continue;
   }
-  for (const platform of platforms) {
-    const recordings = path.join(releaseRoot, platform, 'recordings');
-    let entries = [];
-    try {
-      entries = fs.readdirSync(recordings, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      // `_costs` is the sidecar ledger of the runs beside it, not a run.
-      if (!entry.isDirectory() || entry.name === '_costs') continue;
-      runTotal += 1;
-      runs.push({ release, platform, directory: path.join(recordings, entry.name) });
-    }
+  for (const entry of entries) {
+    // `_costs` is the sidecar ledger of the runs beside it, not a run.
+    if (!entry.isDirectory() || entry.name === '_costs') continue;
+    const candidate = {
+      release: source.release,
+      platform: source.platform,
+      directory: path.join(source.recordings, entry.name),
+      priority: source.priority,
+    };
+    const existing = runsById.get(entry.name);
+    if (!existing || candidate.priority > existing.priority) runsById.set(entry.name, candidate);
   }
 }
-
+const runs = [...runsById.values()];
 runs.sort((left, right) => {
   const time = (row) => {
     try {
@@ -5347,7 +5407,98 @@ runs.sort((left, right) => {
   return time(right) - time(left);
 });
 
-const described = runs.slice(0, runLimit).map((row) => describeRun(row.release, row.platform, row.directory));
+const describedById = new Map();
+for (const row of runs) {
+  const summary = describeRun(row.release, row.platform, row.directory);
+  describedById.set(summary.id, summary);
+}
+
+// Weles API requests keep their process result outside a release runtime so an
+// update cannot erase it. Fold those durable records into the live recording
+// inventory: a cleaned recording loses its artifact counts, not the fact that
+// the run happened or how its process ended.
+const detachedRoot = path.join(home, '.stado/weles-detached-runs');
+try {
+  for (const entry of fs.readdirSync(detachedRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const file = path.join(detachedRoot, entry.name);
+    const document = readJson(file);
+    if (!document || typeof document !== 'object') continue;
+    const stat = fs.statSync(file);
+    const fallbackId = entry.name.slice(0, -'.json'.length);
+    const id = typeof document.run_id === 'string' && document.run_id
+      ? document.run_id
+      : fallbackId;
+    const action = typeof document.action === 'string' && document.action
+      ? document.action
+      : null;
+
+    let status = 'recorded';
+    if (document.status === 'running' || document.ok === null) status = 'running';
+    else if (document.ok === true) status = 'succeeded';
+    else if (document.ok === false || document.status === 'failed') status = 'failed';
+
+    const resultCandidates = [
+      document.result,
+      document.result && typeof document.result === 'object' ? document.result.result : null,
+    ];
+    let result = null;
+    for (const candidate of resultCandidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      const healthy = typeof candidate.healthy === 'boolean' ? candidate.healthy : null;
+      const signal = typeof candidate.signal === 'string' && candidate.signal ? candidate.signal : null;
+      if (healthy !== null || signal) {
+        result = {
+          healthy,
+          signal,
+          recorded_at: typeof candidate.ts === 'string'
+            ? candidate.ts
+            : (typeof document.completed_at === 'string' ? document.completed_at : null),
+        };
+        break;
+      }
+    }
+
+    const durable = {
+      id,
+      release: null,
+      platform: process.platform,
+      action,
+      status,
+      started_at: typeof document.started_at === 'string'
+        ? document.started_at
+        : isoOrNull(stat.birthtimeMs),
+      completed_at: typeof document.completed_at === 'string' ? document.completed_at : null,
+      updated_at: isoOrNull(stat.mtimeMs),
+      artifact_counts: { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 },
+      artifact_bytes: 0,
+      cost_usd: null,
+      result,
+      uploaded: false,
+      upload_proof: null,
+    };
+    const live = describedById.get(id);
+    describedById.set(id, live
+      ? {
+          ...live,
+          action: live.action ?? durable.action,
+          status: durable.status === 'recorded' ? live.status : durable.status,
+          started_at: live.started_at ?? durable.started_at,
+          completed_at: durable.completed_at ?? live.completed_at,
+          updated_at: durable.updated_at ?? live.updated_at,
+          result: durable.result ?? live.result,
+        }
+      : durable);
+  }
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+
+const allDescribed = [...describedById.values()].sort(
+  (left, right) => (Date.parse(right.updated_at ?? '') || 0) - (Date.parse(left.updated_at ?? '') || 0),
+);
+const runTotal = allDescribed.length;
+const described = allDescribed.slice(0, runLimit);
 
 const probePort = (port) =>
   new Promise((resolve) => {
