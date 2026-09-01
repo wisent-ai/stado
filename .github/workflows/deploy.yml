@@ -145,13 +145,42 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
+  # One audited capacity pass runs before either platform reaches the sole
+  # control-plane runner. Keeping this as a dependency instead of duplicating
+  # it inside both jobs prevents two release siblings from reclaiming the same
+  # disk and gives the bounded host operation a retry after a transient scan
+  # timeout.
+  release-capacity:
+    needs: identity
+    runs-on: [self-hosted, stado-control-plane]
+    env:
+      STADO_VERSION: ${{ needs.identity.outputs.version }}
+    steps:
+      - name: Reclaim declared release capacity
+        run: |
+          stado="$HOME/.stado/bin/stado"
+          reclaimed=false
+          for attempt in 1 2 3; do
+            if "$stado" host reclaim lukasz-macbook --apply \
+              --reason "stado $STADO_VERSION release build requires declared scratch capacity" \
+              --json; then
+              reclaimed=true
+              break
+            fi
+            sleep "$((attempt * 5))"
+          done
+          if [ "$reclaimed" != true ]; then
+            echo "::error::Declared release capacity could not be reclaimed after three attempts"
+            false
+          fi
+
   # One platform, judged on its own. A failure here no longer decides whether
   # darwin ever publishes.
   publish-linux:
-    needs: identity
+    needs: [identity, release-capacity]
     runs-on: [self-hosted, stado-control-plane]
-    # NO shared concurrency group here, deliberately, and this is the second
-    # thing to know about this job after `needs: identity`.
+    # NO shared concurrency group here, deliberately. The capacity job is a
+    # completed prerequisite, not a group that can evict this pending build.
     #
     # I added `group: stado-control-plane-runner` with cancel-in-progress
     # false in #172, meaning to make PR gates queue for the single runner
@@ -190,13 +219,6 @@ jobs:
       # that resolves the deprecation rather than the newest one published, because
       # this job publishes create-only release objects and a checkout that changes
       # behaviour under it cannot be corrected after the fact.
-      - name: Reclaim declared release capacity
-        run: |
-          stado="$HOME/.stado/bin/stado"
-          "$stado" host reclaim lukasz-macbook --apply \
-            --reason "stado $STADO_VERSION release build requires declared scratch capacity" \
-            --json
-          "$stado" host disk lukasz-macbook --json
       - uses: actions/checkout@v5
       - name: Ensure daemonless cross-build toolchain
         run: |
@@ -504,7 +526,7 @@ jobs:
   # delivery or ingress failure leaves the coordinate whole rather than
   # partial, and a Linux failure leaves it untouched rather than empty forever.
   deploy-control-plane:
-    needs: identity
+    needs: [identity, release-capacity]
     if: needs.identity.outputs.channel == 'stable'
     runs-on: [self-hosted, stado-control-plane]
     # No shared concurrency group, for the reason written out on publish-linux:
@@ -525,13 +547,6 @@ jobs:
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
     steps:
-      - name: Reclaim declared release capacity
-        run: |
-          stado="$HOME/.stado/bin/stado"
-          "$stado" host reclaim lukasz-macbook --apply \
-            --reason "stado ${{ needs.identity.outputs.version }} native release build requires declared scratch capacity" \
-            --json
-          "$stado" host disk lukasz-macbook --json
       - name: Check out exact source revision
         env:
           GH_TOKEN: ${{ github.token }}
