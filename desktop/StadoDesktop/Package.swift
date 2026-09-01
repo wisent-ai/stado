@@ -8,16 +8,16 @@ let package = Package(
         .executable(name: "Stado", targets: ["Stado"]),
     ],
     dependencies: [
-        // The design system by version, not by commit: 0.7.1 declares no
+        // The design system by version, not by commit: 0.8.1 declares no
         // dependencies of its own, so an exact version requirement is legal,
         // and it ships `WisentSkeleton` and the skeleton rows
         // `WisentLoadingPanel` stands content in place with. SwiftPM admits
         // exactly one requirement per package per resolution, and
-        // `wisent-desktop-auth` at 2ea0e92 names this same `exact: "0.7.1"`,
+        // `wisent-desktop-auth` at a8aed6d names this same `exact: "0.8.1"`,
         // so the pair agrees. Auth itself stays on a commit because it still
         // names `wisent-errors` by revision.
-        .package(url: "https://github.com/wisent-ai/wisent-components.git", exact: "0.7.1"),
-        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", revision: "2ea0e92e1b48e6efb8d6668fc8f468fbe8f4fad4"),
+        .package(url: "https://github.com/wisent-ai/wisent-components.git", exact: "0.8.1"),
+        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", revision: "a8aed6d2f9e3e2ea22799ee0cfe8bae2358a70ad"),
         // By url, not by sibling path: CI checks out this repository alone, and
         // a missing sibling makes the whole graph unresolvable there.
         .package(url: "https://github.com/wisent-ai/echo.git", from: "0.1.2"),
