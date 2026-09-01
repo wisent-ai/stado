@@ -1428,6 +1428,19 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Repair a stale, reachable host whose beacon publisher proves that the
+    /// host-health API verifier is unavailable.
+    ///
+    /// Reconciles the existing least-privilege verifier grant on the object
+    /// API authority, waits for the host's normal publisher to write a newer
+    /// beacon, and closes the recorded silence. Refuses every other diagnosis.
+    #[command(name = "repair-link")]
+    RepairLink {
+        target: String,
+        /// Emit the repair receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Reclaim disk on HOST in declared stages, measuring each one.
     ///
     /// Previews by default: the host's own janitor pass, the release build
@@ -1529,7 +1542,8 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
+    /// Make TARGET's dashboard verifier grant match every object namespace
+    /// plus the route-scoped host-health bearer exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
     /// removed and missing reads are added without printing the bearer.
@@ -2667,6 +2681,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
             HostCommands::Link { target, json } => host::link(&target, json).await,
+            HostCommands::RepairLink { target, json } => host::repair_link(&target, json).await,
             // `--dry-run` is the default and needs no argument: `--apply` is
             // the only flag that changes anything, and clap already refuses
             // the two together.
