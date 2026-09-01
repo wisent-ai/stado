@@ -1371,7 +1371,12 @@ mod tests {
 
     #[test]
     fn a_pinned_account_reaches_the_api_as_the_binding_that_keys_the_profile() {
-        let request = run_request("generic_browser_task", json!({"url": "https://x.test/"}), Some("oko-calendar"), false);
+        let request = run_request(
+            "generic_browser_task",
+            json!({"url": "https://x.test/"}),
+            Some("oko-calendar"),
+            false,
+        );
         assert_eq!(request["account_id"], json!("oko-calendar"));
         // Not a fresh profile: the point of pinning is to REUSE the directory
         // that identity already has, cookies and signed-in session included.
@@ -1388,17 +1393,31 @@ mod tests {
     #[test]
     fn a_fresh_profile_still_names_the_account_its_new_directory_belongs_to() {
         // The API refuses `fresh_profile` without one, so the two travel together.
-        let request = run_request("generic_browser_task", json!({}), Some("stado-fresh-profile-1"), true);
+        let request = run_request(
+            "generic_browser_task",
+            json!({}),
+            Some("stado-fresh-profile-1"),
+            true,
+        );
         assert_eq!(request["fresh_profile"], json!(true));
         assert_eq!(request["account_id"], json!("stado-fresh-profile-1"));
     }
 
     #[test]
     fn an_account_id_that_could_not_be_a_directory_key_is_refused_here() {
-        for bad in ["", "has space", "slash/inside", "quote\"inside", "$(command)"] {
+        for bad in [
+            "",
+            "has space",
+            "slash/inside",
+            "quote\"inside",
+            "$(command)",
+        ] {
             let said = checked_account_id(bad).unwrap_err().to_string();
             assert!(said.contains("must be 1-128 characters"), "{bad:?}: {said}");
         }
-        assert_eq!(checked_account_id("oko-calendar.lukasz_1").unwrap(), "oko-calendar.lukasz_1");
+        assert_eq!(
+            checked_account_id("oko-calendar.lukasz_1").unwrap(),
+            "oko-calendar.lukasz_1"
+        );
     }
 }

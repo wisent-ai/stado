@@ -160,6 +160,23 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               arguments or environment values; it is read-only and cannot expose secret argv",
     },
     ApprovedCommand {
+        argv: &[
+            "/bin/ps",
+            "axww",
+            "-o",
+            "pid",
+            "-o",
+            "ppid",
+            "-o",
+            "cgroup:200",
+            "-o",
+            "comm",
+        ],
+        why: "lists process identifiers, executable names, and their Linux control-group paths \
+              without command arguments or environment values; it is read-only and identifies \
+              the exact systemd unit behind a duplicate queue agent",
+    },
+    ApprovedCommand {
         argv: &["/usr/sbin/netstat", "-anv", "-p", "tcp"],
         why: "reads the kernel TCP socket table without connecting to any endpoint; fixed \
               flags expose listeners and owning processes but accept no remote address",

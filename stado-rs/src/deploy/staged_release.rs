@@ -76,8 +76,12 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
         ))
     };
     let coordinate = Coordinate {
-        version: version.filter(|v| !v.is_empty()).ok_or_else(|| missing(&version_key))?,
-        sha256: sha256.filter(|v| !v.is_empty()).ok_or_else(|| missing(&sha_key))?,
+        version: version
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| missing(&version_key))?,
+        sha256: sha256
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| missing(&sha_key))?,
         local_root: local_root
             .filter(|v| !v.is_empty())
             .ok_or_else(|| missing(LOCAL_ROOT_KEY))?,
@@ -280,8 +284,13 @@ mod tests {
             expand_home("${HOME}/r", "/Users/charles/"),
             Ok("/Users/charles/r".to_string())
         );
-        assert_eq!(expand_home("~/r", "/Users/charles"), Ok("/Users/charles/r".to_string()));
-        let said = expand_home("$RELEASES/r", "/Users/charles").unwrap_err().to_string();
+        assert_eq!(
+            expand_home("~/r", "/Users/charles"),
+            Ok("/Users/charles/r".to_string())
+        );
+        let said = expand_home("$RELEASES/r", "/Users/charles")
+            .unwrap_err()
+            .to_string();
         assert!(said.contains("without running a shell over it"), "{said}");
     }
 
@@ -289,7 +298,9 @@ mod tests {
     fn an_archive_that_is_not_the_declared_one_refuses_before_anything_runs() {
         let declared = "a".repeat(64);
         let observed = "b".repeat(64);
-        let said = digest_verdict(&declared, &observed).unwrap_err().to_string();
+        let said = digest_verdict(&declared, &observed)
+            .unwrap_err()
+            .to_string();
         assert!(said.contains("has not agreed to run"), "{said}");
         // Case is the only thing a host's tooling is allowed to differ on.
         digest_verdict(&declared, &declared.to_uppercase()).unwrap();
@@ -298,7 +309,9 @@ mod tests {
     #[test]
     fn a_shasum_line_yields_only_a_real_digest() {
         assert_eq!(
-            parse_shasum("2714720eea1eaa430000000000000000000000000000000000000000000000ab  /path\n"),
+            parse_shasum(
+                "2714720eea1eaa430000000000000000000000000000000000000000000000ab  /path\n"
+            ),
             Some("2714720eea1eaa430000000000000000000000000000000000000000000000ab")
         );
         assert_eq!(parse_shasum("shasum: no such file\n"), None);
@@ -310,7 +323,10 @@ mod tests {
         let script = activation_script("/r/weles-worker.tar.gz", "0.5.43");
         let parse_check = script.find("bash -n").expect("parse check");
         let run = script.find("bash \"$installer\"").expect("run");
-        assert!(parse_check < run, "the parse check must come first:\n{script}");
+        assert!(
+            parse_check < run,
+            "the parse check must come first:\n{script}"
+        );
         assert!(script.contains("installer-unparseable"), "{script}");
         // A path is one shell word on a real host. The payload may appear
         // inside the quoting - that is what quoting looks like - but it must

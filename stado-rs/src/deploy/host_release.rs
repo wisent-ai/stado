@@ -92,6 +92,7 @@
 //!   declared unit — `skarbiec`, a CLI rather than a daemon — is activated
 //!   and reported as having no unit, not silently "restarted".
 
+use std::path::{Component, Path};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -242,6 +243,8 @@ pub struct ReleaseRequest {
     /// Commit and digest stated by the canonical immutable release manifest.
     pub source_commit: String,
     pub sha256: String,
+    pub archive_name: String,
+    pub member: String,
     /// The public Stado origin serving immutable releases.
     pub release_api: String,
     pub dry_run: bool,
@@ -258,6 +261,8 @@ pub struct ReleasePlan {
     pub platform: String,
     pub sha256: String,
     pub source_commit: String,
+    pub archive_name: String,
+    pub member: String,
     pub release_api: String,
     pub declared_version: String,
     pub dry_run: bool,
@@ -268,21 +273,13 @@ impl ReleasePlan {
     /// The exact immutable archive the host will fetch.
     pub fn release_uri(&self) -> String {
         format!(
-            "stado://releases/{}/{}/{}/{}-v{}-{}.tar.gz",
-            self.product.source.product,
-            self.version,
-            self.platform,
-            self.product.source.product,
-            self.version,
-            self.platform
+            "stado://releases/{}/{}/{}/{}",
+            self.product.source.product, self.version, self.platform, self.archive_name
         )
     }
 
-    pub fn archive_name(&self) -> String {
-        format!(
-            "{}-v{}-{}.tar.gz",
-            self.product.source.product, self.version, self.platform
-        )
+    pub fn archive_name(&self) -> &str {
+        &self.archive_name
     }
 
     /// The versioned staging directory this coordinate owns. Kept after a
@@ -361,6 +358,23 @@ pub fn plan(
             "the canonical release manifest carries an invalid source_commit".to_string(),
         ));
     }
+    let safe_member = |value: &str| {
+        !value.is_empty()
+            && !value.chars().any(char::is_control)
+            && Path::new(value)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+    };
+    if Path::new(&request.archive_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(request.archive_name.as_str())
+        || !safe_member(&request.member)
+    {
+        return Err(DeployError(
+            "the canonical release manifest carries an unsafe archive name or member".to_string(),
+        ));
+    }
     if request
         .release_api
         .bytes()
@@ -395,6 +409,8 @@ pub fn plan(
         platform: platform.to_string(),
         sha256: request.sha256.clone(),
         source_commit: request.source_commit.clone(),
+        archive_name: request.archive_name.clone(),
+        member: request.member.clone(),
         release_api: request.release_api.trim_end_matches('/').to_string(),
         declared_version: declared.to_string(),
         dry_run: request.dry_run,
@@ -1060,10 +1076,10 @@ fn bindings(plan: &ReleasePlan) -> String {
         shlex_quote(&plan.product.source.product),
         shlex_quote(&plan.version),
         shlex_quote(&plan.platform),
-        shlex_quote(&plan.archive_name()),
+        shlex_quote(plan.archive_name()),
         shlex_quote(&plan.sha256),
         shlex_quote(&plan.release_api),
-        shlex_quote(&plan.product.source.member),
+        shlex_quote(&plan.member),
         plan.product.root(),
     );
     match &plan.product.readback {
@@ -1618,22 +1634,136 @@ pub(crate) async fn missing_release_objects(
 /// through this one function. Refusing here is what stops an incomplete
 /// immutable version from being promoted into desired state or delivered to a
 /// host at all.
-pub(crate) async fn catalog_identity(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CatalogIdentity {
+    source_commit: String,
+    sha256: String,
+    archive_name: String,
+    member: String,
+}
+
+async fn pipeline_catalog_identity(
     product: &Product,
     version: &str,
     platform: &str,
-) -> Result<(String, String), DeployError> {
-    let manifest_uri = format!(
-        "stado://releases/{}/{version}/{platform}/release-manifest-{platform}.json",
+    legacy_error: &str,
+) -> Result<CatalogIdentity, DeployError> {
+    let base = format!(
+        "stado://releases/{}/{version}/{platform}",
         product.source.product
     );
+    let manifest_uri = format!("{base}/{}", crate::release_control::RELEASE_MANIFEST_NAME);
     let bytes = crate::cli::storage::fetch_object(&manifest_uri)
         .await
         .map_err(|error| {
             DeployError(format!(
-                "canonical release manifest is unavailable at {manifest_uri}: {error}"
+                "canonical release manifests are unavailable: legacy {legacy_error}; \
+                 pipeline {manifest_uri}: {error}"
             ))
         })?;
+    let manifest: crate::release_control::ReleaseManifest = serde_json::from_slice(&bytes)
+        .map_err(|error| {
+            DeployError(format!(
+                "canonical pipeline release manifest is invalid: {error}"
+            ))
+        })?;
+    crate::release_control::validate_manifest(&manifest).map_err(DeployError)?;
+    for (field, found, expected) in [
+        (
+            "product",
+            manifest.product.as_str(),
+            product.source.product.as_str(),
+        ),
+        ("version", manifest.version.as_str(), version),
+        ("platform", manifest.platform.as_str(), platform),
+    ] {
+        if found != expected {
+            return Err(DeployError(format!(
+                "canonical pipeline release manifest {field} is {found:?}, expected {expected:?}"
+            )));
+        }
+    }
+    let (document, _) = crate::cli::registry::fetch_versioned_document()
+        .await
+        .map_err(|error| DeployError(error.to_string()))?;
+    let control = crate::release_control::control(&document)
+        .map_err(DeployError)?
+        .ok_or_else(|| DeployError("registry declares no release trust keys".to_string()))?;
+    let public_key = control.trusted_keys.get(&manifest.key_id).ok_or_else(|| {
+        DeployError(format!(
+            "canonical pipeline release uses untrusted key {}",
+            manifest.key_id
+        ))
+    })?;
+    let signature_uri = format!("{base}/{}", crate::release_control::RELEASE_SIGNATURE_NAME);
+    let signature = crate::cli::storage::fetch_object(&signature_uri)
+        .await
+        .map_err(|error| {
+            DeployError(format!(
+                "canonical pipeline release signature is unavailable at {signature_uri}: {error}"
+            ))
+        })?;
+    let signature = String::from_utf8(signature).map_err(|_| {
+        DeployError("canonical pipeline release signature is not UTF-8".to_string())
+    })?;
+    crate::release_control::verify_manifest(public_key, &manifest, &signature)
+        .map_err(DeployError)?;
+    let archive_name = crate::release_control::RELEASE_ARCHIVE_NAME.to_string();
+    let mut missing = Vec::new();
+    for name in [
+        archive_name.as_str(),
+        crate::release_control::RELEASE_QUALIFICATION_NAME,
+    ] {
+        let uri = format!("{base}/{name}");
+        if !crate::cli::storage::release_object_present(&uri)
+            .await
+            .map_err(|error| DeployError(error.to_string()))?
+        {
+            missing.push(name.to_string());
+        }
+    }
+    if !missing.is_empty() {
+        return Err(DeployError(format!(
+            "{} {version} is incomplete on {platform}: missing {}",
+            product.source.product,
+            missing.join(", ")
+        )));
+    }
+    Ok(CatalogIdentity {
+        source_commit: manifest.source_revision,
+        sha256: manifest.artifact_sha256,
+        archive_name,
+        member: if manifest.binary.is_empty() {
+            match &product.install {
+                Install::Program { .. } => format!("bin/{}", product.name),
+                Install::Tree { .. } => product.source.member.clone(),
+            }
+        } else {
+            manifest.binary
+        },
+    })
+}
+pub(crate) async fn catalog_identity(
+    product: &Product,
+    version: &str,
+    platform: &str,
+) -> Result<CatalogIdentity, DeployError> {
+    let manifest_uri = format!(
+        "stado://releases/{}/{version}/{platform}/release-manifest-{platform}.json",
+        product.source.product
+    );
+    let bytes = match crate::cli::storage::fetch_object(&manifest_uri).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return pipeline_catalog_identity(
+                product,
+                version,
+                platform,
+                &format!("{manifest_uri}: {error}"),
+            )
+            .await;
+        }
+    };
     let manifest: Value = serde_json::from_slice(&bytes)
         .map_err(|error| DeployError(format!("canonical release manifest is invalid: {error}")))?;
     let object = manifest.as_object().ok_or_else(|| {
@@ -1701,7 +1831,51 @@ pub(crate) async fn catalog_identity(
             missing.join(", ")
         )));
     }
-    Ok((source_commit, sha256))
+    Ok(CatalogIdentity {
+        source_commit,
+        sha256,
+        archive_name: format!(
+            "{}-v{}-{}.tar.gz",
+            product.source.product, version, platform
+        ),
+        member: product.source.member.clone(),
+    })
+}
+
+/// A loopback release origin on a remote host is trusted only when
+/// `host forward-local` recorded that exact endpoint there. The marker is not
+/// proof that the tunnel is still alive—the subsequent fetch proves that—but
+/// it is proof that loopback HTTP names an encrypted Stado-managed channel
+/// rather than an undeclared clear-text transport.
+async fn has_managed_loopback_forward(
+    target: &ComputeTarget,
+    endpoint: &str,
+    runner: &Runner,
+) -> Result<bool, DeployError> {
+    if !loopback_http_origin(endpoint) {
+        return Ok(false);
+    }
+    let script = format!(
+        "set -u\n\
+         endpoint={}\n\
+         directory=\"$HOME/.stado/forwards\"\n\
+         [ -d \"$directory\" ] || exit 0\n\
+         for marker in \"$directory\"/*.url; do\n\
+           [ -f \"$marker\" ] && [ ! -L \"$marker\" ] || continue\n\
+           value=$(/usr/bin/head -n 1 \"$marker\" 2>/dev/null || true)\n\
+           if [ \"$value\" = \"$endpoint\" ]; then\n\
+             printf 'STADO_RELEASE_FORWARD\\t%s\\n' \"$marker\"\n\
+             exit 0\n\
+           fi\n\
+         done\n",
+        shlex_quote(endpoint)
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(output.ok()
+        && output
+            .stdout
+            .lines()
+            .any(|line| line.starts_with("STADO_RELEASE_FORWARD\t")))
 }
 
 /// Deliver one declared product to one canonical registry host.
@@ -1728,12 +1902,14 @@ pub async fn release_host(
     product.platform(platform)?;
     let release_api = crate::cli::storage::release_api_origin()
         .map_err(|error| DeployError(error.to_string()))?;
-    let (source_commit, sha256) = catalog_identity(product, version, platform).await?;
+    let identity = catalog_identity(product, version, platform).await?;
     let local_target = registry
         .lookup_self(&crate::providers::vast::system_hostname())
         .map_err(|error| DeployError(error.to_string()))?
         .is_some_and(|local| local.name == target.name);
+    let managed_loopback = has_managed_loopback_forward(&target, &release_api, runner).await?;
     let self_store = local_target
+        || managed_loopback
         || registry
             .service(OBJECT_API_SERVICE)
             .is_some_and(|object_api| object_api.active_host == target.name);
@@ -1741,8 +1917,10 @@ pub async fn release_host(
         binary: product.name.clone(),
         version: version.to_string(),
         platform: platform.to_string(),
-        source_commit,
-        sha256,
+        source_commit: identity.source_commit,
+        sha256: identity.sha256,
+        archive_name: identity.archive_name,
+        member: identity.member,
         release_api,
         dry_run,
         reinstall,
