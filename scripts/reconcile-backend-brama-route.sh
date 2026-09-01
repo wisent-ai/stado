@@ -5,10 +5,22 @@ stado_bin="${STADO_BIN:-$HOME/.stado/bin/stado}"
 host="${1:-charless-mac-mini}"
 consumer="wisent-backend"
 bind="127.0.0.1:17604"
+resolver_service="com.wisent.stado-resolver"
 work="$HOME/.stado/work/registry-edits/backend-brama-route"
 mkdir -p "$work"
 before="$work/before.json"
 after="$work/after.json"
+
+adapter_listening() {
+  "$stado_bin" host exec "$host" --json -- lsof -nP -iTCP -sTCP:LISTEN |
+    jq -e --arg endpoint "$bind" '
+      .exit_code == 0
+      and (.stdout | split("\n") | any(
+        startswith("stado ")
+        and contains("TCP " + $endpoint + " (LISTEN)")
+      ))
+    ' >/dev/null
+}
 
 "$stado_bin" registry pull > "$before"
 
@@ -54,9 +66,19 @@ jq -e --arg host "$host" --arg consumer "$consumer" --arg bind "$bind" '
 ' "$after" >/dev/null
 
 if cmp -s "$before" "$after"; then
-  printf '%s\n' "Brama route for $consumer on $host is already reconciled"
-  exit 0
+  printf '%s\n' "Brama route for $consumer on $host is already declared"
+else
+  "$stado_bin" registry push "$after"
+  printf '%s\n' "Reconciled Brama route for $consumer on $host at $bind"
 fi
 
-"$stado_bin" registry push "$after"
-printf '%s\n' "Reconciled Brama route for $consumer on $host at $bind"
+if ! adapter_listening; then
+  "$stado_bin" service restart "$resolver_service" --host "$host" --json
+fi
+
+if ! adapter_listening; then
+  printf '%s\n' "Brama adapter for $consumer is not listening at $bind" >&2
+  exit 1
+fi
+
+printf '%s\n' "Brama adapter for $consumer is listening at $bind"
