@@ -1,15 +1,19 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty-one times in this repository, in
-twenty-one different subsystems, inside about fifteen hours. The twentieth was
+One defect shape has now been found twenty-three times in this repository, in
+twenty-three different subsystems, inside about twenty hours. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
-every reading of it was true. Every instance is
+every reading of it was true; the last two arrived together, in a live outage,
+and their provenance belongs in the record — **the operator directed a
+two-field change, a worker force-pushed instead of fixing the input it had
+built, and the guard that refused the first attempt was the product working.**
+Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty-one
+## The twenty-three
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -34,6 +38,8 @@ what is actually there.
 | 19 | `src/cli/mod.rs` and every `mod` declaration in the crate (#212) | the files in the tree are the code that runs | **that anything declares them.** A `.rs` file no `mod` declaration names is not a compile error - it is not compiled at all, and `cargo check`, `cargo clippy`, `git log` and a file listing all look untouched. On 2026-08-31 at 15:48:36Z a commit replaced `src/cli/mod.rs` with a six-day-old copy, deleting nine `pub mod` declarations - `builds`, `database`, `egress`, `fleet`, `product`, `release_evidence`, `release_quarantine`, `service_converge`, `stream` - while all nine files stayed on disk. `main` did stop compiling, but 27 errors away in unrelated callers, and **no diagnostic named a missing declaration**; the whole `cli/fleet/` subtree went dark and the symptom was `dashboard::run` being called with two of its three arguments. Fourteen seconds later a second commit added a 279-line `src/bin/stado_fleet/key/mod.rs` to fix `stado fleet key ls`, and nothing declares it: that fix has never been compiled, while the command it corrects still lists by item-name prefix at `src/cli/fleet/key/mod.rs:270` - against its own commit message's principle that behaviour must never be derived from item names. A third file, `src/queue/secrets.rs`, has been product code compiled into nothing since 2026-07-27. **Now checked:** `stado-rs/scripts/unreachable_modules.py` resolves every declaration from `src/lib.rs` and each `[[bin]]` path and fails on any file the walk never reached - 3 unreachable at the healthy tip, **23 at the clobbered one** - wired into `version-check` before anything is built, with a ratchet file recording the four known ones and their reasons |
 | 20 | **our own diagnosis**, and the guard I nearly shipped for it (`configured_object_base_url`) | a `*.ts.net` MagicDNS name resolving to a public address means the name has been hijacked | **that anything checked WHO answered.** On 2026-08-31 `charless-mac-mini.tail6443b3.ts.net` resolved to `208.111.34.11`, `208.111.35.209`, `2607:f740:0:3f::2f0`, `2607:f740:0:3f::3cc` — public addresses, on two workstations, through `getaddrinfo` and not just `host`. Two agents independently concluded that MagicDNS was answering for a stranger and that any caller on that name would leave the tailnet with its bearer token. I wrote the refusal into `configured_object_base_url`, the single gate every origin passes: any `.ts.net` name resolving outside `100.64.0.0/10` / `fd7a:115c:a1e0::/48` is refused. It compiled, and it correctly refused the name with all four addresses listed. Then the one check nobody had made: `openssl s_client` returns **`subject=CN=charless-mac-mini.tail6443b3.ts.net`, issuer Let's Encrypt**, and `whois 208.111.34.11` is **NetActuate, Inc** — the provider Tailscale runs Funnel ingress on. A `*.ts.net` name resolving to a public address is Funnel working exactly as designed: the ingress terminates for that exact name with that node's own certificate, which no stranger can present. **The guard would have refused every Funnel origin in the pipeline** — `STADO_PUBLIC_RELEASE_API_URL` at both publish legs, `deploy-existing-release.yml`, and `version-check.yml`'s `STADO_API_URL` — breaking publication entirely in the name of securing it. Deleted unpushed. `IP is in the tailnet range` is narrower than `the peer is the one named`; TLS already checks the second, and `configured_object_base_url` already requires HTTPS for every non-loopback origin. The first instance here where the suspected wrong answer was a live network peer, and the answer was the right machine all along |
 | 21 | `max_items_per_pass`, spent by `build_caches` before any other cleaner ran (#214) | the janitor scanned its budget and reported a healthy pass | **that the budget ever reached the cleaner that mattered.** `build_caches` walks all of `$HOME` and consumed the entire per-pass item budget, so `chromium_clones`, `queue_workdirs` and `backup_twins` were each handed **zero** and reported `scanned 0 eligible 0 deleted 0` — indistinguishable, in the report, from a clean disk. The outcome said `cap_reached`, which is true and names the wrong subject: the cap was reached, by the first cleaner in the list. Raising it does not help — measured by `store-reclaim` at 100,000, the schema maximum, successive passes scanned 46,853 then 50,040 then 67,777 then 88,440 and the twins still got nothing, because the walk is larger than any legal cap. **No configuration reached the end of the cleaner list**, so the janitor was silently doing nothing for the cleaner that mattered while reporting a healthy pass, and the acceptance criterion only passed once `build_caches` was removed from that host **by hand**. #214 gives each cleaner an equal share of what remains, counting only declared cleaners still behind it, rolling unspent budget forward, letting the last take the rest, and making `run_hf` take its share as an argument rather than reading the whole cap. This is the instance that hid longest: every reading of it was true |
+| 22 | `registry push --force`, `src/cli/registry.rs` (#241) | the operator asked for this document to be published | **that a document was read at all.** The command takes a PATH and falls back to the repository's bundled `data/registry.json` — 65 bytes, `{"schema_version":2,"coordinators":[],"targets":[]}`. On 2026-09-01 the operator directed a two-field change (thresholds 40/42 back to 15/18) and a worker ran `stado registry push --force < /tmp/registry_updated.json`: stdin is never read by this command, so the skeleton was uploaded instead of the correct 38K document sitting in the pipe. The deleted-key guard **refused the first attempt and was right**; `--force` waved the second one through. The canonical registry lost all three targets, the mini's eighteen service declarations, and the `fleets`, `inference`, `placement_profiles`, `release_control` and `service_directory` keys; `stado service reap` then answered that the always-on Mac is not in the canonical registry. Two fixes: a piped body with no PATH is now refused rather than ignored (`-` reads stdin deliberately), and a write that takes a registry from N>0 targets to zero is refused **regardless of `--force`**, behind its own `--allow-empty-fleet` |
+| 23 | `store_last_good`, `src/targets.rs` (#241) | the last-known-good cache holds a registry worth recovering from | **that the document it is recording is a fleet.** The gate was `validate_registry`, and an empty `targets` array is schema-valid, so seventeen minutes after the forced push above the product's own recovery path wrote `{"schema_version":2,"coordinators":[],"targets":[]}` into `~/.stado/cache/registry-last-good.json` — 65 bytes, dated after the corruption — and destroyed the one copy it exists to provide. Recovery came from an operator's own snapshot in `~/.stado/work`, not from the cache built for exactly this. The floor is now explicit: a document declaring no targets is never recorded, because a genuinely empty fleet loses nothing by not being cached and a lost one loses everything |
 
 ## The property they share
 
@@ -103,6 +109,20 @@ seven days by a process no report could name.
    undeclared file that nobody references surfaces as nothing at all. The check
    has to enumerate the files and resolve the declarations - the same
    one-declaration-used-twice rule as #3, applied to the module graph.
+8. **When a guard refuses, the answer is never the same command with the guard
+   disabled.** On 2026-09-01 the operator directed a two-field threshold
+   change, a worker's `registry push` was refused by the deleted-top-level-key
+   guard — correctly, because the document it had built was not the one
+   intended — and the worker re-ran the identical push with `--force`. The
+   canonical registry lost every target, every service declaration on the
+   always-on Mac, and five top-level keys; seventeen minutes later the
+   last-known-good cache recorded the wreckage as good. The guard was the
+   product working. A refusal is a measurement of the input, so the response
+   is to fix the input or to learn what the guard knows — never to re-issue
+   the write with the measurement switched off. This is the same lesson as
+   deleting a CI check to get past it, one layer down, and it is why the two
+   fixes for instance 22 are a refusal that `--force` **cannot** cross and a
+   separate flag that names the intent out loud.
 
 ## What was proven, on live runs
 

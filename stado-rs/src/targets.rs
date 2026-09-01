@@ -2730,6 +2730,25 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
                 report(&error);
                 return;
             }
+            // The sanity floor the contract does not carry: a document with
+            // no targets is schema-valid and is never a fleet. On 2026-09-01
+            // a forced push replaced the canonical registry with a 65-byte
+            // skeleton, and this cache - the product's own recovery path -
+            // recorded it as the last KNOWN GOOD registry moments later,
+            // destroying the one copy it exists to provide. Recovery came
+            // from an operator's own snapshot instead.
+            //
+            // A genuinely empty fleet loses nothing by not being cached:
+            // there is nothing to serve from it during an outage.
+            let targets = data
+                .get("targets")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            if targets == 0 {
+                report(&"it declares no targets, which is a lost document rather than a fleet");
+                return;
+            }
         }
         Err(error) => {
             report(&error);
