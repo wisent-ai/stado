@@ -241,6 +241,10 @@ struct Installed {
     /// [`ATTEST_UNKNOWN`]: whether the installed file is the one the delivery
     /// path staged for the version it claims.
     attestation: String,
+    /// What the delivery receipt beside the staged copy says, underscored for
+    /// the wire. Empty when the delivery predates receipts, which is not a
+    /// finding: the byte comparison attests those bytes without it.
+    receipt: String,
 }
 
 /// One `host release` invocation, run for one `host-behind` binary.
@@ -785,18 +789,19 @@ async fn attest_installed(
     binary: &str,
     root: &str,
     version: &str,
-) -> Result<&'static str, DeployError> {
+) -> Result<(&'static str, String), DeployError> {
     if version.is_empty() || root.is_empty() || !host_release::is_exact_semver(version) {
-        return Ok(ATTEST_UNKNOWN);
+        return Ok((ATTEST_UNKNOWN, String::new()));
     }
     let platform = target.release_platform.trim();
     if platform.is_empty() {
-        return Ok(ATTEST_UNKNOWN);
+        return Ok((ATTEST_UNKNOWN, String::new()));
     }
-    let staged = format!("{home}/.stado/releases/{binary}/{version}/{platform}/{binary}");
+    let coordinate = format!("{home}/.stado/releases/{binary}/{version}/{platform}");
+    let staged = format!("{coordinate}/{binary}");
     let quoted_staged = crate::deploy::shlex_quote(&staged);
     if !host_channel::remote_test(target, &format!("-f {quoted_staged}"), runner).await? {
-        return Ok(ATTEST_ABSENT);
+        return Ok((ATTEST_ABSENT, String::new()));
     }
     // A byte comparison, not a digest: the two files are already on the same
     // disk, `cmp -s` reads no further than the first difference, and there is
@@ -811,7 +816,38 @@ async fn attest_installed(
     )
     .await?
     .ok();
-    Ok(if same { ATTEST_MATCH } else { ATTEST_DIFFERS })
+    if !same {
+        return Ok((ATTEST_DIFFERS, String::new()));
+    }
+    // The receipt `host release` leaves beside the staged copy, when there is
+    // one. A delivery made before that format has none, and its absence is
+    // "installed before receipts" rather than a finding: the byte comparison
+    // above has already attested these bytes without it.
+    let receipt = host_channel::run_command(
+        target,
+        &format!(
+            "/bin/cat {}/release-receipt.json 2>/dev/null || true",
+            crate::deploy::shlex_quote(&coordinate)
+        ),
+        runner,
+    )
+    .await?;
+    let summary = serde_json::from_str::<Value>(receipt.stdout.trim())
+        .ok()
+        .map(|document| {
+            let field = |key: &str| {
+                document
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            (field("installed_at"), field("delivered_by"))
+        })
+        .filter(|(at, by)| !at.is_empty() || !by.is_empty())
+        .map(|(at, by)| format!("delivered {at} by {by}"))
+        .unwrap_or_default();
+    Ok((ATTEST_MATCH, summary))
 }
 
 async fn probe_installed_versions(
@@ -857,7 +893,8 @@ async fn probe_installed_versions(
         // digest-verified against the canonical manifest on the way in. If the
         // version these bytes claim has no staged copy, or the installed file
         // is not that copy, the bytes did not come through delivery.
-        let attestation = attest_installed(target, runner, &home, binary, &root, &version).await?;
+        let (attestation, receipt) =
+            attest_installed(target, runner, &home, binary, &root, &version).await?;
 
         let mut unit = "none".to_string();
         let mut state = "none".to_string();
@@ -869,7 +906,7 @@ async fn probe_installed_versions(
         }
 
         out.push_str(&format!(
-            "binary={} version={} root={} unit={} state={} attestation={}\n",
+            "binary={} version={} root={} unit={} state={} attestation={} receipt={}\n",
             binary,
             if version.is_empty() {
                 UNKNOWN
@@ -880,6 +917,13 @@ async fn probe_installed_versions(
             unit,
             state,
             attestation,
+            // One token, so the line stays `key=value` and a receipt with a
+            // space in it cannot become two fields.
+            if receipt.is_empty() {
+                NONE.to_string()
+            } else {
+                receipt.replace(' ', "_")
+            },
         ));
     }
     out.push_str(&format!("# binaries {count}\n"));
@@ -918,6 +962,12 @@ fn parse_report(stdout: &str) -> BTreeMap<String, Installed> {
                 entry.state = value.to_string();
             } else if let Some(value) = token.strip_prefix("attestation=") {
                 entry.attestation = value.to_string();
+            } else if let Some(value) = token.strip_prefix("receipt=") {
+                entry.receipt = if value == NONE {
+                    String::new()
+                } else {
+                    value.replace('_', " ")
+                };
             }
         }
         let Some(binary) = binary else {
@@ -1055,7 +1105,16 @@ fn verdict_rows(
                 };
             }
             let (verdict, detail) = match (&installed, reported) {
-                (Some(version), _) if version == declared_version => (IN_SYNC, String::from("-")),
+                (Some(version), _) if version == declared_version => (
+                    IN_SYNC,
+                    // Provenance, when the host kept a record of it. "-" still
+                    // means attested-by-bytes with no receipt, which is every
+                    // delivery made before the receipt format.
+                    entry
+                        .map(|entry| entry.receipt.clone())
+                        .filter(|receipt| !receipt.is_empty())
+                        .unwrap_or_else(|| String::from("-")),
+                ),
                 (Some(version), _) => match version_order(version, declared_version) {
                     // The host is behind the declaration: `--apply` delivers
                     // the declared one, which is an upgrade here.
