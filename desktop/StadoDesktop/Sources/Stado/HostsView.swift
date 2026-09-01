@@ -24,11 +24,19 @@ private struct HostReclaimTarget: Identifiable {
     var id: String { host }
 }
 
+/// The registry host whose ordered control routes are being edited.
+private struct HostConnectionPathsTarget: Identifiable {
+    let host: String
+
+    var id: String { host }
+}
+
 struct HostsView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var gatesStore: HostGatesStore
     @ObservedObject var linkStore: HostLinkStore
+    @ObservedObject var connectionPathStore: HostConnectionPathStore
     @ObservedObject var enrollmentStore: MachineEnrollmentStore
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
@@ -44,6 +52,7 @@ struct HostsView: View {
     @State private var showsEnrollment = false
     @State private var reclaimTarget: HostReclaimTarget?
 
+    @State private var connectionPathsTarget: HostConnectionPathsTarget?
     var body: some View {
         WisentScreen(
             title: "Hosts",
@@ -113,6 +122,14 @@ struct HostsView: View {
                 gates: gatesStore.gates(for: target.host),
                 refreshGates: { await gatesStore.refresh(hosts: gateHostNames) },
                 dismiss: { reclaimTarget = nil }
+            )
+        }
+        .sheet(item: $connectionPathsTarget) { target in
+            HostConnectionPathsSheet(
+                host: target.host,
+                linkStore: linkStore,
+                store: connectionPathStore,
+                refresh: { await linkStore.refresh(hosts: [target.host]) }
             )
         }
     }
@@ -913,6 +930,21 @@ struct HostsView: View {
                 value: link.sshReachable ? "Yes" : "No",
                 tone: link.sshReachable ? .neutral : .danger
             )
+            WisentField(
+                label: "Host-control routes",
+                value: connectionPathsDescription(link),
+                tone: connectionPathsTone(link)
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Manage host-control routes…",
+                    symbol: "network",
+                    kind: .secondary,
+                    isEnabled: !connectionPathStore.mutation.isWorking
+                ) {
+                    connectionPathsTarget = HostConnectionPathsTarget(host: link.host)
+                }
+            )
             // Whether anybody is logged in on the screen there, which had no
             // surface anywhere in the product: `ssh_reachable` above answers
             // "can this machine be reached", and this answers "is there a
@@ -924,7 +956,7 @@ struct HostsView: View {
             // that matters to this host arrives as one of the command's own
             // blockers, rendered verbatim above.
             WisentField(label: "Screen session", value: sessionDescription(link))
-            WisentField(label: "Network path", value: pathDescription(link))
+            WisentField(label: "Beacon network path", value: pathDescription(link))
             WisentField(label: "Last sleep", value: stampDescription(link.lastSleepAt))
             WisentField(label: "Last wake", value: stampDescription(link.lastWakeAt))
             WisentField(label: "Interface changes", value: interfaceDescription(link))
@@ -994,6 +1026,41 @@ struct HostsView: View {
         guard let kind = link.pathKind else { return "Not reported" }
         guard let endpoint = link.endpoint, !endpoint.isEmpty else { return kind.word }
         return "\(kind.word) \(endpoint)"
+    }
+
+    /// Preferred host-control route followed by every declared fallback.
+    ///
+    /// The selector probes all of them, then chooses one for a real operation.
+    /// Showing every answer is what keeps a healthy primary from hiding a
+    /// fallback that will fail during the outage it exists for.
+    private func connectionPathsDescription(_ link: HostLink) -> String {
+        if let error = link.connectionProbeError, !error.isEmpty {
+            return "Routes could not be probed\n\(error)"
+        }
+        guard !link.connectionPaths.isEmpty else { return "Not reported" }
+        return link.connectionPaths.map { path in
+            var labels: [String] = []
+            if path.name == link.selectedConnection {
+                labels.append("selected")
+            }
+            if path.reachable {
+                labels.append("answered")
+            } else if let error = path.error, !error.isEmpty {
+                labels.append("did not answer: \(error)")
+            } else {
+                labels.append("did not answer")
+            }
+            return "\(path.name) · \(labels.joined(separator: " · "))\n\(path.destination)"
+        }
+        .joined(separator: "\n")
+    }
+
+    private func connectionPathsTone(_ link: HostLink) -> WisentTone {
+        if link.connectionProbeError != nil
+            || (!link.connectionPaths.isEmpty && link.selectedConnection == nil) {
+            return .danger
+        }
+        return link.connectionPaths.contains(where: { !$0.reachable }) ? .warning : .neutral
     }
 
     /// The plain words first, then the host's own evidence for them.
@@ -1458,5 +1525,416 @@ private struct HostReclaimSheet: View {
                 )
             }
         }
+    }
+}
+
+/// Which declared route is being added or changed.
+private struct HostConnectionPathEdit: Identifiable {
+    let existing: HostConnectionPathProbe?
+
+    var id: String { existing?.name ?? "new-connection-path" }
+}
+
+/// Ordered host-control routes and their live SSH probe answers.
+///
+/// The registry mutation and the post-write probe stay in one sheet: a saved
+/// address that did not answer is not presented as a completed repair.
+private struct HostConnectionPathsSheet: View {
+    let host: String
+    @ObservedObject var linkStore: HostLinkStore
+    @ObservedObject var store: HostConnectionPathStore
+    let refresh: () async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var editor: HostConnectionPathEdit?
+    @State private var pendingRemoval: HostConnectionPathProbe?
+
+    private var link: HostLink? {
+        linkStore.link(for: host)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x5) {
+            header
+            routes
+            WisentMutationBar(outcome: store.mutation) { store.clearMutation() }
+            footer
+        }
+        .padding(WisentDesign.Space.x6)
+        .frame(width: 720)
+        .background(WisentDesign.canvas)
+        .task {
+            if link == nil {
+                await refresh()
+            }
+        }
+        .sheet(item: $editor) { edit in
+            HostConnectionPathEditor(
+                host: host,
+                existing: edit.existing,
+                store: store,
+                refresh: refresh
+            )
+        }
+        .sheet(item: $pendingRemoval) { path in
+            removalDialog(path)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+            Text("Host-control routes for \(host)")
+                .font(WisentTypography.heading(17))
+                .foregroundStyle(WisentDesign.ink)
+            Text("Stado probes every declared SSH route without changing the host, then runs a real operation once through the first route that answered. The order here is the order it tries.")
+                .font(WisentTypeScale.body())
+                .foregroundStyle(WisentDesign.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var routes: some View {
+        WisentSectionBox(
+            title: "Preferred route and fallbacks",
+            detail: "The preferred route is primary. Fallback priority starts at 1 and is read from top to bottom."
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let error = link?.connectionProbeError, !error.isEmpty {
+                    WisentAlertPanel(
+                        tone: .danger,
+                        title: "The declared routes could not be probed",
+                        detail: error
+                    )
+                } else if let link, !link.connectionPaths.isEmpty {
+                    ForEach(link.connectionPaths) { path in
+                        routeRow(path, selected: path.name == link.selectedConnection)
+                        if path.id != link.connectionPaths.last?.id {
+                            Divider()
+                        }
+                    }
+                } else if linkStore.isRefreshing {
+                    WisentLoadingPanel(
+                        title: "Probing \(host)'s routes",
+                        detail: HostLinkStore.commandLine(host: host)
+                    )
+                } else {
+                    WisentEmptyPanel(
+                        title: "No host-control route was reported",
+                        detail: "Add the preferred primary route or refresh the host link reading.",
+                        symbol: "network"
+                    )
+                }
+            }
+        }
+    }
+
+    private func routeRow(_ path: HostConnectionPathProbe, selected: Bool) -> some View {
+        HStack(alignment: .center, spacing: WisentDesign.Space.x3) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: WisentDesign.Space.x2) {
+                    Text(path.name)
+                        .font(WisentTypeScale.bodyStrong())
+                        .foregroundStyle(WisentDesign.ink)
+                    if path.name == "primary" {
+                        Text("PREFERRED")
+                            .font(WisentTypeScale.eyebrow())
+                            .foregroundStyle(WisentDesign.muted)
+                    }
+                    if selected {
+                        Text("SELECTED")
+                            .font(WisentTypeScale.eyebrow())
+                            .foregroundStyle(WisentTone.success.color)
+                    }
+                }
+                Text(path.destination)
+                    .font(WisentTypeScale.identifier())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .textSelection(.enabled)
+                Text(routeAnswer(path))
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(path.reachable ? WisentTone.success.color : WisentTone.danger.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Menu {
+                Button("Edit…") {
+                    store.clearMutation()
+                    editor = HostConnectionPathEdit(existing: path)
+                }
+                if path.name != "primary" {
+                    Button("Remove…", role: .destructive) {
+                        pendingRemoval = path
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("Actions for \(path.name)")
+            .disabled(store.mutation.isWorking || linkStore.isRefreshing)
+        }
+        .padding(.vertical, WisentDesign.Space.x3)
+    }
+
+    private func routeAnswer(_ path: HostConnectionPathProbe) -> String {
+        if path.reachable { return "SSH probe answered" }
+        if let error = path.error, !error.isEmpty { return "SSH probe did not answer — \(error)" }
+        return "SSH probe did not answer"
+    }
+
+    private var footer: some View {
+        HStack(spacing: WisentDesign.Space.x2) {
+            WisentActionButton(
+                action: WisentAction(
+                    "Add route…",
+                    symbol: "plus",
+                    isEnabled: !store.mutation.isWorking
+                ) {
+                    store.clearMutation()
+                    editor = HostConnectionPathEdit(existing: nil)
+                }
+            )
+            Spacer(minLength: 0)
+            WisentActionButton(
+                action: WisentAction(
+                    "Probe again",
+                    symbol: "arrow.clockwise",
+                    isEnabled: !linkStore.isRefreshing && !store.mutation.isWorking
+                ) {
+                    Task { await refresh() }
+                }
+            )
+            WisentActionButton(
+                action: WisentAction("Done", kind: .primary) {
+                    dismiss()
+                }
+            )
+        }
+    }
+
+    private func removalDialog(_ path: HostConnectionPathProbe) -> WisentDecisionDialog {
+        let arguments = HostConnectionPathStore.removeArguments(host: host, name: path.name)
+        return WisentDecisionDialog(
+            tone: .danger,
+            title: "Remove \(path.name) from \(host)?",
+            lines: [
+                "Stado will stop trying \(path.destination) when every route before it is unavailable.",
+            ],
+            listing: [StadoCLI.commandLine(arguments)],
+            footnote: "The preferred primary route cannot be removed; it can only be replaced.",
+            actions: [
+                WisentAction("Keep route", kind: .secondary) { pendingRemoval = nil },
+                WisentAction("Remove route", symbol: "trash", kind: .primary) {
+                    pendingRemoval = nil
+                    Task {
+                        if await store.remove(host: host, name: path.name) {
+                            await refresh()
+                        }
+                    }
+                },
+            ]
+        )
+    }
+}
+
+/// Add or replace one registry route, with the exact command reviewed before
+/// it runs. Editing keeps a fallback's position unless a new priority is typed.
+private struct HostConnectionPathEditor: View {
+    let host: String
+    let existing: HostConnectionPathProbe?
+    @ObservedObject var store: HostConnectionPathStore
+    let refresh: () async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var destination: String
+    @State private var priority = ""
+    @State private var reviewing = false
+
+    init(
+        host: String,
+        existing: HostConnectionPathProbe?,
+        store: HostConnectionPathStore,
+        refresh: @escaping () async -> Void
+    ) {
+        self.host = host
+        self.existing = existing
+        self.store = store
+        self.refresh = refresh
+        _name = State(initialValue: existing?.name ?? "")
+        _destination = State(initialValue: existing?.destination ?? "")
+    }
+
+    private var cleanName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanDestination: String {
+        destination.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanPriority: String {
+        priority.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var parsedPriority: Int? {
+        cleanPriority.isEmpty ? nil : Int(cleanPriority)
+    }
+
+    private var priorityIsValid: Bool {
+        cleanPriority.isEmpty || (parsedPriority ?? 0) >= 1
+    }
+
+    private var canReview: Bool {
+        !cleanName.isEmpty
+            && !cleanDestination.isEmpty
+            && priorityIsValid
+            && !store.mutation.isWorking
+            && (cleanName != "primary" || cleanPriority.isEmpty)
+    }
+
+    private var arguments: [String] {
+        HostConnectionPathStore.setArguments(
+            host: host,
+            name: cleanName.isEmpty ? "path-name" : cleanName,
+            destination: cleanDestination.isEmpty ? "user@host" : cleanDestination,
+            priority: parsedPriority
+        )
+    }
+
+    var body: some View {
+        Group {
+            if reviewing {
+                confirmation
+            } else {
+                form
+            }
+        }
+        .onAppear {
+            store.clearMutation()
+        }
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                Text(existing == nil ? "Add a host-control route" : "Edit \(existing?.name ?? "")")
+                    .font(WisentTypography.heading(17))
+                    .foregroundStyle(WisentDesign.ink)
+                Text("A route is an SSH destination over any working Layer 3 network: Nebula, Tailscale, WireGuard, ZeroTier, LAN or a public address.")
+                    .font(WisentTypeScale.body())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            field(title: "Path name", hint: "nebula, tailscale, lan") {
+                TextField("nebula", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(existing != nil)
+            }
+            field(title: "SSH destination", hint: "[user@]host[:port]") {
+                TextField("operator@host.nebula", text: $destination)
+                    .textFieldStyle(.roundedBorder)
+            }
+            field(
+                title: "Fallback priority",
+                hint: cleanName == "primary"
+                    ? "Primary is always preferred."
+                    : "Optional. Starts at 1; blank keeps the current position or appends."
+            ) {
+                TextField("1", text: $priority)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 96)
+                    .disabled(cleanName == "primary")
+            }
+            if !priorityIsValid {
+                Text("Fallback priority must be a whole number starting at 1.")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentTone.warning.color)
+            }
+
+            Text(verbatim: StadoCLI.commandLine(arguments))
+                .font(WisentTypeScale.identifier())
+                .foregroundStyle(WisentDesign.ink)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            WisentMutationBar(outcome: store.mutation) { store.clearMutation() }
+
+            HStack(spacing: WisentDesign.Space.x2) {
+                Spacer(minLength: 0)
+                WisentActionButton(
+                    action: WisentAction("Cancel", kind: .secondary) {
+                        dismiss()
+                    }
+                )
+                WisentActionButton(
+                    action: WisentAction(
+                        "Review change",
+                        symbol: "arrow.right",
+                        kind: .primary,
+                        isEnabled: canReview
+                    ) {
+                        reviewing = true
+                    }
+                )
+            }
+        }
+        .padding(WisentDesign.Space.x6)
+        .frame(width: 560)
+        .background(WisentDesign.canvas)
+    }
+
+    private func field<Content: View>(
+        title: String,
+        hint: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+            Text(title)
+                .font(WisentTypeScale.bodyStrong())
+                .foregroundStyle(WisentDesign.ink)
+            content()
+                .font(WisentTypeScale.body())
+            Text(hint)
+                .font(WisentTypeScale.caption())
+                .foregroundStyle(WisentDesign.muted)
+        }
+    }
+
+    private var confirmation: WisentDecisionDialog {
+        let isPrimary = cleanName == "primary"
+        return WisentDecisionDialog(
+            tone: isPrimary ? .danger : .warning,
+            title: "\(existing == nil ? "Add" : "Change") \(cleanName) on \(host)?",
+            lines: [
+                isPrimary
+                    ? "This replaces the preferred address. Every new host operation tries it first."
+                    : "This route is used only after every route before it did not answer.",
+                "The write records the declaration; the Hosts screen probes every route immediately afterwards.",
+            ],
+            listing: [StadoCLI.commandLine(arguments)],
+            footnote: "The real host operation still runs once, through the first route whose SSH probe answers.",
+            actions: [
+                WisentAction("Back to form", kind: .secondary) { reviewing = false },
+                WisentAction("Set route", symbol: "network", kind: .primary) {
+                    Task {
+                        let succeeded = await store.set(
+                            host: host,
+                            name: cleanName,
+                            destination: cleanDestination,
+                            priority: parsedPriority
+                        )
+                        if succeeded {
+                            await refresh()
+                            dismiss()
+                        } else {
+                            reviewing = false
+                        }
+                    }
+                },
+            ]
+        )
     }
 }

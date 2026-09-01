@@ -611,12 +611,72 @@ pub async fn host_path_list(host: &str, json_output: bool) -> Result<(), CmdErro
     Ok(())
 }
 
+/// One machine-readable answer for every `path set` outcome, including the
+/// idempotent one. Desktop clients must not scrape the human sentence to learn
+/// whether the registry moved.
+fn print_host_path_set_receipt(
+    target: &str,
+    path: &str,
+    destination: &str,
+    generation: &str,
+    changed: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "path": path,
+                "destination": destination,
+                "changed": changed,
+                "generation": generation,
+            }))?
+        );
+    } else if changed {
+        println!("set {target} connection path {path} -> {destination}; generation={generation}");
+    } else if path == targets::PRIMARY_SSH_CONNECTION {
+        println!("{target}: primary already points to {destination}");
+    } else {
+        println!("{target}: {path} already points to {destination}");
+    }
+    Ok(())
+}
+
+/// The remove receipt distinguishes an idempotent absence from a registry
+/// write while preserving the existing terminal sentence.
+fn print_host_path_remove_receipt(
+    target: &str,
+    path: &str,
+    generation: &str,
+    removed: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "path": path,
+                "removed": removed,
+                "generation": generation,
+            }))?
+        );
+    } else if removed {
+        println!("removed {target} connection path {path}; generation={generation}");
+    } else {
+        println!("{target}: connection path {path} is already absent");
+    }
+    Ok(())
+}
+
 /// Add or replace one host connection path in the canonical registry.
 pub async fn host_path_set(
     host: &str,
     path: &str,
     ssh: &str,
     priority: Option<usize>,
+    json_output: bool,
 ) -> Result<(), CmdError> {
     let path = path.trim();
     let destination = ssh.trim();
@@ -646,8 +706,14 @@ pub async fn host_path_set(
 
     if path == targets::PRIMARY_SSH_CONNECTION {
         if entry.get("ssh").and_then(Value::as_str) == Some(destination) {
-            println!("{name}: primary already points to {destination}");
-            return Ok(());
+            return print_host_path_set_receipt(
+                &name,
+                path,
+                destination,
+                &expected_generation,
+                false,
+                json_output,
+            );
         }
         entry.insert("ssh".to_string(), json!(destination));
     } else {
@@ -663,8 +729,14 @@ pub async fn host_path_set(
         if priority.is_none()
             && existing.is_some_and(|position| paths.get(position) == Some(&candidate))
         {
-            println!("{name}: {path} already points to {destination}");
-            return Ok(());
+            return print_host_path_set_receipt(
+                &name,
+                path,
+                destination,
+                &expected_generation,
+                false,
+                json_output,
+            );
         }
         let default_position = existing.unwrap_or(paths.len());
         if let Some(position) = existing {
@@ -684,12 +756,11 @@ pub async fn host_path_set(
     }
 
     let generation = push_document_if(&document, &expected_generation).await?;
-    println!("set {name} connection path {path} -> {destination}; generation={generation}");
-    Ok(())
+    print_host_path_set_receipt(&name, path, destination, &generation, true, json_output)
 }
 
 /// Remove one fallback path; the preferred path is replaced through `set`.
-pub async fn host_path_remove(host: &str, path: &str) -> Result<(), CmdError> {
+pub async fn host_path_remove(host: &str, path: &str, json_output: bool) -> Result<(), CmdError> {
     let path = path.trim();
     if path == targets::PRIMARY_SSH_CONNECTION {
         return Err(CmdError::click(
@@ -709,15 +780,25 @@ pub async fn host_path_remove(host: &str, path: &str) -> Result<(), CmdError> {
         .and_then(Value::as_object_mut)
         .ok_or_else(|| CmdError::click("registry target must be an object"))?;
     let Some(paths) = entry.get_mut("ssh_fallbacks").and_then(Value::as_array_mut) else {
-        println!("{name}: connection path {path} is already absent");
-        return Ok(());
+        return print_host_path_remove_receipt(
+            &name,
+            path,
+            &expected_generation,
+            false,
+            json_output,
+        );
     };
     let Some(position) = paths
         .iter()
         .position(|candidate| candidate.get("name").and_then(Value::as_str) == Some(path))
     else {
-        println!("{name}: connection path {path} is already absent");
-        return Ok(());
+        return print_host_path_remove_receipt(
+            &name,
+            path,
+            &expected_generation,
+            false,
+            json_output,
+        );
     };
     paths.remove(position);
     if paths.is_empty() {
@@ -725,8 +806,7 @@ pub async fn host_path_remove(host: &str, path: &str) -> Result<(), CmdError> {
     }
 
     let generation = push_document_if(&document, &expected_generation).await?;
-    println!("removed {name} connection path {path}; generation={generation}");
-    Ok(())
+    print_host_path_remove_receipt(&name, path, &generation, true, json_output)
 }
 
 // ---------------------------------------------------------------------------

@@ -15,12 +15,13 @@ struct ConsoleView: View {
     /// card over the shell.
     let firstRunNotice: String?
 
-    /// The four stores that read the hosts themselves rather than the
+    /// Stores that read or change hosts through the product CLI rather than the
     /// published snapshot, by running the product CLI. Window-scoped: unlike
     /// enrollment, nothing here spans a walk to another machine, and a
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
     @StateObject private var linkStore = HostLinkStore()
+    @StateObject private var connectionPathStore = HostConnectionPathStore()
     @StateObject private var serviceStore = ServiceTruthStore()
     @StateObject private var fleetServiceStore = FleetServicesStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
@@ -358,6 +359,7 @@ struct ConsoleView: View {
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
                     linkStore: linkStore,
+                    connectionPathStore: connectionPathStore,
                     enrollmentStore: enrollmentStore,
                     scope: scopeName,
                     focusedHost: router.focusedHost,
