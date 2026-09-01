@@ -296,7 +296,7 @@ pub enum ServiceCommands {
         /// the plist was repointed from a legacy path to managed `current`.
         #[arg(long)]
         reload_unit: bool,
-        /// Require readiness JSON field `releaseVersion` to equal `--version`.
+        /// Require readiness JSON field `releaseVersion` or `build.version` to equal `--version`.
         #[arg(long)]
         require_release_version: bool,
         /// Replace one legacy user LaunchAgent atomically with this release.
@@ -2418,6 +2418,9 @@ async fn wait_for_service_readiness(
              reported=\n\
              if [ -n \"$expected\" ]; then\n\
                reported=\"$(printf '%s' \"$body\" | /usr/bin/plutil -extract releaseVersion raw -o - - 2>/dev/null)\" || reported=\n\
+               if [ -z \"$reported\" ]; then\n\
+                 reported=\"$(printf '%s' \"$body\" | /usr/bin/plutil -extract build.version raw -o - - 2>/dev/null)\" || reported=\n\
+               fi\n\
              fi\n\
              if [ -z \"$expected\" ] || [ \"$reported\" = \"$expected\" ]; then\n\
                printf '%s\\n' ready\n\
@@ -2427,7 +2430,7 @@ async fn wait_for_service_readiness(
            /bin/sleep 1\n\
          done\n\
          detail=\"readiness timed out after {}s: $url\"\n\
-         if [ -n \"$expected\" ]; then detail=\"$detail did not report releaseVersion $expected\"; fi\n\
+         if [ -n \"$expected\" ]; then detail=\"$detail did not report releaseVersion or build.version $expected\"; fi\n\
          printf '%s\\n' \"$detail\" >&2\n\
          exit 1",
         crate::deploy::shlex_quote(url),
