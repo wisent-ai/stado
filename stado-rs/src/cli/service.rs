@@ -1568,6 +1568,15 @@ async fn list_unowned(json: bool) -> Result<(), CmdError> {
 ///
 /// An empty answer means the hosts were asked and had nothing, because a host
 /// that will not answer is named on stderr and makes the command fail.
+///
+/// It also means the whole host was asked. Until 2026-09-01 this command
+/// enumerated only labels under `com.wisent.`, so its empty answer was a fact
+/// about that prefix and was read as a fact about the machine:
+/// `com.stado.agent.charless-mac-mini` was loaded on the always-on mac, was the
+/// only label on it outside the prefix, held the pid rewriting the janitor's
+/// state file every interval — and this command said the host had nothing
+/// undeclared. Every row is now enumerated and classified; the prefix chooses
+/// the sentence, never the population.
 async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
     let runner = production_runner();
@@ -1579,6 +1588,22 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
             Err(exc) => failures.push(format!("{}: {exc}", target.name)),
         }
     }
+    // A label the fleet never named is the more interesting of the two classes
+    // and used to be the invisible one, so it reads first. This is the order
+    // rows are printed in and nothing else: no row is dropped by it.
+    found.sort_by(|left, right| {
+        let rank = |unit: &service::UndeclaredUnit| {
+            if unit.classification() == "outside-fleet-prefix" {
+                0
+            } else {
+                1
+            }
+        };
+        rank(left)
+            .cmp(&rank(right))
+            .then_with(|| left.host.cmp(&right.host))
+            .then_with(|| left.label.cmp(&right.label))
+    });
     if json {
         let payload: Vec<Value> = found.iter().map(service::UndeclaredUnit::to_json).collect();
         print_json(&json!({"undeclared": payload}))?;
@@ -1588,14 +1613,49 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
             .map(|unit| {
                 vec![
                     unit.host.clone(),
+                    unit.classification().to_string(),
                     unit.label.clone(),
                     dash(&unit.pid),
                     unit.status.clone(),
-                    unit.program.clone(),
+                    // What the process IS running, and only then what its file
+                    // declares. A label loaded from outside the three
+                    // directories this fleet installs into has no declared
+                    // program to print, and printing nothing there is how a
+                    // job could be seen and not identified.
+                    dash(if unit.running_program.is_empty() {
+                        &unit.program
+                    } else {
+                        &unit.running_program
+                    }),
+                    dash(&unit.path),
                 ]
             })
             .collect();
-        table::print(&["HOST", "LABEL", "PID", "LAST_EXIT", "RUNS"], &cells);
+        table::print(
+            &[
+                "HOST",
+                "CLASS",
+                "LABEL",
+                "PID",
+                "LAST_EXIT",
+                "RUNS",
+                "UNIT_FILE",
+            ],
+            &cells,
+        );
+        // The counts, so an empty table and a table whose interesting rows are
+        // outnumbered both read honestly.
+        let outside = found
+            .iter()
+            .filter(|unit| unit.classification() == "outside-fleet-prefix")
+            .count();
+        println!(
+            "{} loaded label(s) the registry does not declare: {} outside the fleet prefix, \
+             {} under it",
+            found.len(),
+            outside,
+            found.len() - outside
+        );
     }
     fail_if_any(&failures, "scan for undeclared units")
 }

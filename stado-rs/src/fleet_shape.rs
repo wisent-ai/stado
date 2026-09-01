@@ -283,7 +283,14 @@ fn process_identity(
         if unit.runs_declared_program().is_some() {
             program_checked += 1;
         }
-        if unit.runs_current_binary() == Some(false) {
+        // Only where the fleet holds the unit file. This check reads two
+        // process timestamps and its remedy is `service converge`, so its
+        // population is the units this fleet installed -- evidence it has in
+        // hand, not a guess from the label's spelling. Now that the scan
+        // enumerates every loaded label, an OS daemon whose binary a system
+        // update replaced after boot would otherwise be reported here as a
+        // fleet finding, with a remedy that cannot touch it.
+        if !unit.declaring_paths.is_empty() && unit.runs_current_binary() == Some(false) {
             out.push(Finding {
                 check: BINARY_CHECK,
                 subject: format!("{}:{}", target.name, unit.label),
@@ -300,17 +307,35 @@ fn process_identity(
                 ),
             });
         }
-        if unit.runs_current_binary().is_some() {
+        if !unit.declaring_paths.is_empty() && unit.runs_current_binary().is_some() {
             binary_checked += 1;
         }
     }
     // A label launchd holds no pid for answers neither question, and saying so
     // is the difference between "every process is right" and "no process was
     // read".
+    //
+    // The classification counts are here for the same reason. The scan now
+    // reads every loaded label rather than only the fleet-prefixed ones, and a
+    // count per class is what makes the widening auditable: an operator can see
+    // that rows outside the prefix were looked at, and how many, instead of
+    // trusting that a filter upstream chose correctly.
+    let undeclared = loaded
+        .iter()
+        .filter(|unit| unit.classification() == "undeclared")
+        .count();
+    let outside = loaded
+        .iter()
+        .filter(|unit| unit.classification() == "outside-fleet-prefix")
+        .count();
     notes.push(format!(
-        "{}: {} loaded label(s), {} process(es) compared against their declaration, {} against the installed binary",
+        "{}: {} loaded label(s) — {} declared, {} undeclared, {} outside the fleet prefix; \
+         {} process(es) compared against their declaration, {} against the installed binary",
         target.name,
         loaded.len(),
+        loaded.iter().filter(|unit| unit.declared).count(),
+        undeclared,
+        outside,
         program_checked,
         binary_checked
     ));
