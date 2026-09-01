@@ -406,6 +406,12 @@ workspace is Stado Desktop. Local onboarding binds the listener to
 loopback. Remote exposure additionally requires authenticated deployment
 configuration and a trusted reverse proxy.
 
+This listener is not a human Supabase API. Object, release, machine, service,
+host-health, rate-limit, and enrollment routes keep their route-specific
+application, workload, or invitation credentials; they never turn a workload
+token into a Wisent login or infer an organization. The repository contains no
+remote human organization action served by this listener.
+
 Three enrollment routes sit beside that surface and outside its operator
 identity, because the machine being invited has one credential and it is not an
 operator's: `GET /api/fleet/invite/key` and `POST /api/fleet/join` authorize on
@@ -427,6 +433,22 @@ provider APIs and credential values do not get a second implementation in the
 app. Build and install it with
 `desktop/StadoDesktop/scripts/build-app.sh`. The screenshots below are live
 reads of the Wisent fleet.
+
+The deployment registry is the remote human organization HTTP surface in this
+repository. Stado Desktop sends every registry request to the canonical
+Supabase project at `https://alvaewvbyxpgwdpugnxy.supabase.co` with both
+`Authorization: Bearer <Supabase JWT>` and
+`X-Wisent-Organization-ID: <uuid>`. Supabase derives the user only from the JWT
+and calls `authorize_organization` for the header organization. Members may
+read that organization's deployments; only owners and admins may create,
+update, or delete them. Infrastructure targets remain scoped to the JWT user.
+Request bodies contain neither user IDs nor roles, and there is no per-user or
+per-role deployment-grant fallback.
+
+The table definitions, RLS policies, and migrations are owned exclusively by
+[`wisent-supabase-oko`](https://github.com/wisent-ai/wisent-supabase-oko).
+Stado consumes that deployed schema and keeps no product-local `supabase/`
+tree.
 
 ![Stado Desktop Releases screen: brama on control-host blocked, its blockers, the candidate's stderr tail, and the quarantined digest the registry desires](desktop/StadoDesktop/docs/screenshots/releases.png)
 
@@ -493,6 +515,11 @@ plaintext is resolved only at execution time.
 Operators pin an exact immutable version and platform. Upgrade requires a
 verified release manifest, compatible schema range, backup, health check, and
 rollback coordinate. No runtime follows a mutable `latest` binary.
+
+Stado release artifacts contain the client only; they never bundle or apply
+Supabase migrations. Database rollout is versioned and deployed from
+[`wisent-supabase-oko`](https://github.com/wisent-ai/wisent-supabase-oko)
+before a Stado release consumes the changed contract.
 
 See [Release and compatibility](https://stado.wisent.com/docs/release) and
 [Operations](https://stado.wisent.com/docs/operations) for release and recovery procedures.

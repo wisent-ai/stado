@@ -55,6 +55,13 @@ jobs:
       # replacement for the deprecated Node 20 runtime in v4.
       - uses: actions/checkout@v5
 
+      - name: Keep Supabase schema in its canonical repository
+        run: |
+          if [ -e supabase ]; then
+            echo "::error::Stado must not carry a supabase/ tree; tables, RLS, and migrations are owned by wisent-ai/wisent-supabase-oko"
+            exit 1
+          fi
+
       - name: Every source file must be reachable from a crate root
         # Before anything is built, because this failure mode does not look like a
         # build failure. A `.rs` file that no `mod` declaration names is not a

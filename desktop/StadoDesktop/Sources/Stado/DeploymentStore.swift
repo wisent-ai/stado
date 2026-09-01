@@ -6,7 +6,6 @@ import WisentAuth
 final class DeploymentStore: ObservableObject {
     @Published private(set) var deployments: [StadoDeployment] = []
     @Published private(set) var infrastructureTargets: [InfrastructureTarget] = []
-    @Published private(set) var grants: [String: [DeploymentGrant]] = [:]
     @Published private(set) var selectedDeploymentID: String?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -49,7 +48,6 @@ final class DeploymentStore: ObservableObject {
             isLoading = false
             deployments = []
             infrastructureTargets = []
-            grants = [:]
             errorMessage = nil
             selectLocal()
             return
@@ -87,29 +85,16 @@ final class DeploymentStore: ObservableObject {
 
     func createDeployment(
         name: String,
-        target: InfrastructureTarget,
-        shareWithHomeOrganization: Bool
+        target: InfrastructureTarget
     ) async throws -> StadoDeployment {
         guard let identity else { throw DeploymentStoreError.notAuthenticated }
-        let organizationID = shareWithHomeOrganization ? identity.organization.id : nil
         let deployment = try await client.createDeployment(
             name: name,
             target: target,
-            organizationID: organizationID,
             identity: identity
         )
         deployments.insert(deployment, at: 0)
         select(deployment)
-        if shareWithHomeOrganization {
-            _ = try await client.upsertGrant(
-                deploymentID: deployment.id,
-                subjectKind: "organization",
-                subjectID: identity.organization.id,
-                subjectRole: nil,
-                permissions: [.view, .submit],
-                identity: identity
-            )
-        }
         return deployment
     }
 
@@ -146,42 +131,6 @@ final class DeploymentStore: ObservableObject {
         }
     }
 
-    func loadGrants(for deployment: StadoDeployment) async {
-        guard let identity else { return }
-        do {
-            grants[deployment.id] = try await client.grants(for: deployment.id, identity: identity)
-        } catch {
-            grants[deployment.id] = nil
-        }
-    }
-
-    func share(
-        deployment: StadoDeployment,
-        subjectKind: String,
-        subjectID: String,
-        subjectRole: String?,
-        permissions: [DeploymentPermission]
-    ) async throws {
-        guard let identity else { throw DeploymentStoreError.notAuthenticated }
-        let grant = try await client.upsertGrant(
-            deploymentID: deployment.id,
-            subjectKind: subjectKind,
-            subjectID: subjectID,
-            subjectRole: subjectRole,
-            permissions: permissions,
-            identity: identity
-        )
-        var current = grants[deployment.id] ?? []
-        current.removeAll { $0.id == grant.id }
-        current.append(grant)
-        grants[deployment.id] = current.sorted { $0.createdAt < $1.createdAt }
-    }
-
-    func revoke(_ grant: DeploymentGrant) async throws {
-        guard let identity else { throw DeploymentStoreError.notAuthenticated }
-        try await client.deleteGrant(id: grant.id, identity: identity)
-        grants[grant.deploymentID]?.removeAll { $0.id == grant.id }
-    }
 
     private func reconcileSelection() {
         guard let selectedDeploymentID else { return }

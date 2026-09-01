@@ -12,7 +12,6 @@ struct DeploymentSetupView: View {
 
     @State private var name = "My Stado"
     @State private var selectedTargetID: String?
-    @State private var shareWithOrganization = true
     @State private var update: ProvisioningUpdate?
     @State private var errorMessage: String?
     @State private var isProvisioning = false
@@ -29,7 +28,7 @@ struct DeploymentSetupView: View {
                     if deploymentStore.isLoading {
                         WisentLoadingPanel(
                             title: "Reading the deployment registry",
-                            detail: "The Stado deployments this account may create, read, or share."
+                            detail: "The Stado deployments this account may create or read for the selected organization."
                         )
                     } else if let registryError = deploymentStore.errorMessage,
                               deploymentStore.deployments.isEmpty {
@@ -131,18 +130,12 @@ struct DeploymentSetupView: View {
                 }
             }
 
-            if identity != nil {
-                WisentSectionBox(title: "Sharing") {
-                    Toggle(isOn: $shareWithOrganization) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Share with \(identity?.organization.name ?? "organization")")
-                                .font(WisentTypeScale.bodyStrong())
-                                .foregroundStyle(WisentDesign.ink)
-                            Text("Members receive view and submit access. You remain the owner and can change access later.")
-                                .font(WisentTypeScale.caption())
-                                .foregroundStyle(WisentDesign.secondary)
-                        }
-                    }
+            if let identity {
+                WisentSectionBox(
+                    title: "Organization ownership",
+                    detail: "This deployment belongs to \(identity.organization.name). Every member may read it; only organization owners and admins may change it."
+                ) {
+                    WisentField(label: "Organization", value: identity.organization.name)
                 }
             }
 
@@ -259,9 +252,7 @@ struct DeploymentSetupView: View {
             lines: decisionLines(target),
             reasonCode: nil,
             listing: decisionListing(target),
-            footnote: shareWithOrganization && identity != nil
-                ? "\(identity?.organization.name ?? "Your organization") receives view and submit access as soon as the deployment record exists."
-                : "Only you will have access until you grant it to someone else.",
+            footnote: "\(identity?.organization.name ?? "The selected organization") owns the deployment. Members may read it; only owners and admins may change it.",
             actions: [
                 WisentAction("Do not create it", kind: .primary) { showsCreateDecision = false },
                 WisentAction(
@@ -305,7 +296,7 @@ struct DeploymentSetupView: View {
             "provider: \(target.provider.rawValue)",
             "account: \(target.externalID)",
             "deployment name: \(trimmedName)",
-            "shared with organization: \(shareWithOrganization && identity != nil)",
+            "organization: \(identity?.organization.name ?? "Sign in required")",
         ]
     }
 
@@ -331,8 +322,7 @@ struct DeploymentSetupView: View {
         do {
             let deployment = try await deploymentStore.createDeployment(
                 name: trimmedName,
-                target: target,
-                shareWithHomeOrganization: shareWithOrganization
+                target: target
             )
             await provisionSafely(deployment: deployment, target: target)
         } catch {

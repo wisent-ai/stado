@@ -108,11 +108,11 @@ struct ConsoleView: View {
             .interactiveDismissDisabled()
         }
         .sheet(isPresented: $showsDeploymentAccess) {
-            if let deployment = deploymentStore.selectedDeployment {
+            if let deployment = deploymentStore.selectedDeployment,
+               let organization = auth.identity?.organization {
                 DeploymentAccessView(
                     deployment: deployment,
-                    store: deploymentStore,
-                    homeOrganization: auth.identity?.organization
+                    organization: organization
                 )
             }
         }
@@ -200,7 +200,7 @@ struct ConsoleView: View {
             Button {
                 presentDeploymentAccess()
             } label: {
-                Label("Manage Access…", systemImage: "person.2")
+                Label("Organization Access…", systemImage: "person.2")
             }
             .disabled(deploymentStore.selectedDeployment == nil)
         } label: {

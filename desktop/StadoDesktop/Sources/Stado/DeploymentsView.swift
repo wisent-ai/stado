@@ -137,7 +137,7 @@ struct DeploymentsView: View {
                         )
                         if source.deployment != nil {
                             WisentActionButton(
-                                action: WisentAction("Manage access…", symbol: "person.2") {
+                                action: WisentAction("Organization access…", symbol: "person.2") {
                                     if let deployment = source.deployment {
                                         deploymentStore.select(deployment)
                                     }

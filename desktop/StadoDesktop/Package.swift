@@ -13,11 +13,11 @@ let package = Package(
         // and it ships `WisentSkeleton` and the skeleton rows
         // `WisentLoadingPanel` stands content in place with. SwiftPM admits
         // exactly one requirement per package per resolution, and
-        // `wisent-desktop-auth` 0.2.3 names this same `exact: "0.8.1"`,
+        // `wisent-desktop-auth` 0.3.1 names this same `exact: "0.8.1"`,
         // so the pair agrees. Auth is on a version too now that
-        // `wisent-errors` is tagged 1.0.0 and 0.2.3 names it by version.
+        // `wisent-errors` is tagged 1.0.0 and 0.3.1 names it by version.
         .package(url: "https://github.com/wisent-ai/wisent-components.git", exact: "0.8.1"),
-        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", exact: "0.2.3"),
+        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", exact: "0.3.1"),
         // By url, not by sibling path: CI checks out this repository alone, and
         // a missing sibling makes the whole graph unresolvable there.
         .package(url: "https://github.com/wisent-ai/echo.git", from: "0.1.2"),
