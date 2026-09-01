@@ -1748,6 +1748,28 @@ pub(crate) async fn catalog_identity(
     version: &str,
     platform: &str,
 ) -> Result<CatalogIdentity, DeployError> {
+    // The pipeline publisher also emits the old compatibility manifest for
+    // older Stado clients, but its signed release archive is the complete
+    // coordinate. Prefer it whenever it exists: validating the compatibility
+    // surface first incorrectly demands the legacy sidecar binaries (`wc`,
+    // `stado-mcp`, and the rest) from an archive-based pipeline release.
+    let pipeline_manifest_uri = format!(
+        "stado://releases/{}/{version}/{platform}/{}",
+        product.source.product,
+        crate::release_control::RELEASE_MANIFEST_NAME
+    );
+    if crate::cli::storage::release_object_present(&pipeline_manifest_uri)
+        .await
+        .map_err(|error| DeployError(error.to_string()))?
+    {
+        return pipeline_catalog_identity(
+            product,
+            version,
+            platform,
+            "not selected because a signed pipeline manifest exists",
+        )
+        .await;
+    }
     let manifest_uri = format!(
         "stado://releases/{}/{version}/{platform}/release-manifest-{platform}.json",
         product.source.product
