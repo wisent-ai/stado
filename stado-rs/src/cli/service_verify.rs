@@ -635,6 +635,14 @@ fn field(row: &Value, key: &str) -> String {
 ///   wolf gets read like one.
 /// * Only rows that already came back [`OBSERVED`]. Where nothing answered,
 ///   [`UNREACHABLE`] is the finding and who owns the silence adds nothing.
+/// * Only ports that are NOT the rollout's declared stable bind. A blue-green
+///   product declares `release_control.products.<p>.targets.<host>.stable_bind`
+///   and serves it through the rollout's stable proxy, never through the
+///   service's own launchd job, so "the declared unit does not hold this port"
+///   is the declared design rather than a fault. Judging it by label reported
+///   `misowned` against brama on 2026-09-01 for a declaration that was right,
+///   and `verify` exited non-zero on a healthy fleet. The port is still named
+///   in the detail, so a squatter sharing it stays visible.
 ///
 /// Ownership that cannot be established leaves the row exactly as it was and
 /// says so in the detail. "I could not tell" is not evidence of a foreign
@@ -658,6 +666,17 @@ async fn judge_ownership(registry: &Registry, findings: &mut [Finding]) {
         else {
             continue;
         };
+        // The stable bind is held by the rollout's proxy by declaration, so
+        // ownership-by-label is the wrong question for it. Checked before the
+        // remote read: there is no answer worth paying a host round-trip for.
+        if declared_stable_port(registry, &finding.service, &finding.host) == Some(port) {
+            finding.detail = format!(
+                "{}; {port} is the stable bind release_control declares for {} on {}, which the \
+                 rollout's stable proxy holds rather than the service's own unit",
+                finding.detail, finding.service, finding.host
+            );
+            continue;
+        }
         let Some(unit) = registry.service_unit(&finding.service, &finding.host) else {
             finding.detail = format!(
                 "{}; the registry names no unit for it on this host, so the port's owner was \
@@ -705,6 +724,23 @@ async fn judge_ownership(registry: &Registry, findings: &mut [Finding]) {
         let Some(taken) = verdicts.iter().find(|verdict| {
             verdict.verdict == crate::deploy::service_serving::PORT_SERVED_BY_OTHER
         }) else {
+            // Not foreign, but not established either. Both "not judged"
+            // branches above say so; leaving this one silent let an operator
+            // read an unanswerable question as a verified answer.
+            if let Some(unresolved) = verdicts.iter().find(|verdict| {
+                matches!(
+                    verdict.verdict,
+                    crate::deploy::service_serving::PORT_OWNER_UNKNOWN
+                        | crate::deploy::service_serving::PORT_UNKNOWN
+                )
+            }) {
+                finding.detail = format!(
+                    "{}; something holds {port} but which launchd job owns it could not be \
+                     established, so ownership is unjudged: {}",
+                    finding.detail,
+                    unresolved.holder_cell()
+                );
+            }
             continue;
         };
         finding.state = MISOWNED;
@@ -714,6 +750,26 @@ async fn judge_ownership(registry: &Registry, findings: &mut [Finding]) {
             taken.holder_cell()
         );
     }
+}
+
+/// The loopback port a blue-green rollout declares as this service's stable
+/// bind on `host`, or `None` when nothing declares one.
+///
+/// Read from `release_control`, which is where the fleet states it:
+/// `products` is keyed by PRODUCT and carries the logical `service` name, so
+/// the lookup is by that field rather than by the product key. A `replace`
+/// rollout declares no `stable_bind` and yields `None`, which leaves the
+/// ownership judgement exactly as it was.
+fn declared_stable_port(registry: &Registry, service: &str, host: &str) -> Option<u16> {
+    let control = crate::release_control::control(&registry.to_document()).ok()??;
+    let policy = control
+        .products
+        .values()
+        .find(|policy| policy.service == service)?;
+    let bind = policy.targets.get(host)?.stable_bind.as_deref()?;
+    bind.parse::<std::net::SocketAddr>()
+        .ok()
+        .map(|address| address.port())
 }
 
 /// Collect and persist one reachability sweep without rendering it. The
