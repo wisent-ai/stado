@@ -1738,6 +1738,49 @@ async fn pipeline_catalog_identity(
             )));
         }
     }
+    // One immutable coordinate, one build. The signed document above is the
+    // delivery authority and stays it; what was missing is any check that the
+    // OTHER publisher of the same coordinate agrees with it.
+    //
+    // On 2026-09-01 both wrote `stado/0.13.27`. A `release submit` published
+    // the signed `release.json` and `release.tar.gz` at 06:48 from d53f10c9,
+    // and the tag's own train published the nine platform objects at 16:25
+    // from 99e03396 — three merges later, carrying #250, #255 and #256. Create-
+    // only puts mean neither could overwrite the other, so the coordinate holds
+    // two builds, and this function preferred the signed one without ever
+    // reading the sidecar beside it. `host release` then reported
+    // `released: charless-mac-mini now runs stado 0.13.27` while installing the
+    // older build, and `service converge` confirmed `in-sync` — every reading
+    // true about itself and none of them about the version an operator asked
+    // for.
+    //
+    // A version number that means two different builds is not deliverable, and
+    // the doctrine for that is already written in `catalog_identity` below:
+    // immutable objects mean the coordinate can never be repaired, so publish a
+    // new version. This refuses with both revisions named rather than choosing
+    // one of them quietly.
+    let sidecar_uri = format!("{base}/release-manifest-{platform}.json");
+    if let Ok(sidecar) = crate::cli::storage::fetch_object(&sidecar_uri).await {
+        let sidecar: Value = serde_json::from_slice(&sidecar).map_err(|error| {
+            DeployError(format!(
+                "{sidecar_uri} sits beside a signed release manifest and is invalid: {error}"
+            ))
+        })?;
+        let sidecar_commit = sidecar
+            .get("source_commit")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !sidecar_commit.is_empty() && sidecar_commit != manifest.source_revision {
+            return Err(DeployError(format!(
+                "{} {version} on {platform} was published twice from two different revisions: \
+                 the signed release manifest was built from {}, and {sidecar_uri} from \
+                 {sidecar_commit}. Delivery would install the signed one, which is not the \
+                 build the second publisher put there. Release objects are immutable, so this \
+                 version can never be made to mean one build; publish a new version instead",
+                product.source.product, manifest.source_revision
+            )));
+        }
+    }
     let (document, _) = crate::cli::registry::fetch_versioned_document()
         .await
         .map_err(|error| DeployError(error.to_string()))?;
