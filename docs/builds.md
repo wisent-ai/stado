@@ -3,6 +3,12 @@
 Stado stores native build recipes in the canonical registry. A recipe names a public HTTPS Git repository, a branch, one POSIX shell command, the artifact paths produced by that command, and one or more worker platforms. The coordinator watches the branch and enqueues one job per platform when its head changes. A worker can claim only the job for its own platform.
 
 Builds and releases are separate. A build uploads the declared artifacts and may record the exact semantic-version tag found on the commit. It does not sign an artifact, change `release_control`, or promote a release. `stado release submit` owns qualification, signing through Skarbiec, publication, delivery, and installation.
+When Stado itself is delivered, the installer records the installed version
+beside the managed binary. Each managed queue agent finishes its active slots,
+detects that its loaded version differs, and exits through its declared
+`KeepAlive` or `Restart=on-failure` policy; the supervisor then starts the
+installed release without unloading the unit or interrupting a job.
+
 
 ## Create and run a recipe
 
