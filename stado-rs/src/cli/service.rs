@@ -4455,6 +4455,10 @@ async fn adopt(
 /// target placeholder and `service_directory.services.<name>` in one registry
 /// update; retire/remove must drop both in the same update or the validator
 /// correctly refuses a directory entry pointing at no managed service.
+///
+/// Dropping an entry is a directory change, so it advances the publication
+/// counter. It did not, and a consumer holding the entry that was just
+/// removed saw a generation telling it its copy was current.
 fn remove_directory_declaration(document: &mut Value, name: &str) {
     let Some(services) = document
         .get_mut("service_directory")
@@ -4464,7 +4468,12 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
     else {
         return;
     };
-    services.remove(name);
+    if services.remove(name).is_none() {
+        return;
+    }
+    // A directory that cannot carry a counter is a document this command did
+    // not write and must not silently repair; the removal still stands.
+    let _ = crate::service_resolution::advance_generation(document);
 }
 
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
@@ -4825,6 +4834,10 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     if !already {
         host_services.push(json!({"name": name, "declared_only": true}));
     }
+    // `declare` writes `service_directory.services.<name>` above, so the
+    // publication counter must advance with it or a consumer's cached copy
+    // never learns the entry exists.
+    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
     let generation = registry::push_document(&document).await?;
     if !as_json {
         println!("declared {name} on {host} (generation {generation})");

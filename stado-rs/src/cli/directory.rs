@@ -1021,22 +1021,8 @@ where
             .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
         edit(entry)?;
     }
-    let block = document
-        .get_mut(DIRECTORY_KEY)
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| click(format!("{DIRECTORY_KEY} is not an object")))?;
-    let generation = block
-        .get("generation")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            click(format!(
-                "{DIRECTORY_KEY}.generation is not an unsigned integer"
-            ))
-        })?;
-    let next_generation = generation
-        .checked_add(1)
-        .ok_or_else(|| click(format!("{DIRECTORY_KEY}.generation overflow")))?;
-    block.insert("generation".to_string(), json!(next_generation));
+    let next_generation =
+        crate::service_resolution::advance_generation(&mut document).map_err(click)?;
     registry::push_document(&document).await?;
     Ok(next_generation)
 }
