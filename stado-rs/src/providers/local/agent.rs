@@ -649,6 +649,29 @@ async fn publish_branch(
     outcome
 }
 
+const INSTALLED_STADO_RELEASE_VERSION: &str = "stado.release-version";
+
+/// The release installed for this managed agent differs from the code this
+/// process loaded. Source-tree recovery agents are deliberately excluded: only
+/// an agent launched through the owner-managed binary belongs to its supervisor
+/// and can rely on that supervisor to recreate it.
+fn installed_stado_release_mismatch() -> Option<String> {
+    let home = crate::config_file::expand_tilde("~");
+    let managed = home.join(".stado").join("bin").join("stado");
+    let argv0 = std::env::args_os().next().map(std::path::PathBuf::from)?;
+    if argv0 != managed {
+        return None;
+    }
+    let installed = std::fs::read_to_string(
+        home.join(".stado")
+            .join("bin")
+            .join(INSTALLED_STADO_RELEASE_VERSION),
+    )
+    .ok()?;
+    let installed = installed.trim();
+    (!installed.is_empty() && installed != env!("CARGO_PKG_VERSION")).then(|| installed.to_string())
+}
+
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
 ///
@@ -776,6 +799,20 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             }
         }
         slots = survivors;
+        if slots.is_empty() {
+            if let Some(installed) = installed_stado_release_mismatch() {
+                let detail = format!(
+                    "installed Stado {installed} supersedes running {}; exiting after all slots \
+                     finished so the declared supervisor starts the installed release",
+                    env!("CARGO_PKG_VERSION")
+                );
+                log_fn(&format!("loop: release-handoff: {detail}"));
+                // Linux services use Restart=on-failure; launchd KeepAlive also
+                // recreates this process. Returning an error is therefore the
+                // cross-platform handoff signal, not a failed workload.
+                return Err(anyhow::anyhow!(detail));
+            }
+        }
         // The janitor's bounded cleanup pass (Python `run_cleanup_once`,
         // wrapped there in try/except BaseException — the Rust port folds
         // every failure into the returned report by construction).

@@ -1101,6 +1101,30 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     std::fs::create_dir_all(&directory).map_err(|error| {
         CmdError::click(format!("cannot prepare {}: {error}", directory.display()))
     })?;
+    // The installed coordinate is the cheap, persistent handshake between the
+    // delivery child and already-running queue agents. Agents launched from
+    // this managed path finish their current slot, compare this file with their
+    // compiled version, then let their declared supervisor recreate them.
+    let release_version_stage =
+        if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
+            let version = std::env::var("WISENT_VERSION")
+                .map_err(|_| CmdError::click("WISENT_VERSION is not set for the Stado delivery"))?;
+            let version = version.trim();
+            if version.is_empty() {
+                return Err(CmdError::click(
+                    "WISENT_VERSION is empty for the Stado delivery",
+                ));
+            }
+            let path = directory.join("stado.release-version.release-incoming");
+            std::fs::write(&path, format!("{version}\n")).map_err(|error| {
+                CmdError::click(format!(
+                    "cannot stage the installed Stado release coordinate: {error}"
+                ))
+            })?;
+            Some(path)
+        } else {
+            None
+        };
     let destination = directory.join(&name);
     if destination.exists() {
         let stamp = chrono::Utc::now().format("%Y%m%d");
@@ -1120,6 +1144,14 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     }
     std::fs::rename(&staged, &destination)
         .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
+    if let Some(staged_version) = release_version_stage {
+        let installed_version = directory.join("stado.release-version");
+        std::fs::rename(&staged_version, &installed_version).map_err(|error| {
+            CmdError::click(format!(
+                "cannot activate the installed Stado release coordinate: {error}"
+            ))
+        })?;
+    }
     println!(
         "installed {} from the delivered release archive",
         destination.display()
