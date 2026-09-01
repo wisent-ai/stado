@@ -234,6 +234,42 @@ async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
         ))),
     }
 }
+
+fn deployment_receipt_identity(bytes: &[u8]) -> Result<Value, CmdError> {
+    let mut receipt: Value = serde_json::from_slice(bytes)?;
+    let object = receipt
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("deployment receipt is not an object"))?;
+    if !matches!(object.remove("completed_at"), Some(Value::String(_))) {
+        return Err(CmdError::click(
+            "deployment receipt has no completed_at timestamp",
+        ));
+    }
+    Ok(receipt)
+}
+
+async fn queue_deployment_receipt(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
+    let original_error = match queue_immutable(path, bytes).await {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let Some(existing) = store
+        .read_bytes(path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    else {
+        return Err(original_error);
+    };
+    if deployment_receipt_identity(&existing)? == deployment_receipt_identity(bytes)? {
+        Ok(())
+    } else {
+        Err(original_error)
+    }
+}
+
 async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
     run.updated_at = Utc::now().to_rfc3339();
     let store = JobStorage::new()
@@ -1527,7 +1563,7 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
     let receipt = serde_json::to_vec(
         &json!({"schema_version":1,"run_id":run.run_id,"product":run.product,"version":run.version,"targets":observed,"completed_at":Utc::now().to_rfc3339()}),
     )?;
-    queue_immutable(
+    queue_deployment_receipt(
         &run_path(&run.product, &run.run_id, "deployment.json"),
         &receipt,
     )

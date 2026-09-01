@@ -626,7 +626,7 @@ async fn apply_policy(args: &ReleasePolicyApplyArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
+async fn promote(args: &ReleasePromoteArgs, exact_is_noop: bool) -> Result<(), CmdError> {
     let mut last_conflict = None;
     for attempt in 0..3 {
         let (document, expected_generation) = super::registry::fetch_versioned_document().await?;
@@ -649,11 +649,12 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
             ));
         }
         let channel = ReleaseChannel::from(args.channel);
-        if let Some(desired) = policy.desired.as_ref() {
-            if desired.version == args.version
-                && desired.channel == channel
-                && desired.artifacts == artifacts
-            {
+        if exact_is_noop {
+            if let Some(desired) = policy.desired.as_ref().filter(|desired| {
+                desired.version == args.version
+                    && desired.channel == channel
+                    && desired.artifacts == artifacts
+            }) {
                 let report = json!({
                     "product": args.product,
                     "version": args.version,
@@ -661,14 +662,18 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
                     "rollout_generation": desired.rollout_generation,
                     "registry_generation": control.generation,
                     "store_generation": expected_generation,
-                    "status": "already_promoted",
+
                 });
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {
                     println!(
-                        "{} {} is already promoted at rollout-generation={}",
-                        args.product, args.version, desired.rollout_generation
+                        "already promoted {} {} channel={:?} rollout-generation={} registry-generation={}",
+                        args.product,
+                        args.version,
+                        channel,
+                        desired.rollout_generation,
+                        control.generation
                     );
                 }
                 return Ok(());
@@ -685,7 +690,7 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
         policy.previous = policy.desired.take();
         policy.desired = Some(DesiredRelease {
             version: args.version.clone(),
-            channel: args.channel.into(),
+            channel,
             rollout_generation,
             promoted_at: Utc::now().to_rfc3339(),
             artifacts,
@@ -713,7 +718,7 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
         let report = json!({
             "product": args.product,
             "version": args.version,
-            "channel": ReleaseChannel::from(args.channel),
+            "channel": channel,
             "rollout_generation": rollout_generation,
             "registry_generation": control.generation,
             "store_generation": stored_generation,
@@ -723,11 +728,7 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
         } else {
             println!(
                 "promoted {} {} channel={:?} rollout-generation={} registry-generation={}",
-                args.product,
-                args.version,
-                ReleaseChannel::from(args.channel),
-                rollout_generation,
-                control.generation
+                args.product, args.version, channel, rollout_generation, control.generation
             );
         }
         return Ok(());
@@ -741,15 +742,18 @@ pub(crate) async fn promote_for_submit(
     version: &str,
     channel: crate::release_pipeline::PipelineChannel,
 ) -> Result<(), CmdError> {
-    promote(&ReleasePromoteArgs {
-        product: product.to_string(),
-        version: version.to_string(),
-        channel: match channel {
-            crate::release_pipeline::PipelineChannel::Candidate => ChannelArg::Candidate,
-            crate::release_pipeline::PipelineChannel::Stable => ChannelArg::Stable,
+    promote(
+        &ReleasePromoteArgs {
+            product: product.to_string(),
+            version: version.to_string(),
+            channel: match channel {
+                crate::release_pipeline::PipelineChannel::Candidate => ChannelArg::Candidate,
+                crate::release_pipeline::PipelineChannel::Stable => ChannelArg::Stable,
+            },
+            json: false,
         },
-        json: false,
-    })
+        true,
+    )
     .await
 }
 
@@ -1134,7 +1138,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             crate::cli::release_submit::delivery_worker(&args).await
         }
         ReleaseCommands::Prepare(args) => prepare(&args).await,
-        ReleaseCommands::Promote(args) => promote(&args).await,
+        ReleaseCommands::Promote(args) => promote(&args, false).await,
         ReleaseCommands::Agent(args) => agent(&args).await,
         ReleaseCommands::Proxy(args) => crate::release_agent::proxy(&args.state, &args.bind)
             .await
