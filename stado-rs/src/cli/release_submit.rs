@@ -1308,6 +1308,7 @@ fn replace_service(
     document: &Value,
     logical_service: &str,
     target: &str,
+    readiness_path: &str,
 ) -> Result<(String, String), CmdError> {
     let directory = crate::service_resolution::directory(document)?
         .ok_or_else(|| CmdError::click("service directory disappeared"))?;
@@ -1332,10 +1333,7 @@ fn replace_service(
         .ok_or_else(|| CmdError::click("release product service has no target endpoint"))?;
     let mut readiness = url::Url::parse(&endpoint.url)
         .map_err(|error| CmdError::click(format!("invalid release service endpoint: {error}")))?;
-    readiness.set_path(&format!(
-        "{}/readyz",
-        readiness.path().trim_end_matches('/')
-    ));
+    readiness.set_path(readiness_path);
     readiness.set_query(None);
     readiness.set_fragment(None);
     Ok((managed_service, readiness.to_string()))
@@ -1394,7 +1392,12 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             )
             .await
             {
-                let (service, readiness_url) = replace_service(&document, &policy.service, name)?;
+                let readiness_path = policy.targets[name]
+                    .readiness_path
+                    .as_deref()
+                    .ok_or_else(|| CmdError::click("replace rollout has no readiness path"))?;
+                let (service, readiness_url) =
+                    replace_service(&document, &policy.service, name, readiness_path)?;
                 super::service::release_pipeline_product(
                     &service,
                     name,
