@@ -2516,9 +2516,19 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     }
     let runner = production_runner();
     if let Some(label) = options.supersede_unit {
-        if label == declared.unit_id() {
+        // One launchd label may exist in both the system and user domains.
+        // A managed system daemon superseding its same-named legacy
+        // LaunchAgent is safe because every operation below is explicitly
+        // scoped: the legacy bootout/restore/delete uses the user domain and
+        // the managed restart uses the daemon path. Keep rejecting the same
+        // name everywhere else, where the two references would identify one
+        // unit rather than the migration pair.
+        if label == declared.unit_id()
+            && !UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
+        {
             return Err(CmdError::usage(
-                "--supersede-unit must name the legacy user LaunchAgent, not the managed unit",
+                "--supersede-unit may match the managed unit only when that unit is a system \
+                 LaunchDaemon replacing its same-named legacy user LaunchAgent",
             ));
         }
         service::check_user_launchagent(&target, label, &runner)
