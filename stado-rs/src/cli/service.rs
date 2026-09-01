@@ -1028,6 +1028,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 require_release_version,
                 supersede_unit: supersede_unit.as_deref(),
                 json,
+                emit: true,
             })
             .await
         }
@@ -2189,6 +2190,31 @@ struct ServiceReleaseOptions<'a> {
     require_release_version: bool,
     supersede_unit: Option<&'a str>,
     json: bool,
+    emit: bool,
+}
+
+pub(crate) async fn release_pipeline_product(
+    name: &str,
+    host: &str,
+    product: &str,
+    version: &str,
+    readiness_url: &str,
+    readiness_timeout_seconds: u64,
+) -> Result<(), CmdError> {
+    release(ServiceReleaseOptions {
+        name,
+        host,
+        product,
+        version,
+        readiness_url: Some(readiness_url),
+        readiness_timeout_seconds,
+        reload_unit: false,
+        require_release_version: true,
+        supersede_unit: None,
+        json: false,
+        emit: false,
+    })
+    .await
 }
 
 #[derive(Default, Deserialize)]
@@ -2649,30 +2675,40 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         bundle.previous_version.as_deref(),
         if options.supersede_unit.is_some() {
             "service readiness passed; superseded user LaunchAgent removed"
-        } else {
+        } else if options.readiness_url.is_some() {
             "service restart and readiness passed"
+        } else {
+            "service restarted; no readiness endpoint was requested"
         },
     )
     .await
     .map_err(CmdError::click)?;
-    if options.json {
-        print_json(&json!({
-            "host": options.host,
-            "service": options.name,
-            "product": options.product,
-            "previous_version": bundle.previous_version,
-            "version": options.version,
-            "artifact_sha256": bundle.artifact.artifact_sha256,
-            "artifact_directory": installed_directory,
-            "status": "released",
-            "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
-            "superseded_unit": options.supersede_unit,
-        }))?;
-    } else {
-        println!(
-            "{}: {} released {} {} (restart and readiness passed)",
-            options.host, options.name, options.product, options.version
-        );
+    let report = json!({
+        "host": options.host,
+        "service": options.name,
+        "product": options.product,
+        "previous_version": bundle.previous_version,
+        "version": options.version,
+        "artifact_sha256": bundle.artifact.artifact_sha256,
+        "artifact_directory": installed_directory,
+        "status": "released",
+        "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
+        "superseded_unit": options.supersede_unit,
+    });
+    if options.emit {
+        if options.json {
+            print_json(&report)?;
+        } else {
+            let readiness = if options.readiness_url.is_some() {
+                "restart and readiness passed"
+            } else {
+                "unit restarted; readiness was not requested"
+            };
+            println!(
+                "{}: {} released {} {} ({readiness})",
+                options.host, options.name, options.product, options.version
+            );
+        }
     }
     Ok(())
 }

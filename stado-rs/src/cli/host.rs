@@ -4876,6 +4876,46 @@ pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<
     Ok(())
 }
 
+/// Repair Skarbiec's short-lived acquisition state after a service-user cutover.
+pub async fn recover_skarbiec_acquisition_state(
+    target: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-acquisition-state.sh"),
+        std::time::Duration::from_secs(90),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec acquisition-state recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    let detail = recovered.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// Restore the core object API without depending on the API being available.
 ///
 /// The checked-in host helper only mutates an unavailable listener. It pins the
@@ -6118,6 +6158,51 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
             resolved.name, outcome.run_id
         )))
     }
+}
+
+/// Read one completed browser run through Weles' authenticated diagnostic API.
+pub async fn weles_run_diagnostics(
+    target: &str,
+    run_id: &str,
+    file: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let Some(path) = file else {
+        let manifest = crate::deploy::weles_capture::run_diagnostics(&channel, run_id)
+            .await
+            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+        print_json(&manifest);
+        return Ok(());
+    };
+    let bytes = crate::deploy::weles_capture::run_diagnostic_file(&channel, run_id, path)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let byte_count = bytes.len();
+    let (encoding, content) = match String::from_utf8(bytes) {
+        Ok(text) => ("utf8", text),
+        Err(error) => ("base64", STANDARD.encode(error.into_bytes())),
+    };
+    if json_output {
+        print_json(&json!({
+            "target": target,
+            "run_id": run_id,
+            "path": path,
+            "bytes": byte_count,
+            "encoding": encoding,
+            "content": content,
+        }));
+    } else if encoding == "utf8" {
+        print!("{content}");
+    } else {
+        println!("base64:{content}");
+    }
+    Ok(())
 }
 
 pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Result<(), CmdError> {
