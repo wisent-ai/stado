@@ -2713,7 +2713,10 @@ fn declared_target_count(document: &Value) -> usize {
 /// every host-addressed command answered `target 'charless-mac-mini' is not in
 /// the canonical registry` - from the fallback that exists to survive exactly
 /// that outage.
-pub(crate) fn may_replace_last_good(incoming: &Value, recorded: Option<&Value>) -> Result<(), String> {
+pub(crate) fn may_replace_last_good(
+    incoming: &Value,
+    recorded: Option<&Value>,
+) -> Result<(), String> {
     let arriving = declared_target_count(incoming);
     let held = recorded.map_or(0, declared_target_count);
     if arriving == 0 && held > 0 {

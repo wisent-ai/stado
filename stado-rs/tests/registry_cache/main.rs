@@ -72,8 +72,7 @@ const SEEDED_REGISTRY_GROWN: &str = r#"{
 /// loader.
 /// What the authority actually served on 2026-08-31 for about nine minutes.
 /// Schema-valid, contract-clean, and empty.
-const EMPTY_FLEET_REGISTRY: &str =
-    r#"{"schema_version": 2, "coordinators": [], "targets": []}"#;
+const EMPTY_FLEET_REGISTRY: &str = r#"{"schema_version": 2, "coordinators": [], "targets": []}"#;
 
 const CONTRACT_VIOLATING_REGISTRY: &str = r#"{"schema_version": 2, "targets": "not-a-list"}"#;
 
@@ -399,7 +398,11 @@ fn a_registry_naming_no_hosts_never_replaces_a_copy_that_names_some() {
         SEEDED_REGISTRY,
         "an empty registry replaced a copy that named hosts"
     );
-    assert_eq!(fleet.sidecar(), dated, "the copy was re-dated without being replaced");
+    assert_eq!(
+        fleet.sidecar(),
+        dated,
+        "the copy was re-dated without being replaced"
+    );
 }
 
 /// The other half of the same rule: a machine with no copy yet must still be
