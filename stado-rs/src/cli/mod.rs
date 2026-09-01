@@ -2071,6 +2071,13 @@ enum HostCommands {
         /// agent redeems each reference on the page that has the field.
         #[arg(long)]
         defer_fills: bool,
+        /// Prefill every sign-in capability on the first loaded page. Use this
+        /// for forms that render the identifier and password together. Weles
+        /// 0.5.41 and newer leave a capability unspent when its field is absent,
+        /// so a later agent step can still redeem it. Mutually exclusive with
+        /// --defer-fills and requires --sign-in-origin.
+        #[arg(long, conflicts_with = "defer_fills", requires = "sign_in_origin")]
+        prefill_all: bool,
         /// The saved-trajectory key. Defaults to the session label, which is
         /// also the browser profile's name - two different things that only
         /// look alike. A run whose `done` carried an error is still codified
@@ -2921,6 +2928,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 sign_in_origin,
                 sign_in_item,
                 defer_fills,
+                prefill_all,
                 flow_name,
                 windowed,
                 json,
@@ -2939,6 +2947,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     sign_in_origin: sign_in_origin.as_deref(),
                     sign_in_item: sign_in_item.as_deref(),
                     defer_fills,
+                    prefill_all,
                     flow_name: flow_name.as_deref(),
                     windowed,
                     json,

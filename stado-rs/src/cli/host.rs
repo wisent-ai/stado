@@ -5367,7 +5367,7 @@ const home = os.homedir();
 const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
 const managedWorkerRoot = path.join(
   home,
-  '.stado/services/com.wisent.always-on.weles-api/current',
+  '.stado/services/weles-admission/current',
 );
 
 const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
@@ -6273,6 +6273,8 @@ pub struct BrowserTaskRequest<'a> {
     /// Give the agent every capability rather than prefilling the first: see
     /// the flag's own help for the runtime version this exists for.
     pub defer_fills: bool,
+    /// Prefill both same-page sign-in fields before the agent runs.
+    pub prefill_all: bool,
     /// The saved-trajectory key, when it must differ from the profile's label.
     pub flow_name: Option<&'a str>,
     pub windowed: bool,
@@ -6299,6 +6301,7 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
         sign_in_origin,
         sign_in_item,
         defer_fills,
+        prefill_all,
         flow_name,
         windowed,
         json,
@@ -6446,6 +6449,14 @@ pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), C
                 let mut all = prefill.entries;
                 all.extend(prefill.deferred);
                 (Vec::new(), all)
+            } else if prefill_all {
+                // Same-page forms can be completed without a model handling
+                // either credential. Weles 0.5.41+ checks field presence before
+                // redemption, so an absent later field remains available in
+                // the constraints for the agent.
+                let mut all = prefill.entries;
+                all.extend(prefill.deferred);
+                (all, Vec::new())
             } else {
                 (prefill.entries, prefill.deferred)
             }
