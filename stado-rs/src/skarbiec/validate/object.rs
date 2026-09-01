@@ -1,7 +1,8 @@
-//! Startup/doctor validation for the complete object authorization boundary.
-//! The verifier grant must expose exactly the mapped items, every token must
-//! be present, and tokens must be pairwise distinct so no bearer can cross a
-//! namespace even after an accidental duplicate secret rotation.
+//! Startup/doctor validation for the dashboard object authorization boundary.
+//! The verifier grant must expose exactly the mapped object items, may also
+//! expose the independently diagnosed host-health route item, and every visible
+//! token must be pairwise distinct so no bearer can cross a route even after an
+//! accidental duplicate secret rotation.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -21,13 +22,18 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<BTreeSet<_>>();
-    let visible = client
+    let mut visible = client
         .list_items()
         .await?
         .into_iter()
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
+    // The object boundary must remain available during a rolling upgrade where
+    // the route-scoped host-health item has not been reconciled yet. Its own
+    // authorization path diagnoses that absence; unknown extra items still
+    // close the object boundary.
+    let host_health_visible = visible.remove(crate::config::HOST_HEALTH_API_ITEM);
     if visible != expected {
         let missing = expected
             .difference(&visible)
@@ -44,35 +50,44 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         )));
     }
 
-    let mut token_owners = HashMap::<Vec<u8>, &str>::new();
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
     // A Skarbiec request decrypts and rewrites shared vault/audit state.
     // Unbounded startup fan-out caused intermittent connection resets and
     // made the complete authorization boundary fail closed. Read serially:
     // startup latency is bounded by the outer timeout, while the vault sees
     // one operation at a time.
-    for (namespace, policy) in namespaces {
+    let mut scope_items = namespaces
+        .iter()
+        .map(|(namespace, policy)| (format!("namespace {namespace}"), policy.item()))
+        .collect::<Vec<_>>();
+    if host_health_visible {
+        scope_items.push((
+            "host-health route".to_string(),
+            crate::config::HOST_HEALTH_API_ITEM,
+        ));
+    }
+    let verified_count = scope_items.len();
+    for (scope, item) in scope_items {
         let token = client
-            .read_string(policy.item(), "token")
+            .read_string(item, "token")
             .await
             .map_err(|error| {
                 SkarbiecError::Deployment(format!(
-                    "reading {}/token for namespace {namespace} failed: {error}",
-                    policy.item()
+                    "reading {item}/token for {scope} failed: {error}"
                 ))
             })?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
-                    "Skarbiec item {}/token is missing or empty for namespace {namespace}",
-                    policy.item()
+                    "Skarbiec item {item}/token is missing or empty for {scope}"
                 ))
             })?;
         let digest = Sha256::digest(token.as_bytes()).to_vec();
-        if let Some(other) = token_owners.insert(digest, namespace) {
+        if let Some(other) = token_owners.insert(digest, scope.clone()) {
             return Err(SkarbiecError::Deployment(format!(
-                "object bearer values for namespaces {other} and {namespace} must be distinct"
+                "dashboard bearer values for {other} and {scope} must be distinct"
             )));
         }
     }
-    Ok(namespaces.len())
+    Ok(verified_count)
 }

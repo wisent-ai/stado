@@ -1568,6 +1568,63 @@ const LINK_DEGRADED: &str = "degraded";
 /// know how this host is reachable" is the answer that sends an operator to
 /// look, and a guess is the answer that does not.
 const PATH_KIND_UNKNOWN: &str = "unknown";
+const HOST_HEALTH_BEACON_UNIT: &str = "com.wisent.host-health-beacon";
+const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
+const HOST_HEALTH_LOG_LINES: u32 = 80;
+const OBJECT_API_SERVICE: &str = "stado-object-api";
+const LINK_REPAIR_WAIT_SECONDS: u64 = 90;
+const LINK_REPAIR_POLL_SECONDS: u64 = 5;
+
+/// The beacon publisher's newest outcome, read from the managed unit's own
+/// declared log. A later successful host-name line supersedes an older error;
+/// otherwise an incident that was already repaired would keep advertising the
+/// old cause forever.
+fn host_health_publisher_diagnosis(report: &UnitLogReport) -> Value {
+    let lines = report.log.lines().collect::<Vec<_>>();
+    let last_success = lines.iter().rposition(|line| line.trim() == report.target);
+    let last_error = lines
+        .iter()
+        .rposition(|line| line.contains("Error:") || line.contains(HOST_HEALTH_AUTH_UNAVAILABLE));
+    if matches!(
+        (last_success, last_error),
+        (Some(success), Some(error)) if success > error
+    ) || matches!((last_success, last_error), (Some(_), None))
+    {
+        return json!({
+            "unit": report.unit,
+            "code": "published",
+            "detail": "The beacon publisher's newest recorded attempt succeeded.",
+            "repairable": false,
+        });
+    }
+    if let Some(index) = last_error {
+        if lines[index].contains(HOST_HEALTH_AUTH_UNAVAILABLE) {
+            return json!({
+                "unit": report.unit,
+                "code": "verifier_unavailable",
+                "detail": format!(
+                    "The beacon publisher reached the host-health API, but that API could not read \
+                     {}/token through its dedicated verifier.",
+                    crate::config::HOST_HEALTH_API_ITEM
+                ),
+                "repairable": true,
+                "repair_command": format!("stado host repair-link {}", report.target),
+            });
+        }
+        return json!({
+            "unit": report.unit,
+            "code": "publisher_failed",
+            "detail": lines[index].trim(),
+            "repairable": false,
+        });
+    }
+    json!({
+        "unit": report.unit,
+        "code": "publisher_silent",
+        "detail": "The beacon is stale, the host answers, and its publisher log names no failed publish.",
+        "repairable": false,
+    })
+}
 
 /// `stado host link TARGET [--json]` — why this host went quiet, in one
 /// payload.
@@ -1697,6 +1754,37 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // — counts as past the threshold. An absent beacon is the strongest form of
     // "nothing has been heard from this host", not an exemption from it.
     let stale = signal.age_seconds.is_none_or(|age| age > threshold);
+    // A reachable host with a stale beacon is a publisher failure, not a
+    // network mystery. Read the managed publisher's own log here so `link`
+    // carries the cause an operator previously had to discover with a second
+    // command.
+    let beacon_publisher = if stale && ssh_reachable {
+        match collect_unit_log(
+            resolved,
+            HOST_HEALTH_BEACON_UNIT,
+            HOST_HEALTH_LOG_LINES,
+            &runner,
+        )
+        .await
+        {
+            Ok(report) => Some(host_health_publisher_diagnosis(&report)),
+            Err(error) => Some(json!({
+                "unit": HOST_HEALTH_BEACON_UNIT,
+                "code": "diagnostic_unavailable",
+                "detail": error.to_string(),
+                "repairable": false,
+            })),
+        }
+    } else {
+        None
+    };
+    if let Some(detail) = beacon_publisher
+        .as_ref()
+        .and_then(|publisher| publisher.get("detail"))
+        .and_then(Value::as_str)
+    {
+        blockers.push(detail.to_string());
+    }
 
     if let Some(detail) = &signal.error {
         blockers.push(detail.clone());
@@ -1861,6 +1949,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         "connection_paths": &connection_probes,
         "connection_probe_error": &connection_probe_error,
         "session": session.to_json(),
+        "beacon_publisher": &beacon_publisher,
         "path_kind": path_kind,
         "endpoint": from_link("endpoint"),
         "last_sleep_at": from_link("last_sleep_at"),
@@ -1905,6 +1994,15 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             super::registry::human_age(chrono::TimeDelta::seconds(age))
         ),
         _ => println!("beacon:   nothing readable for this host"),
+    }
+    if let Some(publisher) = &beacon_publisher {
+        println!(
+            "publisher:{}",
+            publisher.get("detail").and_then(Value::as_str).map_or_else(
+                || " no diagnosis".to_string(),
+                |detail| format!(" {detail}")
+            )
+        );
     }
     println!(
         "ssh:      {}",
@@ -2008,6 +2106,175 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         }
     }
     link_outcome(&resolved.name, verdict, blockers.len())
+}
+
+/// Repair one stale, reachable host whose publisher is being refused because
+/// the dashboard cannot read its route-scoped bearer.
+///
+/// The repair is deliberately narrow. It reads the publisher's own declared
+/// log, refuses every other cause, resolves the object API authority from the
+/// service directory, reconciles that authority's existing verifier grant
+/// without rotating its bearer, then waits for the host's normal one-minute
+/// publisher to prove the repair with a newer beacon. No service is restarted.
+pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .clone();
+    let store = beacon_store().await?;
+    let initial_health = crate::monitor::host_health::load_host_health(&store, &resolved.name)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let initial_signal =
+        crate::deploy::host_ping::grade_beacon(&initial_health, chrono::Utc::now());
+    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
+    if initial_signal
+        .age_seconds
+        .is_some_and(|age| age <= threshold)
+    {
+        let report = json!({
+            "target": resolved.name,
+            "state": "already_healthy",
+            "detail": "The newest beacon is inside the fleet silence threshold; no repair changed the verifier.",
+            "beacon_age_seconds": initial_signal.age_seconds,
+            "beacon_reported_at": initial_signal.reported_at,
+        });
+        if json_output {
+            print_json(&report);
+        } else {
+            println!(
+                "{}: beacon is already fresh; no repair changed the verifier",
+                resolved.name
+            );
+        }
+        return Ok(());
+    }
+
+    let runner = crate::deploy::production_runner();
+    let publisher_log = collect_unit_log(
+        &resolved,
+        HOST_HEALTH_BEACON_UNIT,
+        HOST_HEALTH_LOG_LINES,
+        &runner,
+    )
+    .await?;
+    let diagnosis = host_health_publisher_diagnosis(&publisher_log);
+    let diagnosis_code = diagnosis
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if diagnosis_code != "verifier_unavailable" {
+        let detail = diagnosis
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or("the publisher log names no supported repair");
+        return Err(CmdError::click(format!(
+            "{}: automatic link repair refused because the diagnosed publisher state is \
+             {diagnosis_code}: {detail}",
+            resolved.name
+        )));
+    }
+
+    let authority = registry
+        .service(OBJECT_API_SERVICE)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "service directory declares no {OBJECT_API_SERVICE}; refusing to guess which \
+                 host owns host-health authorization"
+            ))
+        })?
+        .active_host
+        .clone();
+    crate::deploy::host_channel::resolve_target(&registry, &authority)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let verifier = reconcile_object_verifier_report(&authority).await?;
+
+    let previous_reported_at = initial_signal.reported_at.clone();
+    let started = std::time::Instant::now();
+    let mut last_observation = format!("beacon remained {:?}s old", initial_signal.age_seconds);
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(LINK_REPAIR_POLL_SECONDS)).await;
+        match crate::monitor::host_health::load_host_health(&store, &resolved.name).await {
+            Ok(health) => {
+                let signal = crate::deploy::host_ping::grade_beacon(&health, chrono::Utc::now());
+                last_observation = format!(
+                    "newest beacon is {:?}s old and was reported at {}",
+                    signal.age_seconds,
+                    signal.reported_at.as_deref().unwrap_or("an unknown time")
+                );
+                let newer = signal.reported_at != previous_reported_at;
+                let fresh = signal.age_seconds.is_some_and(|age| age <= threshold);
+                if newer && fresh {
+                    let newest_beacon_at = signal
+                        .reported_at
+                        .as_deref()
+                        .and_then(crate::deploy::host_ping::parse_timestamp);
+                    crate::monitor::host_silence::observe_beacon_age(
+                        &store,
+                        &resolved.name,
+                        newest_beacon_at,
+                        crate::monitor::host_silence::READER_CLI,
+                        None,
+                    )
+                    .await
+                    .map_err(|error| CmdError::click(error.to_string()))?;
+                    let silences = crate::monitor::host_silence::recent_silences(
+                        &store,
+                        &resolved.name,
+                        NEWEST_SILENCES,
+                    )
+                    .await
+                    .map_err(|error| CmdError::click(error.to_string()))?;
+                    let silence_closed = silences.iter().all(|record| record.ended_at.is_some());
+                    let report = json!({
+                        "target": resolved.name,
+                        "state": "repaired",
+                        "detail": if silence_closed {
+                            "The verifier was reconciled, the host published a fresh beacon, and its open silence is closed."
+                        } else {
+                            "The verifier was reconciled and the host published a fresh beacon."
+                        },
+                        "authority": authority,
+                        "diagnosis": diagnosis,
+                        "verifier": verifier,
+                        "previous_beacon_reported_at": previous_reported_at,
+                        "beacon_reported_at": signal.reported_at,
+                        "beacon_age_seconds": signal.age_seconds,
+                        "silence_closed": silence_closed,
+                        "waited_seconds": started.elapsed().as_secs(),
+                    });
+                    if json_output {
+                        print_json(&report);
+                    } else {
+                        println!(
+                            "{}: dashboard verifier reconciled on {}; a fresh beacon arrived \
+                             and the open silence is {}",
+                            resolved.name,
+                            authority,
+                            if silence_closed {
+                                "closed"
+                            } else {
+                                "not recorded"
+                            }
+                        );
+                    }
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                last_observation = error.to_string();
+            }
+        }
+        if started.elapsed().as_secs() >= LINK_REPAIR_WAIT_SECONDS {
+            return Err(CmdError::click(format!(
+                "{}: reconciled the dashboard verifier on {authority}, but no fresh beacon \
+                 arrived within {LINK_REPAIR_WAIT_SECONDS}s; {last_observation}",
+                resolved.name
+            )));
+        }
+    }
 }
 
 /// One silence instant, spelled the way the record on disk spells it.
@@ -4482,23 +4749,45 @@ pub async fn vault_token_mint(
     Ok(())
 }
 
-/// Reconcile the object verifier on TARGET to the exact configured namespace set.
-pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+fn render_verifier_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+    let target = report.get("target").and_then(Value::as_str).unwrap_or("-");
+    let consumer = report
+        .get("consumer")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let items = report
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let verb = if report.get("exact").and_then(Value::as_bool) == Some(true) {
+        "reads exactly"
+    } else {
+        "can read"
+    };
+    println!("{target}: {consumer} {verb} {items}");
+    Ok(())
+}
+
+async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         CmdError::click(format!(
             "invalid object_api.namespaces: {}",
             problems.join("; ")
         ))
     })?;
-    let items = namespaces
-        .values()
-        .map(|policy| policy.item().to_string())
-        .collect::<std::collections::BTreeSet<_>>();
+    let items = crate::config::object_verifier_items(namespaces);
     reconcile_verifier(
         target,
-        json_output,
         "object",
-        "object_api.namespaces",
+        "object_api.namespaces and the host-health route",
         crate::config::OBJECT_API_VERIFIER_CONSUMER,
         "WC_OBJECT_SKARBIEC_TOKEN_FILE",
         "stado-object-api-verifier-skarbiec-token",
@@ -4506,6 +4795,13 @@ pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Resul
         true,
     )
     .await
+}
+
+/// Reconcile the dashboard verifier on TARGET to every configured object
+/// namespace and the route-scoped host-health bearer.
+pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let report = reconcile_object_verifier_report(target).await?;
+    render_verifier_report(&report, json_output)
 }
 
 /// Reconcile one product's release verifier dependency on TARGET.
@@ -4526,9 +4822,8 @@ pub async fn reconcile_release_verifier(
         ))
     })?;
     let items = std::collections::BTreeSet::from([publisher.item().to_string()]);
-    reconcile_verifier(
+    let report = reconcile_verifier(
         target,
-        json_output,
         "release",
         &format!("release_api.publishers.{product}"),
         crate::config::RELEASE_API_VERIFIER_CONSUMER,
@@ -4537,7 +4832,8 @@ pub async fn reconcile_release_verifier(
         items,
         false,
     )
-    .await
+    .await?;
+    render_verifier_report(&report, json_output)
 }
 
 /// Reconcile the service verifier on TARGET to the exact configured deployer set.
@@ -4552,9 +4848,8 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<std::collections::BTreeSet<_>>();
-    reconcile_verifier(
+    let report = reconcile_verifier(
         target,
-        json_output,
         "service",
         "service_api.deployers",
         crate::config::SERVICE_API_VERIFIER_CONSUMER,
@@ -4563,7 +4858,8 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         items,
         true,
     )
-    .await
+    .await?;
+    render_verifier_report(&report, json_output)
 }
 
 /// Read one nonsecret Skarbiec metadata report on a managed host.
@@ -4616,7 +4912,6 @@ async fn remote_skarbiec_metadata(
 #[allow(clippy::too_many_arguments)]
 async fn reconcile_verifier(
     target: &str,
-    json_output: bool,
     kind: &str,
     config_name: &str,
     consumer: &str,
@@ -4624,7 +4919,7 @@ async fn reconcile_verifier(
     token_file_default: &str,
     items: std::collections::BTreeSet<String>,
     replace_capabilities: bool,
-) -> Result<(), CmdError> {
+) -> Result<Value, CmdError> {
     if items.is_empty() {
         return Err(CmdError::click(format!(
             "{config_name} is empty; refusing to mint an unusable verifier grant"
@@ -4968,31 +5263,17 @@ async fn reconcile_verifier(
     }
 
     let item_list = items.iter().cloned().collect::<Vec<_>>();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "consumer": consumer,
-                "items": item_list,
-                "publisher_lifecycles": publisher_lifecycles,
-                "bearer_preserved": bearer_preserved,
-                "expires_at": expires_at,
-            }))?
-        );
-    } else {
-        let verb = if replace_capabilities {
-            "reads exactly"
-        } else {
-            "can read"
-        };
-        println!(
-            "{}: {consumer} {verb} {}",
-            resolved.name,
-            item_list.join(",")
-        );
-    }
-    Ok(())
+    let report = json!({
+        "target": resolved.name,
+        "kind": kind,
+        "consumer": consumer,
+        "items": item_list,
+        "publisher_lifecycles": publisher_lifecycles,
+        "bearer_preserved": bearer_preserved,
+        "expires_at": expires_at,
+        "exact": replace_capabilities,
+    });
+    Ok(report)
 }
 
 /// Recover a local Skarbiec audit-lock stall and restart only its loaded dependants.
@@ -5199,6 +5480,132 @@ async fn unit_log_path(
     Ok((output.ok() && !declared.is_empty()).then(|| declared.to_string()))
 }
 
+/// One collected managed-unit log, before the CLI or a higher-level
+/// diagnostic chooses how to render it.
+struct UnitLogReport {
+    target: String,
+    unit: String,
+    lines: u32,
+    declared: Vec<Value>,
+    log: String,
+}
+
+impl UnitLogReport {
+    fn to_json(&self) -> Value {
+        json!({
+            "target": self.target,
+            "unit": self.unit,
+            "lines": self.lines,
+            "declared": self.declared,
+            "log": self.log,
+        })
+    }
+}
+
+/// Collect a managed unit's declared logs without rendering them.
+///
+/// `host unit-log` and higher-level diagnostics share this collector so the
+/// first one never knows a failure sentence the second one cannot see.
+async fn collect_unit_log(
+    resolved: &ComputeTarget,
+    unit: &str,
+    lines: u32,
+    runner: &crate::deploy::Runner,
+) -> Result<UnitLogReport, CmdError> {
+    let home = crate::deploy::host_channel::remote_home(resolved, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    // The unit file is found, never guessed: the daemon directory first, then
+    // both agent directories, exactly the retired reader's search order.
+    let mut plist = None;
+    for candidate in [
+        format!("/Library/LaunchDaemons/{unit}.plist"),
+        format!("{home}/Library/LaunchAgents/{unit}.plist"),
+        format!("/Library/LaunchAgents/{unit}.plist"),
+    ] {
+        if crate::deploy::host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            plist = Some(candidate);
+            break;
+        }
+    }
+    let Some(plist) = plist else {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
+             directories",
+            resolved.name
+        )));
+    };
+
+    let mut sources = vec![json!({"kind": "plist", "path": plist})];
+    let mut body = String::new();
+
+    // One reader for both keys: a unit that sends stdout and stderr to the
+    // same file must not be tailed twice, and a unit that separates them must
+    // not have half of its account silently dropped.
+    let out_path = unit_log_path(resolved, "Print :StandardOutPath", &plist, runner).await?;
+    let err_path = unit_log_path(resolved, "Print :StandardErrorPath", &plist, runner).await?;
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(path) = &out_path {
+        declared.push(path.clone());
+    }
+    if let Some(path) = &err_path {
+        if out_path.as_ref() != Some(path) {
+            declared.push(path.clone());
+        }
+    }
+    if declared.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: {unit} declares no log path",
+            resolved.name
+        )));
+    }
+
+    for log in &declared {
+        if crate::deploy::host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(log)),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            sources.push(json!({"kind": "file", "path": log}));
+            body.push_str(&format!("=== {log} (last {lines} lines)\n"));
+            let tail = crate::deploy::host_channel::run_program(
+                resolved,
+                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
+                runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if tail.ok() {
+                body.push_str(&tail.stdout);
+            } else {
+                body.push_str("    unreadable\n");
+            }
+        } else {
+            sources.push(json!({"kind": "absent", "path": log}));
+            body.push_str(&format!("=== {log} (absent)\n"));
+        }
+    }
+
+    Ok(UnitLogReport {
+        target: resolved.name.clone(),
+        unit: unit.to_string(),
+        lines,
+        declared: sources,
+        log: body.trim_end().to_string(),
+    })
+}
+
 /// The tail of one managed unit's own log, from the paths its unit file
 /// declares.
 ///
@@ -5222,123 +5629,11 @@ pub async fn unit_log(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-
-    // The unit file is found, never guessed: the daemon directory first, then
-    // both agent directories, exactly the retired reader's search order.
-    let mut plist = None;
-    for candidate in [
-        format!("/Library/LaunchDaemons/{unit}.plist"),
-        format!("{home}/Library/LaunchAgents/{unit}.plist"),
-        format!("/Library/LaunchAgents/{unit}.plist"),
-    ] {
-        if crate::deploy::host_channel::remote_test(
-            &resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
-            &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            plist = Some(candidate);
-            break;
-        }
-    }
-    let Some(plist) = plist else {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
-             directories",
-            resolved.name
-        )));
-    };
-
-    // The report is composed here, in the wire text the retired reader
-    // printed: STADO_UNITLOG marker lines interleaved with the prefixed
-    // tails, so the JSON and text renderings below parse it unchanged.
-    let mut report = format!("STADO_UNITLOG\tplist\t{plist}\n");
-
-    // One reader for both keys: a unit that sends stdout and stderr to the
-    // same file must not be tailed twice, and a unit that separates them must
-    // not have half of its account silently dropped.
-    let out_path = unit_log_path(&resolved, "Print :StandardOutPath", &plist, &runner).await?;
-    let err_path = unit_log_path(&resolved, "Print :StandardErrorPath", &plist, &runner).await?;
-    let mut declared: Vec<String> = Vec::new();
-    if let Some(path) = &out_path {
-        declared.push(path.clone());
-    }
-    if let Some(path) = &err_path {
-        if out_path.as_ref() != Some(path) {
-            declared.push(path.clone());
-        }
-    }
-    if declared.is_empty() {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: {unit} declares no log path",
-            resolved.name
-        )));
-    }
-
-    for log in &declared {
-        if crate::deploy::host_channel::remote_test(
-            &resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(log)),
-            &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            report.push_str(&format!("STADO_UNITLOG\tfile\t{log}\n"));
-            report.push_str(&format!("=== {log} (last {lines} lines)\n"));
-            let tail = crate::deploy::host_channel::run_program(
-                &resolved,
-                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
-                &runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-            if tail.ok() {
-                report.push_str(&tail.stdout);
-            } else {
-                report.push_str("    unreadable\n");
-            }
-        } else {
-            report.push_str(&format!("STADO_UNITLOG\tabsent\t{log}\n"));
-            report.push_str(&format!("=== {log} (absent)\n"));
-        }
-    }
-
-    let body: String = report
-        .lines()
-        .filter(|line| !line.starts_with("STADO_UNITLOG\t"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let report = collect_unit_log(&resolved, unit, lines, &runner).await?;
     if json {
-        let files: Vec<serde_json::Value> = report
-            .lines()
-            .filter_map(
-                |line| match crate::deploy::host_channel::marker_fields(line).as_slice() {
-                    ["STADO_UNITLOG", kind, value] => Some(json!({
-                        "kind": kind,
-                        "path": value,
-                    })),
-                    _ => None,
-                },
-            )
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "unit": unit,
-                "lines": lines,
-                "declared": files,
-                "log": body,
-            }))?
-        );
+        println!("{}", serde_json::to_string_pretty(&report.to_json())?);
     } else {
-        println!("{body}");
+        println!("{}", report.log);
     }
     Ok(())
 }

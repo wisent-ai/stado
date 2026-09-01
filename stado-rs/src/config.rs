@@ -1147,6 +1147,12 @@ pub const ACTIVE_OBJECT_NAMESPACES: &[&str] = &[
 ];
 
 pub const OBJECT_API_VERIFIER_CONSUMER: &str = "stado-object-api-verifier";
+/// Route-scoped bearer the dashboard verifies for host-health publication.
+///
+/// The object verifier reads this item too because the host-health endpoint is
+/// served by the same dashboard process and must not fall back to the broad
+/// coordinator grant.
+pub const HOST_HEALTH_API_ITEM: &str = "stado-host-health-api";
 
 pub const OBJECT_API_ACTIONS: &[&str] = &["delete", "get", "list", "put", "stat"];
 
@@ -2962,6 +2968,20 @@ pub fn object_api_namespaces(
         Ok(namespaces) => Ok(namespaces),
         Err(problems) => Err(problems.as_slice()),
     }
+}
+/// Exact item set visible to the dashboard's least-privilege verifier.
+///
+/// Kept in one function because startup validation and remote reconciliation
+/// must agree byte-for-byte: adding a protected route to only one side closes
+/// the whole boundary as either missing or over-broad.
+pub fn object_verifier_items(
+    namespaces: &BTreeMap<String, ObjectApiNamespace>,
+) -> BTreeSet<String> {
+    namespaces
+        .values()
+        .map(|policy| policy.item().to_string())
+        .chain(std::iter::once(HOST_HEALTH_API_ITEM.to_string()))
+        .collect()
 }
 
 /// Policy for one canonical namespace. Invalid aggregate configuration fails
