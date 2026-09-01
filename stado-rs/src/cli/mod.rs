@@ -1778,6 +1778,20 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read the authenticated artifact inventory, or one exact artifact, from
+    /// a completed Weles browser run on TARGET.
+    #[command(name = "weles-run-diagnostics")]
+    WelesRunDiagnostics {
+        target: String,
+        /// Weles run identifier returned by the browser task.
+        run_id: String,
+        /// Exact artifact path from the run inventory.
+        #[arg(long)]
+        file: Option<String>,
+        /// Emit the report as JSON. Binary file content is base64 encoded.
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect every image rendered by one HTTPS surface in a read-only Weles
     /// browser session on TARGET. The objective and safety constraints are
     /// fixed by Stado; the caller supplies only the URL.
@@ -2754,6 +2768,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesActivity { target, json } => {
                 host::weles_activity(&target, json).await
             }
+            HostCommands::WelesRunDiagnostics {
+                target,
+                run_id,
+                file,
+                json,
+            } => host::weles_run_diagnostics(&target, &run_id, file.as_deref(), json).await,
             HostCommands::WelesImageInspect { target, url, json } => {
                 host::weles_image_inspect(&target, &url, json).await
             }
