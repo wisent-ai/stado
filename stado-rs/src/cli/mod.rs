@@ -1008,11 +1008,22 @@ enum RegistryCommands {
     Validate { path: Option<String> },
     /// Upload local registry.json to the canonical registry object.
     Push {
+        /// The document to upload, or `-` to read it from stdin. With neither,
+        /// the repository's bundled registry is uploaded - which is what
+        /// erased the canonical document on 2026-09-01 when a caller piped a
+        /// body this command never reads.
         path: Option<String>,
         /// Allow a write that deletes a top-level key the canonical document
         /// still carries. Without this the upload is refused and names them.
+        /// It does NOT allow a write that erases every target.
         #[arg(long)]
         force: bool,
+        /// Allow a write that leaves the registry with no targets at all.
+        /// Separate from --force on purpose: every other guard asks whether a
+        /// deletion was meant, and this one asks whether the document is a
+        /// fleet at all.
+        #[arg(long)]
+        allow_empty_fleet: bool,
     },
     /// Print the canonical registry to stdout.
     Pull,
@@ -2436,7 +2447,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
-            RegistryCommands::Push { path, force } => registry::push(path, force).await,
+            RegistryCommands::Push {
+                path,
+                force,
+                allow_empty_fleet,
+            } => registry::push(path, force, allow_empty_fleet).await,
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,

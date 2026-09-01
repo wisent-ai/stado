@@ -89,6 +89,7 @@ printf 'STADO_QUARANTINE_BASE64\t%s\n' "$(@BODY@ | /usr/bin/openssl base64 -A)"
 "#;
 
 const READ_WHOLE_BODY: &str = r#"/usr/bin/head -c @LIMIT@ "$path""#;
+const READ_HEAD_BODY: &str = r#"/usr/bin/head -n @LINES@ "$path" | /usr/bin/head -c @LIMIT@"#;
 
 const READ_TAIL_BODY: &str = r#"/usr/bin/tail -n @LINES@ "$path" | /usr/bin/head -c @LIMIT@"#;
 
@@ -306,6 +307,25 @@ pub(crate) async fn remote_read(
     String::from_utf8(file.content).map(Some).map_err(|error| {
         CmdError::click(format!("{}: {path} is not valid UTF-8: {error}", host.name))
     })
+}
+
+/// The first `lines` lines of a file on a registry host, with the file's FULL
+/// size beside them so a caller can inspect startup without implying it read
+/// the whole file. Lossy UTF-8 follows [`remote_read_tail`]'s log contract.
+pub(crate) async fn remote_read_head(
+    host: &ComputeTarget,
+    path: &str,
+    lines: usize,
+) -> Result<Option<(String, u64)>, CmdError> {
+    let body = READ_HEAD_BODY
+        .replace("@LINES@", &lines.to_string())
+        .replace("@LIMIT@", &REMOTE_READ_LIMIT_BYTES.to_string());
+    Ok(read_remote(host, path, &body).await?.map(|file| {
+        (
+            String::from_utf8_lossy(&file.content).into_owned(),
+            file.bytes,
+        )
+    }))
 }
 
 /// The last `lines` lines of a file on a registry host, with the file's FULL
