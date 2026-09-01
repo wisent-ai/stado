@@ -102,9 +102,11 @@ pub fn beacon_slugs(target: &ComputeTarget, requested_identity: &str) -> Vec<Str
     let mut identities: Vec<String> = target.hostnames.clone();
     identities.push(target.name.clone());
     identities.push(requested_identity.to_string());
-    if let Some(ssh) = &target.ssh {
-        identities.push(targets::ssh_hostname(ssh));
-    }
+    identities.extend(
+        target
+            .ssh_connections()
+            .map(|(_, destination)| targets::ssh_hostname(destination)),
+    );
 
     let mut slugs: Vec<String> = Vec::new();
     for value in &identities {

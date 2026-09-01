@@ -204,7 +204,7 @@ pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
 }
 
 async fn install_public_key(runner: &Runner, target: &str, public_key: &str) -> Result<(), String> {
-    let destination = destination_of(target).await?;
+    let destination = destination_of(runner, target).await?;
     let line = authorized_keys_line(public_key, &item_id(target));
     let command = format!(
         "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
@@ -219,7 +219,7 @@ async fn remove_public_key(runner: &Runner, target: &str, public_key: &str) -> R
     if public_key.is_empty() {
         return Ok(());
     }
-    let destination = destination_of(target).await?;
+    let destination = destination_of(runner, target).await?;
     let command = format!(
         "grep -vF '{public_key}' \"$HOME/.ssh/authorized_keys\" > \"$HOME/.ssh/authorized_keys.tmp\" && mv \"$HOME/.ssh/authorized_keys.tmp\" \"$HOME/.ssh/authorized_keys\""
     );
@@ -230,7 +230,7 @@ async fn remove_public_key(runner: &Runner, target: &str, public_key: &str) -> R
 }
 
 async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, String> {
-    let destination = destination_of(target).await?;
+    let destination = destination_of(runner, target).await?;
     let (argv, _key) = channel_argv(target, &destination, "hostname").await?;
     Ok(
         run_checked(runner, CommandSpec::new(argv), "hostname with the new key")
@@ -240,14 +240,15 @@ async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, String>
     )
 }
 
-async fn destination_of(target: &str) -> Result<String, String> {
+async fn destination_of(runner: &Runner, target: &str) -> Result<String, String> {
     let registry = crate::targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
-    registry
+    let target_entry = registry
         .lookup(target)
-        .ok_or_else(|| format!("target '{target}' not found in registry"))?
-        .ssh
-        .clone()
-        .ok_or_else(|| format!("target '{target}' has no remote channel (ssh=null)"))
+        .ok_or_else(|| format!("target '{target}' not found in registry"))?;
+    crate::deploy::host_channel::select_ssh_connection(target_entry, runner)
+        .await
+        .map(|connection| connection.destination.to_string())
+        .map_err(|error| error.to_string())
 }

@@ -5,9 +5,8 @@
 //! string, registry data, or command output.
 
 use std::sync::LazyLock;
-use std::time::Duration;
 
-use super::{shlex_quote, CommandSpec, DeployError, Runner};
+use super::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 static USERNAME_RE: LazyLock<regex::Regex> =
@@ -222,7 +221,7 @@ pub fn select_targets<'a>(
             .iter()
             .filter(|target| {
                 target.is_provider(crate::capabilities::ProviderId::Local)
-                    && target.ssh.as_deref().is_some_and(|ssh| !ssh.is_empty())
+                    && target.has_ssh_connection()
             })
             .copied()
             .collect();
@@ -241,13 +240,15 @@ pub fn select_targets<'a>(
                 super::py_str_repr(&target.name)
             )));
         }
-        if target.ssh.as_deref().unwrap_or("").is_empty() {
+        if !target.has_ssh_connection() {
             return Err(DeployError(format!(
-                "target {} has no SSH destination",
+                "target {} has no SSH connection path",
                 super::py_str_repr(&target.name)
             )));
         }
-        validate_ssh_target(target.ssh.as_deref().unwrap_or(""))?;
+        for (_, destination) in target.ssh_connections() {
+            validate_ssh_target(destination)?;
+        }
     }
     Ok(selected)
 }
@@ -352,8 +353,10 @@ pub async fn provision_users(
     let mut results: Vec<HostUserResult> = Vec::new();
     for target in selected {
         let name = target.name.clone();
-        let ssh_target = target.ssh.clone().unwrap_or_default();
-        validate_ssh_target(&ssh_target)?;
+        let mut ssh_target = target
+            .ssh_connections()
+            .next()
+            .map_or_else(String::new, |(_, destination)| destination.to_string());
         if options.dry_run {
             results.push(HostUserResult {
                 target: name,
@@ -372,20 +375,27 @@ pub async fn provision_users(
             options.admin,
             options.require_password_change,
         );
-        let spec = CommandSpec {
-            argv: ssh_argv(&ssh_target, &command),
-            stdin: Some(format!("{}\n", options.password.unwrap_or(""))),
-            timeout: Some(Duration::from_secs(SSH_TIMEOUT_SECONDS)),
-        };
-        let completed = match runner(spec).await {
-            Ok(completed) => completed,
+        let password = format!("{}\n", options.password.unwrap_or(""));
+        let completed = match host_channel::run_program_with_stdin_and_connection(
+            target,
+            &["/bin/sh", "-c", command.as_str()],
+            &password,
+            runner,
+        )
+        .await
+        {
+            Ok((completed, host_channel::UsedConnection::Ssh(connection))) => {
+                ssh_target = connection.destination.to_string();
+                completed
+            }
+            Ok((completed, host_channel::UsedConnection::Local)) => completed,
             Err(exc) => {
                 results.push(HostUserResult {
                     target: name,
                     ssh: ssh_target,
                     status: "failed".to_string(),
                     os_name: String::new(),
-                    detail: exc,
+                    detail: exc.0,
                 });
                 continue;
             }

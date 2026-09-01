@@ -327,18 +327,9 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
 /// address half is the one this fleet has agreed on. A declared hostname is
 /// accepted after it, for hosts reached by name rather than by number.
 fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
-    if let Some(ssh) = target.ssh.as_deref() {
-        let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
-        if !address.is_empty() {
-            return Some(address.to_string());
-        }
-    }
-    target
-        .hostnames
-        .iter()
-        .map(|name| name.trim())
-        .find(|name| !name.is_empty())
-        .map(str::to_string)
+    let (_, ssh) = target.ssh_connections().next()?;
+    let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
+    (!address.is_empty()).then(|| address.to_string())
 }
 
 /// The port the service listens on.

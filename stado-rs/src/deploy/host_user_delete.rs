@@ -11,10 +11,8 @@
 
 use std::time::Duration;
 
-use crate::deploy::host_users::{
-    ssh_argv, validate_ssh_target, validate_username, SSH_TIMEOUT_SECONDS,
-};
-use crate::deploy::{shlex_quote, CommandSpec, DeployError, Runner};
+use crate::deploy::host_users::{validate_username, SSH_TIMEOUT_SECONDS};
+use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// Marker prefix of the remote script's report line.
@@ -141,23 +139,30 @@ pub async fn delete_user(
         result.error = Some(error.0);
         return result;
     }
-    let destination = target.ssh.as_deref().unwrap_or("");
-    if destination.is_empty() {
+    if !target.has_ssh_connection() {
         result.error = Some(format!(
-            "target {} has no ssh destination in the registry",
+            "target {} has no SSH connection path in the registry",
             target.name
         ));
         return result;
     }
-    if let Err(error) = validate_ssh_target(destination) {
-        result.error = Some(error.0);
-        return result;
-    }
-    result.ssh_target = destination.to_string();
 
-    let mut spec = CommandSpec::new(ssh_argv(destination, &remote_command(username, keep_home)));
-    spec.timeout = Some(Duration::from_secs(SSH_TIMEOUT_SECONDS));
-    match runner(spec).await {
+    let execution = host_channel::run_script_with_timeout_and_connection(
+        target,
+        &remote_command(username, keep_home),
+        Duration::from_secs(SSH_TIMEOUT_SECONDS),
+        runner,
+    )
+    .await;
+    let output = match execution {
+        Ok((output, host_channel::UsedConnection::Ssh(connection))) => {
+            result.ssh_target = connection.destination.to_string();
+            Ok(output)
+        }
+        Ok((output, host_channel::UsedConnection::Local)) => Ok(output),
+        Err(error) => Err(error.0),
+    };
+    match output {
         Ok(output) if output.ok() => match parse_status(&output.stdout, username) {
             Ok((status, os_name)) => {
                 result.status = status;

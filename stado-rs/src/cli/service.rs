@@ -5728,13 +5728,10 @@ async fn install_from_archive(
         }
         std::fs::copy(path, destination)?;
     } else {
-        let ssh_target = target.ssh.clone().unwrap_or_default();
-        if ssh_target.is_empty() {
-            return Err(CmdError::click(format!(
-                "{} declares no ssh destination",
-                target.name
-            )));
-        }
+        let connection = host_channel::select_ssh_connection(target, runner)
+            .await
+            .map_err(click)?;
+        let ssh_target = connection.destination;
         let prepare = host_channel::run_script(
             target,
             "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
@@ -5748,12 +5745,16 @@ async fn install_from_archive(
                 target.name
             )));
         }
-        let mut options = host_channel::ssh_options(&ssh_target);
+        let mut options = host_channel::ssh_options(ssh_target);
         options.pop();
         let mut argv = vec!["scp".to_string(), "-q".to_string()];
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(path.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
+        let key = crate::deploy::ssh_key::materialize(&target.name)
+            .await
+            .map_err(click)?;
+        let argv = crate::deploy::ssh_key::add_identity(argv, &key).map_err(click)?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
             .map_err(CmdError::click)?;

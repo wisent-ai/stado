@@ -190,6 +190,76 @@ fn ssh_proxy_command() -> Command {
     command
 }
 
+fn target_ssh_paths(target: &targets::ComputeTarget) -> Vec<targets::SshConnectionPath> {
+    target
+        .ssh_connections()
+        .map(|(name, destination)| targets::SshConnectionPath {
+            name: name.to_string(),
+            destination: destination.to_string(),
+        })
+        .collect()
+}
+
+fn resolved_ssh_paths(resolved: &ResolvedService) -> Vec<targets::SshConnectionPath> {
+    let mut paths =
+        Vec::with_capacity(usize::from(resolved.ssh.is_some()) + resolved.ssh_fallbacks.len());
+    if let Some(destination) = &resolved.ssh {
+        paths.push(targets::SshConnectionPath {
+            name: targets::PRIMARY_SSH_CONNECTION.to_string(),
+            destination: destination.clone(),
+        });
+    }
+    paths.extend(resolved.ssh_fallbacks.iter().cloned());
+    paths
+}
+
+async fn select_resolver_ssh_path(
+    paths: &[targets::SshConnectionPath],
+) -> Result<&targets::SshConnectionPath, String> {
+    let Some(first) = paths.first() else {
+        return Err("active host has no registry SSH connection path".to_string());
+    };
+    if paths.len() == 1 {
+        return Ok(first);
+    }
+
+    let mut failures = Vec::new();
+    for path in paths {
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            ssh_proxy_command()
+                .arg(&path.destination)
+                .arg("true")
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        match result {
+            Ok(Ok(output)) if output.status.success() => return Ok(path),
+            Ok(Ok(output)) => {
+                let detail = String::from_utf8_lossy(&output.stderr);
+                let detail = detail.trim();
+                failures.push(format!(
+                    "{}: {}",
+                    path.name,
+                    if detail.is_empty() {
+                        output.status.to_string()
+                    } else {
+                        detail.chars().take(512).collect()
+                    }
+                ));
+            }
+            Ok(Err(error)) => failures.push(format!("{}: {error}", path.name)),
+            Err(_) => failures.push(format!("{}: timed out after 20s", path.name)),
+        }
+    }
+    Err(format!(
+        "no registry SSH connection path answered ({})",
+        failures.join("; ")
+    ))
+}
+
 /// Publish one `authority_unreachable` refusal about the authority host.
 ///
 /// The evidence belongs to the AUTHORITY, not to the machine that noticed.
@@ -222,7 +292,7 @@ pub(crate) enum SnapshotSource {
         /// Registry name of the authority target, carried so a failed read
         /// can name the host that is actually silent.
         target: String,
-        ssh: String,
+        ssh: Vec<targets::SshConnectionPath>,
         command: String,
     },
 }
@@ -255,13 +325,13 @@ impl SnapshotSource {
                 ssh,
                 command,
             } => {
-                let first = Self::fetch_authority(target, ssh, command, reader).await;
+                let first = Self::fetch_authority_paths(target, ssh, command, reader).await;
                 let first_error = match first {
                     Ok(snapshot) => return Ok(snapshot),
                     Err(error) => error,
                 };
                 drop_stale_ssh_sockets();
-                Self::fetch_authority(target, ssh, command, reader)
+                Self::fetch_authority_paths(target, ssh, command, reader)
                     .await
                     .map_err(|retry_error| {
                         format!(
@@ -271,6 +341,28 @@ impl SnapshotSource {
                     })
             }
         }
+    }
+
+    async fn fetch_authority_paths(
+        target: &str,
+        paths: &[targets::SshConnectionPath],
+        command: &str,
+        reader: &str,
+    ) -> Result<(Value, String, u64), String> {
+        if paths.is_empty() {
+            return Err("registry authority has no SSH connection path".to_string());
+        }
+        let mut failures = Vec::new();
+        for path in paths {
+            match Self::fetch_authority(target, &path.destination, command, reader).await {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => failures.push(format!("{}: {error}", path.name)),
+            }
+        }
+        Err(format!(
+            "no registry authority SSH connection path answered ({})",
+            failures.join("; ")
+        ))
     }
 
     async fn fetch_authority(
@@ -366,10 +458,10 @@ pub(crate) fn snapshot_source(
     let target = registry
         .lookup(&directory.authority.target)
         .ok_or_else(|| "registry authority target disappeared".to_string())?;
-    let ssh = target
-        .ssh
-        .clone()
-        .ok_or_else(|| "registry authority has no SSH transport".to_string())?;
+    let ssh = target_ssh_paths(target);
+    if ssh.is_empty() {
+        return Err("registry authority has no SSH connection path".to_string());
+    }
     Ok(SnapshotSource::Authority {
         target: target.name.clone(),
         ssh,
@@ -1283,15 +1375,13 @@ async fn proxy_connection(
         return Ok(());
     }
 
-    let ssh = resolved.ssh.ok_or_else(|| {
-        format!(
-            "active host {:?} has no registry SSH transport",
-            resolved.active_host
-        )
-    })?;
+    let paths = resolved_ssh_paths(&resolved);
+    let ssh = select_resolver_ssh_path(&paths)
+        .await
+        .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))?;
     let destination = format!("{host}:{port}");
     let mut child = ssh_proxy_command()
-        .args(["-W", &destination, &ssh])
+        .args(["-W", destination.as_str(), ssh.destination.as_str()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -1622,20 +1712,29 @@ async fn probe_authority(
             detail: notice.map(str::to_string),
         };
     }
-    let Some(ssh) = registry
-        .lookup(&directory.authority.target)
-        .and_then(|authority| authority.ssh.clone())
-    else {
+    let Some(authority) = registry.lookup(&directory.authority.target) else {
         return AuthorityAnswer {
             source: "ssh",
             reachable: false,
             generation: None,
             detail: Some(format!(
-                "registry target {:?} has no SSH transport",
+                "registry target {:?} is missing",
                 directory.authority.target
             )),
         };
     };
+    let ssh = target_ssh_paths(authority);
+    if ssh.is_empty() {
+        return AuthorityAnswer {
+            source: "ssh",
+            reachable: false,
+            generation: None,
+            detail: Some(format!(
+                "registry target {:?} has no SSH connection path",
+                directory.authority.target
+            )),
+        };
+    }
     let source = SnapshotSource::Authority {
         target: directory.authority.target.clone(),
         ssh,
