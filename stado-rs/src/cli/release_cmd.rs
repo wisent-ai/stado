@@ -1142,6 +1142,54 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
             .map_err(|error| CmdError::click(format!("cannot mark {name} executable: {error}")))?;
     }
+    // Leave the receipt the fleet's provenance check reads, before the
+    // install replaces the name.
+    //
+    // `cli::service_converge::attest_installed` decides provenance by byte
+    // comparing the installed file against
+    // `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, which
+    // `deploy::host_release` writes when IT delivers. This command is the
+    // other delivery endpoint and it staged nothing, so a binary it installed
+    // read `unattested` forever after — even though the archive was verified
+    // against the contract digest a hundred lines above.
+    //
+    // lukasz-macbook is the proof. Its `~/.stado/bin` carries this command's
+    // own dated backups through 2026-09-02 and its `stado.release-version`
+    // handshake, so deliveries plainly ran; `~/.stado/releases/stado` holds
+    // 0.13.24 and older, nothing since. `stado service converge` therefore
+    // reported the host's binary as bytes the fleet cannot attest, and the
+    // remediation it printed — deliver a published version — was the thing
+    // that had just happened.
+    //
+    // Never fatal: the archive is verified and the install is the point, so a
+    // receipt that cannot be written is named and the delivery continues.
+    match (
+        std::env::var("WISENT_VERSION")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        crate::self_update::platform_triple_short(),
+    ) {
+        (Some(version), Ok(platform)) => {
+            if let Err(error) =
+                crate::self_update::stage_for_attestation(&name, &version, platform, &staged)
+            {
+                println!(
+                    "release install-local: {name} {version} installed but its attestation copy \
+                     could not be staged, so `stado service converge` will read it as \
+                     unattested: {error}"
+                );
+            }
+        }
+        (None, _) => println!(
+            "release install-local: WISENT_VERSION is unset, so no attestation copy was staged \
+             and `stado service converge` will read {name} as unattested"
+        ),
+        (_, Err(error)) => println!(
+            "release install-local: this platform has no release triple ({error}), so no \
+             attestation copy was staged for {name}"
+        ),
+    }
     std::fs::rename(&staged, &destination)
         .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
     if let Some(staged_version) = release_version_stage {

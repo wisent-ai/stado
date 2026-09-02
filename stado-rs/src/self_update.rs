@@ -463,7 +463,7 @@ async fn install_release_with(
 /// the installed one and `cmp -s` in `attest_installed` matches. Written to a
 /// dot-prefixed name and renamed, so a reader never sees a partial copy at
 /// the coordinate it attests against.
-fn stage_for_attestation(
+pub(crate) fn stage_for_attestation(
     name: &str,
     version: &str,
     platform: &str,
