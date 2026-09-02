@@ -51,10 +51,13 @@ impl RecoveryReleaseClient {
                     .to_string(),
             ));
         }
-        Ok(Self {
-            origin,
-            http: reqwest::Client::new(),
-        })
+        // Same client the rest of the fleet reads objects with: it trusts
+        // `storage.stado.ca_file` and bounds connect and read, so a slow or
+        // privately-signed origin fails with its own sentence instead of a bare
+        // "error sending request", and a stalled body cannot hang recovery.
+        let http = crate::cli::storage::fleet_https_client()
+            .map_err(|error| DeployError(format!("recovery release client: {error}")))?;
+        Ok(Self { origin, http })
     }
 
     async fn get(&self, uri: &str) -> Result<Vec<u8>, DeployError> {

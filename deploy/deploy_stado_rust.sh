@@ -33,6 +33,55 @@ if [ ! -x "$STADO_BIN" ]; then
 fi
 export STADO_BIN
 
+# The release gate downstream asks whether the public channel serves the exact
+# release this host runs. Until 2026-09-02 it asked about `release.version` in
+# the operator config, which no deploy ever writes: the 0.13.42 deploy verified
+# 0.7.22, a version published in July. The coordinate that cannot drift is the
+# binary that was just installed, so it names itself here unless the caller
+# pinned one on purpose.
+if [ -z "${STADO_RELEASE_VERSION:-}" ]; then
+    INSTALLED_VERSION="$("$STADO_BIN" --version)"
+    INSTALLED_VERSION="${INSTALLED_VERSION##* }"
+    case "$INSTALLED_VERSION" in
+        *[![:alnum:]._-]*|"")
+            echo "FATAL: $STADO_BIN --version did not name a usable release version"
+            false
+            ;;
+    esac
+    STADO_RELEASE_VERSION="$INSTALLED_VERSION"
+fi
+export STADO_RELEASE_VERSION
+
+# The gate needs a platform as well, and the host is the only thing that knows
+# which one it is. Same mapping the bootstrap installer and every host helper
+# use, so all of them name one release the same way.
+if [ -z "${STADO_RELEASE_PLATFORM:-}" ]; then
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64) STADO_RELEASE_PLATFORM=darwin-arm64 ;;
+        Linux-x86_64) STADO_RELEASE_PLATFORM=linux-amd64 ;;
+        *)
+            echo "FATAL: unsupported release platform: $(uname -s) $(uname -m)"
+            false
+            ;;
+    esac
+fi
+export STADO_RELEASE_PLATFORM
+
+# A deploy that installs a release and leaves the profile declaring an older one
+# is the drift this whole section exists for: `release.version` is what
+# `stado agent` dispatch, `local_install` and the version-drift check all read as
+# "the release this deployment wants". It is written through Stado's own config
+# command, and only when it disagrees, so the file is untouched on a no-op run.
+# `config show` resolves env over file, and this script has just exported the
+# version, so the file's own declaration is only visible with that variable
+# unset — otherwise the comparison always agrees with itself and never writes.
+DECLARED_VERSION="$(env -u STADO_RELEASE_VERSION "$STADO_BIN" config show 2>/dev/null |
+    jq -r '.resolved.stado_release_version // ""' 2>/dev/null || true)"
+if [ "$DECLARED_VERSION" != "$STADO_RELEASE_VERSION" ]; then
+    "$STADO_BIN" config set release.version "$STADO_RELEASE_VERSION"
+    echo "declared release.version=$STADO_RELEASE_VERSION (was ${DECLARED_VERSION:-unset})"
+fi
+
 echo "Deploying Rust Stado from the explicitly selected deployment profile."
 echo "Preflight fails closed on unresolved active storage, replica, identity,"
 echo "release, object auth, networking or quota; fenced providers are never contacted."

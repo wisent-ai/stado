@@ -1231,21 +1231,74 @@ pub struct OutcomeSummary {
     pub feedback_written: usize,
     pub savings_measured: usize,
 }
-pub async fn measure_outcomes(store: &JobStorage) -> Result<OutcomeSummary, StorageError> {
-    let decisions = super::storage::list_decisions(store).await?;
-    let feedback = super::storage::list_feedback(store).await?;
-    let feedback_ids: std::collections::BTreeSet<&str> = feedback
-        .iter()
-        .map(|entry| entry.decision_id.as_str())
-        .collect();
-    let savings = super::storage::list_savings(store).await?;
-    let measurements = super::storage::list_savings_measurements(store).await?;
-    let measured_ids: std::collections::BTreeSet<&str> = measurements
-        .iter()
-        .map(|entry| entry.savings_id.as_str())
-        .collect();
-    let costs = crate::scheduler::cost::collect_completed_dynamic(store).await?;
+/// Write the feedback and savings measurements that are still missing.
+///
+/// Only the work that is actually outstanding is read. Which decisions already
+/// have feedback, and which savings already have a measurement, are answered by
+/// the object names through one listing each; bodies are downloaded only for
+/// the decisions that can still produce something.
+///
+/// The window matters as much as the filter. A decision whose job has already
+/// left `completed/` and `failed/` can never produce feedback, so without a
+/// bound it stays outstanding forever and is re-read on every tick. The bound
+/// is the policy's own artifact retention: past it, [`super::lifecycle`] would
+/// delete the record anyway, so re-examining it is work the deployment has
+/// already declared worthless.
+///
+/// Before 2026-09-02 this function downloaded every decision, feedback, savings
+/// and measurement record ever written and then read one or two job objects per
+/// decision — 11,514 objects and roughly 16,000 more job reads per tick against
+/// a store that also serves the public release channel. That is what held the
+/// 0.13.42 release download at 570 KB/s until the deploy failed.
+pub async fn measure_outcomes(
+    store: &JobStorage,
+    policy: &AutonomyPolicy,
+    now: DateTime<Utc>,
+) -> Result<OutcomeSummary, StorageError> {
     let mut summary = OutcomeSummary::default();
+    let feedback_ids = super::storage::list_feedback_decision_ids(store).await?;
+    let measured_ids = super::storage::list_measured_savings_ids(store).await?;
+    let mut pending_savings = Vec::new();
+    for savings_id in super::storage::list_savings_ids(store).await? {
+        if measured_ids.contains(&savings_id) {
+            continue;
+        }
+        if let Some(record) = super::storage::load_savings(store, &savings_id).await? {
+            pending_savings.push(record);
+        }
+    }
+    let artifact_seconds = i64::try_from(
+        policy.idle.artifact_days * crate::monitor::billing::SECONDS_PER_DAY,
+    )
+    .unwrap_or(i64::MAX);
+    let mut outstanding: std::collections::BTreeSet<String> = super::storage::list_decision_index(
+        store,
+    )
+    .await?
+    .into_iter()
+    .filter(|(decision_id, updated)| {
+        !feedback_ids.contains(decision_id)
+            && updated.is_none_or(|updated| {
+                now.signed_duration_since(updated).num_seconds() < artifact_seconds
+            })
+    })
+    .map(|(decision_id, _)| decision_id)
+    .collect();
+    outstanding.extend(
+        pending_savings
+            .iter()
+            .map(|saving| saving.decision_id.clone()),
+    );
+    if outstanding.is_empty() {
+        return Ok(summary);
+    }
+    let costs = crate::scheduler::cost::collect_completed_dynamic(store).await?;
+    let mut decisions = Vec::with_capacity(outstanding.len());
+    for decision_id in outstanding {
+        if let Some(decision) = super::storage::load_decision(store, &decision_id).await? {
+            decisions.push(decision);
+        }
+    }
     for decision in decisions
         .iter()
         .filter(|decision| decision.kind == DecisionKind::Placement)
@@ -1301,10 +1354,9 @@ pub async fn measure_outcomes(store: &JobStorage) -> Result<OutcomeSummary, Stor
         else {
             continue;
         };
-        for saving in savings
+        for saving in pending_savings
             .iter()
             .filter(|saving| saving.decision_id == decision.decision_id)
-            .filter(|saving| !measured_ids.contains(saving.savings_id.as_str()))
         {
             let measurement = SavingsMeasurement {
                 schema_version: SCHEMA_VERSION,

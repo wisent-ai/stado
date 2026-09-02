@@ -1,5 +1,7 @@
 //! Canonical object layout and atomic persistence for the autonomy control plane.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Duration, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -510,6 +512,92 @@ pub async fn write_adoption(
 
 pub async fn list_adoptions(store: &JobStorage) -> Result<Vec<AdoptionRecord>, StorageError> {
     load_records(store, &format!("{ADOPTION_PREFIX}/")).await
+}
+
+/// Which record ids exist under one prefix, and when each was last written —
+/// from a single listing, with no body downloaded.
+///
+/// Every record type in this module is keyed by its own id in its object name,
+/// so "does this id exist" and "how old is it" are questions the listing
+/// already answers. Asking them by downloading each body is what made one
+/// coordinator tick 11,514 serial object GETs on 2026-09-02 — 8,129 decisions
+/// and 3,385 feedback records, re-read every tick for work finished months
+/// earlier. The fleet store serves the release channel too, so that tick is
+/// what starved the 0.13.42 release download to 570 KB/s.
+async fn list_record_index(
+    store: &JobStorage,
+    prefix: &str,
+) -> Result<Vec<(String, Option<DateTime<Utc>>)>, StorageError> {
+    let blobs = store.list_blobs_with_meta(prefix).await?;
+    let mut index = Vec::with_capacity(blobs.len());
+    for blob in blobs {
+        let name = blob.name.rsplit('/').next().unwrap_or_default();
+        let Some(id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        index.push((id.to_string(), blob.updated));
+    }
+    Ok(index)
+}
+
+async fn list_record_ids(
+    store: &JobStorage,
+    prefix: &str,
+) -> Result<BTreeSet<String>, StorageError> {
+    Ok(list_record_index(store, prefix)
+        .await?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// Every decision id with the moment its record was last written.
+pub async fn list_decision_index(
+    store: &JobStorage,
+) -> Result<Vec<(String, Option<DateTime<Utc>>)>, StorageError> {
+    list_record_index(store, &format!("{DECISION_PREFIX}/")).await
+}
+
+/// Decision ids that already carry placement feedback. The feedback object is
+/// named for the decision it answers, so the names are the answer.
+pub async fn list_feedback_decision_ids(
+    store: &JobStorage,
+) -> Result<BTreeSet<String>, StorageError> {
+    list_record_ids(store, &format!("{FEEDBACK_PREFIX}/")).await
+}
+
+/// Every savings id currently recorded.
+pub async fn list_savings_ids(store: &JobStorage) -> Result<BTreeSet<String>, StorageError> {
+    list_record_ids(store, &format!("{SAVINGS_PREFIX}/")).await
+}
+
+/// Savings ids that already carry a measurement. A measurement is written as
+/// `measurement-<savings id>`, so its name names the saving it measured.
+pub async fn list_measured_savings_ids(
+    store: &JobStorage,
+) -> Result<BTreeSet<String>, StorageError> {
+    Ok(list_record_ids(store, &format!("{SAVINGS_MEASUREMENT_PREFIX}/"))
+        .await?
+        .into_iter()
+        .filter_map(|id| id.strip_prefix("measurement-").map(str::to_string))
+        .collect())
+}
+
+/// One savings record by id.
+pub async fn load_savings(
+    store: &JobStorage,
+    savings_id: &str,
+) -> Result<Option<SavingsRecord>, StorageError> {
+    let Some(raw) = store
+        .download_text(&format!("{SAVINGS_PREFIX}/{savings_id}.json"))
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_str(&raw)?))
 }
 
 async fn load_records<T>(store: &JobStorage, prefix: &str) -> Result<Vec<T>, StorageError>
