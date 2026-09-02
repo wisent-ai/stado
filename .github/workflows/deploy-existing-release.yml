@@ -310,18 +310,23 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/verify_public_stado_release.sh" \
             "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
             "$version" "$platform" "$RUNNER_TEMP"
-      - name: Acquire release channel bearer
-        env:
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
-        run: |
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          token="$("$stado_bin" secrets get stado-release-publisher --field token)"
-          test -n "$token"
-          echo "::add-mask::$token"
-          echo "STADO_API_TOKEN=$token" >> "$GITHUB_ENV"
+      # No raw bearer is acquired for the delivery. This step used to run
+      # `stado secrets get stado-release-publisher --field token` and export it
+      # as `STADO_API_TOKEN`, and Skarbiec refuses that read on purpose:
+      #
+      #   Error: Skarbiec returned HTTP 403:
+      #   {"error":"consumer not authorized to read item field"}
+      #
+      # An acquisition grant lets the client obtain its own bearer inside the
+      # process; it is not a licence to hand the secret to a shell. That
+      # refusal ended the 0.13.47 delivery after every publish and both public
+      # verifications had passed. The delivery authenticates the way every
+      # other step in this file does — the publisher's acquisition grant — and
+      # needs no token in the environment at all.
       - name: Deploy the existing immutable release
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
           STADO_BIN: ${{ github.workspace }}/stado-rs/target/release/stado
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: scripts/deploy_existing_stado_release.sh '${{ inputs.version }}'
