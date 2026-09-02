@@ -950,52 +950,56 @@ fn developer_id_bundle() -> Result<Option<(String, String, String, String)>, Dep
         read("not_after")?,
     )))
 }
-fn issue_apple_capability(
+/// Issue one Apple sign-in capability on the host that will redeem it.
+///
+/// This used to shell out to a local `skarbiec capability-issue`, and
+/// [`super::host_capability`] was written on 2026-08-31 for exactly that gap
+/// while naming this function as the surviving instance of it. Capabilities
+/// are per-host at both ends: issuing writes state beside the issuing
+/// machine's vault, and redemption is a UNIX socket on the worker. So a
+/// reference minted on an operator's laptop named nothing on
+/// charless-mac-mini, the broker answered `redemption denied: no such
+/// capability`, and the trajectory reported `capability denied` after
+/// spending its browser session - which is how a Developer ID run could look
+/// authorized and be unredeemable at the same time.
+///
+/// The broker addressed is Weles's own instance, not the vault's default
+/// pair: its launcher serves `weles-api-capability.sock` out of
+/// `weles-api-capabilities.json`, and anything issued into the default files
+/// is invisible to it.
+async fn issue_apple_capability(
+    target: &ComputeTarget,
+    broker: &super::host_capability::RemoteBroker,
     agent: &str,
     purpose: &str,
     resource: &str,
     authorization_id: &str,
+    runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let output = Command::new("skarbiec")
-        .args([
-            "capability-issue",
-            "--agent",
+    let capability_id = super::host_capability::issue(
+        target,
+        broker,
+        &super::host_capability::Issuance {
             agent,
-            "--purpose",
             purpose,
-            "--resource",
             resource,
-            "--target",
-            "weles",
-            "--ttl",
-            "3600",
-            "--max-uses",
-            "1",
-            "--authorization-id",
-            authorization_id,
-        ])
-        .output()
-        .map_err(|error| {
-            DeployError(format!(
-                "could not start Skarbiec capability issuance: {error}"
-            ))
-        })?;
-    if !output.status.success() {
+            capability_target: "weles",
+            ttl_seconds: "3600",
+            max_uses: "1",
+            // Bound on purpose: the Apple trajectory builds its expectation
+            // with the guard id, so an unbound reference is refused with
+            // `capability operation mismatch`.
+            authorization_id: Some(authorization_id),
+        },
+        runner,
+    )
+    .await?;
+    if capability_id.len() != 64 || !capability_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(DeployError(format!(
-            "Skarbiec refused Apple capability: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "{}: skarbiec issued {capability_id:?} for {resource}, which is not a capability id",
+            target.name
         )));
     }
-    let issued: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-        DeployError(format!(
-            "Skarbiec returned unreadable capability JSON: {error}"
-        ))
-    })?;
-    let capability_id = issued
-        .get("capability_id")
-        .and_then(Value::as_str)
-        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .ok_or_else(|| DeployError("Skarbiec returned an invalid capability id".to_string()))?;
     Ok(json!({
         "capability_id": capability_id,
         "purpose": purpose,
@@ -1115,24 +1119,45 @@ pub async fn bootstrap_developer_id(
         } else {
             let guard_id = uuid::Uuid::new_v4().to_string();
             let execution_agent = "weles-worker";
+            // Resolved once: all three references must live in the same
+            // broker state the worker's socket is served from, and that
+            // broker is the host's, never this machine's.
+            let broker = super::host_capability::resolve(
+                &target,
+                &super::weles_browser_task::weles_api_broker_files(),
+                &production_runner(),
+            )
+            .await?;
             let email = issue_apple_capability(
+                &target,
+                &broker,
                 execution_agent,
                 "weles.browser.fill",
                 "origin:https://idmsa.apple.com/email",
                 &guard_id,
-            )?;
+                &production_runner(),
+            )
+            .await?;
             let password = issue_apple_capability(
+                &target,
+                &broker,
                 execution_agent,
                 "weles.browser.fill",
                 "origin:https://idmsa.apple.com/password",
                 &guard_id,
-            )?;
+                &production_runner(),
+            )
+            .await?;
             let two_factor = issue_apple_capability(
+                &target,
+                &broker,
                 execution_agent,
                 "weles.apple.2fa",
                 &format!("challenge:apple/{guard_id}"),
                 &guard_id,
-            )?;
+                &production_runner(),
+            )
+            .await?;
             let _action_id = super::weles_capture::run_action(
                 &channel,
                 APPLE_DEVELOPER_ID_ACTION,
