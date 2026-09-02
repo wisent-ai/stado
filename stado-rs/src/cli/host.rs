@@ -849,6 +849,273 @@ done
     Ok(())
 }
 
+/// Every field `stado host disk-cleanup` may rewrite, as parsed from argv.
+///
+/// One field per registry key, because the policy is the whole contract
+/// between an operator and the janitor and a setter that covered part of it
+/// would leave the rest editable only by hand. Before this existed, `stado`
+/// could set exactly one of these — `host weles-recordings-dir`, one
+/// cleaner's root — and the dashboard accepted exactly one more, `mode`, so a
+/// watermark, a budget or a `build_caches` root could only be changed by
+/// pulling `registry.json`, editing it, and pushing it back.
+pub struct DiskCleanupPolicyEdit {
+    pub mode: Option<String>,
+    pub check_interval_seconds: Option<i64>,
+    pub low_free_gb: Option<i64>,
+    pub target_free_gb: Option<i64>,
+    pub max_items_per_pass: Option<i64>,
+    pub max_bytes_per_pass: Option<i64>,
+    pub max_scan_items: Option<i64>,
+    pub max_pass_seconds: Option<i64>,
+    pub clear_max_pass_seconds: bool,
+    pub add_cleaner: Vec<String>,
+    pub remove_cleaner: Vec<String>,
+    pub cleaner_root: Vec<String>,
+    pub clear_cleaner_root: Vec<String>,
+    pub cleaner_min_age_seconds: Vec<String>,
+}
+
+impl DiskCleanupPolicyEdit {
+    /// Whether argv asked for a read rather than a write.
+    fn is_read_only(&self) -> bool {
+        self.mode.is_none()
+            && self.check_interval_seconds.is_none()
+            && self.low_free_gb.is_none()
+            && self.target_free_gb.is_none()
+            && self.max_items_per_pass.is_none()
+            && self.max_bytes_per_pass.is_none()
+            && self.max_scan_items.is_none()
+            && self.max_pass_seconds.is_none()
+            && !self.clear_max_pass_seconds
+            && self.add_cleaner.is_empty()
+            && self.remove_cleaner.is_empty()
+            && self.cleaner_root.is_empty()
+            && self.clear_cleaner_root.is_empty()
+            && self.cleaner_min_age_seconds.is_empty()
+    }
+}
+
+/// `NAME=VALUE` from one repeatable flag.
+fn cleaner_pair(raw: &str, flag: &str) -> Result<(String, String), CmdError> {
+    let Some((name, value)) = raw.split_once('=') else {
+        return Err(CmdError::usage(format!(
+            "--{flag} takes NAME=VALUE, got {raw:?}"
+        )));
+    };
+    let (name, value) = (name.trim().to_string(), value.trim().to_string());
+    if name.is_empty() || value.is_empty() {
+        return Err(CmdError::usage(format!(
+            "--{flag} takes NAME=VALUE, got {raw:?}"
+        )));
+    }
+    Ok((name, value))
+}
+
+/// The retention floor `targets::validate_registry` enforces for one cleaner,
+/// used as the age gate a newly enabled cleaner starts with. Read from the
+/// same three cases the validator states, so enabling a cleaner cannot
+/// produce a document the validator then refuses.
+fn cleaner_age_floor(name: &str) -> i64 {
+    match name {
+        "huggingface_cache" => 3600,
+        "queue_workdirs" | "backup_twins" => 0,
+        _ => 86400,
+    }
+}
+
+/// `serde` writes `Option::None` as `null`, and the cleaner schema accepts a
+/// key list rather than nulls, so a seeded default is stripped before it is
+/// validated. Applied only to the policy subtree this command builds.
+fn strip_nulls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|_, entry| !entry.is_null());
+            for entry in map.values_mut() {
+                strip_nulls(entry);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_nulls),
+        _ => {}
+    }
+}
+
+/// Read or rewrite one target's `disk_cleanup` policy.
+///
+/// The write is the same compare-and-swap every registry setter here uses:
+/// read the current generation, rewrite exactly the named fields, validate the
+/// WHOLE document, and swap it only if nobody else moved it. A target that
+/// declares no policy is seeded from
+/// [`crate::targets::DiskCleanupPolicy::reporting_default`] first, so its
+/// first declaration starts at `report` rather than at whatever the flags
+/// happen to omit.
+pub async fn disk_cleanup_policy(
+    target: &str,
+    edit: DiskCleanupPolicyEdit,
+    json: bool,
+) -> Result<(), CmdError> {
+    if edit.max_pass_seconds.is_some() && edit.clear_max_pass_seconds {
+        return Err(CmdError::usage(
+            "--max-pass-seconds and --clear-max-pass-seconds are mutually exclusive",
+        ));
+    }
+    let store = crate::targets::RegistryStore::open().await?;
+    let current = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
+    let mut document: Value = serde_json::from_str(&current.content)?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    let entry = targets
+        .iter_mut()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+
+    if edit.is_read_only() {
+        let declared = entry.get("disk_cleanup").cloned();
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "target": target,
+                    "generation": current.version,
+                    "declared": declared.is_some(),
+                    "disk_cleanup": declared,
+                }))?
+            );
+        } else if let Some(policy) = declared {
+            println!("{target}: {}", serde_json::to_string_pretty(&policy)?);
+        } else {
+            println!(
+                "{target}: declares no disk_cleanup policy; it is measured against the \
+                 reporting default, which reports and never deletes"
+            );
+        }
+        return Ok(());
+    }
+
+    let mut policy = match entry.get("disk_cleanup") {
+        Some(existing) if existing.is_object() => existing.clone(),
+        _ => {
+            let mut seeded =
+                serde_json::to_value(crate::targets::DiskCleanupPolicy::reporting_default())?;
+            strip_nulls(&mut seeded);
+            seeded
+        }
+    };
+    let policy_map = policy
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("registry target disk_cleanup must be an object"))?;
+
+    for (key, declared) in [
+        ("mode", edit.mode.clone().map(Value::from)),
+        (
+            "check_interval_seconds",
+            edit.check_interval_seconds.map(Value::from),
+        ),
+        ("low_free_gb", edit.low_free_gb.map(Value::from)),
+        ("target_free_gb", edit.target_free_gb.map(Value::from)),
+        (
+            "max_items_per_pass",
+            edit.max_items_per_pass.map(Value::from),
+        ),
+        (
+            "max_bytes_per_pass",
+            edit.max_bytes_per_pass.map(Value::from),
+        ),
+        ("max_scan_items", edit.max_scan_items.map(Value::from)),
+        ("max_pass_seconds", edit.max_pass_seconds.map(Value::from)),
+    ] {
+        if let Some(value) = declared {
+            policy_map.insert(key.to_string(), value);
+        }
+    }
+    if edit.clear_max_pass_seconds {
+        policy_map.remove("max_pass_seconds");
+    }
+
+    let cleaners = policy_map
+        .entry("cleaners".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("disk_cleanup.cleaners must be an object"))?;
+
+    // Enabling a cleaner writes the retention floor its own schema demands,
+    // so `--cleaner build_caches` produces a document that validates rather
+    // than one refused for a missing `min_age_seconds`.
+    let enable = |name: &str, cleaners: &mut serde_json::Map<String, Value>| {
+        cleaners
+            .entry(name.to_string())
+            .or_insert_with(|| json!({ "min_age_seconds": cleaner_age_floor(name) }));
+    };
+    for name in &edit.add_cleaner {
+        enable(name, cleaners);
+    }
+    for name in &edit.remove_cleaner {
+        cleaners.remove(name);
+    }
+    for raw in &edit.cleaner_root {
+        let (name, path) = cleaner_pair(raw, "cleaner-root")?;
+        enable(&name, cleaners);
+        cleaners
+            .get_mut(&name)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
+            })?
+            .insert("root".to_string(), Value::from(path));
+    }
+    for name in &edit.clear_cleaner_root {
+        if let Some(cleaner) = cleaners.get_mut(name).and_then(Value::as_object_mut) {
+            cleaner.remove("root");
+        }
+    }
+    for raw in &edit.cleaner_min_age_seconds {
+        let (name, raw_seconds) = cleaner_pair(raw, "cleaner-min-age-seconds")?;
+        let seconds: i64 = raw_seconds.parse().map_err(|_| {
+            CmdError::usage(format!(
+                "--cleaner-min-age-seconds takes NAME=SECONDS, got {raw:?}"
+            ))
+        })?;
+        enable(&name, cleaners);
+        cleaners
+            .get_mut(&name)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
+            })?
+            .insert("min_age_seconds".to_string(), Value::from(seconds));
+    }
+
+    entry.insert("disk_cleanup".to_string(), policy.clone());
+    // The whole registry, not the field: a policy is only valid in the
+    // document that carries it, and the janitor refuses a document that does
+    // not validate as a whole.
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let generation = store.compare_and_swap(&current.version, &payload).await?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "generation": generation,
+                "disk_cleanup": policy,
+            }))?
+        );
+    } else {
+        println!("{target}: {}", serde_json::to_string_pretty(&policy)?);
+        println!("generation {generation}");
+    }
+    Ok(())
+}
+
 fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), CmdError> {
     fn plutil(plist: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
         std::process::Command::new("/usr/bin/plutil")
