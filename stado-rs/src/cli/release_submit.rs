@@ -324,6 +324,56 @@ async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
         .transpose()
 }
 
+/// The newest submitted run is the delivery fence. Delivery workers already
+/// carry the queue storage identity needed to read run state, while fleet
+/// targets deliberately do not carry a product publisher credential.
+async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut latest: Option<(chrono::DateTime<chrono::FixedOffset>, ReleaseRun)> = None;
+    for path in store
+        .list_paths("runs/release-pipeline/", 0)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        if !path.ends_with("/run.json") {
+            continue;
+        }
+        let Some(text) = store
+            .download_text(&path)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+        else {
+            continue;
+        };
+        let run: ReleaseRun = serde_json::from_str(&text)
+            .map_err(|error| CmdError::click(format!("invalid release run {path}: {error}")))?;
+        if run.product != product {
+            continue;
+        }
+        let created_at =
+            chrono::DateTime::parse_from_rfc3339(&run.created_at).map_err(|error| {
+                CmdError::click(format!(
+                    "release run {} has invalid created_at: {error}",
+                    run.run_id
+                ))
+            })?;
+        let replace = match &latest {
+            None => true,
+            Some((latest_at, latest_run)) => {
+                created_at > *latest_at
+                    || (created_at == *latest_at
+                        && run.run_id.as_str() > latest_run.run_id.as_str())
+            }
+        };
+        if replace {
+            latest = Some((created_at, run));
+        }
+    }
+    Ok(latest.map(|(_, run)| run))
+}
+
 /// The most recent pipeline runs, newest first, with their persisted
 /// failures.
 ///
@@ -1970,12 +2020,29 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
 }
 
 async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdError> {
-    super::release_catalog::require_current_source(
-        &request.product,
-        &request.source_sha256,
-        &request.source_uri,
-    )
-    .await?;
+    let latest = latest_submitted_run(&request.product)
+        .await?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "delivery names no submitted release run for {}",
+                request.product
+            ))
+        })?;
+    let latest_exact = latest.run_id == request.run_id
+        && latest.version == request.version
+        && latest.source_sha256 == request.source_sha256
+        && latest.source_uri == request.source_uri;
+    if !latest_exact {
+        return Err(CmdError::click(format!(
+            "delivery for {} {} source {} was superseded by release run {} source {}; refusing \
+             the stale coordinate",
+            request.product,
+            request.version,
+            request.source_sha256,
+            latest.run_id,
+            latest.source_sha256
+        )));
+    }
     let run = load(&request.run_id).await?.ok_or_else(|| {
         CmdError::click(format!(
             "delivery names missing release run {}",
