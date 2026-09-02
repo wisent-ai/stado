@@ -262,6 +262,27 @@ pub struct CleanupReport {
     pub lock_busy: bool,
     pub active_slot_count: i64,
     pub last_success_at: Option<String>,
+    /// Whether this pass reached its cleaners at all.
+    ///
+    /// Set once, immediately before the first cleaner runs. It exists because
+    /// the report used to carry a complete cleaner table of zeros no matter
+    /// how early the pass gave up, and a table of zeros is byte-for-byte what
+    /// a successful pass that found nothing to delete emits. On
+    /// `lukasz-macbook` that made 12,197 records over fifteen days — 8,539 of
+    /// them `invalid_or_unavailable_policy` and 2,030 `lock_busy`, neither of
+    /// which resolved a policy or opened a single directory — indistinguishable
+    /// from fifteen days of "nothing needed doing", which is why nobody
+    /// noticed the janitor had never once deleted anything.
+    ///
+    /// A pass that did not reach its cleaners now emits `cleaners: null`
+    /// rather than a measurement it never made. Both readers of the table
+    /// already tolerate its absence
+    /// ([`crate::deploy::host_cleanup::cleaner_plans`] returns no rows and
+    /// `stado host disk` prints no per-cleaner section), and the `outcome`
+    /// vocabulary is unchanged: `lock_busy`, `interval_noop`,
+    /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
+    /// non-run this was.
+    pub scanned: bool,
     /// Where the build-cache walk stopped, relative to its scan root, or
     /// `None` when it crossed the whole tree. Carried across passes through
     /// the state file: see [`build_caches::scan_build_caches`].
@@ -298,6 +319,7 @@ impl CleanupReport {
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
             last_success_at: None,
+            scanned: false,
             builds_resume_from: None,
             errors: Vec::new(),
         }
@@ -355,6 +377,21 @@ impl CleanupReport {
                 "skipped": c.skipped,
             })
         };
+        // A table of zeros and a table that was never filled in are the same
+        // bytes, so a pass that did not reach its cleaners states the absence
+        // instead. See [`CleanupReport::scanned`].
+        let cleaners = if self.scanned {
+            serde_json::json!({
+                "huggingface_cache": cleaner(&self.hf),
+                "weles_recordings": cleaner(&self.weles),
+                "build_caches": cleaner(&self.builds),
+                chromium_clones::CLEANER: cleaner(&self.clones),
+                queue_workdirs::CLEANER: cleaner(&self.workdirs),
+                backup_twins::CLEANER: cleaner(&self.backup_twins),
+            })
+        } else {
+            Value::Null
+        };
         serde_json::json!({
             "version": STATE_VERSION,
             "hostname": self.hostname,
@@ -382,14 +419,7 @@ impl CleanupReport {
             "low_bytes": self.low_bytes,
             "target_bytes": self.target_bytes,
             "pressure_active": self.pressure_active,
-            "cleaners": {
-                "huggingface_cache": cleaner(&self.hf),
-                "weles_recordings": cleaner(&self.weles),
-                "build_caches": cleaner(&self.builds),
-                chromium_clones::CLEANER: cleaner(&self.clones),
-                queue_workdirs::CLEANER: cleaner(&self.workdirs),
-                backup_twins::CLEANER: cleaner(&self.backup_twins),
-            },
+            "cleaners": cleaners,
             "caps": {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
@@ -885,19 +915,13 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         _ => None,
     };
     let cap = |name: &str| caps.and_then(|c| c.get(name)) == Some(&Value::Bool(true));
-    serde_json::json!({
-        "version": STATE_VERSION,
-        "mode": mode,
-        "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
-        "started_at": public_timestamp(get("started_at")),
-        "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
-        "outcome": outcome,
-        "free_bytes_before": public_nonnegative(get("free_bytes_before")),
-        "free_bytes_after": public_nonnegative(get("free_bytes_after")),
-        "low_bytes": public_nonnegative(get("low_bytes")),
-        "target_bytes": public_nonnegative(get("target_bytes")),
-        "pressure_active": get("pressure_active").and_then(Value::as_bool),
-        "cleaners": {
+    // A pass that did not reach its cleaners carries no table
+    // ([`CleanupReport::scanned`]), and the public form has to keep saying so:
+    // filling the six sections with zeros here would rebuild, one layer out,
+    // exactly the "did not run" that reads as "nothing needed doing".
+    let public_cleaners = match cleaners {
+        None => Value::Null,
+        Some(_) => serde_json::json!({
             "huggingface_cache": public_cleaner(cleaners.and_then(|c| c.get("huggingface_cache"))),
             "weles_recordings": public_cleaner(cleaners.and_then(|c| c.get("weles_recordings"))),
             "build_caches": public_cleaner(cleaners.and_then(|c| c.get("build_caches"))),
@@ -910,7 +934,21 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             backup_twins::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
             ),
-        },
+        }),
+    };
+    serde_json::json!({
+        "version": STATE_VERSION,
+        "mode": mode,
+        "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
+        "started_at": public_timestamp(get("started_at")),
+        "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
+        "outcome": outcome,
+        "free_bytes_before": public_nonnegative(get("free_bytes_before")),
+        "free_bytes_after": public_nonnegative(get("free_bytes_after")),
+        "low_bytes": public_nonnegative(get("low_bytes")),
+        "target_bytes": public_nonnegative(get("target_bytes")),
+        "pressure_active": get("pressure_active").and_then(Value::as_bool),
+        "cleaners": public_cleaners,
         "caps": {
             "bytes": cap("bytes"),
             "items": cap("items"),
@@ -1497,6 +1535,9 @@ fn run_with_lock(
             (remaining / (behind + 1)).max(1).min(remaining)
         }
     };
+    // Past every early return: from here the cleaner table is a measurement
+    // this pass actually made, so the report may carry one.
+    report.scanned = true;
     // Errors escaping _run_hf (a vanished cache root mid-pass, a failed
     // free-space probe) hit Python's outer `except BaseException`:
     // `runtime` error + the default outcome, state still written.
@@ -1667,7 +1708,19 @@ fn run_with_lock(
         + report.builds.deleted_items
         + report.clones.deleted_items
         + report.backup_twins.deleted_items;
-    if policy.mode != "enforce" {
+    // An incomplete scan is named before anything else a complete pass could
+    // have concluded. `cap_reached` is the report's existing word for "a
+    // budget stopped me", and it has to win here: a pass that spent its scan
+    // cap without reaching a candidate used to publish `report_only` (or, in
+    // `enforce`, `no_eligible_items` once the caps happened to be clear),
+    // and both of those read as a finished look at the disk. On
+    // `lukasz-macbook` that was the whole difference between "there is
+    // nothing to delete" and "I got 7,297 directories into one repository's
+    // `node_modules` and ran out of time", with 174 tagged build caches and
+    // a 62 GiB `target/` unexamined behind it.
+    if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
+        report.outcome = "cap_reached".to_string();
+    } else if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
     } else if report.active_slot_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
         report.outcome = "blocked_active".to_string();
