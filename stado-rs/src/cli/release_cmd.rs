@@ -1101,6 +1101,30 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     std::fs::create_dir_all(&directory).map_err(|error| {
         CmdError::click(format!("cannot prepare {}: {error}", directory.display()))
     })?;
+    // The installed coordinate is the cheap, persistent handshake between the
+    // delivery child and already-running queue agents. Agents launched from
+    // this managed path finish their current slot, compare this file with their
+    // compiled version, then let their declared supervisor recreate them.
+    let release_version_stage =
+        if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
+            let version = std::env::var("WISENT_VERSION")
+                .map_err(|_| CmdError::click("WISENT_VERSION is not set for the Stado delivery"))?;
+            let version = version.trim();
+            if version.is_empty() {
+                return Err(CmdError::click(
+                    "WISENT_VERSION is empty for the Stado delivery",
+                ));
+            }
+            let path = directory.join("stado.release-version.release-incoming");
+            std::fs::write(&path, format!("{version}\n")).map_err(|error| {
+                CmdError::click(format!(
+                    "cannot stage the installed Stado release coordinate: {error}"
+                ))
+            })?;
+            Some(path)
+        } else {
+            None
+        };
     let destination = directory.join(&name);
     if destination.exists() {
         let stamp = chrono::Utc::now().format("%Y%m%d");
@@ -1118,8 +1142,88 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
             .map_err(|error| CmdError::click(format!("cannot mark {name} executable: {error}")))?;
     }
+    // Leave the receipt the fleet's provenance check reads, before the
+    // install replaces the name.
+    //
+    // `cli::service_converge::attest_installed` decides provenance by byte
+    // comparing the installed file against
+    // `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, which
+    // `deploy::host_release` writes when IT delivers. This command is the
+    // other delivery endpoint and it staged nothing, so a binary it installed
+    // read `unattested` forever after — even though the archive was verified
+    // against the contract digest a hundred lines above.
+    //
+    // lukasz-macbook is the proof. Its `~/.stado/bin` carries this command's
+    // own dated backups through 2026-09-02 and its `stado.release-version`
+    // handshake, so deliveries plainly ran; `~/.stado/releases/stado` holds
+    // 0.13.24 and older, nothing since. `stado service converge` therefore
+    // reported the host's binary as bytes the fleet cannot attest, and the
+    // remediation it printed — deliver a published version — was the thing
+    // that had just happened.
+    //
+    // Never fatal: the archive is verified and the install is the point, so a
+    // receipt that cannot be written is named and the delivery continues.
+    match (
+        std::env::var("WISENT_VERSION")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        crate::self_update::platform_triple_short(),
+    ) {
+        (Some(version), Ok(platform)) => {
+            if let Err(error) =
+                crate::self_update::stage_for_attestation(&name, &version, platform, &staged)
+            {
+                println!(
+                    "release install-local: {name} {version} installed but its attestation copy \
+                     could not be staged, so `stado service converge` will read it as \
+                     unattested: {error}"
+                );
+            }
+        }
+        (None, _) => println!(
+            "release install-local: WISENT_VERSION is unset, so no attestation copy was staged \
+             and `stado service converge` will read {name} as unattested"
+        ),
+        (_, Err(error)) => println!(
+            "release install-local: this platform has no release triple ({error}), so no \
+             attestation copy was staged for {name}"
+        ),
+    }
     std::fs::rename(&staged, &destination)
         .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
+    if let Some(staged_version) = release_version_stage {
+        let installed_version = directory.join("stado.release-version");
+        std::fs::rename(&staged_version, &installed_version).map_err(|error| {
+            CmdError::click(format!(
+                "cannot activate the installed Stado release coordinate: {error}"
+            ))
+        })?;
+    }
+    // The handshake above is the queue agent's, and only the queue agent
+    // implements it: `providers::local::agent` is the sole reader of
+    // `stado.release-version`. Every other unit launched from this directory
+    // — the disk-cleanup janitor, the resolver, the health beacon — keeps
+    // executing the inode it started with, for as long as it lives, because
+    // nothing tells launchd or systemd that the file underneath changed.
+    //
+    // That is how a delivery could succeed and change nothing. On 2026-09-01
+    // the janitor on lukasz-macbook was still executing a 68,977,488-byte
+    // image of this exact path while the file was 70,265,008 bytes, had
+    // answered `invalid_or_unavailable_policy` 8,460 times out of 12,009
+    // passes because the policy no longer validated against the code it was
+    // compiled from, and the volume had reached 100% full with a janitor
+    // running every minute the whole way down.
+    //
+    // In place, and never the agent: see `self_update::recycle_replaced_units`.
+    let mut recycle_log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release install-local",
+        &directory,
+        std::slice::from_ref(&name),
+        &mut recycle_log,
+    )
+    .await;
     println!(
         "installed {} from the delivered release archive",
         destination.display()

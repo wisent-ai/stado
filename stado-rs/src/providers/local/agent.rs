@@ -705,6 +705,87 @@ async fn publish_branch(
     outcome
 }
 
+const INSTALLED_STADO_RELEASE_VERSION: &str = "stado.release-version";
+
+/// What the managed binary on disk says it is, asked of the file itself.
+fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new(managed)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    text.split_whitespace().last().map(str::to_string)
+}
+
+/// A release handoff worth taking: the marker names a release this process is
+/// not, AND the binary on disk is no longer this process's image -- so exiting
+/// hands control to a genuinely different file and the supervisor's restart
+/// changes something.
+///
+/// The marker alone cannot decide that, and reading it as authoritative cost a
+/// host its entire share of the queue. On 2026-09-02 `lukasz-macbook` held a
+/// 0.13.42 binary at the managed path beside a marker still reading 0.13.39.
+/// The agent announced `installed 0.13.39 supersedes running 0.13.42`, exited,
+/// was recreated by launchd from that same file, and repeated it every ten
+/// seconds -- claiming nothing, while a signed Stado release delivery pinned to
+/// that host sat queued behind it. A handoff whose restart cannot change the
+/// running image is not a handoff, it is a stall with an explanation.
+///
+/// So the file is asked what it is. When it answers this process's own version
+/// the marker is merely stale: it is corrected here, once, instead of being
+/// re-read forever. Only a file that answers something else is a release
+/// waiting to be started. Source-tree recovery agents stay excluded, because
+/// only an agent launched through the owner-managed binary belongs to a
+/// supervisor that recreates it.
+fn installed_stado_release_mismatch(log_fn: &mut impl FnMut(&str)) -> Option<String> {
+    let home = crate::config_file::expand_tilde("~");
+    let managed = home.join(".stado").join("bin").join("stado");
+    let argv0 = std::env::args_os().next().map(std::path::PathBuf::from)?;
+    if argv0 != managed {
+        return None;
+    }
+    let marker = home
+        .join(".stado")
+        .join("bin")
+        .join(INSTALLED_STADO_RELEASE_VERSION);
+    let installed = std::fs::read_to_string(&marker).ok()?;
+    let installed = installed.trim();
+    let running = env!("CARGO_PKG_VERSION");
+    if installed.is_empty() || installed == running {
+        return None;
+    }
+    match managed_binary_version(&managed) {
+        Some(on_disk) if on_disk != running => Some(installed.to_string()),
+        Some(on_disk) => {
+            match std::fs::write(&marker, format!("{on_disk}\n")) {
+                Ok(()) => log_fn(&format!(
+                    "loop: release-marker-repaired: {} named {installed} while the managed binary \
+                     is {on_disk}; the marker now names what is installed",
+                    marker.display()
+                )),
+                Err(error) => log_fn(&format!(
+                    "loop: release-marker-stale: {} names {installed} while the managed binary is \
+                     {on_disk}, and it could not be corrected: {error}",
+                    marker.display()
+                )),
+            }
+            None
+        }
+        None => {
+            log_fn(&format!(
+                "loop: release-marker-unverified: {} names {installed} and the managed binary \
+                 would not state its version; continuing rather than handing off to an image that \
+                 may not differ",
+                marker.display()
+            ));
+            None
+        }
+    }
+}
+
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
 ///
@@ -832,6 +913,20 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             }
         }
         slots = survivors;
+        if slots.is_empty() {
+            if let Some(installed) = installed_stado_release_mismatch(log_fn) {
+                let detail = format!(
+                    "installed Stado {installed} supersedes running {}; exiting after all slots \
+                     finished so the declared supervisor starts the installed release",
+                    env!("CARGO_PKG_VERSION")
+                );
+                log_fn(&format!("loop: release-handoff: {detail}"));
+                // Linux services use Restart=on-failure; launchd KeepAlive also
+                // recreates this process. Returning an error is therefore the
+                // cross-platform handoff signal, not a failed workload.
+                return Err(anyhow::anyhow!(detail));
+            }
+        }
         // The janitor's bounded cleanup pass (Python `run_cleanup_once`,
         // wrapped there in try/except BaseException — the Rust port folds
         // every failure into the returned report by construction).
@@ -845,6 +940,21 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         agent_diag.insert("disk_cleanup".into(), cleanup_report.clone());
         if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
             disk_low_bytes = Some(reported_low);
+        }
+        // Admission reads the canonical declaration directly as well as the
+        // janitor report. Cleanup deliberately uses a cross-process lock; a
+        // busy lock or an older writer's invalid report must not erase a
+        // perfectly readable low watermark and close the queue forever.
+        let registry_target = lookup_self_auto(&hostname).await?;
+        if let Some(declared_low) = registry_target
+            .as_ref()
+            .and_then(|target| target.disk_cleanup.as_ref())
+            .map(|policy| policy.low_free_gb.saturating_mul(disk_cleanup::GIB))
+        {
+            if disk_low_bytes != Some(declared_low) {
+                log_fn("loop: loaded disk low watermark from the canonical registry");
+            }
+            disk_low_bytes = Some(declared_low);
         }
         // Python: shutil.disk_usage(expanduser("~")).free, OSError -> None.
         let current_free_bytes =
@@ -948,7 +1058,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             last_fleet_flush = Instant::now();
         }
         let mut gpu_power_policy_ok = true;
-        if let Some(t) = lookup_self_auto(&hostname).await? {
+        if let Some(t) = registry_target.as_ref() {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 // Env overrides are now owned by systemd (/etc/wisent/wisent-agent.env).
                 // Ignore registry env deltas so an external registry push cannot
@@ -1399,45 +1509,29 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
-        // Disk pressure suppresses admission exactly the way a paused queue
-        // does, and for the same reason: everything above this point has already
-        // run, so live slots keep advancing, heartbeats keep going out, and the
-        // capacity broadcast above carries real numbers with
-        // `disk_pressure_active` beside them. What stops is starting new work on
-        // a host that is under its own low watermark. The job that would be
-        // claimed here is the thing consuming the disk -- on the always-on mac
-        // the queue drained 19.3 GiB down to 13.8 GiB in forty minutes of
-        // `cargo build` workloads -- and no later gate measures that, so this is
-        // where it belongs.
-        if pressure_active {
-            log_fn(&format!(
-                "loop: disk-pressure-active: {} bytes free is under the {} byte low watermark; \
-                 claiming nothing until the janitor or the operator frees space, and saying so \
-                 in the broadcast rather than going quiet",
-                current_free_bytes.unwrap_or_default(),
-                disk_low_bytes.unwrap_or_default()
-            ));
-            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
-            continue;
-        }
+        // Disk pressure is enforced after the assigned queue is read. One exact
+        // signed release-delivery command remains admissible so Stado can repair
+        // the agent binary that owns this gate; every ordinary workload remains
+        // blocked below the watermark.
 
         // Cooperative yield: if a higher-priority queued job can't fit, evict
         // just enough lower-priority yieldable slots to make room. Runs BEFORE
         // the full-GPU early-return below because that is exactly when it's
         // needed. Inert (single any() over slots) unless a yieldable job runs.
-        if maybe_yield_for_priority(
-            &store,
-            &sizing,
-            &mut slots,
-            &gpu_type,
-            total_vram_gb,
-            free_vram_gb,
-            kind,
-            &consumer_id,
-            log_fn,
-        )
-        .await?
-            > 0
+        if !pressure_active
+            && maybe_yield_for_priority(
+                &store,
+                &sizing,
+                &mut slots,
+                &gpu_type,
+                total_vram_gb,
+                free_vram_gb,
+                kind,
+                &consumer_id,
+                log_fn,
+            )
+            .await?
+                > 0
         {
             continue; // re-loop: recompute free VRAM, then claim the freed room
         }
@@ -1512,6 +1606,57 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 .cmp(&a.priority)
                 .then_with(|| a.created_at.cmp(&b.created_at))
         });
+        if pressure_active {
+            queued.retain(|job| {
+                job.gpu_mem_gb == 0
+                    && job.priority == crate::constants::RELEASE_JOB_PRIORITY
+                    && !job.run_id.is_empty()
+                    && !job.pinned_host.is_empty()
+                    && job.command == crate::constants::RELEASE_DELIVERY_JOB_COMMAND
+                    && job
+                        .output_uri
+                        .starts_with("stado://probierz/runs/release-pipeline/stado/")
+                    && job.output_uri.contains("/deliveries/")
+                    && job.output_uri.ends_with("/output")
+            });
+            // A host can accumulate deliveries while it is under pressure.
+            // The newest submission is the current operator intent; replaying
+            // them FIFO briefly downgrades the installed agent before climbing
+            // through every superseded coordinate.
+            let matched_deliveries = queued.len();
+            queued.sort_by(|a, b| {
+                b.created_at
+                    .cmp(&a.created_at)
+                    .then_with(|| b.job_id.cmp(&a.job_id))
+            });
+            queued.truncate(1);
+            agent_diag.insert(
+                "disk_pressure_superseded_deliveries".into(),
+                Value::from(matched_deliveries.saturating_sub(queued.len()) as i64),
+            );
+            agent_diag.insert(
+                "disk_pressure_recovery_jobs".into(),
+                Value::from(queued.len() as i64),
+            );
+            if queued.is_empty() {
+                log_fn(&format!(
+                    "loop: disk-pressure-active: {} bytes free is under the {} byte low \
+                     watermark; ordinary work remains blocked and no signed Stado release \
+                     delivery is assigned to this host",
+                    current_free_bytes.unwrap_or_default(),
+                    disk_low_bytes.unwrap_or_default()
+                ));
+                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+                continue;
+            }
+            log_fn(&format!(
+                "loop: disk-pressure-active: {} bytes free is under the {} byte low watermark; \
+                 admitting {} signed Stado release delivery and no ordinary work",
+                current_free_bytes.unwrap_or_default(),
+                disk_low_bytes.unwrap_or_default(),
+                queued.len()
+            ));
+        }
         let mut started = 0i64;
         let mut diag_vram_rejected = 0i64;
         let mut diag_eligibility_rejected = 0i64;

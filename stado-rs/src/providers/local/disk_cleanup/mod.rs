@@ -262,6 +262,27 @@ pub struct CleanupReport {
     pub lock_busy: bool,
     pub active_slot_count: i64,
     pub last_success_at: Option<String>,
+    /// Whether this pass reached its cleaners at all.
+    ///
+    /// Set once, immediately before the first cleaner runs. It exists because
+    /// the report used to carry a complete cleaner table of zeros no matter
+    /// how early the pass gave up, and a table of zeros is byte-for-byte what
+    /// a successful pass that found nothing to delete emits. On
+    /// `lukasz-macbook` that made 12,197 records over fifteen days — 8,539 of
+    /// them `invalid_or_unavailable_policy` and 2,030 `lock_busy`, neither of
+    /// which resolved a policy or opened a single directory — indistinguishable
+    /// from fifteen days of "nothing needed doing", which is why nobody
+    /// noticed the janitor had never once deleted anything.
+    ///
+    /// A pass that did not reach its cleaners now emits `cleaners: null`
+    /// rather than a measurement it never made. Both readers of the table
+    /// already tolerate its absence
+    /// ([`crate::deploy::host_cleanup::cleaner_plans`] returns no rows and
+    /// `stado host disk` prints no per-cleaner section), and the `outcome`
+    /// vocabulary is unchanged: `lock_busy`, `interval_noop`,
+    /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
+    /// non-run this was.
+    pub scanned: bool,
     /// Where the build-cache walk stopped, relative to its scan root, or
     /// `None` when it crossed the whole tree. Carried across passes through
     /// the state file: see [`build_caches::scan_build_caches`].
@@ -298,6 +319,7 @@ impl CleanupReport {
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
             last_success_at: None,
+            scanned: false,
             builds_resume_from: None,
             errors: Vec::new(),
         }
@@ -355,6 +377,21 @@ impl CleanupReport {
                 "skipped": c.skipped,
             })
         };
+        // A table of zeros and a table that was never filled in are the same
+        // bytes, so a pass that did not reach its cleaners states the absence
+        // instead. See [`CleanupReport::scanned`].
+        let cleaners = if self.scanned {
+            serde_json::json!({
+                "huggingface_cache": cleaner(&self.hf),
+                "weles_recordings": cleaner(&self.weles),
+                "build_caches": cleaner(&self.builds),
+                chromium_clones::CLEANER: cleaner(&self.clones),
+                queue_workdirs::CLEANER: cleaner(&self.workdirs),
+                backup_twins::CLEANER: cleaner(&self.backup_twins),
+            })
+        } else {
+            Value::Null
+        };
         serde_json::json!({
             "version": STATE_VERSION,
             "hostname": self.hostname,
@@ -382,14 +419,7 @@ impl CleanupReport {
             "low_bytes": self.low_bytes,
             "target_bytes": self.target_bytes,
             "pressure_active": self.pressure_active,
-            "cleaners": {
-                "huggingface_cache": cleaner(&self.hf),
-                "weles_recordings": cleaner(&self.weles),
-                "build_caches": cleaner(&self.builds),
-                chromium_clones::CLEANER: cleaner(&self.clones),
-                queue_workdirs::CLEANER: cleaner(&self.workdirs),
-                backup_twins::CLEANER: cleaner(&self.backup_twins),
-            },
+            "cleaners": cleaners,
             "caps": {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
@@ -885,19 +915,13 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         _ => None,
     };
     let cap = |name: &str| caps.and_then(|c| c.get(name)) == Some(&Value::Bool(true));
-    serde_json::json!({
-        "version": STATE_VERSION,
-        "mode": mode,
-        "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
-        "started_at": public_timestamp(get("started_at")),
-        "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
-        "outcome": outcome,
-        "free_bytes_before": public_nonnegative(get("free_bytes_before")),
-        "free_bytes_after": public_nonnegative(get("free_bytes_after")),
-        "low_bytes": public_nonnegative(get("low_bytes")),
-        "target_bytes": public_nonnegative(get("target_bytes")),
-        "pressure_active": get("pressure_active").and_then(Value::as_bool),
-        "cleaners": {
+    // A pass that did not reach its cleaners carries no table
+    // ([`CleanupReport::scanned`]), and the public form has to keep saying so:
+    // filling the six sections with zeros here would rebuild, one layer out,
+    // exactly the "did not run" that reads as "nothing needed doing".
+    let public_cleaners = match cleaners {
+        None => Value::Null,
+        Some(_) => serde_json::json!({
             "huggingface_cache": public_cleaner(cleaners.and_then(|c| c.get("huggingface_cache"))),
             "weles_recordings": public_cleaner(cleaners.and_then(|c| c.get("weles_recordings"))),
             "build_caches": public_cleaner(cleaners.and_then(|c| c.get("build_caches"))),
@@ -910,7 +934,21 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             backup_twins::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
             ),
-        },
+        }),
+    };
+    serde_json::json!({
+        "version": STATE_VERSION,
+        "mode": mode,
+        "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
+        "started_at": public_timestamp(get("started_at")),
+        "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
+        "outcome": outcome,
+        "free_bytes_before": public_nonnegative(get("free_bytes_before")),
+        "free_bytes_after": public_nonnegative(get("free_bytes_after")),
+        "low_bytes": public_nonnegative(get("low_bytes")),
+        "target_bytes": public_nonnegative(get("target_bytes")),
+        "pressure_active": get("pressure_active").and_then(Value::as_bool),
+        "cleaners": public_cleaners,
         "caps": {
             "bytes": cap("bytes"),
             "items": cap("items"),
@@ -1389,42 +1427,6 @@ fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("build_caches_resume_from"))
         .and_then(|v| v.as_str().map(str::to_string));
-    // THIS writer's last attempt, not the file's.
-    //
-    // This read used to be `previous["last_attempt_at"]` - the last attempt by
-    // anyone - so any writer's stamp gated every writer. On 2026-08-31
-    // charless-mac-mini had two janitors: the queue agent's in-process pass and
-    // a standalone `disk-cleanup` unit on its own timer. With the thresholds
-    // raised to 40/42 GiB against 31.2 GiB free, the agent reported
-    // `disk_pressure_active: true`, `errors: []`, policy resolved, and all six
-    // cleaners `scanned 0` - because the other process had stamped the file
-    // within the interval. Pressure active, policy resolved, nothing scanned.
-    //
-    // The gate returns before the first scanner AND before `run_with_lock`
-    // reaches the lock, so the lock cannot mediate it: the lock makes two
-    // janitors take turns deleting, while this made the working one never try.
-    // Both are real and only this one silences a pass.
-    //
-    // Removing a redundant unit does not fix this. `stado disk-cleanup --once`
-    // is a supported operator command that writes the same file, so one manual
-    // run would otherwise silence the agent's janitor for a full interval on
-    // any host.
-    let last_attempt = writer_last_attempt(&previous, report.writer);
-    if !force
-        && last_attempt.is_some()
-        && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64
-    {
-        report.outcome = "interval_noop".to_string();
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            last_attempt.unwrap_or(attempted_at),
-            log_fn,
-        );
-    }
-
     let before = match free_bytes(home) {
         Ok(free) => free,
         Err(exc) => {
@@ -1453,6 +1455,55 @@ fn run_with_lock(
             .is_some_and(|r| r.get("pressure_active") == Some(&Value::Bool(true)))
         && before < policy.target_free_gb * GIB;
     report.pressure_active = Some(before < policy.low_free_gb * GIB || continuing_reclaim);
+    // THIS writer's last attempt, not the file's.
+    //
+    // This read used to be `previous["last_attempt_at"]` - the last attempt by
+    // anyone - so any writer's stamp gated every writer. On 2026-08-31
+    // charless-mac-mini had two janitors: the queue agent's in-process pass and
+    // a standalone `disk-cleanup` unit on its own timer. With the thresholds
+    // raised to 40/42 GiB against 31.2 GiB free, the agent reported
+    // `disk_pressure_active: true`, `errors: []`, policy resolved, and all six
+    // cleaners `scanned 0` - because the other process had stamped the file
+    // within the interval. Pressure active, policy resolved, nothing scanned.
+    //
+    // The gate returns before the first scanner AND before `run_with_lock`
+    // reaches the lock, so the lock cannot mediate it: the lock makes two
+    // janitors take turns deleting, while this made the working one never try.
+    // Both are real and only this one silences a pass.
+    //
+    // Removing a redundant unit does not fix this. `stado disk-cleanup --once`
+    // is a supported operator command that writes the same file, so one manual
+    // run would otherwise silence the agent's janitor for a full interval on
+    // any host.
+    let last_attempt = writer_last_attempt(&previous, report.writer);
+    // The interval paces a healthy host; it must not pace a host that is
+    // already under its own declared low watermark. Measuring free space
+    // above this gate is what makes that possible, and it is also what makes
+    // an `interval_noop` report readable: the gate used to return before the
+    // first measurement, so the report said `pressure_active: null` while the
+    // same agent's log line said `disk-pressure-active`. On 2026-09-02
+    // `lukasz-macbook` sat at 9.3 GB free against a 100 GB watermark and its
+    // janitor answered `interval_noop` every pass, hourly, while the release
+    // pipeline kept writing. `cap_reached` plus `continuing_reclaim` already
+    // model a reclaim that must be resumed - and this gate was what refused
+    // to resume it. Concurrency is mediated by the lock below, never by this
+    // stamp: the lock makes two janitors take turns, the stamp made the
+    // working one never try.
+    if !force
+        && report.pressure_active != Some(true)
+        && last_attempt.is_some()
+        && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64
+    {
+        report.outcome = "interval_noop".to_string();
+        return finish(
+            report,
+            started,
+            Some(home),
+            persist,
+            last_attempt.unwrap_or(attempted_at),
+            log_fn,
+        );
+    }
     if !preview && policy.mode == "enforce" {
         rotate_service_logs(home, log_fn);
     }
@@ -1462,7 +1513,15 @@ fn run_with_lock(
         return finish(report, started, Some(home), persist, attempted_at, log_fn);
     }
 
-    let deadline = Instant::now() + std::time::Duration::from_secs_f64(DEADLINE_SECONDS);
+    // The host's declared pass budget, or this module's own 30 seconds when it
+    // declares none. This is the limit that actually decides how much of a
+    // large tree one pass sees: on `lukasz-macbook` `max_scan_items` never
+    // bound and the deadline did, every pass.
+    let pass_seconds = policy
+        .max_pass_seconds
+        .filter(|seconds| *seconds > 0)
+        .map_or(DEADLINE_SECONDS, |seconds| seconds as f64);
+    let deadline = Instant::now() + std::time::Duration::from_secs_f64(pass_seconds);
     // How much of the pass's remaining scan budget one cleaner may spend while
     // declared cleaners behind it have not run yet.
     //
@@ -1497,6 +1556,9 @@ fn run_with_lock(
             (remaining / (behind + 1)).max(1).min(remaining)
         }
     };
+    // Past every early return: from here the cleaner table is a measurement
+    // this pass actually made, so the report may carry one.
+    report.scanned = true;
     // Errors escaping _run_hf (a vanished cache root mid-pass, a failed
     // free-space probe) hit Python's outer `except BaseException`:
     // `runtime` error + the default outcome, state still written.
@@ -1667,7 +1729,19 @@ fn run_with_lock(
         + report.builds.deleted_items
         + report.clones.deleted_items
         + report.backup_twins.deleted_items;
-    if policy.mode != "enforce" {
+    // An incomplete scan is named before anything else a complete pass could
+    // have concluded. `cap_reached` is the report's existing word for "a
+    // budget stopped me", and it has to win here: a pass that spent its scan
+    // cap without reaching a candidate used to publish `report_only` (or, in
+    // `enforce`, `no_eligible_items` once the caps happened to be clear),
+    // and both of those read as a finished look at the disk. On
+    // `lukasz-macbook` that was the whole difference between "there is
+    // nothing to delete" and "I got 7,297 directories into one repository's
+    // `node_modules` and ran out of time", with 174 tagged build caches and
+    // a 62 GiB `target/` unexamined behind it.
+    if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
+        report.outcome = "cap_reached".to_string();
+    } else if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
     } else if report.active_slot_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
         report.outcome = "blocked_active".to_string();
@@ -1804,6 +1878,12 @@ async fn cleanup_once(
     } else {
         Some(state_dir.as_path())
     };
+    // Registry and queue reads are network operations and have no filesystem
+    // side effects. Resolve them before taking the exclusive janitor lock: one
+    // stalled store request must not prevent every other agent and cleanup
+    // process on this host from reading policy or reclaiming disk.
+    let registry = fetch_canonical_registry().await;
+    let live_jobs = fetch_live_job_ids().await;
     let lock = match acquire_lock(&state_dir) {
         Ok(lock) => lock,
         Err(exc) => {
@@ -1817,8 +1897,6 @@ async fn cleanup_once(
         report.outcome = "lock_busy".to_string();
         return finish(report, started, Some(&home), None, attempted_at, log_fn);
     };
-    let registry = fetch_canonical_registry().await;
-    let live_jobs = fetch_live_job_ids().await;
     run_with_lock(
         &home,
         &state_dir,

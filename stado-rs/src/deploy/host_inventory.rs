@@ -13,11 +13,11 @@
 //! [`crate::deploy::host_exec`]'s allowlist deliberately does not offer,
 //! because process arguments and environments are where the secrets are.
 //!
-//! The fix is NOT a wider allowlist. `host exec`'s contract is that every
-//! entry is a compile-time argv of absolute paths with no operator-supplied
-//! path in it; the three facts missing here all need `$HOME`, and an entry
-//! taking `$HOME` is an entry taking a path. So this is a separate command
-//! with its own, narrower contract:
+//! The fix is NOT a wider allowlist. `host exec` passes a program's output
+//! through to the operator's terminal untouched, and the three facts missing
+//! here are read out of files under `~/.stado` that a corrupt or hostile
+//! writer also reaches. So this is a separate command with its own, narrower
+//! contract:
 //!
 //! - it takes a registry TARGET NAME and nothing else — no path, no file
 //!   name, no port, no pattern. There is no way to point it at something;

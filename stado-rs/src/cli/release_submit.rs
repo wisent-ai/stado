@@ -29,9 +29,6 @@ use crate::release_pipeline::{
 const OBJECT_API_SERVICE: &str = "stado-object-api";
 const OBJECT_API_REASON: &str =
     "release submission requires the canonical object store before its first write";
-/// Release qualification and delivery unblock declared fleet versions, so
-/// routine batch work must not leave them at the zero-priority FIFO tail.
-const RELEASE_JOB_PRIORITY: i64 = 90_000_000;
 
 #[derive(Args)]
 pub struct ReleaseSubmitArgs {
@@ -327,21 +324,14 @@ async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
         .transpose()
 }
 
-/// The most recent pipeline runs, newest first, with their persisted
-/// failures.
-///
-/// This is the read side of the run objects `submit` maintains: `stado
-/// release status` prints it and the dashboard's operator console serves the
-/// same text, so a failed run is visible from the CLI and the GUI without
-/// hunting through hosts or job stores.
-pub(crate) async fn recent_runs(
-    product: Option<&str>,
-    limit: usize,
-) -> Result<Vec<Value>, CmdError> {
+/// The newest submitted run is the delivery fence. Delivery workers already
+/// carry the queue storage identity needed to read run state, while fleet
+/// targets deliberately do not carry a product publisher credential.
+async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdError> {
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut runs = Vec::new();
+    let mut latest: Option<(chrono::DateTime<chrono::FixedOffset>, ReleaseRun)> = None;
     for path in store
         .list_paths("runs/release-pipeline/", 0)
         .await
@@ -357,7 +347,85 @@ pub(crate) async fn recent_runs(
         else {
             continue;
         };
-        let Ok(run) = serde_json::from_str::<Value>(&text) else {
+        let run: ReleaseRun = serde_json::from_str(&text)
+            .map_err(|error| CmdError::click(format!("invalid release run {path}: {error}")))?;
+        if run.product != product {
+            continue;
+        }
+        let created_at =
+            chrono::DateTime::parse_from_rfc3339(&run.created_at).map_err(|error| {
+                CmdError::click(format!(
+                    "release run {} has invalid created_at: {error}",
+                    run.run_id
+                ))
+            })?;
+        let replace = match &latest {
+            None => true,
+            Some((latest_at, latest_run)) => {
+                created_at > *latest_at
+                    || (created_at == *latest_at
+                        && run.run_id.as_str() > latest_run.run_id.as_str())
+            }
+        };
+        if replace {
+            latest = Some((created_at, run));
+        }
+    }
+    Ok(latest.map(|(_, run)| run))
+}
+
+/// One run object as raw JSON, or nothing when it is absent or unreadable.
+async fn load_run_value(store: &JobStorage, path: &str) -> Result<Option<Value>, CmdError> {
+    let Some(text) = store
+        .download_text(path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str::<Value>(&text).ok())
+}
+
+/// The most recent pipeline runs, newest first, with their persisted
+/// failures.
+///
+/// This is the read side of the run objects `submit` maintains: `stado
+/// release status` prints it and the dashboard's operator console serves the
+/// same text, so a failed run is visible from the CLI and the GUI without
+/// hunting through hosts or job stores.
+///
+/// The listing already carries each run object's write time, so the order is
+/// known before a single body is downloaded and the read stops as soon as
+/// `limit` matching runs are in hand. Downloading every run.json ever written
+/// to then sort and truncate is the same shape as the autonomy outcome tick:
+/// a bounded question answered with the whole history, over a store that
+/// serves one object per HTTP request — and the release console polls this.
+pub(crate) async fn recent_runs(
+    product: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Value>, CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut ordered: Vec<String> = {
+        let mut blobs = store
+            .list_blobs_with_meta("runs/release-pipeline/")
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+            .into_iter()
+            .filter(|blob| blob.name.ends_with("/run.json"))
+            .collect::<Vec<_>>();
+        blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
+        blobs.into_iter().map(|blob| blob.name).collect()
+    };
+    let mut runs = Vec::new();
+    let mut examined = usize::default();
+    for path in &ordered {
+        if runs.len() >= limit {
+            break;
+        }
+        examined += true as usize;
+        let Some(run) = load_run_value(&store, path).await? else {
             continue;
         };
         if product.is_some_and(|selected| run["product"].as_str() != Some(selected)) {
@@ -365,14 +433,10 @@ pub(crate) async fn recent_runs(
         }
         runs.push(run);
     }
-    runs.sort_by(|a, b| {
-        b["updated_at"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(a["updated_at"].as_str().unwrap_or(""))
-    });
-    let all = runs.clone();
-    runs.truncate(limit);
+    // Older runs stay unread unless a live build needs its denominator; the
+    // ones already consumed above cannot be that denominator.
+    ordered.drain(..examined.min(ordered.len()));
+    let older = ordered;
     // An in-flight run says only "publishing", which reads as a promise. The
     // run object already names each platform's queue job, and the queue knows
     // exactly where that job stands, so the two are joined here: every
@@ -386,7 +450,6 @@ pub(crate) async fn recent_runs(
         if !live {
             continue;
         }
-        let run_id = run["run_id"].as_str().unwrap_or("").to_owned();
         let product_name = run["product"].as_str().unwrap_or("").to_owned();
         let Some(platforms) = run["platforms"].as_object_mut() else {
             continue;
@@ -422,8 +485,7 @@ pub(crate) async fn recent_runs(
                     let mut progress = Map::new();
                     progress.insert("compiled".into(), Value::from(compiled));
                     if let Some(total) =
-                        previous_compile_total(&store, &all, &run_id, &product_name, platform_name)
-                            .await
+                        previous_compile_total(&store, &older, &product_name, platform_name).await
                     {
                         progress.insert("of_previous_run".into(), Value::from(total));
                         if let Some(ratio) = (compiled * 100).checked_div(total) {
@@ -455,15 +517,21 @@ async fn compiling_count(store: &JobStorage, job_id: &str) -> Option<u64> {
 
 /// The compile count of the newest older run of the same product and
 /// platform whose job finished — the denominator for the estimate.
+///
+/// `older` is the run objects newest-first that [`recent_runs`] did not need,
+/// as paths: the answer is nearly always the first or second of them, so they
+/// are downloaded one at a time and the walk stops at the first usable count.
 async fn previous_compile_total(
     store: &JobStorage,
-    all: &[Value],
-    current_run: &str,
+    older: &[String],
     product: &str,
     platform: &str,
 ) -> Option<u64> {
-    for run in all {
-        if run["run_id"].as_str() == Some(current_run) || run["product"].as_str() != Some(product) {
+    for path in older {
+        let Ok(Some(run)) = load_run_value(store, path).await else {
+            continue;
+        };
+        if run["product"].as_str() != Some(product) {
             continue;
         }
         let record = &run["platforms"][platform];
@@ -471,7 +539,7 @@ async fn previous_compile_total(
             continue;
         };
         if let Some(count) = compiling_count(store, job_id).await {
-            if count > 0 {
+            if count > u64::default() {
                 return Some(count);
             }
         }
@@ -701,7 +769,7 @@ async fn enqueue(
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let options = SubmitOptions {
         pinned_host: consumer,
-        priority: RELEASE_JOB_PRIORITY,
+        priority: crate::constants::RELEASE_JOB_PRIORITY,
         run_id: stable_run_id("release-platform", &format!("{id}\0{platform}")),
         output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
         input_artifacts: resolved.clone(),
@@ -913,6 +981,52 @@ async fn publish(
     Ok(a)
 }
 
+/// Refuse a release whose runtime declaration omits the version it would
+/// replace, before anything is built, signed or published.
+///
+/// The host enforces the same rule at rollout, and enforcing it only there is
+/// expensive: `release_agent` quarantines the candidate digest as
+/// `rollback_compatibility_undeclared`, and a quarantined immutable coordinate
+/// is spent -- the version can be abandoned but never retried, because a
+/// rebuild of the same version writes different bytes to a coordinate that
+/// refuses to differ. Brama burnt 0.2.40, 0.2.44, 0.2.54 and 0.2.59 exactly
+/// that way, each time because a hand-kept list had not been told about the
+/// release that shipped before it. Both sides of the comparison are readable
+/// here, one document read before the first build, so the answer arrives while
+/// it is still free and names the edit that fixes it.
+async fn require_rollback_compatibility(
+    manifest: &ReleasePipelineManifest,
+    version: &str,
+) -> Result<(), CmdError> {
+    let Some(runtime) = manifest.runtime.as_ref() else {
+        return Ok(());
+    };
+    let (document, _) = super::registry::fetch_versioned_document().await?;
+    let Some(control) = release_control::control(&document)? else {
+        return Ok(());
+    };
+    let Some(policy) = control.products.get(&manifest.product) else {
+        return Ok(());
+    };
+    let Some(desired) = policy.desired.as_ref() else {
+        return Ok(());
+    };
+    if desired.version == version
+        || runtime
+            .rollback_compatible_with
+            .iter()
+            .any(|declared| declared == &desired.version)
+    {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{} {version} does not declare rollback compatibility with {}, the release it would \
+         replace; add \"{}\" to runtime.rollback_compatible_with in {PRODUCT_MANIFEST}. Without \
+         it every rollout target quarantines this digest and the coordinate is spent.",
+        manifest.product, desired.version, desired.version
+    )))
+}
+
 pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let root = args.source.canonicalize()?;
     let manifest_bytes = std::fs::read(root.join(PRODUCT_MANIFEST))?;
@@ -933,6 +1047,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             "requested channel is forbidden by promotion policy",
         ));
     }
+    require_rollback_compatibility(&m, &args.version).await?;
     // An explicit endpoint may be a Stado-managed loopback forward to the
     // control host. Only an absent endpoint means this caller owns the local
     // object daemon and must ensure it before publishing.
@@ -1233,7 +1348,7 @@ async fn run_deliveries(
             };
             let options = SubmitOptions {
                 pinned_host: consumer,
-                priority: RELEASE_JOB_PRIORITY,
+                priority: crate::constants::RELEASE_JOB_PRIORITY,
                 run_id: stable_run_id(
                     "release-delivery",
                     &format!("{}\0{}", run.run_id, d.name),
@@ -1248,9 +1363,7 @@ async fn run_deliveries(
                 secret_env: secret_refs(&d.secret_env),
                 ..Default::default()
             };
-            let command =
-                "$HOME/.stado/bin/stado release delivery-worker --request delivery-request.json"
-                    .to_string();
+            let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
             let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
             let job = jobs
                 .pop()
@@ -1382,7 +1495,20 @@ fn replace_service(
 }
 
 async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
-    const MAX_ATTEMPTS: usize = 24;
+    // Every poll runs the target's own release agent once, and that run is
+    // what advances the rollout state machine. The wait therefore has to
+    // cover the phases the agent must pass through, and the last of them is
+    // the product's own declared rollback window: the agent leaves
+    // Monitoring for Committed only once `rollback_window_seconds` have
+    // elapsed since cutover. A fixed ceiling cannot express that. Twenty-four
+    // polls five seconds apart gave 120s, while brama, image-video-router and
+    // weles-worker each declare a 300s window in the same document read
+    // below, so a healthy rollout of any of them reported "did not converge"
+    // every single time.
+    const POLL_INTERVAL: Duration = Duration::from_secs(5);
+    // Headroom for the agent runs themselves and for the poll that observes
+    // the commit, which can only be the first one after the window closes.
+    const CONVERGENCE_SLACK: Duration = Duration::from_secs(60);
 
     let (document, _) = super::registry::fetch_versioned_document().await?;
     let control = release_control::control(&document)?
@@ -1491,7 +1617,15 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
         );
         let mut last_observation = "product state was not returned".to_string();
         let mut converged = false;
-        for attempt in 1..=MAX_ATTEMPTS {
+        let budget = Duration::from_secs(
+            policy
+                .strategy
+                .readiness_timeout_seconds
+                .saturating_add(policy.strategy.drain_timeout_seconds)
+                .saturating_add(policy.strategy.rollback_window_seconds),
+        ) + CONVERGENCE_SLACK;
+        let deadline = std::time::Instant::now() + budget;
+        loop {
             let output = crate::deploy::host_channel::run_script(target, &script, &runner)
                 .await
                 .map_err(|e| CmdError::click(e.to_string()))?;
@@ -1559,14 +1693,22 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                     state.detail
                 );
             }
-            if attempt < MAX_ATTEMPTS {
-                tokio::time::sleep(Duration::from_secs(5)).await;
+            if std::time::Instant::now() + POLL_INTERVAL >= deadline {
+                break;
             }
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
         if !converged {
             return Err(CmdError::click(format!(
-                "target {name} did not converge to {} generation {} after {MAX_ATTEMPTS} attempts: {last_observation}",
-                run.version, desired.rollout_generation
+                "target {name} did not converge to {} generation {} within {}s \
+                 (readiness {}s + drain {}s + declared rollback window {}s): \
+                 {last_observation}",
+                run.version,
+                desired.rollout_generation,
+                budget.as_secs(),
+                policy.strategy.readiness_timeout_seconds,
+                policy.strategy.drain_timeout_seconds,
+                policy.strategy.rollback_window_seconds
             )));
         }
     }
@@ -1982,8 +2124,61 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     write_receipt(&receipt)
 }
 
+async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdError> {
+    let latest = latest_submitted_run(&request.product)
+        .await?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "delivery names no submitted release run for {}",
+                request.product
+            ))
+        })?;
+    let latest_exact = latest.run_id == request.run_id
+        && latest.version == request.version
+        && latest.source_sha256 == request.source_sha256
+        && latest.source_uri == request.source_uri;
+    if !latest_exact {
+        return Err(CmdError::click(format!(
+            "delivery for {} {} source {} was superseded by release run {} source {}; refusing \
+             the stale coordinate",
+            request.product,
+            request.version,
+            request.source_sha256,
+            latest.run_id,
+            latest.source_sha256
+        )));
+    }
+    let run = load(&request.run_id).await?.ok_or_else(|| {
+        CmdError::click(format!(
+            "delivery names missing release run {}",
+            request.run_id
+        ))
+    })?;
+    let platform = run.platforms.get(&request.platform);
+    let exact = run.state == ReleaseRunState::Delivering
+        && run.product == request.product
+        && run.version == request.version
+        && run.source_sha256 == request.source_sha256
+        && run.source_uri == request.source_uri
+        && platform.is_some_and(|platform| {
+            platform.state == PlatformRunState::Published
+                && platform.artifact_sha256.as_deref() == Some(request.archive_sha256.as_str())
+                && platform.release_manifest_sha256.as_deref()
+                    == Some(request.manifest_sha256.as_str())
+        });
+    if !exact {
+        return Err(CmdError::click(format!(
+            "delivery {} {} {} does not match its current published run; refusing the stale \
+             coordinate",
+            request.product, request.version, request.platform
+        )));
+    }
+    Ok(())
+}
+
 pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> {
     let request: DeliveryRequest = serde_json::from_slice(&std::fs::read(&args.request)?)?;
+    require_current_delivery(&request).await?;
     let archive = std::fs::read(&request.archive_path)?;
     let source_archive = std::fs::read(&request.source_path)?;
     if request.schema_version != 1
@@ -2026,7 +2221,11 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         ("WISENT_PLATFORM".into(), request.platform.clone()),
         ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
     ]);
-    let step = execute(&request.name, &request.argv, &source_root, &environment)?;
+    let mut delivery_argv = request.argv.clone();
+    if request.product == "stado" && delivery_argv.first().is_some_and(|value| value == "stado") {
+        delivery_argv[0] = std::env::current_exe()?.display().to_string();
+    }
+    let step = execute(&request.name, &delivery_argv, &source_root, &environment)?;
     let receipt = DeliveryReceipt {
         schema_version: 1,
         run_id: request.run_id,
@@ -2035,7 +2234,7 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         product: request.product,
         version: request.version,
         platform: request.platform,
-        argv: request.argv,
+        argv: delivery_argv,
         required: request.required,
         secret_env: request.secret_env,
         archive_uri: request.archive_uri,

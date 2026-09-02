@@ -131,6 +131,37 @@ pub const DISK_CHECK: &str = "disk-headroom-against-policy";
 pub const PROGRAM_CHECK: &str = "loaded-label-runs-declared-program";
 pub const BINARY_CHECK: &str = "loaded-label-runs-installed-binary";
 pub const ARTEFACT_CHECK: &str = "service-artefact-not-older-than-installed";
+pub const PREFIX_CHECK: &str = "label-carries-its-prefix-once";
+pub const ORPHAN_CHECK: &str = "loaded-job-has-a-unit-file";
+pub const RESTART_CHECK: &str = "job-runs-are-work-not-a-loop";
+pub const SHADOW_CHECK: &str = "path-resolves-the-delivered-binary";
+pub const UNIT_ENV_CHECK: &str = "unit-declares-the-environment-its-program-reads";
+
+/// The label prefix this fleet's own installer mints.
+///
+/// A label that carries it twice was built by applying it to a name that
+/// already had it. That is not cosmetic: the doubled label is a DIFFERENT
+/// label, so it is declared nowhere, every ownership reader calls it
+/// undeclared, and launchd runs it anyway.
+const MINTED_PREFIX: &str = "com.wisent.compute.service.";
+
+/// Variables launchd hands every job, so a script reading one of these is not
+/// reading something its unit file failed to declare.
+///
+/// Deliberately short. Anything not on it that a script reads and does not
+/// default is a variable somebody has to supply, and the unit file is the only
+/// thing that can.
+const AMBIENT_VARIABLES: [&str; 12] = [
+    "HOME", "PATH", "USER", "SHELL", "TMPDIR", "PWD", "OLDPWD", "LANG", "LC_ALL", "IFS", "UID",
+    "LOGNAME",
+];
+
+/// Runs past which a job is not doing work on a schedule, it is looping.
+///
+/// `stado-resolver` was at 50,863 and `claude-reauth-once` at 45,418 while
+/// every other reader called the host healthy, so the threshold only has to be
+/// far enough above a legitimate restart count to be beyond argument.
+const RESTART_LOOP_RUNS: u64 = 500;
 
 /// Sweep the whole canonical registry.
 ///
@@ -189,11 +220,35 @@ async fn host_findings(
 ) -> Result<(Vec<Finding>, Vec<String>), String> {
     let mut findings = Vec::new();
     let mut notes = Vec::new();
-    let loaded = service::loaded_units(target, runner)
+    let (loaded, posture) = service::loaded_units_with_posture(target, runner)
         .await
         .map_err(|error| error.to_string())?;
     duplicate_domains(target, &loaded, &mut findings);
     process_identity(target, &loaded, &mut findings, &mut notes);
+    // The five checks added on 2026-09-02, each one a state that was found by
+    // hand during the #286 hunt and that nothing would have reported again.
+    let mut labels_measured = 0_usize;
+    let mut runs_measured = 0_usize;
+    let mut env_measured = 0_usize;
+    let mut path_measured = 0_usize;
+    doubled_prefix(target, &loaded, &mut findings, &mut labels_measured);
+    let mut orphan_measured = 0_usize;
+    loaded_without_unit_file(target, &loaded, &mut findings, &mut orphan_measured);
+    restart_loops(target, &loaded, &mut findings, &mut runs_measured);
+    unit_environment(target, &loaded, &mut findings, &mut env_measured);
+    path_binary(
+        target,
+        posture.as_ref(),
+        &mut findings,
+        &mut notes,
+        &mut path_measured,
+    );
+    // A check that cannot say what it looked at cannot be trusted when it is
+    // quiet, which is the rule this module holds itself to.
+    notes.push(format!(
+        "{}: {labels_measured} label(s) read for a doubled prefix, {orphan_measured} loaded with no unit file, {runs_measured} for a restart loop, {env_measured} for a declared environment, {path_measured} PATH binary",
+        target.name
+    ));
     // One inventory read, two questions: which processes hold which declared
     // ports, and whether the artefacts behind the service units are the ones
     // the fleet has installed.
@@ -202,6 +257,333 @@ async fn host_findings(
     }
     disk_headroom(target, runner, &mut findings, &mut notes).await;
     Ok((findings, notes))
+}
+
+/// A label carries this fleet's minted prefix exactly once.
+///
+/// `label()` used to prefix a name that already carried the prefix, and the
+/// function was fixed early. Nobody went looking for the jobs it had already
+/// minted, and on 2026-09-01 eight of them were loaded on charless-mac-mini —
+/// one of them a system LaunchDaemon with `KeepAlive` running
+/// `stado agent --target charless-mac-mini`, which recreated an undeclared
+/// queue agent for days. Three separate sessions hunted it as a rogue script.
+///
+/// It is a string comparison. It would have ended that hunt on the first
+/// sweep, and it is here because the absence of this one line cost more than
+/// every check above it put together.
+fn doubled_prefix(
+    target: &ComputeTarget,
+    loaded: &[service::UndeclaredUnit],
+    out: &mut Vec<Finding>,
+    measured: &mut usize,
+) {
+    for unit in loaded {
+        *measured += 1;
+        let Some(rest) = unit.label.strip_prefix(MINTED_PREFIX) else {
+            continue;
+        };
+        if !rest.starts_with(MINTED_PREFIX) && !rest.starts_with("com.wisent.") {
+            continue;
+        }
+        out.push(Finding {
+            check: PREFIX_CHECK,
+            subject: format!("{}:{}", target.name, unit.label),
+            declared: format!("one {MINTED_PREFIX} prefix per label"),
+            observed: format!(
+                "the label already carried a fleet prefix, so it was minted onto one: the real name is {rest}"
+            ),
+            command: format!(
+                "stado service label-print {} --host {} to see what it holds, then stado service bootout {} --host {} --domain <the domain it is loaded in>",
+                unit.label, target.name, unit.label, target.name
+            ),
+        });
+    }
+}
+
+/// A job launchd holds has a unit file somebody can read.
+///
+/// launchd keeps a job after its plist is deleted, and every reader in this
+/// binary enumerated unit files or one launchd domain. A job loaded in the
+/// system domain with no file on disk was therefore in nobody's list, and that
+/// is exactly where the #286 respawner lived: loaded, restarting on
+/// `KeepAlive`, invisible, and reported by `list --undeclared`,
+/// `list --unowned` and the reap keep-set as "no label holds this".
+///
+/// The population is the jobs whose PROGRAM comes out of a fleet-managed root
+/// — evidence in hand, not the label's spelling. Every `application.com.apple.*`
+/// row on a mac is loaded with no unit file too, and it is not this fleet's
+/// business.
+fn loaded_without_unit_file(
+    target: &ComputeTarget,
+    loaded: &[service::UndeclaredUnit],
+    out: &mut Vec<Finding>,
+    measured: &mut usize,
+) {
+    for unit in loaded {
+        if unit.loaded_domains.is_empty() || !unit.declaring_paths.is_empty() {
+            continue;
+        }
+        *measured += 1;
+        let program = if unit.running_program.is_empty() {
+            unit.program.as_str()
+        } else {
+            unit.running_program.as_str()
+        };
+        if !fleet_program(program) {
+            continue;
+        }
+        out.push(Finding {
+            check: ORPHAN_CHECK,
+            subject: format!("{}:{}", target.name, unit.label),
+            declared: "a loaded job has a unit file in one of the three fleet directories"
+                .to_string(),
+            observed: format!(
+                "launchd holds it in {} with no unit file on disk{}, running {program}",
+                unit.loaded_domains.join(", "),
+                if unit.path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (loaded from {}, now gone)", unit.path)
+                }
+            ),
+            command: format!(
+                "stado service bootout {} --host {} --domain {}",
+                unit.label,
+                target.name,
+                unit.loaded_domains
+                    .first()
+                    .map_or("system", |domain| domain.as_str())
+            ),
+        });
+    }
+}
+
+/// Does a program come out of a root this fleet installs into?
+///
+/// Asked of the path rather than of a label, because the label is the thing
+/// that lied in every incident this module records.
+fn fleet_program(program: &str) -> bool {
+    let first = program
+        .split_whitespace()
+        .find(|word| word.starts_with('/'));
+    let Some(path) = first else { return false };
+    [
+        ".stado/",
+        "/weles/",
+        "/Users/Shared/stado",
+        "/Users/Shared/jeden",
+    ]
+    .iter()
+    .any(|root| path.contains(root))
+}
+
+/// A job's run count is work it did, not a loop it is in.
+///
+/// A one-shot with `KeepAlive` is invisible to every other check here: it
+/// reads `active`, it exits, launchd restarts it, forever. Nothing reported
+/// the count, so on charless-mac-mini
+/// `com.wisent.compute.service.com.wisent.claude-reauth-once` — a job whose
+/// own name says `once` — had run 45,418 times and exited 1 every single time,
+/// into a log nobody read; `stado-resolver` was at 50,863 and `brama-funnel`
+/// at 50,436.
+///
+/// Two findings, deliberately separate. A job looping is one defect; a job
+/// whose last exit is non-zero is another, and a host can have either without
+/// the other.
+fn restart_loops(
+    target: &ComputeTarget,
+    loaded: &[service::UndeclaredUnit],
+    out: &mut Vec<Finding>,
+    measured: &mut usize,
+) {
+    for unit in loaded {
+        if unit.declaring_paths.is_empty() {
+            continue;
+        }
+        if let Some(runs) = unit.runs {
+            *measured += 1;
+            if runs >= RESTART_LOOP_RUNS {
+                out.push(Finding {
+                    check: RESTART_CHECK,
+                    subject: format!("{}:{}", target.name, unit.label),
+                    declared: format!("a managed job starts fewer than {RESTART_LOOP_RUNS} times"),
+                    observed: format!(
+                        "launchd has started it {runs} times{}; a one-shot under KeepAlive restarts forever",
+                        unit.last_exit
+                            .map(|code| format!(", last exit {code}"))
+                            .unwrap_or_default()
+                    ),
+                    command: format!(
+                        "stado service label-print {} --host {} then stado host unit-log {} {}",
+                        unit.label, target.name, target.name, unit.label
+                    ),
+                });
+                continue;
+            }
+        }
+        // A non-zero last exit on a job the fleet installed, reported whether
+        // or not it is also looping: `78`, `128` and `255` all read as
+        // "loaded" to every other command.
+        let exit = unit.last_exit.or_else(|| unit.status.parse().ok());
+        if let Some(code) = exit {
+            if code != 0 {
+                out.push(Finding {
+                    check: RESTART_CHECK,
+                    subject: format!("{}:{}", target.name, unit.label),
+                    declared: "a managed job's last run succeeded".to_string(),
+                    observed: format!(
+                        "last exit {code}{}",
+                        unit.runs
+                            .map(|runs| format!(" after {runs} run(s)"))
+                            .unwrap_or_default()
+                    ),
+                    command: format!("stado host unit-log {} {}", target.name, unit.label),
+                });
+            }
+        }
+    }
+}
+
+/// The `stado` a shell on the host resolves is the one the channel delivered.
+///
+/// `~/.cargo/bin/stado` at 0.7.34 shadowed a delivered 0.13.40 on this
+/// workstation for a week. 0.7.34 has no `--undeclared`, no `bootout` and no
+/// `reap`, so every answer it gave was "this host is clean" — not because the
+/// host was, but because that binary could not look. A stale product binary in
+/// front of a fresh one is worse than no binary: it answers.
+///
+/// Compared by resolved real path, so a symlink to the delivered file is not a
+/// finding.
+fn path_binary(
+    target: &ComputeTarget,
+    posture: Option<&service::PathBinary>,
+    out: &mut Vec<Finding>,
+    notes: &mut Vec<String>,
+    measured: &mut usize,
+) {
+    let Some(posture) = posture else {
+        notes.push(format!(
+            "{}: which stado this host carries could not be read",
+            target.name
+        ));
+        return;
+    };
+    // Unmeasured is not clean. The first version of this check reported
+    // agreement whenever `command -v stado` answered nothing, which on
+    // charless-mac-mini it always does: the channel's shell is not a login
+    // shell. A check that passes because it could not look is the disease.
+    if !posture.measurable() {
+        notes.push(format!(
+            "{}: stado copies UNMEASURED — delivered {} resolved to {:?}, {} location(s) answered",
+            target.name,
+            posture.delivered,
+            posture.delivered_real,
+            posture.candidates.len()
+        ));
+        return;
+    }
+    *measured += posture.candidates.len();
+    let shadows = posture.shadows();
+    if shadows.is_empty() {
+        notes.push(format!(
+            "{}: {} stado location(s) all resolve to the delivered {} ({})",
+            target.name,
+            posture.candidates.len(),
+            posture.delivered_real,
+            if posture.delivered_version.is_empty() {
+                "version unread"
+            } else {
+                &posture.delivered_version
+            }
+        ));
+        return;
+    }
+    for copy in shadows {
+        out.push(Finding {
+            check: SHADOW_CHECK,
+            subject: format!("{}:{}", target.name, copy.path),
+            declared: format!(
+                "every stado on this host is the delivered {} ({})",
+                posture.delivered_real,
+                if posture.delivered_version.is_empty() {
+                    "version unread"
+                } else {
+                    &posture.delivered_version
+                }
+            ),
+            observed: format!(
+                "{} is {} and resolves to {}, which is not the delivered binary",
+                copy.path,
+                if copy.version.is_empty() {
+                    "unrunnable".to_string()
+                } else {
+                    copy.version.clone()
+                },
+                copy.real
+            ),
+            command: format!(
+                "ln -sf {} {} on {} — a stale stado answers every question as though the host were clean",
+                posture.delivered, copy.path, target.name
+            ),
+        });
+    }
+}
+
+/// A unit file declares the variables its own program reads.
+///
+/// A launchd job inherits almost nothing, so a plist that names none of what
+/// its program requires is a unit that cannot work — and it fails on its
+/// interval, quietly, forever. `com.wisent.host-health-beacon-collect` on
+/// lukasz-macbook carried `HOME` and `PATH` while its program required
+/// `STADO_HOST_HEALTH_API_URL`; it failed every five minutes from 12 August
+/// into a log nobody read, and the fleet's own beacon age never noticed
+/// because the other hosts self-publish.
+///
+/// The population is scripts under the account's own home — a fleet script,
+/// never a system binary — and the subtraction is against
+/// [`AMBIENT_VARIABLES`] plus whatever the script defaults for itself, so a
+/// script that handles its own absence is not a finding.
+fn unit_environment(
+    target: &ComputeTarget,
+    loaded: &[service::UndeclaredUnit],
+    out: &mut Vec<Finding>,
+    measured: &mut usize,
+) {
+    for unit in loaded {
+        if unit.script_reads.is_empty() {
+            continue;
+        }
+        *measured += 1;
+        let missing: Vec<&str> = unit
+            .script_reads
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !AMBIENT_VARIABLES.contains(name))
+            .filter(|name| !unit.script_assigns.iter().any(|set| set == name))
+            .filter(|name| !unit.env_keys.iter().any(|given| given == name))
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        out.push(Finding {
+            check: UNIT_ENV_CHECK,
+            subject: format!("{}:{}", target.name, unit.label),
+            declared: "the unit file declares every variable its program reads".to_string(),
+            observed: format!(
+                "the plist hands it [{}] and the program reads [{}] without a default",
+                if unit.env_keys.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    unit.env_keys.join(" ")
+                },
+                missing.join(" ")
+            ),
+            command: format!(
+                "stado service env-set {} <KEY> <value> --host {} for each, or stado service ensure {}",
+                unit.label, target.name, unit.label
+            ),
+        });
+    }
 }
 
 /// One label, one declaring domain.

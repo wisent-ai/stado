@@ -2015,6 +2015,38 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     let mut findings: Vec<Finding> = Vec::new();
     let mut claimed: BTreeSet<String> = BTreeSet::new();
 
+    // What the fleet declares DELIVERED, which is what a missing version
+    // declaration is measured against. Read from the document's own
+    // `release_control` block and never from a unit on the host: a product
+    // stays a release target after its launchd plist is removed, and so does
+    // the version gap. A block that will not parse is reported rather than
+    // skipped — a check that quietly measures nothing is the defect it was
+    // written to catch.
+    let release_control = match registry
+        .extra
+        .get(crate::release_control::RELEASE_CONTROL_KEY)
+    {
+        Some(value) => {
+            match <crate::release_control::ReleaseControl as serde::Deserialize>::deserialize(value)
+            {
+                Ok(control) => Some(control),
+                Err(error) => {
+                    findings.push(Finding::new(
+                        "unreadable-release-control",
+                        "registry",
+                        format!(
+                            "registry.{} did not parse, so no delivered product was judged \
+                             against its declared version: {error}",
+                            crate::release_control::RELEASE_CONTROL_KEY
+                        ),
+                    ));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     for target in &registry.targets {
         let slugs = host_health::beacon_slugs(target, &target.name);
         claimed.extend(slugs.iter().cloned());
@@ -2033,6 +2065,26 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                 Finding::new("misdeclared-domain", &target.name, misdeclared.sentence())
                     .about(unit),
             );
+        }
+        // Same shape and the same reason it belongs before any beacon: a host
+        // that declares no version for a product it is delivered is wrong
+        // whether or not the host is answering, and it is why every version
+        // diagnostic is silent about that product.
+        for undeclared in
+            service::products_without_declared_version(target, release_control.as_ref())
+        {
+            let mut finding = Finding::new(
+                "undeclared-service-version",
+                &target.name,
+                undeclared.sentence(),
+            );
+            // A unit is named when one exists that is not this product's
+            // legacy label; a delivered product with no unit at all still
+            // gets its row, which is the case the unit-derived check missed.
+            if let Some(unit) = undeclared.unit.clone() {
+                finding = finding.about(unit);
+            }
+            findings.push(finding);
         }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(

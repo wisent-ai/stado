@@ -131,6 +131,21 @@ const ATTEST_DIFFERS: &str = "staged-differs";
 /// No staged copy for the claimed version: these bytes never came through the
 /// delivery path.
 const ATTEST_ABSENT: &str = "no-staged-copy";
+/// No staged copy for the claimed version AND no staged copy of this binary
+/// at any version: the delivery path has never run here for it.
+///
+/// Held apart from [`ATTEST_ABSENT`] because the two carry opposite
+/// histories and opposite remedies, and folding them together made the
+/// verdict unreadable. On 2026-09-01 `lukasz-macbook` reported both at once:
+/// `skarbiec` had no `~/.stado/releases/skarbiec` directory at all — the
+/// bootstrap installer stages nothing, so a binary that has never been
+/// delivered reads exactly like one that was tampered with — while `stado`
+/// had nine staged versions, the newest `0.13.24` from the day before, and a
+/// `0.13.28` at the install path that no delivery put there. One is a host
+/// nobody has released to yet; the other is a binary swapped in beside a
+/// working pipeline. Printing the same sentence for both is what made
+/// "unattested" look like the normal state of every host.
+const ATTEST_NEVER_DELIVERED: &str = "no-delivery-history";
 /// The version could not be read, so provenance was never asked.
 const ATTEST_UNKNOWN: &str = "unknown";
 
@@ -801,7 +816,16 @@ async fn attest_installed(
     let staged = format!("{coordinate}/{binary}");
     let quoted_staged = crate::deploy::shlex_quote(&staged);
     if !host_channel::remote_test(target, &format!("-f {quoted_staged}"), runner).await? {
-        return Ok((ATTEST_ABSENT, String::new()));
+        // `host release` creates `<binary>/<version>/<platform>/` only when it
+        // stages, so the binary directory existing at all is the record that
+        // this host has been delivered to before. Its absence is bootstrap,
+        // not tampering.
+        let history = format!("{home}/.stado/releases/{binary}");
+        let quoted_history = crate::deploy::shlex_quote(&history);
+        if host_channel::remote_test(target, &format!("-d {quoted_history}"), runner).await? {
+            return Ok((ATTEST_ABSENT, String::new()));
+        }
+        return Ok((ATTEST_NEVER_DELIVERED, String::new()));
     }
     // A byte comparison, not a digest: the two files are already on the same
     // disk, `cmp -s` reads no further than the first difference, and there is
@@ -1076,10 +1100,19 @@ fn verdict_rows(
             let unattested = match attestation {
                 ATTEST_ABSENT => Some(format!(
                     "the host runs {} and no delivered copy of {} is staged at \
-                     $HOME/.stado/releases; these bytes did not come through \
-                     `stado host release`, and --apply will not move the declaration to \
-                     a version it cannot attest",
+                     $HOME/.stado/releases, though earlier versions of this binary were \
+                     delivered here; these bytes were put at the install path beside the \
+                     delivery path, and --apply will not move the declaration to a version \
+                     it cannot attest",
                     installed.as_deref().unwrap_or(UNKNOWN),
+                    installed.as_deref().unwrap_or(UNKNOWN)
+                )),
+                ATTEST_NEVER_DELIVERED => Some(format!(
+                    "the host runs {} and this binary has never been delivered here: \
+                     $HOME/.stado/releases holds no version of it at all. The bootstrap \
+                     installer stages nothing, so this is the expected reading for a host \
+                     that has not had a `stado host release` yet — it is not evidence that \
+                     anything was replaced",
                     installed.as_deref().unwrap_or(UNKNOWN)
                 )),
                 ATTEST_DIFFERS => Some(format!(

@@ -2113,7 +2113,8 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
 ///
 /// The repair is deliberately narrow. It reads the publisher's own declared
 /// log, refuses every other cause, resolves the object API authority from the
-/// service directory, reconciles that authority's existing verifier grant
+/// service directory, copies the authoritative route bearer into that
+/// authority's target-local verifier shadow, reconciles the existing grant
 /// without rotating its bearer, then waits for the host's normal one-minute
 /// publisher to prove the repair with a newer beacon. No service is restarted.
 pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError> {
@@ -5015,12 +5016,13 @@ async fn reconcile_verifier(
         .checked_sub(now)
         .filter(|ttl| *ttl > 0)
         .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
-    // Publisher items remain authoritative in the control-plane vault. The
-    // release API reads target-local verifier shadows with the same ids. Keep
-    // those shadows target-owned and atomically replace a staged vault copy;
-    // this copies the current value without rotating or reclassifying source.
-    let mut publisher_lifecycles = Vec::new();
-    if kind == "release" {
+    // Release publisher items and the route-scoped host-health bearer remain
+    // authoritative in the control-plane vault. Their consumers read
+    // target-local shadows with the same ids. Atomically replace only those
+    // shadows; this copies the current value without rotating or reclassifying
+    // the authoritative source.
+    let mut source_lifecycles = Vec::new();
+    if matches!(kind, "release" | "object") {
         let authoritative_vault = crate::credential_store::owner::vault()
             .map_err(|error| CmdError::click(error.to_string()))?;
         let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
@@ -5043,13 +5045,16 @@ async fn reconcile_verifier(
             remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
                 .await?;
         for item in &items {
+            if kind == "object" && item.as_str() != crate::config::HOST_HEALTH_API_ITEM {
+                continue;
+            }
             let source_entry = authoritative
                 .get("items")
                 .and_then(Value::as_object)
                 .and_then(|entries| entries.get(item))
                 .ok_or_else(|| {
                     CmdError::click(format!(
-                        "authoritative release publisher item {item} is absent"
+                        "authoritative {kind} verifier source item {item} is absent"
                     ))
                 })?;
             let source_management = source_entry
@@ -5057,7 +5062,7 @@ async fn reconcile_verifier(
                 .and_then(Value::as_object)
                 .ok_or_else(|| {
                     CmdError::click(format!(
-                        "authoritative release publisher item {item} has no management metadata"
+                        "authoritative {kind} verifier source item {item} has no management metadata"
                     ))
                 })?;
             let mode = source_management
@@ -5066,7 +5071,7 @@ async fn reconcile_verifier(
                 .filter(|value| matches!(*value, "owner" | "managed" | "external"))
                 .ok_or_else(|| {
                     CmdError::click(format!(
-                        "authoritative release publisher item {item} has no supported lifecycle mode"
+                        "authoritative {kind} verifier source item {item} has no supported lifecycle mode"
                     ))
                 })?;
             let controller = source_management
@@ -5075,13 +5080,13 @@ async fn reconcile_verifier(
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
                     CmdError::click(format!(
-                        "authoritative release publisher item {item} has no lifecycle controller"
+                        "authoritative {kind} verifier source item {item} has no lifecycle controller"
                     ))
                 })?;
             let token =
                 crate::credential_store::owner::read_string(item, "token").map_err(|error| {
                     CmdError::click(format!(
-                        "cannot read authoritative release publisher item {item}: {error}"
+                        "cannot read authoritative {kind} verifier source item {item}: {error}"
                     ))
                 })?;
             let target_entry = target_items.as_array().and_then(|entries| {
@@ -5089,14 +5094,18 @@ async fn reconcile_verifier(
                     .iter()
                     .find(|entry| entry.get("id").and_then(Value::as_str) == Some(item))
             });
-            let shadow_owned = target_entry
-                .and_then(|entry| entry.get("management"))
-                .and_then(Value::as_object)
-                .is_some_and(|management| {
-                    management.get("mode").and_then(Value::as_str) == Some("owner")
-                        && management.get("controller").and_then(Value::as_str)
-                            == Some(target_owner)
-                });
+            // Release shadows must be owned by the target vault. The
+            // host-health item may itself be authoritative when the object API
+            // runs beside the control-plane vault, so equality is sufficient.
+            let shadow_owned = kind == "object"
+                || target_entry
+                    .and_then(|entry| entry.get("management"))
+                    .and_then(Value::as_object)
+                    .is_some_and(|management| {
+                        management.get("mode").and_then(Value::as_str) == Some("owner")
+                            && management.get("controller").and_then(Value::as_str)
+                                == Some(target_owner)
+                    });
             let compare_command = format!(
                 "set -eu; expected=$(/bin/cat); actual=$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --field token); [ \"$actual\" = \"$expected\" ]",
                 crate::deploy::shlex_quote(&gnupg_home),
@@ -5119,7 +5128,7 @@ async fn reconcile_verifier(
                     "fields": { "token": token },
                     "context": {}
                 }))?;
-                let staging = format!("{vault}.stado-release-verifier");
+                let staging = format!("{vault}.stado-{kind}-verifier");
                 let set_command = format!(
                     "set -eu; live={}; staging={}; trap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM; /bin/cp -p \"$live\" \"$staging\"; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} reclaim {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} rm {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} set-json {} --type token >/dev/null; /bin/chmod 600 \"$staging\"; /bin/mv -f \"$staging\" \"$live\"; trap - EXIT HUP INT TERM",
                     crate::deploy::shlex_quote(&vault),
@@ -5173,18 +5182,18 @@ async fn reconcile_verifier(
                         .as_deref()
                         .unwrap_or("shadow write completed");
                     CmdError::click(format!(
-                        "{}: cannot verify release verifier shadow for {item} after {first}: {error}",
+                        "{}: cannot verify {kind} verifier shadow for {item} after {first}: {error}",
                         resolved.name
                     ))
                 })?;
             }
             if !comparison.ok() {
                 return Err(CmdError::click(format!(
-                    "{}: release verifier shadow for {item} differs after reconciliation",
+                    "{}: {kind} verifier shadow for {item} differs after reconciliation",
                     resolved.name,
                 )));
             }
-            publisher_lifecycles.push(json!({
+            source_lifecycles.push(json!({
                 "item": item,
                 "mode": mode,
                 "controller": controller,
@@ -5268,7 +5277,7 @@ async fn reconcile_verifier(
         "kind": kind,
         "consumer": consumer,
         "items": item_list,
-        "publisher_lifecycles": publisher_lifecycles,
+        "source_lifecycles": source_lifecycles,
         "bearer_preserved": bearer_preserved,
         "expires_at": expires_at,
         "exact": replace_capabilities,
@@ -5660,10 +5669,8 @@ const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
 const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
 const home = os.homedir();
 const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
-const managedWorkerRoot = path.join(
-  home,
-  '.stado/services/weles-admission/current',
-);
+const managedServiceRoot = path.join(home, '.stado/services/weles-admission');
+const managedWorkerRoot = path.join(managedServiceRoot, 'current');
 
 const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
 const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
@@ -5703,19 +5710,35 @@ const addRecordingSource = (release, platform, recordings, priority) => {
   releaseVersions.add(release);
   recordingSources.push({ release, platform, recordings, priority });
 };
-const addManagedRuntime = (runtime, platform) => {
+const addManagedRuntime = (runtime, platform, priority) => {
   const manifest = readJson(path.join(runtime, 'package.json'));
-  addRecordingSource(manifest?.version, platform, path.join(runtime, 'recordings'), 1);
+  const release = typeof manifest?.version === 'string' && manifest.version
+    ? manifest.version
+    : null;
+  if (release) releaseVersions.add(release);
+  addRecordingSource(release, platform, path.join(runtime, 'recordings'), priority);
 };
 
-// Current fleet-managed Weles releases unpack their runtime beside the launcher.
-// Some service artifacts carry a platform directory and older ones do not, so
-// inspect both layouts. The `current` link is the declaration Stado reconciles.
-addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed');
+// `current` is the active immutable coordinate. Count its release even before
+// the first browser run creates a recordings directory.
+addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed', 2);
+
+// Also report every immutable release Stado installed. The service store is
+// digest-addressed (`sha256-*/<platform>/runtime`), not version-addressed, and
+// tying release discovery to a recordings directory hid fresh installations
+// until their first browser artifact existed.
 try {
-  for (const entry of fs.readdirSync(managedWorkerRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    addManagedRuntime(path.join(managedWorkerRoot, entry.name, 'runtime'), entry.name);
+  for (const releaseEntry of fs.readdirSync(managedServiceRoot, { withFileTypes: true })) {
+    if (!releaseEntry.isDirectory() || !releaseEntry.name.startsWith('sha256-')) continue;
+    const releaseRoot = path.join(managedServiceRoot, releaseEntry.name);
+    for (const platformEntry of fs.readdirSync(releaseRoot, { withFileTypes: true })) {
+      if (!platformEntry.isDirectory()) continue;
+      addManagedRuntime(
+        path.join(releaseRoot, platformEntry.name, 'runtime'),
+        platformEntry.name,
+        1,
+      );
+    }
   }
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
@@ -5947,9 +5970,12 @@ try {
       }
     }
 
+    const release = typeof document.release_version === 'string' && document.release_version
+      ? document.release_version
+      : null;
     const durable = {
       id,
-      release: null,
+      release,
       platform: process.platform,
       action,
       status,

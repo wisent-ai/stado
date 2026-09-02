@@ -33,34 +33,28 @@
 //! depend on the table being perfectly curated, and they give the operator
 //! a real error instead of a silent mismatch.
 //!
-//! Every entry is read-only, takes no operator-supplied argument, and
-//! carries its own justification in [`ApprovedCommand::why`].
+//! Almost every entry is read-only. The exceptions are the sign-in entries at
+//! the end of the table, which exist because a provider grant the vendor has
+//! disowned is repaired by one command and no read can substitute for it; each
+//! states in its own [`ApprovedCommand::why`] exactly what it changes. Every
+//! entry, read or repair, still takes no operator-supplied argument and
+//! carries its own justification.
+//!
+//! An entry whose program the managed account owns rather than the system —
+//! anything under `~` — is described once more in [`ACCOUNT_PROGRAMS`], which
+//! supplies the fixed environment and the time budget that program needs. Those
+//! words are compile-time constants of this module too, so barrier three is
+//! unchanged: `$HOME` expands on the far side and nothing the operator typed
+//! reaches the host except the choice of entry.
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use std::time::Duration;
+
+use serde_json::{json, Value};
 
 use super::host_channel;
 use super::{py_str_repr, shlex_quote, DeployError, Runner};
 
 const RESOLVED_EXECUTABLE_MARKER: &str = "STADO_RESOLVED_EXECUTABLE\t";
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HostExecReceipt {
-    schema: String,
-    target: String,
-    ssh: Option<String>,
-    ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
-    command: String,
-    argv: Vec<String>,
-    program_candidates: Vec<String>,
-    resolved_executable: String,
-    stdout: String,
-    stderr: String,
-    exit_code: i32,
-    status: String,
-    error: Option<String>,
-}
 
 /// `status` for a command that ran and exited clean.
 pub const OK_STATUS: &str = "ok";
@@ -138,6 +132,137 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[(
         TAILSCALE_PROGRAM,
     ],
 )];
+
+/// Brama's own service launcher, as the fleet installs it in the managed
+/// account's home.
+///
+/// It is `argv[0]` of the sign-in entries, and it is the canonical spelling
+/// rather than a path that exists: the launcher ships inside the release
+/// bundle, so where it actually lives is [`AccountProgram::candidates`].
+/// Running the gateway binary directly would be the wrong program: `brama
+/// subscription sign-in` needs the admission credential the launcher acquires
+/// from Skarbiec under Brama's own workload identity at every start, and the
+/// launcher runs a named CLI verb inside exactly that environment. Nothing
+/// here carries a secret — the launcher fetches it on the host and it never
+/// reaches an argument vector.
+const BRAMA_LAUNCHER: &str = "~/.stado/bin/start-with-skarbiec";
+
+/// The prefix that marks a program, or one of its environment values, as
+/// living under the login user's home rather than at a system path.
+const HOME_RELATIVE: &str = "~/";
+
+/// What an entry whose program the managed account owns needs on top of its
+/// fixed argv.
+#[derive(Debug)]
+struct AccountProgram {
+    /// `argv[0]` of every entry this describes, exactly as the entry spells
+    /// it. Keyed on the program, like [`PROGRAM_CANDIDATES`], so one row
+    /// covers every verb of the same program.
+    program: &'static str,
+    /// Every path in the account's home this program is installed at, in probe
+    /// order. The first executable one runs.
+    candidates: &'static [&'static str],
+    /// Fixed environment for that program, home-relative where a value is a
+    /// path. Compile-time constants of this module: an operator's words select
+    /// an entry and never become part of this.
+    environment: &'static [(&'static str, &'static str)],
+    /// The wall-clock budget for the whole run.
+    ///
+    /// [`host_channel::remote_timeout`] is two minutes, which is right for a
+    /// read and wrong for a repair that walks a real single-sign-on and a
+    /// consent screen in a browser on the far side. Cutting the channel
+    /// mid-flight would leave the operator unable to tell a refused sign-in
+    /// from one still running.
+    timeout_seconds: u64,
+}
+
+/// Every program in the table that the managed account owns.
+const ACCOUNT_PROGRAMS: &[AccountProgram] = &[AccountProgram {
+    program: BRAMA_LAUNCHER,
+    // The launcher is part of the release bundle, and the live bundle is the
+    // `current` link the service unit itself runs through -- never a pinned
+    // version, which would go stale at the next release and send a repair into
+    // a launcher older than the vault it talks to. Both platform directory
+    // spellings the fleet has shipped are probed, newest layout first, and the
+    // standalone copy some accounts keep in `~/.stado/bin` is last.
+    candidates: &[
+        "~/.stado/services/brama/current/darwin-arm64/bin/start-with-skarbiec",
+        "~/.stado/services/brama/current/darwin-arm/bin/start-with-skarbiec",
+        BRAMA_LAUNCHER,
+    ],
+    // Two paths this run must not share with the gateway it is repairing.
+    //
+    // The launcher ends whatever holds its capability-broker socket and then
+    // rebinds it. On its stable default path that is the live gateway's own
+    // broker, so a CLI run beside a serving Brama would take the service's
+    // credential redemption down with it. And the runtime directory is named
+    // after the installation, which for a CLI run out of the live bundle is
+    // the live one: the launcher rebuilds the subscription manifest and the
+    // capability catalog in it at every start, so sharing it would rewrite the
+    // serving gateway's own runtime state. Both get a copy of their own under
+    // the fleet's scratch area, and the service is untouched.
+    environment: &[
+        (
+            "BRAMA_CAP_SOCKET",
+            "~/.stado/work/brama-sign-in/capability.sock",
+        ),
+        ("BRAMA_RUNTIME_DIR", "~/.stado/work/brama-sign-in/runtime"),
+    ],
+    timeout_seconds: 1500,
+}];
+
+/// The account-owned program behind an entry, if this is one.
+fn account_program(program: &str) -> Option<&'static AccountProgram> {
+    ACCOUNT_PROGRAMS
+        .iter()
+        .find(|account| account.program == program)
+}
+
+/// A home-relative word as the remote shell should read it: its own `$HOME`
+/// followed by the quoted remainder. A word that is already absolute is just
+/// quoted.
+fn home_anchored(word: &str) -> String {
+    match word.strip_prefix(HOME_RELATIVE) {
+        Some(rest) => format!("\"$HOME\"/{}", shlex_quote(rest)),
+        None => shlex_quote(word),
+    }
+}
+
+/// The remote script for an account-owned entry: find the installed copy,
+/// export the entry's fixed environment, then become it.
+///
+/// Every word is a compile-time constant of this module and is quoted for the
+/// remote shell; the only thing that expands on the host is its own `$HOME`.
+/// The operator's words selected the entry and reach the host in nothing else,
+/// so barrier three holds exactly as it does on the
+/// [`host_channel::run_program`] path.
+fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
+    let mut script = String::from("set -eu\nprogram=\n");
+    for candidate in account.candidates {
+        script.push_str(&format!(
+            "[ -n \"$program\" ] || [ ! -x {candidate} ] || program={candidate}\n",
+            candidate = home_anchored(candidate)
+        ));
+    }
+    script.push_str(&format!(
+        "[ -n \"$program\" ] || {{ printf '%s\\n' {} >&2; exit 127; }}\n",
+        shlex_quote(&format!(
+            "this program is installed at none of its approved paths in the managed \
+             account's home on this host: {}",
+            account.candidates.join(", ")
+        ))
+    ));
+    for (name, value) in account.environment {
+        script.push_str(&format!("{name}={}\nexport {name}\n", home_anchored(value)));
+    }
+    let fixed = arguments
+        .iter()
+        .map(|word| shlex_quote(word))
+        .collect::<Vec<String>>()
+        .join(" ");
+    script.push_str(&format!("exec \"$program\" {fixed}\n"));
+    script
+}
 
 /// The allowlist.
 ///
@@ -377,6 +502,122 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               interface operand and no address, and every configuring form of ifconfig requires \
               one, so this entry cannot change an address, a route, or an interface's state",
     },
+    // The three sign-in repairs, added 2026-09-02. These are the only entries
+    // in this table that change anything, and they are here because the thing
+    // they change cannot be reached any other way: a provider grant the vendor
+    // has disowned is replaced by one browser sign-in, that sign-in belongs to
+    // Brama's own CLI on the host whose vault the gateway reads, and the vault
+    // that matters is never this control plane's. `brama-sub-wisent-app-codex-primary`
+    // was recorded `needs_reauthorization` on 2026-08-27 with the provider's own
+    // sentence -- "Your session has ended. Please log in again." -- and from that
+    // moment every model call the fleet routed through that gateway had one live
+    // provider and no way for an operator to repair it without a private ssh
+    // session outside the registry-authorized channel. Each entry names one
+    // provider, one exact Weles sign-in row, and its own fixed reason. The row
+    // is named rather than inferred because Weles holds seven codex accounts
+    // and two claude ones, and the cost of getting that wrong is one real
+    // sign-in into somebody else's account; the reason is fixed because it is
+    // recorded in Brama's journal beside the verdict and an operator-supplied
+    // one would be an operator-supplied argument.
+    //
+    // The login budget is deliberately above the ten minutes the reauth
+    // trajectory's own `login.mjs` allows itself. Setting the two equal, which
+    // this table did first, meant the outer kill landed in the same second as
+    // the inner cap: Weles answered 502 with no run detail and the trajectory
+    // was SIGKILLed before it could write the page it was stuck on, which is
+    // the one artifact the operator actually needs. The inner cap must be the
+    // one that fires.
+    ApprovedCommand {
+        argv: &[
+            BRAMA_LAUNCHER,
+            "subscription",
+            "sign-in",
+            "codex",
+            "--login-item",
+            "codex-wisent-google-sso",
+            "--reason",
+            "codex-grant-disowned-2026-08-27-gateway-has-one-live-provider",
+            "--login-timeout-ms",
+            "900000",
+            "--json",
+        ],
+        why: "asks Weles to sign the codex account in on the host that holds the vault, then \
+              proves the repair by Brama's own refresh. The row is the one Weles declares \
+              primary for codex and maps to `brama-sub-wisent-app-codex-primary`, which is \
+              the subscription the provider disowned; it is also the row Brama's own renewal \
+              sweep already drives, so this entry cannot reach an account that sweep would \
+              not. It changes exactly one thing: that subscription's stored provider \
+              credential. It cannot spend money, because a sign-in buys nothing. No \
+              credential reaches this command: Weles writes what it mints into the vault \
+              directly, the admission bearer is acquired on the host, and the verdict this \
+              prints carries a result, a reason and a login row and never a secret",
+    },
+    ApprovedCommand {
+        argv: &[
+            BRAMA_LAUNCHER,
+            "subscription",
+            "sign-in",
+            "claude-code",
+            "--login-item",
+            "claude-wisent-google-sso",
+            "--reason",
+            "claude-code-vault-row-yields-no-credential-second-live-provider",
+            "--login-timeout-ms",
+            "900000",
+            "--json",
+        ],
+        why: "the same repair for claude-code, whose stored document is account metadata \
+              carrying no credential material: its pool contributes no model at all, and a \
+              sign-in is what would put a credential there. A gateway with one live provider \
+              is a gateway that stops serving at the next lapsed session, which is the state \
+              this fleet was in on 2026-08-27. The row is Weles's declared primary for \
+              claude, mapped to `brama-sub-wisent-app-claude-primary`. Same guarantees as \
+              the codex entry: no argument, no purchase, no secret in argv or output",
+    },
+    ApprovedCommand {
+        argv: &[
+            BRAMA_LAUNCHER,
+            "subscription",
+            "sign-in",
+            "kimi",
+            "--login-item",
+            "kimi-lukasz-google-sso",
+            "--reason",
+            "kimi-vault-row-yields-no-credential-second-live-provider",
+            "--login-timeout-ms",
+            "900000",
+            "--json",
+        ],
+        why: "the same repair for kimi, in the same state as claude-code: a stored document \
+              with no credential material and a pool that contributes no model. The row is \
+              Weles's only kimi account and its declared primary, mapped to \
+              `brama-sub-wisent-app-kimi-primary`. Same guarantees as the codex entry",
+    },
+    // The proof the sign-in entries above are judged by, added 2026-09-02. A
+    // repaired credential that redeems is not a repaired gateway: the vault can
+    // yield a value the provider then refuses, which is exactly the state
+    // 2026-08-27 left, and only a real completion separates the two. It runs
+    // through the same subscription dispatch a caller reaches, on the host, so
+    // no bearer of any kind crosses this channel.
+    ApprovedCommand {
+        argv: &[
+            BRAMA_LAUNCHER,
+            "test",
+            "--model",
+            "codex/gpt-5.3-codex-spark",
+            "--agent-id",
+            "wisent-app",
+            "--allow-provider-cost",
+        ],
+        why: "sends one fixed prompt through Brama's subscription dispatch and prints the \
+              model, the token counts and the latency. The route is the provider's own \
+              cheapest codex model -- the one its plan-probe table already names -- and the \
+              request is covered by the subscription the account already holds, so it buys \
+              nothing, renews nothing and raises no limit. `--allow-provider-cost` is \
+              Brama's own acknowledgement flag and is fixed here because this entry exists \
+              to spend exactly one completion; the prompt and the agent are compile-time \
+              constants, and the answer carries no credential",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
@@ -498,8 +739,7 @@ fn extract_resolved_executable(
     Ok(Some(resolved))
 }
 
-
-/// Run one approved read-only command on a canonical registry host.
+/// Run one approved command on a canonical registry host.
 pub async fn exec_host(
     target_name: &str,
     words: &[String],
@@ -514,18 +754,41 @@ pub async fn exec_host(
     // fixed argv IS the command line, and probing a single path on the host
     // would only replace the remote shell's own report of a missing program
     // with a worse one.
-    let candidates = approved.candidates();
-    let mut output = match approved.argv.split_first() {
-        Some((_, arguments)) if candidates.len() > usize::from(true) => {
+    let account = account_program(approved.argv.first().copied().unwrap_or_default());
+    let candidates = match account {
+        Some(account) => account.candidates,
+        None => approved.candidates(),
+    };
+    // `mut`: a multi-candidate run reports which path it execed on stderr, and
+    // that marker line is consumed out of the operator-visible stderr below.
+    let mut output = match (approved.argv.split_first(), account) {
+        (Some((_, arguments)), Some(account)) => {
+            let script = account_script(account, arguments);
+            host_channel::run_script_with_timeout(
+                &target,
+                &script,
+                Duration::from_secs(account.timeout_seconds),
+                runner,
+            )
+            .await?
+        }
+        (Some((_, arguments)), None) if candidates.len() > usize::from(true) => {
             let script = candidate_script(candidates, arguments);
             host_channel::run_script(&target, &script, runner).await?
         }
         _ => host_channel::run_program(&target, approved.argv, runner).await?,
     };
-    let resolved_executable = if candidates.len() > usize::from(true) {
+    // Which path the host actually execed. Only the multi-candidate script
+    // reports it: the account script resolves `$program` in the remote shell
+    // and prints no marker, so that path has nothing to report here and
+    // asking it for one would fail a run that worked.
+    let resolved_executable = if account.is_some() {
+        None
+    } else if candidates.len() > usize::from(true) {
         match extract_resolved_executable(&mut output.stderr, candidates)? {
-            Some(path) => path,
-            None if !output.ok() => String::new(),
+            Some(path) => Some(path),
+            // A failed run may never have reached any candidate.
+            None if !output.ok() => None,
             None => {
                 return Err(DeployError(
                     "host returned no resolved executable marker".into(),
@@ -533,32 +796,33 @@ pub async fn exec_host(
             }
         }
     } else {
-        candidates.first().copied().unwrap_or_default().to_string()
+        candidates.first().copied().map(str::to_string)
     };
-    let ok = output.ok();
-    let error = if ok {
-        None
-    } else {
-        Some(host_channel::last_error_line(&output, "ssh failed"))
-    };
-    let receipt = HostExecReceipt {
-        schema: "stado.host-exec-receipt.v1".into(),
-        target: target.name,
-        ssh: target.ssh,
-        ssh_fallbacks: target.ssh_fallbacks,
-        command: approved.display(),
-        argv: approved.argv.iter().map(|word| (*word).to_string()).collect(),
-        program_candidates: candidates.iter().map(|path| (*path).to_string()).collect(),
-        resolved_executable,
-        stdout: output.stdout,
-        stderr: output.stderr,
-        exit_code: output.code,
-        status: if ok {
-            OK_STATUS.into()
-        } else {
-            host_channel::FAILED_STATUS.into()
-        },
-        error,
-    };
-    serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()))
+
+    let mut report = host_channel::base_report(&target);
+    report.insert("command".to_string(), json!(approved.display()));
+    report.insert("argv".to_string(), json!(approved.argv));
+    // Where this program may live, for an entry that has more than one install
+    // path: `argv[0]` is one candidate among several and is not evidence of
+    // where the host actually found it.
+    if candidates.len() > usize::from(true) {
+        report.insert("program_candidates".to_string(), json!(candidates));
+    }
+    // Which of them ran, when the host told us.
+    if let Some(resolved) = &resolved_executable {
+        report.insert("resolved_executable".to_string(), json!(resolved));
+    }
+    // The budget an account-owned repair ran under. Without it a channel cut at
+    // the cap is indistinguishable in this report from a program that failed
+    // fast, and the two ask for different next steps.
+    if let Some(account) = account {
+        report.insert(
+            "timeout_seconds".to_string(),
+            json!(account.timeout_seconds),
+        );
+    }
+    report.insert("stdout".to_string(), json!(output.stdout));
+    report.insert("stderr".to_string(), json!(output.stderr));
+    host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
+    Ok(Value::Object(report))
 }

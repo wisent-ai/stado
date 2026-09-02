@@ -2698,6 +2698,17 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(60));
+    for host in configured_origin_hosts() {
+        // The tailnet states where its own names live. Asking the system
+        // resolver about a MagicDNS name is asking a witness that may not have
+        // been told: on 2026-09-02 it answered the public `ts.net` front end
+        // once and nothing the next time, while the tailnet address served the
+        // same route in 82 ms. SNI and certificate validation still use the
+        // name, so this decides the route and never the identity.
+        if let Some(address) = crate::tailnet::address_of(&host) {
+            builder = builder.resolve(&host, std::net::SocketAddr::new(address, 0));
+        }
+    }
     let ca_file = crate::config::wc_stado_storage_ca_file().trim().to_string();
     if !ca_file.is_empty() {
         let path = crate::config_file::expand_tilde(&ca_file);
@@ -2718,14 +2729,37 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
     builder.build().map_err(CmdError::from)
 }
 
-fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
-    let value = match std::env::var(variable) {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(CmdError::click(format!("{variable} must be valid Unicode")));
+/// Every host this process may address as a Stado HTTP origin.
+///
+/// Read from the accessors that own each origin rather than from raw
+/// environment variables, so a value configured in `config.json` is pinned
+/// exactly like one exported into the process. Malformed values are dropped
+/// here and refused where they are used, because this function decides
+/// routing and must never be the thing that rejects a configuration.
+fn configured_origin_hosts() -> Vec<String> {
+    let mut hosts = Vec::new();
+    let candidates = [
+        crate::config::stado_api_url(),
+        crate::config::wc_stado_storage_url().to_string(),
+        std::env::var("STADO_HOST_HEALTH_API_URL").unwrap_or_default(),
+    ];
+    for candidate in candidates {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
         }
-    };
+        let Ok(url) = url::Url::parse(candidate) else {
+            continue;
+        };
+        let Some(host) = url.host_str() else { continue };
+        if crate::tailnet::is_magicdns_name(host) && !hosts.iter().any(|known| known == host) {
+            hosts.push(host.to_string());
+        }
+    }
+    hosts
+}
+
+fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::Url>, CmdError> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
@@ -2760,6 +2794,38 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
     Ok(Some(url))
 }
 
+fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
+    let value = match std::env::var(variable) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(CmdError::click(format!("{variable} must be valid Unicode")));
+        }
+    };
+    validated_object_base_url(variable, &value)
+}
+
+/// The canonical origin from the environment, and then from `api.url`.
+///
+/// `STADO_API_URL` is a configuration field, not an environment-only switch:
+/// `config::stado_api_url` resolves both, and that is how the scheduler, the
+/// doctor and every enrolment path read it. Reading the environment alone made
+/// `stado host release` refuse a fleet delivery with "STADO_API_URL is
+/// required for canonical release reads" on a host whose own configuration
+/// declared the canonical origin — printed back by `host config-show` while
+/// being refused.
+///
+/// Only the release channel resolves it this way. The private object plane
+/// keeps its own endpoint: widening the shared reader instead sent every
+/// object write to the public origin, and a source archive PUT there answered
+/// `504 FUNCTION_INVOCATION_TIMEOUT` twice before the cause was the diff.
+fn configured_api_origin() -> Result<Option<url::Url>, CmdError> {
+    if let Some(url) = configured_object_base_url("STADO_API_URL")? {
+        return Ok(Some(url));
+    }
+    validated_object_base_url("api.url", &crate::config::stado_api_url())
+}
+
 /// Canonical public origin for immutable release reads. Release consumers use
 /// the same `STADO_API_URL` contract as `storage get|stat|url`; there is no
 /// release-specific origin that can drift from it.
@@ -2771,7 +2837,7 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
 /// keeps the per-target gate: it accepts this shape only for the host the
 /// service directory says serves the object API.
 pub(crate) fn release_api_origin() -> Result<String, CmdError> {
-    let url = configured_object_base_url("STADO_API_URL")?
+    let url = configured_api_origin()?
         .ok_or_else(|| CmdError::click("STADO_API_URL is required for canonical release reads"))?;
     if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str()) {
         return Err(CmdError::click(
@@ -3303,7 +3369,7 @@ async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
 fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
     let (base_url, route) = if object.namespace() == "releases" {
-        let base_url = configured_object_base_url("STADO_API_URL")?.ok_or_else(|| {
+        let base_url = configured_api_origin()?.ok_or_else(|| {
             CmdError::click("STADO_API_URL is required to render a release object URL")
         })?;
         (base_url, "/api/release/object")

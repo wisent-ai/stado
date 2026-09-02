@@ -341,10 +341,10 @@ jobs:
               > "$RUNNER_TEMP/release-lifecycles.json"
             jq -e '
               .items == ["stado-release-publisher"] and
-              (.publisher_lifecycles | type == "array") and
-              (.publisher_lifecycles | length) == 1 and
+              (.source_lifecycles | type == "array") and
+              (.source_lifecycles | length) == 1 and
               all(
-                .publisher_lifecycles[];
+                .source_lifecycles[];
                 (.item | type == "string" and length > 0) and
                 (.controller | type == "string" and length > 0) and
                 (.mode == "owner" or .mode == "managed" or .mode == "external") and
@@ -487,25 +487,9 @@ jobs:
         run: |
           export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          for source in "$RUNNER_TEMP"/stado-release/*; do
-            name="${source##*/}"
-            uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
-            delivered="$RUNNER_TEMP/public-$name"
-            visible=false
-            for attempt in $(seq 1 12); do
-              rm -f "$delivered"
-              if "$stado_bin" storage get "$uri" "$delivered" &&
-                 cmp --silent "$source" "$delivered"; then
-                visible=true
-                break
-              fi
-              sleep "$((attempt * 2))"
-            done
-            if [ "$visible" != true ]; then
-              echo "::error::Public release delivery did not serve immutable $uri"
-              false
-            fi
-          done
+          bash "$GITHUB_WORKSPACE/scripts/verify_public_stado_release.sh" \
+            "$stado_bin" "$RUNNER_TEMP/stado-release" stado \
+            "$STADO_VERSION" linux-amd64 "$RUNNER_TEMP"
       - name: Reclaim Rust release cache
         if: always()
         run: |
@@ -739,25 +723,10 @@ jobs:
         run: |
           export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
           stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          for source in "$STADO_NATIVE_RELEASE_DIR"/*; do
-            name="${source##*/}"
-            uri="stado://releases/stado/$STADO_NATIVE_RELEASE_VERSION/$STADO_NATIVE_RELEASE_PLATFORM/$name"
-            delivered="$RUNNER_TEMP/public-native-$name"
-            visible=false
-            for attempt in $(seq 1 12); do
-              rm -f "$delivered"
-              if "$stado_bin" storage get "$uri" "$delivered" &&
-                 cmp --silent "$source" "$delivered"; then
-                visible=true
-                break
-              fi
-              sleep "$((attempt * 2))"
-            done
-            if [ "$visible" != true ]; then
-              echo "::error::Public release delivery did not serve immutable $uri"
-              false
-            fi
-          done
+          bash "$STADO_SOURCE_DIR/scripts/verify_public_stado_release.sh" \
+            "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
+            "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
+            "$RUNNER_TEMP"
 
       - name: Deliver verified native release
         run: |
@@ -820,3 +789,48 @@ jobs:
               cargo clean --manifest-path "$manifest"
             fi
           fi
+
+  deploy-fleet:
+    needs: [identity, publish-linux, deploy-control-plane]
+    if: needs.identity.outputs.channel == 'stable'
+    runs-on: [self-hosted, stado-control-plane]
+    permissions:
+      contents: read
+    env:
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_VERSION: ${{ needs.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Converge every required Stado delivery
+        run: |
+          set -euo pipefail
+          stado_bin="$HOME/.stado/bin/stado"
+          test -x "$stado_bin"
+          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+          declared="${version_line#*\"}"
+          declared="${declared%%\"*}"
+          test "$declared" = "$STADO_VERSION"
+          targets="$(
+            jq -er '
+              [
+                .deliveries[]
+                | select(.required == true)
+                | select(.argv == ["stado", "release", "install-local"])
+                | .target
+              ]
+              | if length > 0 and length == (unique | length)
+                then .[]
+                else error("required Stado delivery targets must be present and unique")
+                end
+            ' .wisent-release.json
+          )"
+          while IFS= read -r target; do
+            test -n "$target"
+            "$stado_bin" host declare-version "$target" \
+              --binary stado \
+              --version "$STADO_VERSION" \
+              --json
+            "$stado_bin" service converge "$target" stado --apply --json
+          done <<<"$targets"

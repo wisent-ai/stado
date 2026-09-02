@@ -27,13 +27,14 @@
 //! - [`host_cleanup`] — `stado host cleanup --dry-run`: drives the host's
 //!   own janitor in preview mode; contains no cleanup policy itself.
 //! - [`host_exec`] — `stado host exec`: one command from a fixed
-//!   read-only allowlist. Not a shell.
+//!   allowlist, read-only apart from the declared provider sign-in
+//!   repairs. Not a shell.
 //! - [`host_inventory`] — `stado host inventory`: the stado-managed
 //!   binaries, forward markers and loopback listeners of one host, plus
 //!   the verdict on whether each marker still matches a live listener.
-//!   It needs `$HOME`, which is exactly why it is NOT an `host_exec`
-//!   allowlist entry: that table's contract is a fixed argv of absolute
-//!   paths with no operator-supplied path in it.
+//!   It is NOT an `host_exec` allowlist entry because it reduces and caps
+//!   every value it reads off the host; that table passes a program's
+//!   output through untouched.
 //! - [`host_object_relocate`] — `stado host object-relocate`: re-address
 //!   objects from one key prefix to another INSIDE the store, on the host
 //!   that holds it. The object API has no move and no server-side copy, so
@@ -119,7 +120,9 @@ pub mod service;
 pub mod service_catalog;
 pub mod service_env_file;
 pub mod service_file_fetch;
+pub mod service_label_print;
 pub mod service_serving;
+pub mod service_spawn_watch;
 pub mod ssh_key;
 pub mod staged_release;
 pub mod stream;

@@ -184,14 +184,23 @@ struct Walk<'a> {
     reserved: Vec<PathBuf>,
     /// Bytes this pass expects to have freed, against `max_bytes_per_pass`.
     deleted_bytes: i64,
-    /// Path components, relative to the scan root, at which the previous
-    /// pass stopped, and whether this walk is still skipping forward to
-    /// reach them. Empty and `false` mean "start at the root".
-    resume: Vec<OsString>,
-    catching_up: bool,
+    /// Where the previous pass stopped, as a path relative to the scan
+    /// root, and the level that path sits on. `None` means "start at the
+    /// root".
+    ///
+    /// A level-order walk visits by increasing depth and, within a depth, in
+    /// lexicographic order, so `(depth, relative path)` is a total order over
+    /// everything the walk examines and "before the cursor" is decidable
+    /// without remembering the tree. Skipping forward is not charged to the
+    /// scan budget, exactly as the depth-first cursor it replaces was not:
+    /// re-crossing the shallow levels costs the pass wall clock, never
+    /// candidates.
+    resume: Option<PathBuf>,
+    resume_depth: usize,
     /// The directory this pass could not get to, recorded the moment a
     /// budget refuses it, so the next pass starts there instead of at the
-    /// root. `None` once the walk has crossed the whole tree.
+    /// root. Relative to the scan root. `None` once the walk has crossed the
+    /// whole tree.
     halted_at: Option<PathBuf>,
 }
 
@@ -265,12 +274,35 @@ impl<'a> Walk<'a> {
     /// the number is comparable with the free space the deletion recovers.
     /// Unreadable subtrees contribute nothing rather than aborting the
     /// estimate — the deletion below reports its own failures.
-    fn tree_bytes(&self, dir_fd: RawFd, depth: usize) -> i64 {
+    ///
+    /// Bounded by the pass deadline, and never charged to `scanned_items`.
+    /// The tag is the build tool's statement that this directory is ONE
+    /// regenerable unit, so it is one scanned candidate however many files
+    /// it holds — a `target/` is one deletable thing, not the hundred
+    /// thousand entries inside it. It used to be neither: the recursion was
+    /// unbounded and free, so the first eligible cache could consume the
+    /// whole thirty-second deadline totalling bytes, and the pass then
+    /// halted with `caps.deadline` set and no cache examined after it.
+    ///
+    /// `complete` is cleared when the deadline cut the total short. The
+    /// bytes returned are then the bytes actually proven, never an estimate
+    /// of the rest: [`Walk::judge`] reports the shortfall as
+    /// `scan_deadline`, so a partial total reads as "I did not finish
+    /// looking" instead of as a smaller true-looking number.
+    fn tree_bytes(&self, dir_fd: RawFd, depth: usize, complete: &mut bool) -> i64 {
+        if Instant::now() >= self.deadline {
+            *complete = false;
+            return 0;
+        }
         let Ok(names) = entry_names(dir_fd) else {
             return 0;
         };
         let mut total = 0i64;
         for name in names {
+            if Instant::now() >= self.deadline {
+                *complete = false;
+                return total;
+            }
             let Ok(info) = safefs::fstatat_nofollow(dir_fd, &name) else {
                 continue;
             };
@@ -281,7 +313,7 @@ impl<'a> Walk<'a> {
                 }
                 if let Ok(child) = safefs::open_dir_at(dir_fd, &name) {
                     if same_object(&safefs::fstat(child.as_raw_fd()).unwrap_or(info), &info) {
-                        total += self.tree_bytes(child.as_raw_fd(), depth + 1);
+                        total += self.tree_bytes(child.as_raw_fd(), depth + 1, complete);
                     }
                 }
                 continue;
@@ -308,8 +340,17 @@ impl<'a> Walk<'a> {
             return Ok(Progress::Continue);
         }
         report.builds.eligible_items += 1;
-        let expected = self.tree_bytes(dir_fd, 0);
+        let mut complete = true;
+        let expected = self.tree_bytes(dir_fd, 0, &mut complete);
         report.builds.expected_bytes += expected;
+        if !complete {
+            // The cache is eligible and its bytes are the bytes proven, so
+            // both are reported — but the pass has to say that the number is
+            // a floor and not the total, or an operator reads a short
+            // `expected_bytes` as the whole of what a cleanup would recover.
+            report.caps.deadline = true;
+            report.skip_builds("scan_deadline", 1);
+        }
         if self.policy.mode != "enforce" {
             return Ok(Progress::Continue);
         }
@@ -345,36 +386,152 @@ impl<'a> Walk<'a> {
         Ok(Progress::Continue)
     }
 
-    /// Examine every child of one directory, descending until a valid tag
-    /// says "this whole subtree is regenerable".
-    fn descend(
+    /// Whether `(depth, relative)` was already examined by an earlier pass.
+    ///
+    /// A level-order walk visits by increasing depth and, within a depth, in
+    /// lexicographic order, so this pair is a total order over everything the
+    /// walk examines. A cursor naming a directory that has since been deleted
+    /// simply resumes at the next surviving entry, exactly as the
+    /// component-matching depth-first cursor did.
+    fn before_cursor(&self, depth: usize, relative: &Path) -> bool {
+        match &self.resume {
+            None => false,
+            Some(cursor) => (depth, relative) < (self.resume_depth, cursor.as_path()),
+        }
+    }
+
+    /// Examine the tree one level at a time, stopping at every directory its
+    /// own build tool tagged as regenerable.
+    ///
+    /// LEVEL ORDER, and that is the whole of why this cleaner now finds
+    /// anything. A build tool writes its cache at the TOP of the tree it
+    /// generates — that is where the standard puts `CACHEDIR.TAG` — so every
+    /// candidate is shallow and everything deep is some tree's contents. A
+    /// depth-first walk spends its budget the other way round: on
+    /// `lukasz-macbook` on 2026-09-02, crossing the declared root took
+    /// 803,825 directories against a `max_scan_items` of 100,000, and the
+    /// walk was still inside the first repository's `node_modules` — 7,297
+    /// directories deep into one alphabetically-first branch — having
+    /// examined none of the 174 tagged caches the tree holds, including a
+    /// 62 GiB `target/`. Visiting by level reaches 41 of them in 5,808
+    /// charges and 107 in 38,578, all of them inside one pass's budget, on
+    /// the same tree with the same cap.
+    ///
+    /// The order changes only WHICH directories a bounded pass gets to look
+    /// at. Every deletion criterion — the tag, the age, the reserved roots,
+    /// the ownership and device checks — is applied exactly as before.
+    fn walk_levels(
         &mut self,
-        dir_fd: RawFd,
-        dir_path: &Path,
-        depth: usize,
+        root_fd: RawFd,
+        root: &Path,
         report: &mut CleanupReport,
     ) -> Result<Progress, JanitorError> {
-        for name in entry_names(dir_fd)? {
-            // Skip forward to where the previous pass stopped. `entry_names`
-            // is a `BTreeSet`, so "before the cursor" is decidable and stable
-            // across passes; a cursor naming a directory that has since been
-            // deleted simply resumes at the next surviving sibling.
-            if self.catching_up {
-                match self.resume.get(depth) {
-                    // Already examined by an earlier pass.
-                    Some(target) if &name < target => continue,
-                    // The cursor's own branch: descend into it still catching
-                    // up, because the stopping point is somewhere below.
-                    Some(target) if &name == target => {}
-                    // Past the cursor at this level, or deeper than it
-                    // reaches: everything from here on is unexamined.
-                    _ => self.catching_up = false,
+        // The frontier is the directories at one depth whose children are
+        // still unexamined, as paths relative to the scan root. Paths and not
+        // descriptors: one level of this tree holds tens of thousands of
+        // directories on a developer host, far past any descriptor limit, so
+        // a level-order walk cannot hold the level open the way the
+        // depth-first walk held one descriptor per level.
+        //
+        // `safefs::open_path` re-opens a frontier entry one component at a
+        // time with `O_DIRECTORY|O_NOFOLLOW` from the root descriptor, which
+        // is the same refusal to follow a symlink swapped in mid-walk that
+        // holding the descriptor gave: a component that is no longer a
+        // directory we own fails the open, and the entry is skipped.
+        let mut frontier: Vec<PathBuf> = vec![PathBuf::new()];
+        let mut depth = 0usize;
+        while !frontier.is_empty() {
+            if depth + 1 > MAX_DEPTH {
+                report.skip_builds("depth_cap", frontier.len() as i64);
+                return Ok(Progress::Continue);
+            }
+            let mut next: Vec<PathBuf> = Vec::new();
+            for parent in &frontier {
+                let parent_fd = if parent.as_os_str().is_empty() {
+                    safefs::dup_fd(root_fd)?
+                } else {
+                    let parts: Vec<OsString> = parent
+                        .components()
+                        .map(|part| part.as_os_str().to_os_string())
+                        .collect();
+                    match safefs::open_path(root_fd, &parts) {
+                        Ok(descriptor) => descriptor,
+                        // The tree moved under the walk between one level and
+                        // the next. Nothing beneath this entry is examined
+                        // this pass; the next one re-reads it from the root.
+                        Err(_) => {
+                            report.skip_builds("entry_replaced", 1);
+                            continue;
+                        }
+                    }
+                };
+                if let Progress::Halt = self.examine(
+                    parent_fd.as_raw_fd(),
+                    root,
+                    parent,
+                    depth,
+                    &mut next,
+                    report,
+                )? {
+                    return Ok(Progress::Halt);
                 }
             }
-            let info = match safefs::fstatat_nofollow(dir_fd, &name) {
+            // Lexicographic within the level, so `before_cursor` above is
+            // comparing against the order the walk actually visits in.
+            next.sort();
+            frontier = next;
+            depth += 1;
+        }
+        Ok(Progress::Continue)
+    }
+
+    /// Examine every child of one frontier directory: judge the ones their
+    /// build tool tagged, and hand the rest to the next level.
+    fn examine(
+        &mut self,
+        parent_fd: RawFd,
+        root: &Path,
+        parent: &Path,
+        depth: usize,
+        next: &mut Vec<PathBuf>,
+        report: &mut CleanupReport,
+    ) -> Result<Progress, JanitorError> {
+        let names = match entry_names(parent_fd) {
+            Ok(names) => names,
+            Err(_) => {
+                report.skip_builds("stat_failed", 1);
+                return Ok(Progress::Continue);
+            }
+        };
+        let child_depth = depth + 1;
+        for name in names {
+            let relative = parent.join(&name);
+            // Everything an earlier pass already decided is re-crossed to
+            // reach the cursor, and charged to nothing: resuming costs this
+            // walk wall clock, never candidates. Its tag is still read,
+            // because a cache skipped as "already judged" must still be
+            // pruned rather than descended into on the way past.
+            let before = self.before_cursor(child_depth, &relative);
+            if Instant::now() >= self.deadline {
+                report.caps.deadline = true;
+                report.skip_builds("scan_deadline", 1);
+                // Halting while still catching up leaves the cursor where it
+                // was: this pass reached nothing new, so it has nothing newer
+                // to hand the next one.
+                let halt = if before {
+                    self.resume.clone()
+                } else {
+                    Some(relative)
+                };
+                self.halted_at = self.halted_at.take().or(halt);
+                return Ok(Progress::Halt);
+            }
+            let info = match safefs::fstatat_nofollow(parent_fd, &name) {
                 Ok(info) => info,
                 Err(_) => {
-                    report.skip_builds("stat_failed", 1);
+                    if !before {
+                        report.skip_builds("stat_failed", 1);
+                    }
                     continue;
                 }
             };
@@ -384,30 +541,28 @@ impl<'a> Walk<'a> {
                 // operator can see the cleaner declined rather than missed
                 // it. `O_NOFOLLOW` below would refuse it anyway; saying so
                 // here is what makes the refusal visible.
-                report.skip_builds("symlink_not_followed", 1);
+                if !before {
+                    report.skip_builds("symlink_not_followed", 1);
+                }
                 continue;
             }
             if kind != IFDIR {
                 continue;
             }
-            let child_path = dir_path.join(&name);
-            if self
-                .reserved
-                .iter()
-                .any(|root| child_path.starts_with(root))
-            {
-                report.skip_builds("reserved_or_hidden", 1);
+            let absolute = root.join(&relative);
+            if self.reserved.iter().any(|item| absolute.starts_with(item)) {
+                if !before {
+                    report.skip_builds("reserved_or_hidden", 1);
+                }
                 continue;
             }
-            if let Progress::Halt = self.charge(report) {
-                self.halted_at.get_or_insert(child_path);
-                return Ok(Progress::Halt);
+            if !before {
+                if let Progress::Halt = self.charge(report) {
+                    self.halted_at.get_or_insert(relative);
+                    return Ok(Progress::Halt);
+                }
             }
-            if depth + 1 > MAX_DEPTH {
-                report.skip_builds("depth_cap", 1);
-                continue;
-            }
-            let child = match safefs::open_dir_at(dir_fd, &name) {
+            let child = match safefs::open_dir_at(parent_fd, &name) {
                 Ok(child) => child,
                 Err(exc)
                     if matches!(
@@ -416,8 +571,8 @@ impl<'a> Walk<'a> {
                     ) =>
                 {
                     // `fstatat` said directory, the `O_NOFOLLOW` open says
-                    // symlink or non-directory: the name was swapped
-                    // between the two calls.
+                    // symlink or non-directory: the name was swapped between
+                    // the two calls.
                     report.skip_builds("entry_replaced", 1);
                     continue;
                 }
@@ -435,14 +590,11 @@ impl<'a> Walk<'a> {
                 report.skip_builds("unsafe_owner_or_device", 1);
                 continue;
             }
-            // A directory that CONTAINS a reserved root may still hide
-            // build caches deeper down, so it is descended — but its own
+            // A directory that CONTAINS a reserved root may still hide build
+            // caches deeper down, so it goes on the next level — but its own
             // tag can never authorize deleting it, because that would take
             // the reserved root with it.
-            let guards_reserved = self
-                .reserved
-                .iter()
-                .any(|root| root.starts_with(&child_path));
+            let guards_reserved = self.reserved.iter().any(|item| item.starts_with(&absolute));
             let tag = match self.read_tag(child.as_raw_fd()) {
                 Ok(tag) => tag,
                 Err(_) => {
@@ -450,27 +602,37 @@ impl<'a> Walk<'a> {
                     Tag::Absent
                 }
             };
-            let progress = match tag {
+            match tag {
                 Tag::Signed if guards_reserved => {
-                    report.skip_builds("reserved_or_hidden", 1);
-                    self.descend(child.as_raw_fd(), &child_path, depth + 1, report)?
+                    if !before {
+                        report.skip_builds("reserved_or_hidden", 1);
+                    }
+                    next.push(relative);
                 }
-                Tag::Signed => self.judge(dir_fd, &name, child.as_raw_fd(), &child_info, report)?,
+                // PRUNED AT THE TAG, and never put on the next level. The tag
+                // is the build tool's statement that this directory is one
+                // regenerable unit, so the walk has no business inside it:
+                // its contents are neither candidates nor scannable items.
+                Tag::Signed => {
+                    if !before {
+                        if let Progress::Halt =
+                            self.judge(parent_fd, &name, child.as_raw_fd(), &child_info, report)?
+                        {
+                            self.halted_at.get_or_insert(relative);
+                            return Ok(Progress::Halt);
+                        }
+                    }
+                }
                 // A tag file whose first line is not the signature is not a
-                // permission. Reported, and the walk continues downward:
-                // the caches below it are unaffected by a stray file above.
+                // permission. Reported, and the walk continues downward: the
+                // caches below it are unaffected by a stray file above.
                 Tag::Unsigned => {
-                    report.skip_builds("untagged", 1);
-                    self.descend(child.as_raw_fd(), &child_path, depth + 1, report)?
+                    if !before {
+                        report.skip_builds("untagged", 1);
+                    }
+                    next.push(relative);
                 }
-                Tag::Absent => self.descend(child.as_raw_fd(), &child_path, depth + 1, report)?,
-            };
-            if let Progress::Halt = progress {
-                // A deeper frame records first, so the innermost refusal is
-                // the one kept: resuming above it would re-cross a subtree
-                // this pass already paid for.
-                self.halted_at.get_or_insert(child_path);
-                return Ok(Progress::Halt);
+                Tag::Absent => next.push(relative),
             }
         }
         Ok(Progress::Continue)
@@ -549,17 +711,24 @@ fn remove_contents(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), J
 /// from there rather than restarting at the root. Without it the two budgets
 /// above are not a throttle but a ceiling on how much of the tree can ever be
 /// seen: on 2026-09-01 `lukasz-macbook` declared this cleaner over a root
-/// holding 879,559 directories, `max_scan_items` is capped at 100,000 by
-/// `targets::validate_registry`, and one pass crossed exactly that many in
-/// its 30-second deadline. The same first eleven percent was scanned every
-/// hour, `build_caches` reported one eligible directory of 160 KiB, and the
-/// 62 GiB `target/` further down the same tree was unreachable by
-/// construction while the volume sat at 100%.
+/// holding 879,559 directories, `max_scan_items` is capped at
+/// [`crate::targets::MAX_SCAN_ITEMS_CEILING`], and one pass crossed exactly
+/// its share in the 30-second deadline.
 ///
-/// The cursor changes only the ORDER in which directories are examined.
-/// Every deletion criterion — the tag, the age, the reserved roots, the
+/// The cursor was not enough on its own, because the ORDER was wrong. The
+/// walk is level-order ([`Walk::walk_levels`]): a build tool writes its cache
+/// at the top of the tree it generates, so candidates are shallow and depth
+/// is somebody's contents. Measured on that same root on 2026-09-02, a
+/// depth-first pass spent 7,297 charges without leaving the first
+/// repository's `node_modules` and reported `eligible_items: 0`,
+/// `expected_bytes: 0`; level-order spent 70,306 on the same tree, under the
+/// same policy and the same deadline, and found 78 eligible caches holding
+/// 294 GiB.
+///
+/// Neither the order nor the cursor changes WHICH directories may be
+/// deleted. Every criterion — the tag, the age, the reserved roots, the
 /// ownership and device checks — is applied exactly as it would be on a walk
-/// that started at the root.
+/// that started at the root and went straight down.
 pub fn scan_build_caches(
     home: &Path,
     policy: &DiskCleanupPolicy,
@@ -609,16 +778,11 @@ pub fn scan_build_caches(
         if root_info.st_uid != euid() {
             return Err(JanitorError::os("build cache root ownership mismatch"));
         }
-        let resume: Vec<OsString> = resume_from
+        let resume = resume_from.as_deref().map(PathBuf::from);
+        let resume_depth = resume
             .as_deref()
-            .map(|value| {
-                Path::new(value)
-                    .components()
-                    .map(|part| part.as_os_str().to_os_string())
-                    .collect()
-            })
+            .map(|path| path.components().count())
             .unwrap_or_default();
-        let catching_up = !resume.is_empty();
         let mut walk = Walk {
             home,
             policy,
@@ -630,19 +794,17 @@ pub fn scan_build_caches(
             reserved: reserved_roots(home, policy),
             deleted_bytes: 0,
             resume,
-            catching_up,
+            resume_depth,
             halted_at: None,
         };
         // The root itself is never a candidate, tagged or not: the cleaner
         // deletes caches inside the root it was given, and a root it
         // deleted would leave the next pass reporting `root_absent` about a
         // home directory.
-        walk.descend(root_fd.as_raw_fd(), &root, 0, report)?;
-        Ok(walk.halted_at.and_then(|path| {
-            path.strip_prefix(&root)
-                .ok()
-                .map(std::path::Path::to_path_buf)
-        }))
+        walk.walk_levels(root_fd.as_raw_fd(), &root, report)?;
+        // Already relative to the scan root: the level-order frontier is
+        // built from relative paths, so there is no prefix to strip.
+        Ok(walk.halted_at)
     };
     match body(report) {
         // A walk that reached the end of the tree clears the cursor, so the

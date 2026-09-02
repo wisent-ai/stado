@@ -513,7 +513,7 @@ pub(crate) async fn run_autonomy_once(
     let anomalies = crate::autonomy::cost::detect_anomalies(&allocation, &inventory, &forecast);
     crate::autonomy::cost::persist_reports(store, &prices, &allocation, &forecast, &anomalies)
         .await?;
-    let outcomes = crate::autonomy::cost::measure_outcomes(store).await?;
+    let outcomes = crate::autonomy::cost::measure_outcomes(store, &policy, now).await?;
     if outcomes.feedback_written > usize::default() || outcomes.savings_measured > usize::default()
     {
         log(&format!(

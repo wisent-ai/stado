@@ -36,7 +36,7 @@ use crate::deploy::service::{
 };
 use crate::deploy::{
     host_channel, host_exec, production_runner, service_env_file, service_file_fetch,
-    service_serving, DeployError,
+    service_label_print, service_serving, service_spawn_watch, DeployError,
 };
 use crate::observations;
 use crate::queue::JobStorage;
@@ -151,6 +151,72 @@ pub enum ServiceCommands {
         /// label is running can be named.
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Sit on HOST and name the parent of the next process matching a
+    /// program, while that parent is still alive.
+    ///
+    /// `reap` and `list --unowned` each take one snapshot, and a snapshot
+    /// taken after a respawn can only ever report `ppid 1` — the parent
+    /// backgrounded the child and exited, which is precisely why nothing
+    /// could say what kept restarting an undeclared `stado agent` on
+    /// charless-mac-mini. Driving a snapshot from here in a loop cannot
+    /// sample faster than an SSH round trip; the loop has to run on the host.
+    ///
+    /// Reads `ps` on an interval and prints. It signals nothing, starts
+    /// nothing and writes nothing, so it is safe to leave running while
+    /// somebody else works on the box.
+    #[command(name = "watch-spawn")]
+    WatchSpawn {
+        /// Registry host to watch.
+        #[arg(long)]
+        host: String,
+        /// The program to watch for, as a substring of its command line --
+        /// for example `stado agent --target charless-mac-mini`. Processes
+        /// matching it that are ALREADY running when the watch opens are
+        /// reported as baseline and never as arrivals.
+        #[arg(long)]
+        command: String,
+        /// How long to watch, in seconds.
+        #[arg(long, default_value_t = 300)]
+        seconds: u64,
+        /// Gap between samples, in milliseconds. The default catches a parent
+        /// that lives about a second; tighten it for one that does not.
+        #[arg(long, default_value_t = 1000)]
+        interval_ms: u64,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Ask launchd what it holds under one named label, in one named domain.
+    ///
+    /// Every other ownership reader here enumerates a population first:
+    /// `list --undeclared` unions `launchctl list` with the unit files in the
+    /// three directories this fleet installs into, and the reap keep-set
+    /// probes only labels the registry declares. A job loaded in the system
+    /// domain whose plist has since been deleted is outside all of them, and
+    /// on charless-mac-mini one such job recreated an undeclared `stado agent`
+    /// for days while every command answered that no label held it.
+    ///
+    /// This reader does not enumerate. The operator names the label, which is
+    /// the only way to ask about one nothing lists. Read-only: it reports
+    /// `pid`, `state`, `last exit code`, `runs`, `path` and the argv, and
+    /// nothing else — `launchctl print` also dumps the job's environment, and
+    /// this fleet's units keep tokens there.
+    #[command(name = "label-print")]
+    LabelPrint {
+        /// launchd label, as the host knows it.
+        label: String,
+        /// Registry host to ask.
+        #[arg(long)]
+        host: String,
+        /// Which launchd domain to ask: `system`, `user`, or unset for both,
+        /// system first — the same order `bootout` acts in, so the two can
+        /// never disagree about which job is meant.
+        #[arg(long)]
+        domain: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -987,6 +1053,19 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             apply,
             json,
         } => reap(&host, &command, apply, json).await,
+        ServiceCommands::WatchSpawn {
+            host,
+            command,
+            seconds,
+            interval_ms,
+            json,
+        } => watch_spawn(&host, &command, seconds, interval_ms, json).await,
+        ServiceCommands::LabelPrint {
+            label,
+            host,
+            domain,
+            json,
+        } => label_print(&label, &host, domain.as_deref(), json).await,
         ServiceCommands::Verify { host, local, json } => {
             if local {
                 crate::cli::service_verify::verify_local(json).await
@@ -1781,6 +1860,195 @@ async fn reap(host: &str, command: &str, apply: bool, json: bool) -> Result<(), 
             "{}: {stubborn} process(es) did not end on SIGTERM; their rows name each pid",
             target.name
         )));
+    }
+    Ok(())
+}
+
+/// `service watch-spawn --host HOST --command SUBSTRING` — name the parent of
+/// the next matching process, while that parent still exists.
+///
+/// The report leads with the parent because the parent is the whole question.
+/// A row reading `ppid 1` with `launchd` as the parent is not a failure of
+/// this command: it means the arrival was already reparented when the sample
+/// caught it, and the answer is to sample faster.
+async fn watch_spawn(
+    host: &str,
+    command: &str,
+    seconds: u64,
+    interval_ms: u64,
+    json: bool,
+) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let runner = production_runner();
+    let report = service_spawn_watch::watch_spawns(&target, command, seconds, interval_ms, &runner)
+        .await
+        .map_err(click)?;
+    if json {
+        return print_json(&json!({
+            "host": report.host,
+            "matched": report.matched,
+            "seconds": report.seconds,
+            "interval_ms": report.interval_ms,
+            "samples": report.samples,
+            "elapsed_seconds": report.elapsed_seconds,
+            "unsupported": report.unsupported,
+            "baseline": report.baseline.iter().map(|entry| entry.row.to_json()).collect::<Vec<_>>(),
+            "arrivals": report.arrivals.iter().map(service_spawn_watch::Arrival::to_json).collect::<Vec<_>>(),
+        }));
+    }
+    if let Some(system) = &report.unsupported {
+        println!(
+            "{}: spawn watch is Darwin-only; the host reports {system}",
+            report.host
+        );
+        return Ok(());
+    }
+    let baseline: Vec<Vec<String>> = report
+        .baseline
+        .iter()
+        .map(|entry| {
+            vec![
+                entry.row.pid.clone(),
+                entry.row.ppid.clone(),
+                entry.row.started_at.clone(),
+                entry.row.command.clone(),
+            ]
+        })
+        .collect();
+    println!("already running when the watch opened:");
+    table::print(&["PID", "PPID", "STARTED_AT", "COMMAND"], &baseline);
+    if report.arrivals.is_empty() {
+        // A watch that saw nothing is a result, not a dud: it says the thing
+        // that was respawning has stopped, or never fired in this window.
+        println!(
+            "\n{}: no process matching {:?} started in {}s across {} samples",
+            report.host, report.matched, report.elapsed_seconds, report.samples
+        );
+        return Ok(());
+    }
+    for arrival in &report.arrivals {
+        println!(
+            "\narrival {} at +{}s: pid {} ppid {} — {}",
+            arrival.sequence,
+            arrival.after_seconds,
+            arrival.row.pid,
+            arrival.row.ppid,
+            arrival.row.command
+        );
+        let cells: Vec<Vec<String>> = arrival
+            .ancestry
+            .iter()
+            .map(|ancestor| {
+                vec![
+                    ancestor.depth.to_string(),
+                    ancestor.row.pid.clone(),
+                    ancestor.row.ppid.clone(),
+                    if ancestor.alive { "yes" } else { "no" }.to_string(),
+                    ancestor.row.started_at.clone(),
+                    ancestor.row.command.clone(),
+                ]
+            })
+            .collect();
+        table::print(
+            &["DEPTH", "PID", "PPID", "ALIVE", "STARTED_AT", "COMMAND"],
+            &cells,
+        );
+        match arrival.parent() {
+            Some(parent) => println!(
+                "  parent: pid {} ({}) — {}",
+                parent.row.pid,
+                if parent.alive {
+                    "still running"
+                } else {
+                    "already exited"
+                },
+                parent.row.command
+            ),
+            None => println!("  parent: not in the snapshot that caught it; sample faster"),
+        }
+    }
+    println!(
+        "\n{}: {} arrival(s) in {}s across {} samples",
+        report.host,
+        report.arrivals.len(),
+        report.elapsed_seconds,
+        report.samples
+    );
+    Ok(())
+}
+
+/// `service label-print LABEL --host HOST` — what launchd holds under one
+/// label, asked rather than enumerated.
+///
+/// Exits non-zero when launchd holds nothing under the label, so a script can
+/// use it as the "is this ghost still loaded" test it exists to answer.
+async fn label_print(
+    label: &str,
+    host: &str,
+    domain: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let scope = service::BootoutScope::parse(domain).map_err(click)?;
+    let runner = production_runner();
+    let state = service_label_print::print_label(&target, label, scope, &runner)
+        .await
+        .map_err(click)?;
+    if json {
+        return print_json(&state.to_json());
+    }
+    if let Some(system) = &state.unsupported {
+        println!(
+            "{}: label-print is Darwin-only; the host reports {system}",
+            state.host
+        );
+        return Ok(());
+    }
+    if !state.loaded() {
+        println!(
+            "{}: launchd holds no job under {label} in the {} domain(s)",
+            state.host,
+            domain.unwrap_or("system, user and gui")
+        );
+        return Err(CmdError::click(format!(
+            "{}: {label} is not loaded",
+            state.host
+        )));
+    }
+    table::print(
+        &["FIELD", "VALUE"],
+        &[
+            vec![
+                "domain".to_string(),
+                dash(state.domain.as_deref().unwrap_or("")),
+            ],
+            vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
+            vec![
+                "state".to_string(),
+                dash(state.state.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "last exit code".to_string(),
+                dash(state.last_exit_code.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "runs".to_string(),
+                dash(state.runs.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "path".to_string(),
+                dash(state.path.as_deref().unwrap_or("")),
+            ],
+            vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
+        ],
+    );
+    // A loaded job whose unit file is gone is the shape no directory scan can
+    // report, so it is called out rather than left to be inferred from a path.
+    if state.path.is_none() {
+        println!(
+            "{}: {label} is loaded with no unit file recorded — nothing that scans directories can see it",
+            state.host
+        );
     }
     Ok(())
 }
