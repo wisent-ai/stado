@@ -1,7 +1,7 @@
 //! Priority-marker index (`queue_priority/<inv_prio>-<ts>-<jid>.json`
 //! markers so name-ascending sort = priority-desc + FIFO), the `list_jobs`
-//! bulk fetch, the top-N priority listing, the priority-first listing, and
-//! the metadata-prefiltered fitting-jobs listing.
+//! bulk fetch, and [`list_claimable`] — the ordered index walk every
+//! scheduler poll goes through.
 //!
 //! Port of `stado/queue/listing/__init__.py`.
 //!
@@ -9,8 +9,10 @@
 //! `capacity.py:121` and `leases/__init__.py:143` reference
 //! `store._azure_backend`, an attribute that never exists (the backend
 //! handle is `_blob_backend`). The intended behavior is a single backend
-//! handle — exactly what `JobStorage` carries here — so `list_fitting`
-//! always takes the metadata-prefiltering path.
+//! handle — exactly what `JobStorage` carries here — so the metadata
+//! prefilter Python's `list_fitting` chose between backends for is simply
+//! always in force in the oldest-first pass of [`list_claimable`], which has
+//! one path.
 //!
 //! # Index ordering rule
 //!
@@ -237,6 +239,18 @@ pub struct JobScan<'a> {
     /// slot. It sees the listed generation of the document; a caller that
     /// re-reads the job before claiming still has to re-apply it.
     pub eligible: &'a (dyn Fn(&Job) -> bool + Sync),
+    /// Anchor this scan at the index head instead of the resumable cursor,
+    /// and leave the cursor where it was.
+    ///
+    /// The cursor rotates so that a bounded poll eventually reaches work
+    /// past its window — reachability. But a caller that is not asking "what
+    /// can I run" and instead asking "is there anything more important than
+    /// what I am running" needs the actual head of the index: a rotated
+    /// window answers with the most important job in an arbitrary slice,
+    /// which is not the same question. Those callers pay strict priority
+    /// order for their decision and hand the rotation back untouched, so the
+    /// claim loops that depend on it are unaffected.
+    pub from_head: bool,
 }
 
 impl JobScan<'_> {
@@ -328,6 +342,12 @@ pub async fn list_claimable(
 /// engages. It engages exactly when the index is bigger than one poll can
 /// hold — the case where something past the window would otherwise never be
 /// looked at.
+///
+/// The cursor is shared by every bounded scan against `queue/`, which is
+/// what makes the rotation a fleet-wide guarantee of reachability rather
+/// than a per-caller one — and also why a caller whose decision depends on
+/// the index's actual head must say so with [`JobScan::from_head`] instead
+/// of inheriting whatever slice the last poll left behind.
 async fn collect_from_index(
     store: &JobStorage,
     prefix: &str,
@@ -339,8 +359,15 @@ async fn collect_from_index(
     if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
         return Ok(());
     }
-    let bounded = scan.want > 0 || scan.scan_budget > 0;
-    let origin = if bounded { store.scan_cursor() } else { String::new() };
+    // `from_head` opts out of the rotation in both directions: the walk
+    // starts at the head and the cursor is not moved, so a priority-fidelity
+    // read neither observes nor perturbs the claim loops sharing it.
+    let rotates = (scan.want > 0 || scan.scan_budget > 0) && !scan.from_head;
+    let origin = if rotates {
+        store.scan_cursor()
+    } else {
+        String::new()
+    };
     let mut at = origin.clone();
     let mut wrapped = false;
     // Every exit records where it stopped, including the exits that found
@@ -373,20 +400,34 @@ async fn collect_from_index(
             download_many_or_none(store, &marker_paths, 10.min(marker_paths.len())).await;
         let mut entries: Vec<(&str, String)> = Vec::new();
         for (marker, body) in markers.iter().zip(marker_bodies) {
-            let Some(body) = body else {
-                // The marker was deleted between the listing and this read:
-                // its job left the queue, which is exactly the state the
-                // reader is meant to shrug at.
-                continue;
+            // A marker body that vanished (its job left the queue between the
+            // listing and this read), one whose job_id is missing, and one
+            // naming a job already in `seen` all end the same way: no window
+            // slot. They are still charged, because each one cost a fetch.
+            // Leaving them free is what would let a page of them scan without
+            // bound — the very input the budget exists for — and the charge is
+            // what makes the claim below true for every dead marker, not just
+            // the ones whose job blob is gone.
+            let resolved = match &body {
+                // Strict-raise on corrupt marker JSON; a missing/non-string
+                // job_id just skips the marker.
+                Some(body) => serde_json::from_str::<serde_json::Value>(body)?
+                    .get("job_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                None => None,
             };
-            // Strict-raise on corrupt marker JSON; a missing/non-string
-            // job_id just skips the marker.
-            let value: serde_json::Value = serde_json::from_str(&body)?;
-            let Some(job_id) = value.get("job_id").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            if !seen.contains(job_id) {
-                entries.push((marker.as_str(), job_id.to_string()));
+            match resolved {
+                Some(job_id) if !seen.contains(&job_id) => {
+                    entries.push((marker.as_str(), job_id));
+                }
+                _ => {
+                    *scanned += 1;
+                    if scan.budget_spent(*scanned) {
+                        stopped_at = (*marker).to_string();
+                        break 'walk;
+                    }
+                }
             }
         }
         let job_paths: Vec<String> = entries
@@ -401,12 +442,14 @@ async fn collect_from_index(
                 stopped_at = String::new();
                 break 'walk;
             }
-            // A marker with no job behind it is the expected stale case: skip
-            // it, charge the budget, keep going. It cost a read, so it costs
-            // budget; it never costs a window slot. The budget check below
-            // runs for it too — a page of nothing but dead markers still has
-            // to be able to exhaust the budget, or the "bound" would be no
-            // bound at all on exactly the input that needs one.
+            // Every marker the walk reads costs exactly one unit of budget,
+            // here or in the resolve loop above, whether or not a job comes
+            // back. A marker with no job behind it is the expected stale
+            // case: skip it, charge it, keep going — it never costs a window
+            // slot. That uniformity is what lets a page of nothing but dead
+            // markers exhaust the budget, which is the input the bound exists
+            // for; charging only the ones that resolve would leave it no
+            // bound at all there.
             *scanned += 1;
             if let Some(data) = body {
                 let job = Job::from_json(&data)?;
@@ -433,7 +476,7 @@ async fn collect_from_index(
         }
         at = page_end;
     }
-    if bounded {
+    if rotates {
         store.set_scan_cursor(stopped_at);
     }
     Ok(())

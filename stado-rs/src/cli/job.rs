@@ -12,9 +12,9 @@
 //! through [`submit_batch`] — the same entry point `stado submit` uses — so
 //! the startup script, the `runs/<run_id>.json` manifest and the
 //! `gpu_mem_gb` / `priority` / `gpu_type` blob metadata that
-//! [`crate::queue::listing::list_fitting`] prefilters on are all stamped by
-//! exactly the code that stamps them for a fresh submit. `rerun_options`
-//! stamps them for a fresh submit. Resolved hardware is carried explicitly.
+//! [`crate::queue::listing::list_claimable`] prefilters on are all stamped
+//! by exactly the code that stamps them for a fresh submit. Resolved
+//! hardware is carried explicitly.
 //!
 //! `watch --follow` carries the byte cursor forward across polls, so every
 //! poll prints only the bytes that appeared since the last one and the

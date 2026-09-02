@@ -168,6 +168,10 @@ pub async fn dispatch_box_jobs(
                 scan_budget: QUEUE_SCAN_BUDGET,
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &|job| crate::capabilities::ProviderId::Box.matches(&job.provider),
+                // Dispatch wants reachability, so it takes the shared
+                // rotation: work past one tick's window is picked up by the
+                // next tick instead of never.
+                from_head: false,
             },
         )
         .await?

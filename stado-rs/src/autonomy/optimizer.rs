@@ -120,6 +120,9 @@ pub async fn plan_queued(
                 scan_budget: usize::default(),
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &|_| true,
+                // Unbounded: this walk covers the whole index from the head
+                // regardless, and touches no cursor.
+                from_head: false,
             },
         )
         .await?;

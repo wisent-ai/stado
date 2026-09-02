@@ -428,6 +428,14 @@ pub async fn maybe_yield_for_priority(
                         false,
                     )
                 },
+                // Preempting a running job is a priority-fidelity decision,
+                // not a reachability one: it must be taken against the head
+                // of the index. The rotating cursor is shared with the claim
+                // loops below, so inheriting it would answer "the most
+                // important job in some rotated slice", and this host would
+                // yield to the wrong job — or fail to yield at all while the
+                // job it should make room for sat before the slice.
+                from_head: true,
             },
         )
         .await?;
@@ -523,6 +531,10 @@ async fn queued_gpu_job_for_inference(
                         pinned_only,
                     )
                 },
+                // A claim loop wants reachability and so takes the shared
+                // rotation: a job past this poll's window is reached by a
+                // later poll rather than never.
+                from_head: false,
             },
         )
         .await?;
@@ -1482,6 +1494,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                             pinned_only,
                         )
                     },
+                    // A claim loop wants reachability and so takes the shared
+                    // rotation: a job past this poll's window is reached by a
+                    // later poll rather than never.
+                    from_head: false,
                 },
             )
             .await?;
