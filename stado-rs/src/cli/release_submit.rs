@@ -1980,6 +1980,14 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     }
     let output = source.join(".wisent-output");
     std::fs::create_dir_all(&output)?;
+    // `WISENT_SOURCE_COMMIT` and `WISENT_SOURCE_SHA256` are the snapshot's own
+    // identity, and a build that needs them has nowhere else to get them: the
+    // worker unpacks a `git archive`, so there is no repository to ask, and
+    // `weles-worker`'s build script asked anyway and died with `fatal: not a
+    // git repository` while stamping its provenance. Both values are already
+    // validated by `submit`, which refuses a source tree that is not an exact
+    // clean commit before the archive exists — so a build script re-checking
+    // that is not only unable to, it has nothing left to check.
     let mut environment = BTreeMap::from([
         ("WISENT_SOURCE_DIR".into(), source.display().to_string()),
         ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
@@ -1990,6 +1998,8 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         ("WISENT_PRODUCT".into(), request.product.clone()),
         ("WISENT_VERSION".into(), request.version.clone()),
         ("WISENT_PLATFORM".into(), request.platform.clone()),
+        ("WISENT_SOURCE_COMMIT".into(), request.source_commit.clone()),
+        ("WISENT_SOURCE_SHA256".into(), request.source_sha256.clone()),
     ]);
     for (name, input) in &request.inputs {
         let key = name
