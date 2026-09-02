@@ -1189,17 +1189,20 @@ const REPEAT_CAUSE_LIMIT: usize = 3;
 /// live records are unclassified, seven of them consecutively, and refusing on a
 /// cause the agent could not name would have frozen this product for a month on
 /// no evidence at all.
-pub fn repeating_cause(state: &HostReleaseState) -> Option<RepeatingCause> {
+pub fn cause_run(state: &HostReleaseState) -> Option<CauseRun> {
     let mut recent: Vec<&QuarantineRecord> = state.quarantined.values().collect();
     // The map is keyed by digest, so its own order is the digest's. Recency is
     // the question being asked.
     recent.sort_by_key(|record| std::cmp::Reverse(record.quarantined_at));
-    let run = recent.get(..REPEAT_CAUSE_LIMIT)?;
-    let cause = run[0].cause;
-    if !cause.is_classified() || !run.iter().all(|record| record.cause == cause) {
+    let cause = recent.first()?.cause;
+    if !cause.is_classified() {
         return None;
     }
-    Some(RepeatingCause {
+    let run: Vec<&QuarantineRecord> = recent
+        .into_iter()
+        .take_while(|record| record.cause == cause)
+        .collect();
+    Some(CauseRun {
         cause,
         evidence: run[0].evidence.clone(),
         since: run[run.len() - 1].quarantined_at,
@@ -1212,15 +1215,14 @@ pub fn repeating_cause(state: &HostReleaseState) -> Option<RepeatingCause> {
     })
 }
 
-/// A run of quarantines that all failed the same named way.
+/// The most recent quarantines that all failed one named way.
 ///
-/// Public and structured rather than a formatted sentence because two callers
-/// need it: the agent records it as the reason it stopped, and
-/// `stado release doctor` reports it as a blocker *before* the agent's next
-/// tick, so an operator finds out that the next promotion will be refused
-/// without having to spend one to discover it.
+/// The run is however long it actually is — one row is a run of one — because
+/// the length is no longer the whole decision. It is the input to two different
+/// questions: what does the cause's own condition say right now, and failing
+/// that, is this repetitive enough to stop on.
 #[derive(Debug, Clone)]
-pub struct RepeatingCause {
+pub struct CauseRun {
     pub cause: QuarantineCause,
     /// The decisive line from the most recent member of the run.
     pub evidence: String,
@@ -1230,21 +1232,98 @@ pub struct RepeatingCause {
     pub digests: Vec<String>,
 }
 
-impl RepeatingCause {
+impl CauseRun {
+    pub fn len(&self) -> usize {
+        self.digests.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.digests.is_empty()
+    }
+
+    /// Would counting alone stop the next candidate?
+    ///
+    /// The unchanged fallback: [`REPEAT_CAUSE_LIMIT`] consecutive quarantines
+    /// of one classified cause. This is what governs every cause with no
+    /// checkable condition, and what governs a cause whose condition could not
+    /// be reached.
+    pub fn repeats(&self) -> bool {
+        self.len() >= REPEAT_CAUSE_LIMIT
+    }
+}
+
+/// Why the agent is holding, in the words of whatever it actually established.
+///
+/// A refusal that says only that it fired leaves the operator to guess whether
+/// the wall was seen or merely inferred, and those call for different next
+/// moves: one is repaired, the other is investigated.
+#[derive(Debug, Clone)]
+pub enum HoldGround {
+    /// The cause's own condition was asked and still reports the wall. The
+    /// strongest ground there is, and it holds at the FIRST quarantine.
+    Observed {
+        /// The check that was run, as an operator would run it.
+        check: String,
+        /// The vault's own sentence for what still refuses.
+        detail: String,
+        /// When the check was run — now, not when the candidate failed.
+        at: DateTime<Utc>,
+    },
+    /// No condition to ask, or it could not answer, and the run is long enough
+    /// to stop on by itself.
+    Repeated {
+        count: usize,
+        since: DateTime<Utc>,
+        /// Present when a condition exists but could not be reached, so the
+        /// refusal does not imply the count was the only available evidence.
+        unreachable: Option<String>,
+    },
+}
+
+/// A hold on the next candidate, with the ground it rests on.
+#[derive(Debug, Clone)]
+pub struct CauseHold {
+    pub cause: QuarantineCause,
+    pub evidence: String,
+    pub digests: Vec<String>,
+    pub ground: HoldGround,
+}
+
+impl CauseHold {
     /// The sentence recorded on the host and printed to the operator.
     ///
     /// Ends with the override, always. A refusal that does not say how to
     /// overrule it is a refusal an operator works around by editing the state
     /// file, which is the unaudited write this whole area exists to remove.
     pub fn sentence(&self) -> String {
-        let mut sentence = format!(
-            "refusing to promote another candidate: the last {} quarantines on this host all \
-             failed for {} since {}, and nothing about it has changed. {}",
-            REPEAT_CAUSE_LIMIT,
-            self.cause.as_str(),
-            self.since.to_rfc3339(),
-            self.evidence
-        );
+        let mut sentence = match &self.ground {
+            HoldGround::Observed { check, detail, at } => format!(
+                "refusing to promote another candidate: {} still refuses. Checked with `{check}` \
+                 at {}, which reported: {detail}.",
+                self.cause.as_str(),
+                at.to_rfc3339(),
+            ),
+            HoldGround::Repeated {
+                count,
+                since,
+                unreachable,
+            } => {
+                let mut text = format!(
+                    "refusing to promote another candidate: the last {count} quarantines on this \
+                     host all failed for {} since {}, and nothing about it has changed. {}",
+                    self.cause.as_str(),
+                    since.to_rfc3339(),
+                    self.evidence
+                );
+                if let Some(why) = unreachable {
+                    text.push_str(&format!(
+                        " The condition behind this cause could not be checked ({why}), so this \
+                         rests on the repetition rather than on an observation."
+                    ));
+                }
+                text
+            }
+        };
         if let Some(remedy) = self.cause.remedy() {
             sentence.push_str(&format!(" Remedy: {remedy}."));
         }
@@ -1254,6 +1333,127 @@ impl RepeatingCause {
             self.digests.first().map_or("<digest>", String::as_str)
         ));
         sentence
+    }
+}
+
+/// How long the condition check gets before it counts as no answer.
+///
+/// It opens vault items, which is one `gpg` per distinct item, so it is not
+/// instant — but it is scoped to one resource, and a check that outlives this
+/// is a check that is not going to answer. A hung predicate must degrade to
+/// [`WallVerdict::Unknown`] rather than stall a reconcile tick.
+const PREDICATE_TIMEOUT_SECONDS: u64 = 20;
+
+/// Ask a cause's own condition whether its wall still stands.
+///
+/// Runs as the release user with that user's `HOME`, mirroring
+/// [`spawn_release`], because the vault the check reads belongs to that account
+/// and a check run as the wrong user reads the wrong store. `PATH` carries the
+/// Homebrew prefix for the same reason [`crate::cli::service`]'s owner read
+/// does: the decrypt helper lives there, and without it every answer would be
+/// an unreachable one.
+///
+/// Strictly read-only. `routes verify` resolves and reports; it starts nothing,
+/// writes nothing, and is safe against a live broker — which is why it is a
+/// predicate at all.
+async fn ask_wall(
+    target: &ReleaseTargetPolicy,
+    predicate: &release_cause::CausePredicate,
+) -> (release_cause::WallVerdict, Option<String>) {
+    let unreachable = |why: String| (release_cause::WallVerdict::Unknown, Some(why));
+    let skarbiec = Path::new(&target.home).join(".stado/bin/skarbiec");
+    if !skarbiec.is_file() {
+        return unreachable(format!("no skarbiec binary at {}", skarbiec.display()));
+    }
+    let mut command = tokio::process::Command::new("/usr/bin/sudo");
+    command
+        .args(["-n", "-u", &target.run_as_user, "-H", "/usr/bin/env"])
+        .arg(format!("HOME={}", target.home))
+        .arg("PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .arg(&skarbiec)
+        .args(&predicate.args)
+        .stdin(Stdio::null());
+    let run = tokio::time::timeout(
+        Duration::from_secs(PREDICATE_TIMEOUT_SECONDS),
+        command.output(),
+    )
+    .await;
+    let output = match run {
+        Err(_) => {
+            return unreachable(format!(
+                "`skarbiec {}` did not answer within {PREDICATE_TIMEOUT_SECONDS}s",
+                predicate.args.join(" ")
+            ))
+        }
+        Ok(Err(error)) => {
+            return unreachable(format!("cannot run {}: {error}", skarbiec.display()))
+        }
+        Ok(Ok(output)) => output,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let verdict = release_cause::read_routes_verify(output.status.success(), &stdout);
+    let note = match verdict {
+        release_cause::WallVerdict::Unknown => Some(
+            String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .lines()
+                .next_back()
+                .unwrap_or("the check reported nothing")
+                .chars()
+                .take(200)
+                .collect(),
+        ),
+        _ => release_cause::routes_verify_detail(&stdout),
+    };
+    (verdict, note)
+}
+
+/// Should the agent spend another candidate, and if not, on what ground?
+///
+/// The order is the whole change. Ask the condition first; fall back to
+/// counting only when there is no condition to ask or it could not answer:
+///
+/// - [`WallVerdict::Present`] holds at the FIRST quarantine of that cause. The
+///   wall was observed, so a second and third candidate would establish
+///   nothing that is not already known.
+/// - [`WallVerdict::Gone`] releases, including a run past
+///   [`REPEAT_CAUSE_LIMIT`]. This is the property counting cannot have: an
+///   operator who refills the credential gets promotion back because the check
+///   stops failing, with no override and nothing to remember.
+/// - [`WallVerdict::Unknown`] decides nothing by itself and never releases a
+///   hold. It falls through to the count, which is exactly the behaviour before
+///   any of this existed, and the refusal says the check was unreachable so the
+///   ground is not mistaken for an observation.
+async fn cause_hold(target: &ReleaseTargetPolicy, state: &HostReleaseState) -> Option<CauseHold> {
+    let run = cause_run(state)?;
+    let repeated = |unreachable: Option<String>| {
+        run.repeats().then(|| CauseHold {
+            cause: run.cause,
+            evidence: run.evidence.clone(),
+            digests: run.digests.clone(),
+            ground: HoldGround::Repeated {
+                count: run.len(),
+                since: run.since,
+                unreachable,
+            },
+        })
+    };
+    let Some(predicate) = run.cause.predicate(&run.evidence) else {
+        return repeated(None);
+    };
+    match ask_wall(target, &predicate).await {
+        (release_cause::WallVerdict::Present, detail) => Some(CauseHold {
+            cause: run.cause,
+            evidence: run.evidence.clone(),
+            digests: run.digests.clone(),
+            ground: HoldGround::Observed {
+                check: format!("skarbiec {}", predicate.args.join(" ")),
+                detail: detail.unwrap_or_else(|| run.evidence.clone()),
+                at: Utc::now(),
+            },
+        }),
+        (release_cause::WallVerdict::Gone, _) => None,
+        (release_cause::WallVerdict::Unknown, why) => repeated(why),
     }
 }
 
@@ -1418,11 +1618,13 @@ async fn reconcile_product(
     }
 
     // Everything below stages and burns a new candidate. Before spending one,
-    // ask whether the last few were spent against a condition that has not
-    // moved.
-    if let Some(wall) = repeating_cause(&state) {
+    // ask the cause's own condition whether the wall is still there, and fall
+    // back to counting only when there is nothing to ask or it cannot answer.
+    // This sits AFTER the desired-digest quarantine guard above, which returns
+    // first and is untouched.
+    if let Some(hold) = cause_hold(target, &state).await {
         state.phase = RolloutPhase::Quarantined;
-        state.detail = wall.sentence();
+        state.detail = hold.sentence();
         save_state(target, &mut state)?;
         return Ok(state);
     }
@@ -1792,22 +1994,120 @@ mod tests {
         ),
     ];
 
+    /// Build the hold the same way `cause_hold` does, but from a supplied
+    /// verdict instead of a spawned process.
+    ///
+    /// The decision and the spawn are separated so the decision can be
+    /// exercised for every verdict, including the ones a real host will not
+    /// produce on demand — a vault that will not open, a timeout. The spawn
+    /// itself is [`ask_wall`] and is the part that cannot be tested without a
+    /// host; what it returns is exactly this enum.
+    fn decide(
+        state: &HostReleaseState,
+        verdict: Option<(release_cause::WallVerdict, Option<String>)>,
+    ) -> Option<CauseHold> {
+        let run = cause_run(state)?;
+        let repeated = |unreachable: Option<String>| {
+            run.repeats().then(|| CauseHold {
+                cause: run.cause,
+                evidence: run.evidence.clone(),
+                digests: run.digests.clone(),
+                ground: HoldGround::Repeated {
+                    count: run.len(),
+                    since: run.since,
+                    unreachable,
+                },
+            })
+        };
+        match verdict {
+            None => repeated(None),
+            Some((release_cause::WallVerdict::Present, detail)) => Some(CauseHold {
+                cause: run.cause,
+                evidence: run.evidence.clone(),
+                digests: run.digests.clone(),
+                ground: HoldGround::Observed {
+                    check: "skarbiec routes verify provider:kimi".to_string(),
+                    detail: detail.unwrap_or_else(|| run.evidence.clone()),
+                    at: Utc::now(),
+                },
+            }),
+            Some((release_cause::WallVerdict::Gone, _)) => None,
+            Some((release_cause::WallVerdict::Unknown, why)) => repeated(why),
+        }
+    }
+
+    const PRESENT: Option<(release_cause::WallVerdict, Option<String>)> =
+        Some((release_cause::WallVerdict::Present, None));
+    const GONE: Option<(release_cause::WallVerdict, Option<String>)> =
+        Some((release_cause::WallVerdict::Gone, None));
+
     #[test]
-    fn three_quarantines_on_one_cause_hold_the_next_candidate() {
-        let held = repeating_cause(&state_with(RUN)).expect("a run of three is a wall");
-        assert_eq!(held.cause, QuarantineCause::CredentialCannotServe);
-        assert_eq!(held.digests.len(), REPEAT_CAUSE_LIMIT);
-        // The oldest member, not the newest: "since" is how long this has been
-        // true.
-        assert_eq!(held.since.to_rfc3339(), "2026-09-01T10:34:46+00:00");
+    fn an_observed_wall_holds_at_the_very_first_quarantine() {
+        // This is the whole point of the change. One row plus a condition that
+        // still reports the wall is sufficient; the old rule spent two more
+        // candidates establishing what the check already said.
+        let hold = decide(&state_with(&RUN[..1]), PRESENT)
+            .expect("one quarantine and an observed wall must hold");
+        assert!(matches!(hold.ground, HoldGround::Observed { .. }));
+        let sentence = hold.sentence();
+        assert!(
+            sentence.contains("still refuses") && sentence.contains("Checked with"),
+            "an observed hold must say what it observed and when: {sentence}"
+        );
     }
 
     #[test]
-    fn two_is_iterating_and_is_not_refused() {
-        // A candidate fails, someone changes something, the next fails the same
-        // way. Refusing here would block the first honest repair attempt, and
-        // two is the longest run the live host actually produced.
-        assert!(repeating_cause(&state_with(&RUN[..2])).is_none());
+    fn a_repaired_credential_releases_promotion_with_no_override() {
+        // The property counting cannot have. The operator refills the vault
+        // field, the check stops failing, and the next candidate goes -- no
+        // `quarantine clear`, nothing to remember.
+        assert!(decide(&state_with(&RUN[..1]), GONE).is_none());
+        // Including past the counting limit: an observation beats a tally.
+        assert!(decide(&state_with(RUN), GONE).is_none());
+    }
+
+    #[test]
+    fn an_unreachable_check_never_releases_a_hold_and_never_invents_one() {
+        let unknown =
+            |why: &str| Some((release_cause::WallVerdict::Unknown, Some(why.to_string())));
+        // Not permission to promote: the count still governs, exactly as before
+        // the predicate existed.
+        let hold = decide(&state_with(RUN), unknown("no skarbiec binary at /x"))
+            .expect("an unreachable check must fall back to counting, not release");
+        match &hold.ground {
+            HoldGround::Repeated { unreachable, .. } => assert_eq!(
+                unreachable.as_deref(),
+                Some("no skarbiec binary at /x"),
+                "the refusal must admit the check could not be reached"
+            ),
+            other => panic!("expected a counted hold, got {other:?}"),
+        }
+        assert!(
+            hold.sentence().contains("could not be checked"),
+            "the ground must not read as an observation: {}",
+            hold.sentence()
+        );
+        // And it does not manufacture a refusal on a short run either.
+        assert!(decide(&state_with(&RUN[..1]), unknown("timeout")).is_none());
+    }
+
+    #[test]
+    fn counting_still_governs_a_cause_with_no_condition_to_ask() {
+        // N=3 unchanged where it applies. `verdict: None` is what `cause_hold`
+        // does when the cause has no predicate.
+        let rows: Vec<(&str, QuarantineCause, &str)> = RUN
+            .iter()
+            .map(|(digest, _, stamp)| {
+                (
+                    *digest,
+                    QuarantineCause::CapabilityRedemptionRefused,
+                    *stamp,
+                )
+            })
+            .collect();
+        assert!(decide(&state_with(&rows[..2]), None).is_none());
+        let hold = decide(&state_with(&rows), None).expect("three of one cause still holds");
+        assert!(matches!(hold.ground, HoldGround::Repeated { .. }));
     }
 
     #[test]
@@ -1819,45 +2119,60 @@ mod tests {
             .iter()
             .map(|(digest, _, stamp)| (*digest, QuarantineCause::Unclassified, *stamp))
             .collect();
-        assert!(repeating_cause(&state_with(&unnamed)).is_none());
+        assert!(cause_run(&state_with(&unnamed)).is_none());
+        assert!(decide(&state_with(&unnamed), PRESENT).is_none());
     }
 
     #[test]
-    fn one_different_cause_in_the_run_breaks_it() {
+    fn one_different_cause_below_the_top_shortens_the_run() {
+        // The live shape: b54ea076 credential_cannot_serve sits above
+        // aba3c3b2 rollback_compatibility_undeclared, so the run is ONE.
+        // Counting alone would not hold, which is why the condition matters.
         let mut mixed = RUN.to_vec();
-        mixed[0].1 = QuarantineCause::RollbackCompatibilityUndeclared;
-        assert!(repeating_cause(&state_with(&mixed)).is_none());
+        mixed[1].1 = QuarantineCause::RollbackCompatibilityUndeclared;
+        let run = cause_run(&state_with(&mixed)).expect("the newest row still names a cause");
+        assert_eq!(run.cause, QuarantineCause::CredentialCannotServe);
+        assert_eq!(run.len(), 1);
+        assert!(!run.repeats());
+        // Counting lets it burn; the observed wall does not.
+        assert!(decide(&state_with(&mixed), None).is_none());
+        assert!(decide(&state_with(&mixed), PRESENT).is_some());
     }
 
     #[test]
     fn recency_is_read_from_the_stamp_not_from_the_digest_order() {
         // The map is keyed by digest, so its iteration order is alphabetical.
-        // A rule that trusted that order would pick the wrong three.
+        // A rule that trusted that order would pick the wrong rows.
         let mut rows = RUN.to_vec();
         rows.push((
             "0000aaaa",
             QuarantineCause::RollbackCompatibilityUndeclared,
             "2026-08-06T15:49:52Z",
         ));
-        let held = repeating_cause(&state_with(&rows))
+        let run = cause_run(&state_with(&rows))
             .expect("the oldest row sorts first by digest and must not join the run");
-        assert_eq!(held.cause, QuarantineCause::CredentialCannotServe);
-        assert!(!held.digests.iter().any(|digest| digest == "0000aaaa"));
+        assert_eq!(run.cause, QuarantineCause::CredentialCannotServe);
+        assert_eq!(run.len(), REPEAT_CAUSE_LIMIT);
+        assert!(!run.digests.iter().any(|digest| digest == "0000aaaa"));
+        // The oldest member of the run, not of the map.
+        assert_eq!(run.since.to_rfc3339(), "2026-09-01T10:34:46+00:00");
     }
 
     #[test]
-    fn the_refusal_always_names_a_way_out() {
-        let sentence = repeating_cause(&state_with(RUN))
-            .expect("a run of three is a wall")
-            .sentence();
-        assert!(
-            sentence.contains("stado release quarantine clear --digest 217167ef"),
-            "refusal must name the existing override and a real digest: {sentence}"
-        );
-        assert!(
-            sentence.contains("skarbiec routes verify"),
-            "refusal must carry the cause's remedy: {sentence}"
-        );
+    fn every_refusal_names_a_way_out() {
+        for verdict in [PRESENT, None] {
+            let sentence = decide(&state_with(RUN), verdict)
+                .expect("a run of three holds either way")
+                .sentence();
+            assert!(
+                sentence.contains("stado release quarantine clear --digest 217167ef"),
+                "refusal must name the existing override and a real digest: {sentence}"
+            );
+            assert!(
+                sentence.contains("skarbiec routes verify"),
+                "refusal must carry the cause's remedy: {sentence}"
+            );
+        }
     }
 
     /// Retention: the clip used to keep the head and drop the end, and both

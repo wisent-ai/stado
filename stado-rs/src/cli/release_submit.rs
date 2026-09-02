@@ -1970,43 +1970,35 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
 }
 
 async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "cannot prove the current release coordinate before delivery: {error}"
-            ))
-        })?;
-    let control = release_control::control(&registry.to_document())
-        .map_err(CmdError::click)?
-        .ok_or_else(|| CmdError::click("registry has no release control declaration"))?;
-    let policy = control.products.get(&request.product).ok_or_else(|| {
+    super::release_catalog::require_current_source(
+        &request.product,
+        &request.source_sha256,
+        &request.source_uri,
+    )
+    .await?;
+    let run = load(&request.run_id).await?.ok_or_else(|| {
         CmdError::click(format!(
-            "registry has no release policy for {}",
-            request.product
+            "delivery names missing release run {}",
+            request.run_id
         ))
     })?;
-    let desired = policy.desired.as_ref().ok_or_else(|| {
-        CmdError::click(format!(
-            "registry has no desired release for {}",
-            request.product
-        ))
-    })?;
-    let artifact = desired.artifacts.get(&request.platform).ok_or_else(|| {
-        CmdError::click(format!(
-            "desired {} {} has no {} artifact",
-            request.product, desired.version, request.platform
-        ))
-    })?;
-    let exact = desired.version == request.version
-        && artifact.archive_uri == request.archive_uri
-        && artifact.artifact_sha256 == request.archive_sha256
-        && artifact.manifest_uri == request.manifest_uri
-        && artifact.manifest_sha256 == request.manifest_sha256;
+    let platform = run.platforms.get(&request.platform);
+    let exact = run.state == ReleaseRunState::Delivering
+        && run.product == request.product
+        && run.version == request.version
+        && run.source_sha256 == request.source_sha256
+        && run.source_uri == request.source_uri
+        && platform.is_some_and(|platform| {
+            platform.state == PlatformRunState::Published
+                && platform.artifact_sha256.as_deref() == Some(request.archive_sha256.as_str())
+                && platform.release_manifest_sha256.as_deref()
+                    == Some(request.manifest_sha256.as_str())
+        });
     if !exact {
         return Err(CmdError::click(format!(
-            "delivery {} {} {} was superseded by desired {} {:?}; refusing the stale coordinate",
-            request.product, request.version, request.platform, desired.version, desired.channel
+            "delivery {} {} {} does not match its current published run; refusing the stale \
+             coordinate",
+            request.product, request.version, request.platform
         )));
     }
     Ok(())
@@ -2057,7 +2049,11 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         ("WISENT_PLATFORM".into(), request.platform.clone()),
         ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
     ]);
-    let step = execute(&request.name, &request.argv, &source_root, &environment)?;
+    let mut delivery_argv = request.argv.clone();
+    if request.product == "stado" && delivery_argv.first().is_some_and(|value| value == "stado") {
+        delivery_argv[0] = std::env::current_exe()?.display().to_string();
+    }
+    let step = execute(&request.name, &delivery_argv, &source_root, &environment)?;
     let receipt = DeliveryReceipt {
         schema_version: 1,
         run_id: request.run_id,
@@ -2066,7 +2062,7 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         product: request.product,
         version: request.version,
         platform: request.platform,
-        argv: request.argv,
+        argv: delivery_argv,
         required: request.required,
         secret_env: request.secret_env,
         archive_uri: request.archive_uri,
