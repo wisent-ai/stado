@@ -40,7 +40,17 @@ test -f "$release_dir/$manifest_name"
 # route. The listing proves that every standalone object is also visible with its
 # writer-verified size. Re-downloading each executable repeated hundreds of MiB
 # and exceeded the release runner's wall-clock budget without proving more.
-listing="$($stado_bin storage objects releases "$product/$version/$platform/" --json)"
+#
+# A chunked put stages its parts at `<key>.__stado_upload/<id>/<index>` under
+# this same prefix, and the composition that finishes the object deletes them.
+# An interrupted upload therefore leaves parts a later attempt cleans up:
+# 0.13.44's first darwin attempt left four when the runner lost its connection
+# mid-archive. Parts are upload state, never coordinate members, so they are
+# dropped here — while any OTHER unexpected member still fails the coordinate.
+listing="$(
+  $stado_bin storage objects releases "$product/$version/$platform/" --json |
+    jq -c '{objects: [.objects[] | select((.key // .uri) | contains(".__stado_upload/") | not)]}'
+)"
 local_count=0
 for source in "$release_dir"/*; do
   name="${source##*/}"
