@@ -26,13 +26,10 @@
 //! `job.error` — both the diagnosis readers surface and the marker that a
 //! second expiry turns the job `failed/` with that same stored reason.
 //!
-//! Write discipline: every transition is fenced per job record — versioned
-//! read, create-if-absent at the destination (the `claim_queued_job`
-//! transition claim), then compare-and-swap on the source record against
-//! the version read. A lost race compensates by deleting the destination
-//! claim and defers to the winner; a fresh heartbeat is re-checked from
-//! storage metadata immediately before the transition so a job whose
-//! worker heartbeat is fresh is never touched.
+//! Write discipline: every transition uses
+//! [`JobStorage::move_job_if_version`], which persists explicit ownership and
+//! source-generation intent, CAS-fences the source, then creates or validates
+//! the destination. Any caller can finish an abandoned transition.
 
 use chrono::Utc;
 
@@ -87,98 +84,6 @@ fn started_age_seconds(job: &Job, now: chrono::DateTime<Utc>) -> Option<i64> {
     Some((now - started).num_seconds())
 }
 
-/// Fenced prefix move of one job record.
-///
-/// The create-if-absent at the destination is the transition claim (the
-/// `claim_queued_job` discipline): exactly one mover wins it. The
-/// compare-and-swap on the source record against `expected_version` proves
-/// no concurrent writer touched (or terminally moved) the record since the
-/// caller's read; on a lost race the destination claim is deleted again so
-/// the store is left exactly as found. Returns `true` when this caller
-/// performed the move.
-async fn fenced_move(
-    store: &JobStorage,
-    job: &Job,
-    from_prefix: &str,
-    to_prefix: &str,
-    expected_version: &str,
-) -> Result<bool, StorageError> {
-    let from = format!("{from_prefix}/{}.json", job.job_id);
-    let to = format!("{to_prefix}/{}.json", job.job_id);
-    let body = job.to_json();
-    let created = store.create_text_if_absent(&to, &body).await?;
-    if !created {
-        let Some(existing) = store.read_job(to_prefix, &job.job_id).await? else {
-            return Ok(false);
-        };
-        if serde_json::to_value(existing)? != serde_json::to_value(job)? {
-            return Ok(false);
-        }
-    }
-    match store
-        .compare_and_swap_text(&from, expected_version, &body)
-        .await
-    {
-        Ok(_) => {
-            if super::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
-                super::runs::record_terminal_outcome(store, job, to_prefix).await?;
-            }
-            store.delete_blob(&from).await?;
-            if from_prefix == "queue" {
-                store.delete_priority_marker(&job.job_id).await?;
-            }
-            super::tombstone::on_transition(store, job, to_prefix).await;
-            Ok(true)
-        }
-        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
-            if created {
-                store.delete_blob(&to).await?;
-            }
-            Ok(false)
-        }
-        Err(error) => {
-            if created {
-                store.delete_blob(&to).await?;
-            }
-            Err(error)
-        }
-    }
-}
-
-/// Finish deletion of a source fence left after its destination was committed.
-/// The other copy must carry the same immutable submission identity.
-async fn recover_source_fence(
-    store: &JobStorage,
-    job: &Job,
-    source_prefix: &str,
-) -> Result<bool, StorageError> {
-    let mut destination = None;
-    for prefix in ["cancelled", "failed", "uploaded", "completed", "running", "queue"] {
-        if prefix == source_prefix {
-            continue;
-        }
-        if let Some(existing) = store.read_job(prefix, &job.job_id).await? {
-            if crate::queue::submit::immutable_job_projection(&existing)
-                == crate::queue::submit::immutable_job_projection(job)
-            {
-                destination = Some((prefix, existing));
-                break;
-            }
-        }
-    }
-    let Some((prefix, existing)) = destination else {
-        return Ok(false);
-    };
-    if super::runs::TERMINAL_PREFIXES.contains(&prefix) {
-        super::runs::record_terminal_outcome(store, &existing, prefix).await?;
-    }
-    store.delete_blob(&format!("{source_prefix}/{}.json", job.job_id))
-        .await?;
-    if source_prefix == "queue" {
-        store.delete_priority_marker(&job.job_id).await?;
-    }
-    Ok(true)
-}
 
 
 /// Reap one running job whose lease is expired: requeue on the first
@@ -192,13 +97,14 @@ async fn reap_one(
     log: &dyn Fn(&str),
     summary: &mut ReaperSummary,
 ) -> Result<(), StorageError> {
+    store.recover_job_transition(job_id).await?;
     let path = format!("running/{job_id}.json");
     let Some(versioned) = store.read_text_versioned(&path).await? else {
         return Ok(()); // already moved by a concurrent writer
     };
     let mut job = Job::from_json(&versioned.content)?;
     if job.state != job_state::RUNNING {
-        recover_source_fence(store, &job, "running").await?;
+        store.recover_job_transition(job_id).await?;
         return Ok(());
     }
 
@@ -238,7 +144,10 @@ async fn reap_one(
         job.state = job_state::FAILED.to_string();
         job.failed_at = Some(isoformat_utc(now));
         job.error = Some(LEASE_EXPIRED_REASON.to_string());
-        if fenced_move(store, &job, "running", "failed", &versioned.version).await? {
+        if store
+            .move_job_if_version(&job, "running", "failed", &versioned.version)
+            .await?
+        {
             summary.failed += 1;
             let why = if second_expiry {
                 "second lease expiry".to_string()
@@ -267,12 +176,11 @@ async fn reap_one(
     if job.pinned_host.is_empty() {
         job.assigned_to = String::new();
     }
-    if fenced_move(store, &job, "running", "queue", &versioned.version).await? {
+    if store
+        .move_job_if_version(&job, "running", "queue", &versioned.version)
+        .await?
+    {
         summary.requeued += 1;
-        store.refresh_job_metadata("queue", &job).await?;
-        if job.priority > 0 {
-            store.write_priority_marker(&job).await?;
-        }
         store.cleanup_status(&job.job_id).await?;
         log(&format!(
             "{job_id}: requeued ({LEASE_EXPIRED_REASON}; lease silent for {age}s; restart {}/{})",
@@ -297,26 +205,29 @@ async fn clear_silent_assignments(
 ) -> Result<(), StorageError> {
     let live = capacity::read_consumer_capacity(store).await?;
     for candidate in store.list_jobs("queue", 0).await? {
-        if candidate.state != job_state::QUEUED {
-            recover_source_fence(store, &candidate, "queue").await?;
+        store.recover_job_transition(&candidate.job_id).await?;
+        let Some(current) = store.read_job("queue", &candidate.job_id).await? else {
+            continue;
+        };
+        if current.state != job_state::QUEUED {
             continue;
         }
-        if candidate.assigned_to.is_empty() || !candidate.pinned_host.is_empty() {
+        if current.assigned_to.is_empty() || !current.pinned_host.is_empty() {
             continue;
         }
         let worker_live = live
             .keys()
-            .any(|consumer| consumer.eq_ignore_ascii_case(&candidate.assigned_to));
+            .any(|consumer| consumer.eq_ignore_ascii_case(&current.assigned_to));
         if worker_live {
             continue;
         }
-        let job_id = candidate.job_id.clone();
+        let job_id = current.job_id.clone();
         let path = format!("queue/{job_id}.json");
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             continue;
         };
         let mut job = Job::from_json(&versioned.content)?;
-        if job.state != job_state::QUEUED || job.assigned_to != candidate.assigned_to {
+        if job.state != job_state::QUEUED || job.assigned_to != current.assigned_to {
             continue; // changed under the listing; the next tick reconciles
         }
         let worker = std::mem::take(&mut job.assigned_to);

@@ -721,6 +721,47 @@ impl MachineFacade {
             .as_str()
             .unwrap_or_default()
             .to_string();
+        let record_path = format!("machine_requests/{request_id}.json");
+        let run_id = stable_run_id("machine", &request_id);
+        if let Some(versioned) = self.store.read_text_versioned(&record_path).await? {
+            let existing: Map<String, Value> = serde_json::from_str::<Value>(&versioned.content)
+                .map_err(|_| MachineError::new("INTERNAL", "stored idempotency record is invalid"))?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| {
+                    MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                })?;
+            if let Some(stored_result) = existing.get("result").filter(|result| result.is_object()) {
+                if stored_result.get("job").is_some_and(Value::is_object) {
+                    let mut replay_request = request.clone();
+                    if replay_request
+                        .get("source_archive_path")
+                        .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+                    {
+                        if let Some(source_sha) =
+                            existing.get("source_sha256").and_then(Value::as_str)
+                        {
+                            replay_request.insert(
+                                "source_archive_path".into(),
+                                Value::from(source_sha),
+                            );
+                        }
+                    }
+                    let digest = request_digest(&replay_request);
+                    if existing.get("request_digest").and_then(Value::as_str)
+                        != Some(digest.as_str())
+                        || existing.get("run_id").and_then(Value::as_str)
+                            != Some(run_id.as_str())
+                    {
+                        return Err(MachineError::new(
+                            "IDEMPOTENCY_CONFLICT",
+                            "client_request_id was already used with a different request",
+                        ));
+                    }
+                    return Ok(stored_result.clone());
+                }
+            }
+        }
         let archive = validate_source_archive(request.get("source_archive_path"))?;
         let mut source_uri = String::new();
         let mut source_sha = String::new();
@@ -743,10 +784,10 @@ impl MachineFacade {
             );
         }
 
-        let record_path = format!("machine_requests/{request_id}.json");
+
         let digest = request_digest(&digest_request);
         let owner = uuid::Uuid::new_v4().simple().to_string();
-        let run_id = stable_run_id("machine", &request_id);
+
         let lease_expires_at =
             (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
         let mut reservation = Map::new();

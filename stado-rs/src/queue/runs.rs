@@ -27,11 +27,6 @@ pub const ALL_PREFIXES: [&str; 6] = [
     "cancelled",
 ];
 
-/// `run-<unix seconds>-<8 hex chars>` (Python `generate_run_id`).
-pub fn generate_run_id() -> String {
-    let hex = uuid::Uuid::new_v4().simple().to_string();
-    format!("run-{}-{}", Utc::now().timestamp(), &hex[..8])
-}
 
 /// Auto-derive a readable name from the run's commands: shared module +
 /// model + the distinct --task values (or a count if many).
@@ -96,6 +91,8 @@ pub async fn read_run(
     store: &JobStorage,
     run_id: &str,
 ) -> Result<Option<Map<String, Value>>, StorageError> {
+    crate::queue::submit::validate_run_id(run_id)
+        .map_err(|error| StorageError::Other(error.to_string()))?;
     let Some(versioned) = store
         .read_text_versioned(&format!("{RUN_PREFIX}/{run_id}.json"))
         .await?
@@ -147,6 +144,8 @@ pub async fn record_terminal_outcome(
     if job.run_id.is_empty() || job.submission_request_digest.is_empty() {
         return Ok(());
     }
+    crate::queue::submit::validate_run_id(&job.run_id)
+        .map_err(|error| StorageError::Other(error.to_string()))?;
     crate::queue::submit::migrate_v2_run_manifest(store, &job.run_id)
         .await
         .map_err(|error| StorageError::Other(error.to_string()))?;
@@ -159,6 +158,8 @@ pub async fn record_terminal_outcome(
             ))
         })?;
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
+        crate::queue::submit::validate_stored_run_manifest(&manifest, &job.run_id)
+            .map_err(|error| StorageError::Other(error.to_string()))?;
         if manifest.get("schema").and_then(Value::as_str)
             != Some("stado.run-submission.v3")
             || manifest.get("request_digest").and_then(Value::as_str)
@@ -268,6 +269,11 @@ pub async fn run_status(
     let Some(manifest) = read_run(store, run_id).await? else {
         return Ok(None);
     };
+    crate::queue::submit::validate_stored_run_manifest(
+        &Value::Object(manifest.clone()),
+        run_id,
+    )
+    .map_err(|error| StorageError::Other(error.to_string()))?;
     let entries = manifest
         .get("entries")
         .and_then(Value::as_array)

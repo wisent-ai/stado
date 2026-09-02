@@ -16,7 +16,7 @@ use crate::config;
 use crate::models::{
     activation_extraction_must_share_gpu, deprecated_activation_command_reason, Job, JobSecretRef,
 };
-use crate::queue::runs::{generate_run_id, RUN_PREFIX};
+use crate::queue::runs::RUN_PREFIX;
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
@@ -33,9 +33,18 @@ pub enum SubmitError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedHardwareProjection {
+    pub gpu_mem_gb: i64,
+    pub gpu_type: String,
+    pub machine_type: String,
+}
+
 /// Every durable submission option. Callers start from
 /// [`SubmitOptions::default`] and set what they need.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubmitOptions {
     pub provider: String,
     pub batch_id: String,
@@ -52,6 +61,9 @@ pub struct SubmitOptions {
     pub gpu_type: String,
     pub vram_gb: i64,
     pub machine_type: String,
+    /// Exact resolved hardware, used by durable replay/rerun to bypass
+    /// mutable sizing catalogs. Normal interactive submissions leave it unset.
+    pub resolved_hardware: Option<ResolvedHardwareProjection>,
     /// Operating system the job requires (`Job::platform_os`). Empty is no
     /// constraint; a native build declares the one platform whose binaries it
     /// can produce, and only a host of that platform claims it.
@@ -96,6 +108,7 @@ impl Default for SubmitOptions {
             gpu_type: String::new(),
             vram_gb: 0,
             machine_type: String::new(),
+            resolved_hardware: None,
             platform_os: String::new(),
             architecture: String::new(),
             pre_command: String::new(),
@@ -182,34 +195,65 @@ fn digest_value(value: &Value) -> String {
 
 /// Derive a path-safe run id from a caller-retained domain token. Retrying the
 /// same operation must pass the same token; distinct operations must not share
-/// one. The manifest binds the resulting id to the complete request digest.
+/// one. The original scope is included in the digest; its display fragment is
+/// sanitized and therefore cannot escape the runs namespace.
 pub fn stable_run_id(scope: &str, token: &str) -> String {
     let digest = digest_value(&serde_json::json!({
         "scope": scope,
         "token": token,
     }));
-    format!("run-{scope}-{}", &digest[..24])
+    let mut label = scope
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(32)
+        .collect::<String>();
+    label = label.trim_matches('-').to_string();
+    if label.is_empty() {
+        label = "scope".into();
+    }
+    format!("run-{label}-{}", &digest[..24])
+}
+
+pub fn validate_run_id(run_id: &str) -> Result<(), SubmitError> {
+    if run_id.is_empty()
+        || run_id.len() > 160
+        || matches!(run_id, "." | "..")
+        || !run_id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+        })
+    {
+        return Err(SubmitError::Validation(
+            "run id must be 1-160 ASCII letters, digits, '.', '_' or '-'".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Canonical semantic request. Submitter display fields and random IDs are
 /// deliberately absent; every option that changes placement, source, secrets,
-/// inputs or execution is included.
-pub fn submission_request(commands: &[String], options: &SubmitOptions) -> Result<Value, SubmitError> {
+/// Canonical semantic request. The per-command resolved hardware projection
+/// makes validation independent of mutable sizing catalogs while every other
+/// execution field is derived from `options`.
+fn submission_request(
+    commands: &[String],
+    options: &SubmitOptions,
+    resolved_hardware: &[ResolvedHardwareProjection],
+) -> Result<Value, SubmitError> {
     let options_value = serde_json::to_value(options)
         .map_err(|error| SubmitError::Validation(format!("serialize submission options: {error}")))?;
     Ok(serde_json::json!({
-        "schema": "stado.submission-request.v2",
+        "schema": "stado.submission-request.v3",
         "commands": commands,
         "effective_bucket": if options.bucket.is_empty() { config::bucket() } else { options.bucket.as_str() },
         "options": options_value,
+        "resolved_hardware": resolved_hardware,
     }))
-}
-
-pub fn submission_request_digest(
-    commands: &[String],
-    options: &SubmitOptions,
-) -> Result<String, SubmitError> {
-    Ok(digest_value(&submission_request(commands, options)?))
 }
 
 pub fn submission_source_digest(options: &SubmitOptions) -> String {
@@ -239,7 +283,7 @@ struct ManifestEntry {
     outcome_job: Option<Job>,
 }
 
-fn expected_job_key(request_digest: &str, index: usize, command: &str) -> String {
+pub fn submission_job_key(request_digest: &str, index: usize, command: &str) -> String {
     digest_value(&serde_json::json!({
         "request_digest": request_digest,
         "command_index": index,
@@ -315,6 +359,11 @@ fn validate_run_manifest(
             "run id {run_id} already belongs to a different or legacy submission request"
         )));
     }
+    if request.get("schema").and_then(Value::as_str) != Some("stado.submission-request.v3") {
+        return Err(SubmitError::Validation(format!(
+            "run id {run_id} requires explicit request-plan migration"
+        )));
+    }
     for obsolete in ["n_jobs", "job_ids", "commands"] {
         if manifest.get(obsolete).is_some() {
             return Err(SubmitError::Validation(format!(
@@ -341,6 +390,37 @@ fn validate_run_manifest(
             .ok_or_else(|| SubmitError::Validation("submission request options are missing".into()))?,
     )
     .map_err(|error| SubmitError::Validation(format!("invalid submission options: {error}")))?;
+    let resolved_hardware: Vec<ResolvedHardwareProjection> = serde_json::from_value(
+        request
+            .get("resolved_hardware")
+            .cloned()
+            .ok_or_else(|| {
+                SubmitError::Validation("submission request hardware plan is missing".into())
+            })?,
+    )
+    .map_err(|error| {
+        SubmitError::Validation(format!("invalid submission hardware plan: {error}"))
+    })?;
+    if resolved_hardware.len() != commands.len() {
+        return Err(SubmitError::Validation(format!(
+            "run id {run_id} has an incomplete submission hardware plan"
+        )));
+    }
+    let required_manifest_string = |field: &str| {
+        manifest
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                SubmitError::Validation(format!("run manifest {run_id} is missing {field}"))
+            })
+    };
+    let provenance = SubmissionProvenance {
+        created_at: required_manifest_string("created_at")?,
+        submitted_by: required_manifest_string("submitted_by")?,
+        submitted_from: required_manifest_string("submitted_from")?,
+        submitter_app: required_manifest_string("submitter_app")?,
+    };
     if manifest.get("source_digest").and_then(Value::as_str)
         != Some(submission_source_digest(&options).as_str())
         || manifest.get("input_digest").and_then(Value::as_str)
@@ -364,7 +444,7 @@ fn validate_run_manifest(
     let mut validated = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let command = &commands[index];
-        let key = expected_job_key(request_digest, index, command);
+        let key = submission_job_key(request_digest, index, command);
         let job_id = format!("job-{}", &key[..24]);
         if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
             || entry.get("command").and_then(Value::as_str) != Some(command.as_str())
@@ -375,21 +455,30 @@ fn validate_run_manifest(
                 "run id {run_id} has a corrupt command-to-job mapping at index {index}"
             )));
         }
-        let job: Job = serde_json::from_value(
-            entry
-                .get("planned_job")
-                .cloned()
-                .ok_or_else(|| SubmitError::Validation("run entry has no planned job".into()))?,
-        )
-        .map_err(|error| SubmitError::Validation(format!("invalid planned job: {error}")))?;
-        if job.job_id != job_id
-            || job.command != *command
-            || job.run_id != run_id
-            || job.submission_request_digest != request_digest
-            || job.submission_command_index != Some(index)
+        let planned_value = entry
+            .get("planned_job")
+            .cloned()
+            .ok_or_else(|| SubmitError::Validation("run entry has no planned job".into()))?;
+        let job: Job = serde_json::from_value(planned_value.clone())
+            .map_err(|error| SubmitError::Validation(format!("invalid planned job: {error}")))?;
+        let mut effective = options.clone();
+        effective.exclusive =
+            effective.exclusive && !activation_extraction_must_share_gpu(command);
+        let mut expected = build_planned_job(
+            command,
+            &effective,
+            &job_id,
+            &resolved_hardware[index],
+            &provenance,
+        );
+        expected.submission_request_digest = request_digest.to_string();
+        expected.submission_command_index = Some(index);
+        if serde_json::to_value(&expected)
+            .map_err(|error| SubmitError::Validation(error.to_string()))?
+            != planned_value
         {
             return Err(SubmitError::Validation(format!(
-                "run id {run_id} has corrupt planned job content at index {index}"
+                "run id {run_id} has a planned job not derivable from its request at index {index}"
             )));
         }
         let state = entry
@@ -444,6 +533,17 @@ fn validate_run_manifest(
     }
     Ok(validated)
 }
+pub(crate) fn validate_stored_run_manifest(
+    manifest: &Value,
+    run_id: &str,
+) -> Result<(), SubmitError> {
+    let request = manifest
+        .get("request")
+        .ok_or_else(|| SubmitError::Validation("run manifest request is missing".into()))?;
+    let request_digest = digest_value(request);
+    validate_run_manifest(manifest, run_id, request, &request_digest).map(|_| ())
+}
+
 
 async fn migrate_v2_manifest(
     store: &JobStorage,
@@ -710,16 +810,12 @@ pub async fn submit_batch(
     if commands.is_empty() {
         return Err(SubmitError::Validation("at least one command is required".into()));
     }
-    let mut options = options.clone();
-    if options.run_id.is_empty() {
-        options.run_id = generate_run_id();
-    }
+    let options = options.clone();
+    validate_run_id(&options.run_id)?;
     for command in commands {
         validate_submission(command, &options)?;
     }
     let run_id = options.run_id.clone();
-    let request = submission_request(commands, &options)?;
-    let request_digest = digest_value(&request);
     let bucket = if options.bucket.is_empty() {
         config::bucket()
     } else {
@@ -727,8 +823,70 @@ pub async fn submit_batch(
     };
     let store = JobStorage::with_bucket(bucket).await?;
     let path = format!("{RUN_PREFIX}/{run_id}.json");
+    let existing_raw = store.download_text(&path).await?;
+    let resolved_hardware: Vec<ResolvedHardwareProjection> =
+        if let Some(raw) = existing_raw.as_ref() {
+            let existing: Value = serde_json::from_str(raw).map_err(|error| {
+                SubmitError::Validation(format!("invalid run manifest: {error}"))
+            })?;
+            if existing.get("schema").and_then(Value::as_str)
+                == Some("stado.run-submission.v3")
+            {
+                let stored_request = existing.get("request").ok_or_else(|| {
+                    SubmitError::Validation("stored run request is missing".into())
+                })?;
+                let expected_options = serde_json::to_value(&options).map_err(|error| {
+                    SubmitError::Validation(format!("serialize submission options: {error}"))
+                })?;
+                if stored_request.get("schema").and_then(Value::as_str)
+                    != Some("stado.submission-request.v3")
+                    || stored_request.get("commands") != Some(&serde_json::json!(commands))
+                    || stored_request.get("options") != Some(&expected_options)
+                    || stored_request.get("effective_bucket").and_then(Value::as_str)
+                        != Some(bucket)
+                {
+                    return Err(SubmitError::Validation(format!(
+                        "run id {run_id} already belongs to a different submission request"
+                    )));
+                }
+                serde_json::from_value(
+                    stored_request
+                        .get("resolved_hardware")
+                        .cloned()
+                        .ok_or_else(|| {
+                            SubmitError::Validation(
+                                "stored run request has no resolved hardware plan".into(),
+                            )
+                        })?,
+                )
+                .map_err(|error| {
+                    SubmitError::Validation(format!(
+                        "stored run request has invalid resolved hardware: {error}"
+                    ))
+                })?
+            } else {
+                let mut resolved = Vec::with_capacity(commands.len());
+                for command in commands {
+                    resolved.push(resolve_hardware(command, &options).await?);
+                }
+                resolved
+            }
+        } else {
+            let mut resolved = Vec::with_capacity(commands.len());
+            for command in commands {
+                resolved.push(resolve_hardware(command, &options).await?);
+            }
+            resolved
+        };
+    if resolved_hardware.len() != commands.len() {
+        return Err(SubmitError::Validation(format!(
+            "run id {run_id} has an invalid resolved hardware plan"
+        )));
+    }
+    let request = submission_request(commands, &options, &resolved_hardware)?;
+    let request_digest = digest_value(&request);
 
-    let manifest = match store.download_text(&path).await? {
+    let manifest = match existing_raw {
         Some(raw) => {
             let existing: Value = serde_json::from_str(&raw)
                 .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
@@ -748,14 +906,29 @@ pub async fn submit_batch(
             }
         }
         None => {
+            let provenance = SubmissionProvenance {
+                created_at: chrono::Utc::now().to_rfc3339(),
+                submitter_app: std::env::var("WC_SUBMITTER_APP")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "manual".into()),
+                submitted_by: submitter(),
+                submitted_from: hostname(),
+            };
             let mut entries = Vec::with_capacity(commands.len());
             for (index, command) in commands.iter().enumerate() {
-                let key = expected_job_key(&request_digest, index, command);
+                let key = submission_job_key(&request_digest, index, command);
                 let job_id = format!("job-{}", &key[..24]);
                 let mut effective = options.clone();
                 effective.exclusive =
                     effective.exclusive && !activation_extraction_must_share_gpu(command);
-                let mut job = build_job(command, &effective, &job_id).await?;
+                let mut job = build_planned_job(
+                    command,
+                    &effective,
+                    &job_id,
+                    &resolved_hardware[index],
+                    &provenance,
+                );
                 job.submission_request_digest = request_digest.clone();
                 job.submission_command_index = Some(index);
                 entries.push(serde_json::json!({
@@ -780,13 +953,10 @@ pub async fn submit_batch(
                 "source_digest": submission_source_digest(&options),
                 "input_digest": submission_input_digest(commands, &options),
                 "request": request,
-                "created_at": chrono::Utc::now().to_rfc3339(),
-                "submitter_app": std::env::var("WC_SUBMITTER_APP")
-                    .ok()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| "manual".into()),
-                "submitted_by": submitter(),
-                "submitted_from": hostname(),
+                "created_at": provenance.created_at,
+                "submitter_app": provenance.submitter_app,
+                "submitted_by": provenance.submitted_by,
+                "submitted_from": provenance.submitted_from,
                 "entries": entries,
             });
             let created = store
@@ -989,11 +1159,21 @@ async fn estimate_gpu_mem(command: &str) -> Result<i64, SubmitError> {
 ///      GPU_SIZING when machine_type is not also explicit.
 ///   4. machine_type argument — caller-pinned GCE machine type, taken
 ///      verbatim. Use this for non-cataloged SKUs.
-async fn build_job(
+#[derive(Debug, Clone)]
+struct SubmissionProvenance {
+    created_at: String,
+    submitted_by: String,
+    submitted_from: String,
+    submitter_app: String,
+}
+
+async fn resolve_hardware(
     command: &str,
     options: &SubmitOptions,
-    job_id: &str,
-) -> Result<Job, SubmitError> {
+) -> Result<ResolvedHardwareProjection, SubmitError> {
+    if let Some(resolved) = options.resolved_hardware.as_ref() {
+        return Ok(resolved.clone());
+    }
     let caller_asked_for_gpu =
         !options.gpu_type.is_empty() || options.vram_gb > 0 || !options.machine_type.is_empty();
     let mut gpu_mem = if options.vram_gb > 0 {
@@ -1001,54 +1181,57 @@ async fn build_job(
     } else {
         estimate_gpu_mem(command).await?
     };
-
-    let machine_type: String;
-    let accel_type: String;
-    if !caller_asked_for_gpu && gpu_mem == 0 {
-        // CPU path — no GPU requirements, no regex hit. Same as pre-0.4.122.
-        machine_type = CPU_MACHINE_TYPE.into();
-        accel_type = String::new();
+    let (machine_type, gpu_type) = if !caller_asked_for_gpu && gpu_mem == 0 {
+        (CPU_MACHINE_TYPE.into(), String::new())
     } else {
         let (inferred_machine, inferred_accel) =
             config::lookup_instance_type(&options.provider, gpu_mem);
-        accel_type = if options.gpu_type.is_empty() {
+        let gpu_type = if options.gpu_type.is_empty() {
             inferred_accel.to_string()
         } else {
             options.gpu_type.clone()
         };
-        if !options.machine_type.is_empty() {
-            // caller-pinned, take verbatim
-            machine_type = options.machine_type.clone();
+        let machine_type = if !options.machine_type.is_empty() {
+            options.machine_type.clone()
         } else if !options.gpu_type.is_empty() && options.vram_gb == 0 {
-            // Caller pinned the accelerator but not the size — pick the
-            // machine_type from GPU_SIZING by matching accel label.
             let empty = BTreeMap::new();
             let sizing = GPU_SIZING.get(options.provider.as_str()).unwrap_or(&empty);
-            let matched = sizing
+            match sizing
                 .iter()
-                .find(|(_, (_, accel))| *accel == options.gpu_type);
-            match matched {
+                .find(|(_, (_, accel))| *accel == options.gpu_type)
+            {
                 Some((mem, (machine, _))) => {
-                    machine_type = machine.to_string();
                     if gpu_mem == 0 {
                         gpu_mem = *mem;
                     }
+                    machine.to_string()
                 }
-                None => machine_type = inferred_machine.to_string(),
+                None => inferred_machine.to_string(),
             }
         } else {
-            machine_type = inferred_machine.to_string();
-        }
-    }
+            inferred_machine.to_string()
+        };
+        (machine_type, gpu_type)
+    };
+    Ok(ResolvedHardwareProjection {
+        gpu_mem_gb: gpu_mem,
+        gpu_type,
+        machine_type,
+    })
+}
 
-    // priority stays user-controlled. Makespan-optimization happens in
-    // the coordinator's centralized matcher (see _assign_jobs_to_agents
-    // in coordinator.py), not by mutating the priority field at submit
-    // time.
+fn build_planned_job(
+    command: &str,
+    options: &SubmitOptions,
+    job_id: &str,
+    hardware: &ResolvedHardwareProjection,
+    provenance: &SubmissionProvenance,
+) -> Job {
     let mut job = Job::new(job_id, command);
-    job.gpu_mem_gb = gpu_mem;
-    job.gpu_type = accel_type;
-    job.machine_type = machine_type;
+    job.created_at = provenance.created_at.clone();
+    job.gpu_mem_gb = hardware.gpu_mem_gb;
+    job.gpu_type = hardware.gpu_type.clone();
+    job.machine_type = hardware.machine_type.clone();
     job.platform_os = options.platform_os.clone();
     job.architecture = options.architecture.clone();
     job.provider = options.provider.clone();
@@ -1058,11 +1241,11 @@ async fn build_job(
     job.pin_to_provider = options.pin_to_provider;
     job.priority = options.priority;
     job.deadline_at = options.deadline_at.clone();
-    job.submitted_by = submitter();
-    job.submitted_from = hostname();
+    job.submitted_by = provenance.submitted_by.clone();
+    job.submitted_from = provenance.submitted_from.clone();
     job.submitted_via = "cli".into();
     job.run_id = options.run_id.clone();
-    job.submitter_app = std::env::var("WC_SUBMITTER_APP").unwrap_or_default();
+    job.submitter_app = provenance.submitter_app.clone();
     job.repo = options.repo.clone();
     job.repo_ref = options.repo_ref.clone();
     job.repo_workdir = options.repo_workdir.clone();
@@ -1081,8 +1264,7 @@ async fn build_job(
     job.secret_env = options.secret_env.clone();
     job.input_artifacts = options.input_artifacts.clone();
     job.resolved_input_artifacts = options.resolved_input_artifacts.clone();
-
-    Ok(job)
+    job
 }
 
 /// Construct the [`JobStorage`] handle the Python code builds as

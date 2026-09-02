@@ -306,8 +306,10 @@ The dashboard listens on `http://127.0.0.1:8765`.
 ### 3. Submit a job from another terminal
 
 ```bash
-stado submit "printf 'hello from Stado\n'"
+stado submit --run-id quickstart-hello "printf 'hello from Stado\n'"
 ```
+`--run-id` is a required caller-retained retry identity. Reusing it with the
+same request recovers the original job; use a new value for intentional new work.
 
 The command prints a `Job ID`. Use it below:
 

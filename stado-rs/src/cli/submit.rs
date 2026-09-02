@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::profiles;
 use crate::queue::submit::{
-    submission_input_digest, submission_request_digest, submission_source_digest, submit_batch,
+    submission_input_digest, submission_job_key, submission_source_digest, submit_batch,
     SubmitOptions,
 };
 
@@ -127,9 +127,9 @@ pub struct SubmitArgs {
     /// matcher never reassigns it.
     #[arg(long, default_value = "")]
     pinned_host: String,
-    /// Stable caller identity for exactly-once submission. Repeating the same
-    /// run id and command returns the original job id; a different command is refused.
-    #[arg(long, default_value = "")]
+    /// Stable caller-retained identity for exactly-once submission. Required:
+    /// repeating the same run id and request returns the original jobs.
+    #[arg(long)]
     run_id: String,
 }
 
@@ -442,11 +442,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             .collect(),
         None => vec![args.command.clone()],
     };
-    let batch_id = if args.run_id.is_empty() {
-        format!("batch-{}", chrono::Utc::now().timestamp())
-    } else {
-        format!("run-{}", args.run_id)
-    };
+    let batch_id = format!("run-{}", args.run_id);
 
     let options = SubmitOptions {
         provider,
@@ -538,12 +534,11 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         "\nSubmitted {} job(s) via {mode}{flag_str}. Batch: {batch_id}",
         commands.len()
     );
-    let mut receipt_options = options.clone();
-    receipt_options.run_id = jobs
+    let receipt_options = options.clone();
+    let request_digest = jobs
         .first()
-        .map(|job| job.run_id.clone())
-        .unwrap_or_else(|| options.run_id.clone());
-    let request_digest = submission_request_digest(&commands, &receipt_options)?;
+        .map(|job| job.submission_request_digest.clone())
+        .ok_or_else(|| CmdError::click("durable submission returned no jobs"))?;
     let receipt = serde_json::json!({
         "schema": "stado.submission-receipt.v2",
         "run_id": jobs.first().map(|job| job.run_id.as_str()).unwrap_or(options.run_id.as_str()),
@@ -556,7 +551,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         "jobs": jobs.iter().enumerate().map(|(index, job)| serde_json::json!({
             "command_index": index,
             "command": job.command,
-            "job_key": job.job_id.strip_prefix("job-").unwrap_or(&job.job_id),
+            "job_key": submission_job_key(&request_digest, index, &job.command),
             "job_id": job.job_id,
             "output_uri": job.output_uri,
             "repo_ref": job.repo_ref,

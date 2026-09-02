@@ -206,14 +206,14 @@ pub async fn resume(schedule_id: &str) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// `schedule run ID`: fire a schedule once right now, regardless of its
-/// next run time.
-pub async fn run(schedule_id: &str) -> Result<(), CmdError> {
+/// `schedule run ID --retry-token TOKEN`: fire a schedule exactly once for
+/// the caller-retained token, regardless of its next run time.
+pub async fn run(schedule_id: &str, retry_token: &str) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     if read_schedule(&store, schedule_id).await?.is_none() {
         return Err(CmdError::click(format!("schedule {schedule_id} not found")));
     }
-    let job = schedules::fire_schedule_now(&store, schedule_id, Utc::now())
+    let job = schedules::fire_schedule_now(&store, schedule_id, retry_token, Utc::now())
         .await?
         .ok_or_else(|| {
             CmdError::click(format!(

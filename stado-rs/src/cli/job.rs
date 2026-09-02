@@ -14,7 +14,7 @@
 //! `gpu_mem_gb` / `priority` / `gpu_type` blob metadata that
 //! [`crate::queue::listing::list_fitting`] prefilters on are all stamped by
 //! exactly the code that stamps them for a fresh submit. `rerun_options`
-//! documents the one place the resolved spec cannot simply be pinned back.
+//! stamps them for a fresh submit. Resolved hardware is carried explicitly.
 //!
 //! `watch --follow` carries the byte cursor forward across polls, so every
 //! poll prints only the bytes that appeared since the last one and the
@@ -32,7 +32,9 @@ use serde_json::json;
 use crate::constants::POLL_INTERVAL_S;
 use crate::machine::{normalize_job, MachineError, MachineFacade};
 use crate::models::{job_state, Job};
-use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions, CPU_MACHINE_TYPE};
+use crate::queue::submit::{
+    stable_run_id, submit_batch, ResolvedHardwareProjection, SubmitOptions,
+};
 use crate::queue::JobStorage;
 
 use super::{table, CmdError};
@@ -192,16 +194,9 @@ async fn rerun(job_id: &str, retry_token: &str, json: bool) -> Result<(), CmdErr
 /// and never the latter — so the rerun lands on the same hardware. That is
 /// the whole content of "resubmit with identical spec".
 ///
-/// The one exception is a job that came out of the CPU branch of
-/// `queue::submit::submit_via_gcs`, recognizable by [`CPU_MACHINE_TYPE`]
-/// with no accelerator and no sized VRAM. That branch runs only when the
-/// caller pinned nothing, so pinning its machine_type back would flip
-/// submit's `caller_asked_for_gpu` gate and stamp an accelerator onto a CPU
-/// job. Leaving all three empty re-enters the same branch: a command that
-/// still sizes to nothing comes out byte-identical, and one the fleet has
-/// since measured gets today's real size — which is precisely what
-/// resubmitting the same spec should do, since the original's zero recorded
-/// "not sized yet", not "needs no GPU".
+/// Resolved hardware is carried through the explicit replay projection. This
+/// bypasses current sizing catalogs, including for the CPU-default marker,
+/// rather than inferring hardware again during the rerun.
 ///
 /// `re_submission_of` is set to the id being rerun. That is what makes
 /// [`crate::queue::tombstone::on_transition`] write `fixed/<id>.json` or
@@ -210,10 +205,7 @@ async fn rerun(job_id: &str, retry_token: &str, json: bool) -> Result<(), CmdErr
 /// deliberately NOT carried: a manual rerun is not a scheduled submission,
 /// and claiming otherwise would corrupt the schedule's own accounting.
 fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions {
-    let cpu_default = !original.gpu_mem_gb.is_positive()
-        && original.gpu_type.is_empty()
-        && original.machine_type == CPU_MACHINE_TYPE;
-    let mut options = SubmitOptions {
+    SubmitOptions {
         provider: original.provider.clone(),
         // The caller retains retry_token, so a crash retries this manifest
         // rather than opening a second batch.
@@ -229,6 +221,11 @@ fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions {
         repo_ref: original.repo_ref.clone(),
         repo_workdir: original.repo_workdir.clone(),
         repo_extras: original.repo_extras.clone(),
+        resolved_hardware: Some(ResolvedHardwareProjection {
+            gpu_mem_gb: original.gpu_mem_gb,
+            gpu_type: original.gpu_type.clone(),
+            machine_type: original.machine_type.clone(),
+        }),
         pre_command: original.pre_command.clone(),
         apt_packages: original.apt_packages.clone(),
         output_uri: original.output_uri.clone(),
@@ -248,13 +245,7 @@ fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions {
         input_artifacts: original.input_artifacts.clone(),
         resolved_input_artifacts: original.resolved_input_artifacts.clone(),
         ..SubmitOptions::default()
-    };
-    if !cpu_default {
-        options.gpu_type = original.gpu_type.clone();
-        options.vram_gb = original.gpu_mem_gb;
-        options.machine_type = original.machine_type.clone();
     }
-    options
 }
 
 /// The fields a rerun has to reproduce, side by side, so "identical spec"

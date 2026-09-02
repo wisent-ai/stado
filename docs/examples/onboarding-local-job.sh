@@ -8,7 +8,7 @@ stado config validate
 stado doctor --fix-hints
 
 # submit a trivial local workload and watch it finish
-JOB_ID=$(stado submit --profile local -- echo hello-from-stado | awk -F'"' '/"id"/ {print $4; exit}')
+JOB_ID=$(stado submit --run-id onboarding-local-job --profile local -- echo hello-from-stado | awk -F'"' '/"id"/ {print $4; exit}')
 echo "submitted: $JOB_ID"
 stado job watch "$JOB_ID"
 

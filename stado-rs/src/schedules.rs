@@ -623,7 +623,7 @@ async fn reserve_manual_occurrence(
     store: &JobStorage,
     schedule_id: &str,
     owner: &str,
-    now: DateTime<Utc>,
+    retry_token: &str,
 ) -> Result<Option<Schedule>, StorageError> {
     let path = path(schedule_id);
     let Some(versioned) = store.read_text_versioned(&path).await? else {
@@ -636,12 +636,8 @@ async fn reserve_manual_occurrence(
     if sched.pending_occurrence.is_some() {
         return Ok(None);
     }
-    let occurrence_at = format!(
-        "manual:{}:{}",
-        crate::models::isoformat_utc(now),
-        uuid::Uuid::new_v4().simple()
-    );
-    let token = occurrence_token(schedule_id, &occurrence_at);
+    let token = format!("{schedule_id}\0{retry_token}");
+    let occurrence_at = format!("manual:{}", stable_run_id("schedule-manual", &token));
     sched.pending_occurrence = Some(ScheduleOccurrenceReservation {
         occurrence_key: stable_run_id("schedule-occurrence", &token),
         occurrence_at,
@@ -1010,8 +1006,32 @@ pub async fn fire_due_schedules(
 pub async fn fire_schedule_now(
     store: &JobStorage,
     schedule_id: &str,
+    retry_token: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<crate::models::Job>, StorageError> {
+    let token = format!("{schedule_id}\0{retry_token}");
+    let run_id = stable_run_id("schedule", &token);
+    if let Some(manifest) = crate::queue::runs::read_run(store, &run_id).await? {
+        crate::queue::submit::validate_stored_run_manifest(
+            &serde_json::Value::Object(manifest.clone()),
+            &run_id,
+        )
+        .map_err(|error| StorageError::Other(error.to_string()))?;
+        if let Some(job) = manifest
+            .get("entries")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| {
+                entry
+                    .get("outcome")
+                    .and_then(|outcome| outcome.get("job"))
+                    .or_else(|| entry.get("planned_job"))
+            })
+            .cloned()
+        {
+            return serde_json::from_value(job).map(Some).map_err(StorageError::Json);
+        }
+    }
     let Some(sched) = read_schedule(store, schedule_id).await? else {
         return Ok(None);
     };
@@ -1022,7 +1042,7 @@ pub async fn fire_schedule_now(
     let claimed = if sched.pending_occurrence.is_some() {
         takeover_pending_occurrence(store, schedule_id, &owner).await?
     } else {
-        reserve_manual_occurrence(store, schedule_id, &owner, now).await?
+        reserve_manual_occurrence(store, schedule_id, &owner, retry_token).await?
     };
     let Some(claimed) = claimed else {
         return Ok(None);

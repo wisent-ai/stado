@@ -887,8 +887,12 @@ enum ScheduleCommands {
     Pause { schedule_id: String },
     /// Re-enable a paused schedule (next run recomputed from now).
     Resume { schedule_id: String },
-    /// Fire a schedule once right now, regardless of its next run time.
-    Run { schedule_id: String },
+    /// Fire a schedule once with a caller-retained retry identity.
+    Run {
+        schedule_id: String,
+        #[arg(long)]
+        retry_token: String,
+    },
 }
 
 /// `schedule create` options (boxed out of the enum to keep variant sizes
@@ -2494,7 +2498,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             ScheduleCommands::Rm { schedule_id } => schedule::rm(&schedule_id).await,
             ScheduleCommands::Pause { schedule_id } => schedule::pause(&schedule_id).await,
             ScheduleCommands::Resume { schedule_id } => schedule::resume(&schedule_id).await,
-            ScheduleCommands::Run { schedule_id } => schedule::run(&schedule_id).await,
+            ScheduleCommands::Run {
+                schedule_id,
+                retry_token,
+            } => schedule::run(&schedule_id, &retry_token).await,
         },
         Commands::DiskCleanup {
             once,

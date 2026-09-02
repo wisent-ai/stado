@@ -2734,11 +2734,15 @@ pub(crate) async fn store_object_with_metadata(
     }
     let path = object.storage_path();
     let store = JobStorage::new().await?;
+    let stdin_bytes = if create_only && source == "-" {
+        Some(read_object_source(source)?)
+    } else {
+        None
+    };
     let uploaded = if create_only {
-        if source == "-" {
-            let bytes = read_object_source(source)?;
+        if let Some(bytes) = stdin_bytes.as_ref() {
             let mut staged = tempfile::NamedTempFile::new()?;
-            staged.write_all(&bytes)?;
+            staged.write_all(bytes)?;
             store.upload_file_if_absent(&path, staged.path()).await?
         } else {
             store
@@ -2751,6 +2755,18 @@ pub(crate) async fn store_object_with_metadata(
         true
     };
     if !uploaded {
+        let incoming = match stdin_bytes {
+            Some(bytes) => bytes,
+            None => read_object_source(source)?,
+        };
+        let existing = store.read_bytes(&path).await?.ok_or_else(|| {
+            CmdError::click(format!(
+                "{object} won create-only admission but is no longer readable"
+            ))
+        })?;
+        if Sha256::digest(&existing) == Sha256::digest(&incoming) {
+            return Ok(uri);
+        }
         let policy = if object.namespace() == "releases" {
             "release objects are immutable"
         } else {

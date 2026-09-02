@@ -12,6 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::capabilities::{RuntimeAdapter, RuntimeFacet, StorageAdapter};
 use crate::config;
@@ -30,6 +32,103 @@ pub struct JobStorage {
     backend: Arc<dyn BlobBackend>,
     backend_name: String,
     bucket_name: String,
+}
+
+const TRANSITION_PREFIX: &str = "job-transitions";
+const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobTransition {
+    schema: String,
+    transition_id: String,
+    owner: String,
+    job_id: String,
+    from_prefix: String,
+    to_prefix: String,
+    source_version: String,
+    source_digest: String,
+    destination_version: Option<String>,
+    state: String,
+    created_at: String,
+    destination_job: Job,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn transition_path(job_id: &str) -> String {
+    format!("{TRANSITION_PREFIX}/{}.json", sha256_hex(job_id.as_bytes()))
+}
+
+fn prefix_state(prefix: &str) -> &str {
+    if prefix == "queue" {
+        crate::models::job_state::QUEUED
+    } else {
+        prefix
+    }
+}
+
+fn transition_fence_state(transition_id: &str) -> String {
+    format!("transitioning:{transition_id}")
+}
+
+fn merge_transition_destination(
+    current: &Job,
+    requested: &Job,
+    from_prefix: &str,
+    to_prefix: &str,
+) -> Result<Job, StorageError> {
+    if crate::queue::submit::immutable_job_projection(current)
+        != crate::queue::submit::immutable_job_projection(requested)
+    {
+        return Err(StorageError::StorageConflict(format!(
+            "{} immutable submission identity changed",
+            current.job_id
+        )));
+    }
+    let mut destination = current.clone();
+    destination.state = prefix_state(to_prefix).to_string();
+    match to_prefix {
+        "running" => {
+            destination.started_at = requested.started_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+        }
+        "queue" if from_prefix == "running" => {
+            destination.started_at = requested.started_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.restarts = destination.restarts.max(requested.restarts);
+            destination.last_restart = requested.last_restart.clone();
+            destination.error = requested.error.clone();
+            destination.preempt_count =
+                destination.preempt_count.max(requested.preempt_count);
+            destination.yield_count = destination.yield_count.max(requested.yield_count);
+            destination.assigned_to = requested.assigned_to.clone();
+        }
+        "completed" | "uploaded" | "cancelled" => {
+            destination.completed_at = requested.completed_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.error = requested.error.clone();
+        }
+        "failed" => {
+            destination.failed_at = requested.failed_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.error = requested.error.clone();
+        }
+        _ => {}
+    }
+    if crate::queue::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
+        destination.peak_vram_gb =
+            destination.peak_vram_gb.max(requested.peak_vram_gb);
+        destination.peak_vram_per_gpu |= requested.peak_vram_per_gpu;
+        for artifact in &requested.artifact_paths {
+            if !destination.artifact_paths.contains(artifact) {
+                destination.artifact_paths.push(artifact.clone());
+            }
+        }
+    }
+    Ok(destination)
 }
 
 fn validate_layout_document(raw: &str) -> Result<(), StorageError> {
@@ -424,66 +523,359 @@ impl JobStorage {
         Ok(())
     }
 
-    /// Atomically claim the current queued generation. The running destination
-    /// is create-only and the queued source is CAS-fenced, so a stale listing
-    /// can neither recreate running nor erase a concurrent queue rewrite.
+    async fn read_job_transition(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<(JobTransition, String)>, StorageError> {
+        let Some(versioned) = self.read_text_versioned(&transition_path(job_id)).await? else {
+            return Ok(None);
+        };
+        let transition: JobTransition = serde_json::from_str(&versioned.content)?;
+        if transition.schema != TRANSITION_SCHEMA || transition.job_id != job_id {
+            return Err(StorageError::Other(format!(
+                "invalid durable transition record for {job_id}"
+            )));
+        }
+        Ok(Some((transition, versioned.version)))
+    }
+
+    async fn set_transition_state(
+        &self,
+        transition_id: &str,
+        job_id: &str,
+        state: &str,
+    ) -> Result<(), StorageError> {
+        for _ in 0..16 {
+            let Some((mut transition, version)) = self.read_job_transition(job_id).await? else {
+                return Err(StorageError::Other(format!(
+                    "durable transition {transition_id} disappeared"
+                )));
+            };
+            if transition.transition_id != transition_id {
+                return Err(StorageError::StorageConflict(format!(
+                    "durable transition ownership changed for {job_id}"
+                )));
+            }
+            if transition.state == state {
+                return Ok(());
+            }
+            transition.state = state.to_string();
+            match self
+                .compare_and_swap_text(
+                    &transition_path(job_id),
+                    &version,
+                    &serde_json::to_string_pretty(&transition)?,
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "durable transition {transition_id} remained contended"
+        )))
+    }
+
+    /// Recover or finish the single durable lifecycle transition for a job.
+    /// Recovery is ownership-independent: the persisted intent and source
+    /// version are the fence, so any caller can complete an abandoned owner.
+    pub async fn recover_job_transition(&self, job_id: &str) -> Result<bool, StorageError> {
+        let Some((transition, _)) = self.read_job_transition(job_id).await? else {
+            return Ok(false);
+        };
+        if transition.state == "aborted" {
+            return Ok(false);
+        }
+        let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
+        let destination_path = format!("{}/{}.json", transition.to_prefix, job_id);
+        let fence_state = transition_fence_state(&transition.transition_id);
+
+        if transition.state == "completed" {
+            if let Some(source) = self.read_job(&transition.from_prefix, job_id).await? {
+                if source.state == fence_state {
+                    self.delete_blob(&source_path).await?;
+                    if transition.from_prefix == "queue" {
+                        self.delete_priority_marker(job_id).await?;
+                    }
+                }
+            }
+            return Ok(true);
+        }
+        if transition.state != "prepared" {
+            return Err(StorageError::Other(format!(
+                "durable transition {} has invalid state {}",
+                transition.transition_id, transition.state
+            )));
+        }
+
+        match self.read_text_versioned(&source_path).await? {
+            Some(versioned)
+                if versioned.version == transition.source_version
+                    && sha256_hex(versioned.content.as_bytes()) == transition.source_digest =>
+            {
+                let mut source = Job::from_json(&versioned.content)?;
+                source.state = fence_state.clone();
+                match self
+                    .compare_and_swap_text(&source_path, &versioned.version, &source.to_json())
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
+                        return Ok(false)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Some(versioned) => {
+                let source = Job::from_json(&versioned.content)?;
+                if source.state != fence_state {
+                    self.set_transition_state(
+                        &transition.transition_id,
+                        job_id,
+                        "aborted",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+            }
+            None => {
+                let Some(destination) = self.read_job(&transition.to_prefix, job_id).await? else {
+                    return Err(StorageError::StorageConflict(format!(
+                        "transition {} lost both source and destination",
+                        transition.transition_id
+                    )));
+                };
+                if crate::queue::submit::immutable_job_projection(&destination)
+                    != crate::queue::submit::immutable_job_projection(
+                        &transition.destination_job,
+                    )
+                {
+                    return Err(StorageError::StorageConflict(format!(
+                        "{destination_path} does not match transition {}",
+                        transition.transition_id
+                    )));
+                }
+                self.set_transition_state(&transition.transition_id, job_id, "completed")
+                    .await?;
+                return Ok(true);
+            }
+        }
+
+        let destination = if self
+            .backend
+            .upload_text_if_absent(&destination_path, &transition.destination_job.to_json())
+            .await?
+        {
+            transition.destination_job.clone()
+        } else {
+            let Some(existing_versioned) = self.read_text_versioned(&destination_path).await? else {
+                return Ok(false);
+            };
+            let existing = Job::from_json(&existing_versioned.content)?;
+            if crate::queue::submit::immutable_job_projection(&existing)
+                != crate::queue::submit::immutable_job_projection(
+                    &transition.destination_job,
+                )
+                || existing.state != prefix_state(&transition.to_prefix)
+            {
+                return Err(StorageError::StorageConflict(format!(
+                    "{destination_path} conflicts with transition {}",
+                    transition.transition_id
+                )));
+            }
+            if transition.destination_version.as_deref()
+                == Some(existing_versioned.version.as_str())
+                && existing.to_json() != transition.destination_job.to_json()
+            {
+                match self
+                    .compare_and_swap_text(
+                        &destination_path,
+                        &existing_versioned.version,
+                        &transition.destination_job.to_json(),
+                    )
+                    .await
+                {
+                    Ok(_) => transition.destination_job.clone(),
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
+                        return Ok(false)
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                existing
+            }
+        };
+        self.backend
+            .set_metadata(&destination_path, &Self::job_metadata(&destination))
+            .await?;
+        if transition.to_prefix == "queue" && destination.priority > 0 {
+            self.write_priority_marker(&destination).await?;
+        }
+        if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
+            crate::queue::runs::record_terminal_outcome(
+                self,
+                &destination,
+                &transition.to_prefix,
+            )
+            .await?;
+        }
+        self.set_transition_state(&transition.transition_id, job_id, "completed")
+            .await?;
+        if let Some(source) = self.read_job(&transition.from_prefix, job_id).await? {
+            if source.state == fence_state {
+                self.delete_blob(&source_path).await?;
+                if transition.from_prefix == "queue" {
+                    self.delete_priority_marker(job_id).await?;
+                }
+            }
+        }
+        tombstone::on_transition(self, &destination, &transition.to_prefix).await;
+        Ok(true)
+    }
+
+    async fn transition_job_if_version(
+        &self,
+        requested: &Job,
+        from_prefix: &str,
+        to_prefix: &str,
+        expected_version: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        for _ in 0..16 {
+            self.recover_job_transition(&requested.job_id).await?;
+            let source_path = format!("{from_prefix}/{}.json", requested.job_id);
+            let Some(source_versioned) = self.read_text_versioned(&source_path).await? else {
+                if let Some(existing) = self.read_job(to_prefix, &requested.job_id).await? {
+                    if crate::queue::submit::immutable_job_projection(&existing)
+                        == crate::queue::submit::immutable_job_projection(requested)
+                    {
+                        return Ok(true);
+                    }
+                }
+                return Ok(false);
+            };
+            if expected_version.is_some_and(|expected| expected != source_versioned.version) {
+                return Ok(false);
+            }
+            let current = Job::from_json(&source_versioned.content)?;
+            if current.state != prefix_state(from_prefix) {
+                self.recover_job_transition(&requested.job_id).await?;
+                return Ok(false);
+            }
+            let destination_versioned =
+                self.read_text_versioned(&format!("{to_prefix}/{}.json", requested.job_id)).await?;
+            let (destination_basis, destination_version) = match destination_versioned {
+                Some(existing_versioned) => {
+                    let existing = Job::from_json(&existing_versioned.content)?;
+                    if crate::queue::submit::immutable_job_projection(&existing)
+                        != crate::queue::submit::immutable_job_projection(&current)
+                        || existing.state != prefix_state(to_prefix)
+                    {
+                        return Err(StorageError::StorageConflict(format!(
+                            "{to_prefix}/{}.json belongs to different lifecycle data",
+                            requested.job_id
+                        )));
+                    }
+                    (existing, Some(existing_versioned.version))
+                }
+                None => (requested.clone(), None),
+            };
+            let destination = merge_transition_destination(
+                &current,
+                &destination_basis,
+                from_prefix,
+                to_prefix,
+            )?;
+            let transition_id = sha256_hex(
+                format!(
+                    "{}\0{}\0{}\0{}\0{}",
+                    requested.job_id,
+                    from_prefix,
+                    to_prefix,
+                    source_versioned.version,
+                    destination.to_json()
+                )
+                .as_bytes(),
+            );
+            let candidate = JobTransition {
+                schema: TRANSITION_SCHEMA.to_string(),
+                transition_id,
+                owner: uuid::Uuid::new_v4().simple().to_string(),
+                job_id: requested.job_id.clone(),
+                from_prefix: from_prefix.to_string(),
+                to_prefix: to_prefix.to_string(),
+                source_version: source_versioned.version.clone(),
+                source_digest: sha256_hex(source_versioned.content.as_bytes()),
+                destination_version,
+                state: "prepared".into(),
+                created_at: Utc::now().to_rfc3339(),
+                destination_job: destination,
+            };
+            let path = transition_path(&requested.job_id);
+            let body = serde_json::to_string_pretty(&candidate)?;
+            let installed = match self.read_text_versioned(&path).await? {
+                None => self.create_text_if_absent(&path, &body).await?,
+                Some(active) => {
+                    let existing: JobTransition = serde_json::from_str(&active.content)?;
+                    if existing.state == "prepared" {
+                        self.recover_job_transition(&requested.job_id).await?;
+                        continue;
+                    }
+                    match self
+                        .compare_and_swap_text(&path, &active.version, &body)
+                        .await
+                    {
+                        Ok(_) => true,
+                        Err(StorageError::StorageConflict(_)) => false,
+                        Err(error) => return Err(error),
+                    }
+                }
+            };
+            if !installed {
+                continue;
+            }
+            if self.recover_job_transition(&requested.job_id).await? {
+                return Ok(true);
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "job {} remained contended during lifecycle transition",
+            requested.job_id
+        )))
+    }
+
+    /// Claim through a durable transition record. The running job is derived
+    /// from the fresh versioned queue body; stale caller priority/assignment
+    /// cannot overwrite a concurrent queued rewrite.
     pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
+        self.recover_job_transition(&job.job_id).await?;
         let queue_path = format!("queue/{}.json", job.job_id);
         let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
             return Ok(false);
         };
         let current = Job::from_json(&versioned.content)?;
         if current.state != crate::models::job_state::QUEUED
+            || current.assigned_to != job.assigned_to
             || crate::queue::submit::immutable_job_projection(&current)
                 != crate::queue::submit::immutable_job_projection(job)
         {
             return Ok(false);
-        }
-        for terminal in crate::queue::runs::TERMINAL_PREFIXES {
-            if self
-                .backend
-                .exists(&format!("{terminal}/{}.json", job.job_id))
-                .await?
-            {
-                return Ok(false);
-            }
         }
         let cancellation = format!("cancellations/{}.json", job.job_id);
         let cancelled = format!("cancelled/{}.json", job.job_id);
         if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
             return Ok(false);
         }
-        let running_path = format!("running/{}.json", job.job_id);
-        if !self
-            .backend
-            .upload_text_if_absent(&running_path, &job.to_json())
-            .await?
-        {
+        let moved = self
+            .transition_job_if_version(job, "queue", "running", Some(&versioned.version))
+            .await?;
+        if !moved {
             return Ok(false);
         }
         if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
-            self.backend.delete(&running_path).await?;
             return Ok(false);
         }
-        match self
-            .compare_and_swap_text(&queue_path, &versioned.version, &job.to_json())
-            .await
-        {
-            Ok(_) => {}
-            Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
-                self.backend.delete(&running_path).await?;
-                return Ok(false);
-            }
-            Err(error) => {
-                self.backend.delete(&running_path).await?;
-                return Err(error);
-            }
-        }
-        self.backend
-            .set_metadata(&running_path, &Self::job_metadata(job))
-            .await?;
-        self.backend.delete(&queue_path).await?;
-        self.delete_priority_marker(&job.job_id).await?;
         Ok(true)
     }
     pub async fn refresh_job_metadata(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
@@ -626,105 +1018,43 @@ impl JobStorage {
         Ok(())
     }
 
-    /// Move one current source generation to a create-only destination.
-    ///
-    /// The source is read versioned before the destination is created, then
-    /// CAS-rewritten to the destination state as a durable fence before the
-    /// source path is deleted. A crash can leave two readable copies, but a
-    /// stale caller can never create a destination after the source has moved.
+    /// Move through the recoverable transition record. No destination is
+    /// created until the exact source generation has been fenced.
     pub async fn move_job(
         &self,
         job: &Job,
         from_prefix: &str,
         to_prefix: &str,
     ) -> Result<(), StorageError> {
-        let from = format!("{from_prefix}/{}.json", job.job_id);
-        let to = format!("{to_prefix}/{}.json", job.job_id);
-        let Some(versioned) = self.read_text_versioned(&from).await? else {
-            if let Some(existing) = self.read_job(to_prefix, &job.job_id).await? {
-                if serde_json::to_value(existing)? == serde_json::to_value(job)? {
-                    return Ok(());
-                }
-            }
-            return Err(StorageError::StorageConflict(format!(
-                "{from} no longer exists; refusing stale move to {to}"
-            )));
-        };
-        let current = Job::from_json(&versioned.content)?;
-        let expected_source_state = if from_prefix == "queue" {
-            crate::models::job_state::QUEUED
+        if self
+            .transition_job_if_version(job, from_prefix, to_prefix, None)
+            .await?
+        {
+            Ok(())
         } else {
-            from_prefix
-        };
-        if current.state != expected_source_state && current.state != job.state {
-            return Err(StorageError::StorageConflict(format!(
-                "{from} is in state {}, not {expected_source_state}",
-                current.state
-            )));
+            Err(StorageError::StorageConflict(format!(
+                "{from_prefix}/{}.json changed before transition to {to_prefix}",
+                job.job_id
+            )))
         }
-        if crate::queue::submit::immutable_job_projection(&current)
-            != crate::queue::submit::immutable_job_projection(job)
-        {
-            return Err(StorageError::StorageConflict(format!(
-                "{from} immutable submission identity changed"
-            )));
-        }
-        let body = job.to_json();
-        let created = self.backend.upload_text_if_absent(&to, &body).await?;
-        if !created {
-            let existing = self
-                .read_job(to_prefix, &job.job_id)
-                .await?
-                .ok_or_else(|| {
-                    StorageError::StorageConflict(format!(
-                        "{to} won create-if-absent but is unreadable"
-                    ))
-                })?;
-            if serde_json::to_value(existing)? != serde_json::to_value(job)? {
-                return Err(StorageError::StorageConflict(format!(
-                    "{to} already contains a different lifecycle outcome"
-                )));
-            }
-        }
-        match self
-            .compare_and_swap_text(&from, &versioned.version, &body)
-            .await
-        {
-            Ok(_) => {}
-            Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
-                if created {
-                    self.backend.delete(&to).await?;
-                }
-                return Err(StorageError::StorageConflict(format!(
-                    "{from} changed during move to {to}"
-                )));
-            }
-            Err(error) => {
-                if created {
-                    self.backend.delete(&to).await?;
-                }
-                return Err(error);
-            }
-        }
-        if crate::queue::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
-            crate::queue::runs::record_terminal_outcome(self, job, to_prefix).await?;
-        }
-        if created {
-            self.backend
-                .set_metadata(&to, &Self::job_metadata(job))
-                .await?;
-        }
-        self.backend.delete(&from).await?;
-        if from_prefix == "queue" {
-            self.delete_priority_marker(&job.job_id).await?;
-        }
-        if to_prefix == "queue" {
-            if created && job.priority > 0 {
-                self.write_priority_marker(job).await?;
-            }
-        }
-        tombstone::on_transition(self, job, to_prefix).await;
-        Ok(())
+    }
+
+    /// Version-pinned lifecycle move for decisions (lease expiry, liveness)
+    /// made from a specific source read.
+    pub async fn move_job_if_version(
+        &self,
+        job: &Job,
+        from_prefix: &str,
+        to_prefix: &str,
+        expected_version: &str,
+    ) -> Result<bool, StorageError> {
+        self.transition_job_if_version(
+            job,
+            from_prefix,
+            to_prefix,
+            Some(expected_version),
+        )
+        .await
     }
 
     // ---- delegates to queue/listing/ (priority markers + bulk fetch) ----

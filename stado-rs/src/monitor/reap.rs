@@ -61,6 +61,8 @@ pub async fn reap_terminal_runs(
             continue;
         };
         let initial_manifest: Value = serde_json::from_str(&initial.content)?;
+        crate::queue::submit::validate_stored_run_manifest(&initial_manifest, &run_id)
+            .map_err(|error| StorageError::Other(error.to_string()))?;
         if initial_manifest.get("reaped_at").is_some_and(py_truthy) {
             continue;
         }
@@ -114,6 +116,8 @@ pub async fn reap_terminal_runs(
             continue;
         };
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
+        crate::queue::submit::validate_stored_run_manifest(&manifest, &run_id)
+            .map_err(|error| StorageError::Other(error.to_string()))?;
         let entries = manifest
             .get_mut("entries")
             .and_then(Value::as_array_mut)
@@ -163,6 +167,14 @@ pub async fn reap_terminal_runs(
             Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
             Err(error) => return Err(error),
         }
+        let retained = read_run(store, &run_id).await?.ok_or_else(|| {
+            StorageError::Other(format!("run manifest {run_id} disappeared after reaping CAS"))
+        })?;
+        crate::queue::submit::validate_stored_run_manifest(
+            &Value::Object(retained),
+            &run_id,
+        )
+        .map_err(|error| StorageError::Other(error.to_string()))?;
 
         for job_id in &job_ids {
             for prefix in TERMINAL_PREFIXES {
