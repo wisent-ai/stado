@@ -374,6 +374,18 @@ async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdEr
     Ok(latest.map(|(_, run)| run))
 }
 
+/// One run object as raw JSON, or nothing when it is absent or unreadable.
+async fn load_run_value(store: &JobStorage, path: &str) -> Result<Option<Value>, CmdError> {
+    let Some(text) = store
+        .download_text(path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str::<Value>(&text).ok())
+}
+
 /// The most recent pipeline runs, newest first, with their persisted
 /// failures.
 ///
@@ -381,6 +393,13 @@ async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdEr
 /// release status` prints it and the dashboard's operator console serves the
 /// same text, so a failed run is visible from the CLI and the GUI without
 /// hunting through hosts or job stores.
+///
+/// The listing already carries each run object's write time, so the order is
+/// known before a single body is downloaded and the read stops as soon as
+/// `limit` matching runs are in hand. Downloading every run.json ever written
+/// to then sort and truncate is the same shape as the autonomy outcome tick:
+/// a bounded question answered with the whole history, over a store that
+/// serves one object per HTTP request — and the release console polls this.
 pub(crate) async fn recent_runs(
     product: Option<&str>,
     limit: usize,
@@ -388,23 +407,25 @@ pub(crate) async fn recent_runs(
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut runs = Vec::new();
-    for path in store
-        .list_paths("runs/release-pipeline/", 0)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-    {
-        if !path.ends_with("/run.json") {
-            continue;
-        }
-        let Some(text) = store
-            .download_text(&path)
+    let mut ordered: Vec<String> = {
+        let mut blobs = store
+            .list_blobs_with_meta("runs/release-pipeline/")
             .await
             .map_err(|error| CmdError::click(error.to_string()))?
-        else {
-            continue;
-        };
-        let Ok(run) = serde_json::from_str::<Value>(&text) else {
+            .into_iter()
+            .filter(|blob| blob.name.ends_with("/run.json"))
+            .collect::<Vec<_>>();
+        blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
+        blobs.into_iter().map(|blob| blob.name).collect()
+    };
+    let mut runs = Vec::new();
+    let mut examined = usize::default();
+    for path in &ordered {
+        if runs.len() >= limit {
+            break;
+        }
+        examined += true as usize;
+        let Some(run) = load_run_value(&store, path).await? else {
             continue;
         };
         if product.is_some_and(|selected| run["product"].as_str() != Some(selected)) {
@@ -412,14 +433,10 @@ pub(crate) async fn recent_runs(
         }
         runs.push(run);
     }
-    runs.sort_by(|a, b| {
-        b["updated_at"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(a["updated_at"].as_str().unwrap_or(""))
-    });
-    let all = runs.clone();
-    runs.truncate(limit);
+    // Older runs stay unread unless a live build needs its denominator; the
+    // ones already consumed above cannot be that denominator.
+    ordered.drain(..examined.min(ordered.len()));
+    let older = ordered;
     // An in-flight run says only "publishing", which reads as a promise. The
     // run object already names each platform's queue job, and the queue knows
     // exactly where that job stands, so the two are joined here: every
@@ -433,7 +450,6 @@ pub(crate) async fn recent_runs(
         if !live {
             continue;
         }
-        let run_id = run["run_id"].as_str().unwrap_or("").to_owned();
         let product_name = run["product"].as_str().unwrap_or("").to_owned();
         let Some(platforms) = run["platforms"].as_object_mut() else {
             continue;
@@ -469,8 +485,7 @@ pub(crate) async fn recent_runs(
                     let mut progress = Map::new();
                     progress.insert("compiled".into(), Value::from(compiled));
                     if let Some(total) =
-                        previous_compile_total(&store, &all, &run_id, &product_name, platform_name)
-                            .await
+                        previous_compile_total(&store, &older, &product_name, platform_name).await
                     {
                         progress.insert("of_previous_run".into(), Value::from(total));
                         if let Some(ratio) = (compiled * 100).checked_div(total) {
@@ -502,15 +517,21 @@ async fn compiling_count(store: &JobStorage, job_id: &str) -> Option<u64> {
 
 /// The compile count of the newest older run of the same product and
 /// platform whose job finished — the denominator for the estimate.
+///
+/// `older` is the run objects newest-first that [`recent_runs`] did not need,
+/// as paths: the answer is nearly always the first or second of them, so they
+/// are downloaded one at a time and the walk stops at the first usable count.
 async fn previous_compile_total(
     store: &JobStorage,
-    all: &[Value],
-    current_run: &str,
+    older: &[String],
     product: &str,
     platform: &str,
 ) -> Option<u64> {
-    for run in all {
-        if run["run_id"].as_str() == Some(current_run) || run["product"].as_str() != Some(product) {
+    for path in older {
+        let Ok(Some(run)) = load_run_value(store, path).await else {
+            continue;
+        };
+        if run["product"].as_str() != Some(product) {
             continue;
         }
         let record = &run["platforms"][platform];
@@ -518,7 +539,7 @@ async fn previous_compile_total(
             continue;
         };
         if let Some(count) = compiling_count(store, job_id).await {
-            if count > 0 {
+            if count > u64::default() {
                 return Some(count);
             }
         }
