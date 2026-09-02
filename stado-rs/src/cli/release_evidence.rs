@@ -43,7 +43,7 @@ use super::release_quarantine::{
 use super::CmdError;
 use crate::deploy::{host_channel, host_gates, production_runner, shlex_quote};
 use crate::release_agent::{
-    self, host_log_path, release_status_uri, HostReleaseState, QuarantineRecord, RepeatingCause,
+    self, host_log_path, release_status_uri, CauseRun, HostReleaseState, QuarantineRecord,
     RolloutPhase,
 };
 use crate::release_cause::{self, Classification, QuarantineCause};
@@ -565,9 +565,15 @@ struct Facts<'a> {
     /// The blockers the host's own queue agent published, in its words.
     gate_blockers: Vec<String>,
     disk_pressure_unresolved: bool,
-    /// The agent's own repeat-cause refusal, as it would apply on the next
-    /// tick.
-    repeating: Option<RepeatingCause>,
+    /// The most recent quarantines sharing one named cause, as the agent's own
+    /// detector reports them.
+    ///
+    /// This command cannot ask the cause's condition: the check reads the
+    /// release user's vault ON the host, and running it here would resolve this
+    /// operator's own store instead. So the run is reported, the count is
+    /// resolved into a certain hold where counting alone decides, and the check
+    /// the agent will run is named so an operator can run it themselves.
+    run: Option<CauseRun>,
     /// A candidate is recorded, or the phase says one is being staged.
     in_flight: bool,
 }
@@ -601,21 +607,26 @@ fn diagnosis(facts: &Facts<'_>) -> Value {
     {
         blockers.push(BLOCKER_CANDIDATE_NOT_READY.to_string());
     }
-    if facts.repeating.is_some() {
+    // Only a hold that counting alone decides is asserted as a blocker. A
+    // shorter run whose cause has a checkable condition is reported as pending,
+    // not claimed: this command cannot reach the condition, and asserting a
+    // refusal it did not establish would be the same overreach as naming a
+    // cause from a symptom.
+    let held = facts.run.as_ref().is_some_and(CauseRun::repeats);
+    if held {
         blockers.push(BLOCKER_REPEATING_CAUSE.to_string());
     }
     blockers.sort();
     blockers.dedup();
     let converged =
         facts.observed_version.is_some() && facts.observed_version == facts.desired_version;
-    let verdict =
-        if desired_quarantined || facts.disk_pressure_unresolved || facts.repeating.is_some() {
-            VERDICT_BLOCKED
-        } else if facts.in_flight || !converged {
-            VERDICT_ROLLING
-        } else {
-            VERDICT_SETTLED
-        };
+    let verdict = if desired_quarantined || facts.disk_pressure_unresolved || held {
+        VERDICT_BLOCKED
+    } else if facts.in_flight || !converged {
+        VERDICT_ROLLING
+    } else {
+        VERDICT_SETTLED
+    };
     let summary = cause_summary(&facts.quarantined);
     // Remedies are for what is blocking *now*, not for every cause in the
     // host's history. A settled product with an old quarantine was printing
@@ -640,9 +651,10 @@ fn diagnosis(facts: &Facts<'_>) -> Value {
         remedies.push(REMEDY_DESIRED_DIGEST_QUARANTINED.to_string());
     }
     if let Some(remedy) = facts
-        .repeating
+        .run
         .as_ref()
-        .and_then(|repeating| repeating.cause.remedy())
+        .filter(|_| held)
+        .and_then(|run| run.cause.remedy())
     {
         remedies.push(remedy.to_string());
     }
@@ -656,14 +668,25 @@ fn diagnosis(facts: &Facts<'_>) -> Value {
         "detail": facts.detail,
         "candidate": facts.candidate,
         "quarantine_summary": summary,
-        "repeating_cause": facts.repeating.as_ref().map(|repeating| json!({
-            "cause": repeating.cause.as_str(),
-            "quarantines": repeating.digests.len(),
-            "since": repeating.since.to_rfc3339(),
-            "evidence": repeating.evidence,
-            "digests": repeating.digests,
-            "detail": repeating.sentence(),
-        })),
+        "cause_run": facts.run.as_ref().map(|run| {
+            let predicate = run.cause.predicate(&run.evidence);
+            json!({
+                "cause": run.cause.as_str(),
+                "quarantines": run.len(),
+                "since": run.since.to_rfc3339(),
+                "evidence": run.evidence,
+                "digests": run.digests,
+                // `held` is what this command established. `condition_check`
+                // is what the agent will ask before spending a candidate, and
+                // is the same command an operator can run by hand.
+                "held": held,
+                "hold_ground": if held { "repeated" } else { "pending_condition_check" },
+                "condition_check": predicate
+                    .as_ref()
+                    .map(|check| format!("skarbiec {}", check.args.join(" "))),
+                "condition_resource": predicate.as_ref().map(|check| check.resource.clone()),
+            })
+        }),
         "quarantined": facts.quarantined,
         "gates": facts.gates,
         "verdict": verdict,
@@ -761,7 +784,7 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         // Computed from the state file this command already read, by the
         // agent's own function, so the blocker reported here and the refusal
         // the agent would apply cannot be two different rules.
-        repeating: state.as_ref().and_then(release_agent::repeating_cause),
+        run: state.as_ref().and_then(release_agent::cause_run),
         in_flight: state
             .as_ref()
             .is_some_and(|state| state.candidate.is_some() || phase_is_rolling(state.phase)),
@@ -811,14 +834,28 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     // The refusal, spelled out where the operator is already looking. This is
     // the line that turns "the rollout is not moving" into "the rollout is
     // being held, on purpose, for this, and here is how to overrule it".
-    if let Some(repeating) = report["repeating_cause"].as_object() {
+    if let Some(run) = report["cause_run"].as_object() {
+        let label = if run["held"] == Value::Bool(true) {
+            "held"
+        } else {
+            "watching"
+        };
         println!(
-            "held              {} quarantines share {} since {}",
-            cell(&repeating["quarantines"]),
-            cell(&repeating["cause"]),
-            cell(&repeating["since"])
+            "{label:<18}{} quarantine(s) share {} since {}",
+            cell(&run["quarantines"]),
+            cell(&run["cause"]),
+            cell(&run["since"])
         );
-        println!("                  {}", cell(&repeating["evidence"]));
+        println!("                  {}", cell(&run["evidence"]));
+        // Named, not run: the check reads the release user's vault on the host.
+        // An operator reading this can run it themselves, and the agent will
+        // run it before it spends the next candidate.
+        if let Some(check) = run["condition_check"].as_str() {
+            println!(
+                "                  agent will refuse the next candidate if this still \
+                 fails on the host: {check}"
+            );
+        }
     }
     let remedies: Vec<String> = report["remedies"]
         .as_array()
