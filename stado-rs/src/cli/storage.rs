@@ -2600,25 +2600,7 @@ fn configured_origin_hosts() -> Vec<String> {
     hosts
 }
 
-fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
-    // `STADO_API_URL` is a configuration field -- `api.url` -- and not an
-    // environment-only switch: `config::stado_api_url` resolves it from the
-    // environment first and the configuration second, and that is how the
-    // scheduler, the doctor and every enrolment path read it. This reader
-    // consulted the environment alone, so `stado host release` refused a fleet
-    // delivery with "STADO_API_URL is required for canonical release reads" on
-    // a host whose own configuration declared the canonical origin, and
-    // printed it back under `host config-show` while refusing to use it.
-    let mut value = match std::env::var(variable) {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => String::new(),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(CmdError::click(format!("{variable} must be valid Unicode")));
-        }
-    };
-    if value.trim().is_empty() && variable == "STADO_API_URL" {
-        value = crate::config::stado_api_url();
-    }
+fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::Url>, CmdError> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
@@ -2653,6 +2635,38 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
     Ok(Some(url))
 }
 
+fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
+    let value = match std::env::var(variable) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(CmdError::click(format!("{variable} must be valid Unicode")));
+        }
+    };
+    validated_object_base_url(variable, &value)
+}
+
+/// The canonical origin from the environment, and then from `api.url`.
+///
+/// `STADO_API_URL` is a configuration field, not an environment-only switch:
+/// `config::stado_api_url` resolves both, and that is how the scheduler, the
+/// doctor and every enrolment path read it. Reading the environment alone made
+/// `stado host release` refuse a fleet delivery with "STADO_API_URL is
+/// required for canonical release reads" on a host whose own configuration
+/// declared the canonical origin — printed back by `host config-show` while
+/// being refused.
+///
+/// Only the release channel resolves it this way. The private object plane
+/// keeps its own endpoint: widening the shared reader instead sent every
+/// object write to the public origin, and a source archive PUT there answered
+/// `504 FUNCTION_INVOCATION_TIMEOUT` twice before the cause was the diff.
+fn configured_api_origin() -> Result<Option<url::Url>, CmdError> {
+    if let Some(url) = configured_object_base_url("STADO_API_URL")? {
+        return Ok(Some(url));
+    }
+    validated_object_base_url("api.url", &crate::config::stado_api_url())
+}
+
 /// Canonical public origin for immutable release reads. Release consumers use
 /// the same `STADO_API_URL` contract as `storage get|stat|url`; there is no
 /// release-specific origin that can drift from it.
@@ -2664,7 +2678,7 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
 /// keeps the per-target gate: it accepts this shape only for the host the
 /// service directory says serves the object API.
 pub(crate) fn release_api_origin() -> Result<String, CmdError> {
-    let url = configured_object_base_url("STADO_API_URL")?
+    let url = configured_api_origin()?
         .ok_or_else(|| CmdError::click("STADO_API_URL is required for canonical release reads"))?;
     if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str()) {
         return Err(CmdError::click(
@@ -3128,7 +3142,7 @@ async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
 fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
     let (base_url, route) = if object.namespace() == "releases" {
-        let base_url = configured_object_base_url("STADO_API_URL")?.ok_or_else(|| {
+        let base_url = configured_api_origin()?.ok_or_else(|| {
             CmdError::click("STADO_API_URL is required to render a release object URL")
         })?;
         (base_url, "/api/release/object")
