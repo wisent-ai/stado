@@ -1152,6 +1152,30 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
             ))
         })?;
     }
+    // The handshake above is the queue agent's, and only the queue agent
+    // implements it: `providers::local::agent` is the sole reader of
+    // `stado.release-version`. Every other unit launched from this directory
+    // — the disk-cleanup janitor, the resolver, the health beacon — keeps
+    // executing the inode it started with, for as long as it lives, because
+    // nothing tells launchd or systemd that the file underneath changed.
+    //
+    // That is how a delivery could succeed and change nothing. On 2026-09-01
+    // the janitor on lukasz-macbook was still executing a 68,977,488-byte
+    // image of this exact path while the file was 70,265,008 bytes, had
+    // answered `invalid_or_unavailable_policy` 8,460 times out of 12,009
+    // passes because the policy no longer validated against the code it was
+    // compiled from, and the volume had reached 100% full with a janitor
+    // running every minute the whole way down.
+    //
+    // In place, and never the agent: see `self_update::recycle_replaced_units`.
+    let mut recycle_log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release install-local",
+        &directory,
+        std::slice::from_ref(&name),
+        &mut recycle_log,
+    )
+    .await;
     println!(
         "installed {} from the delivered release archive",
         destination.display()
