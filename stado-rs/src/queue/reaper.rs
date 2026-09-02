@@ -332,13 +332,12 @@ pub async fn reap_expired_leases(
     // cost per tick that eventually re-examines every queued job rather than
     // a one-shot migration that stops looking. It runs before the passes
     // below so a recovered marker is claimable in this same tick.
+    let index_swept =
+        crate::queue::migrations::backfill_priority_markers(store, config::MARKER_REPAIR_PER_TICK)
+            .await?;
     let mut summary = ReaperSummary {
-        index_swept: crate::queue::migrations::backfill_priority_markers(
-            store,
-            config::MARKER_REPAIR_PER_TICK,
-        )
-        .await?,
-        ..ReaperSummary::default()
+        index_swept,
+        ..Default::default()
     };
     for candidate in store.list_jobs("running", 0).await? {
         if candidate.job_id.is_empty() {

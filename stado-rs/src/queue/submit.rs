@@ -798,15 +798,32 @@ fn lease_is_live(entry: &Map<String, Value>) -> bool {
         .is_some_and(|expires| expires > chrono::Utc::now())
 }
 
-async fn claim_entry(
-    store: &JobStorage,
-    path: &str,
-    run_id: &str,
-    request: &Value,
-    request_digest: &str,
-    index: usize,
-    owner: &str,
-) -> Result<EntryClaim, SubmitError> {
+/// The loop-invariant identity of one idempotent submission: the run manifest
+/// every entry is claimed and checkpointed in, plus the immutable request that
+/// names those entries and the ownership token fencing them.
+///
+/// `claim_entry` and `checkpoint_accepted` both need all of it and neither
+/// varies any of it — only `index` and the created `job_id` differ between
+/// calls — so it travels as one borrowed value instead of six parameters
+/// re-threaded through every call site.
+struct SubmissionContext<'a> {
+    store: &'a JobStorage,
+    path: &'a str,
+    run_id: &'a str,
+    request: &'a Value,
+    request_digest: &'a str,
+    owner: &'a str,
+}
+
+async fn claim_entry(ctx: &SubmissionContext<'_>, index: usize) -> Result<EntryClaim, SubmitError> {
+    let SubmissionContext {
+        store,
+        path,
+        run_id,
+        request,
+        request_digest,
+        owner,
+    } = *ctx;
     for _ in 0..16 {
         let versioned = store
             .read_text_versioned(path)
@@ -899,15 +916,18 @@ async fn claim_entry(
 // one level out, so the count is declared instead of hidden.
 #[allow(clippy::too_many_arguments)]
 async fn checkpoint_accepted(
-    store: &JobStorage,
-    path: &str,
-    run_id: &str,
-    request: &Value,
-    request_digest: &str,
+    ctx: &SubmissionContext<'_>,
     index: usize,
     job_id: &str,
-    owner: &str,
 ) -> Result<(), SubmitError> {
+    let SubmissionContext {
+        store,
+        path,
+        run_id,
+        request,
+        request_digest,
+        owner,
+    } = *ctx;
     for _ in 0..16 {
         let versioned = store
             .read_text_versioned(path)
@@ -1147,19 +1167,17 @@ pub async fn submit_batch(
     // share only this exact request digest and all side effects remain
     // create-if-absent/CAS fenced.
     let owner = format!("submission:{request_digest}");
+    let ctx = SubmissionContext {
+        store: &store,
+        path: &path,
+        run_id: &run_id,
+        request: &request,
+        request_digest: &request_digest,
+        owner: &owner,
+    };
     let mut accepted = Vec::with_capacity(planned.len());
     for index in 0..planned.len() {
-        match claim_entry(
-            &store,
-            &path,
-            &run_id,
-            &request,
-            &request_digest,
-            index,
-            &owner,
-        )
-        .await?
-        {
+        match claim_entry(&ctx, index).await? {
             EntryClaim::Terminal(job) => accepted.push(job),
             EntryClaim::Accepted(planned_job) => {
                 let existing = find_job(&store, &planned_job.job_id)
@@ -1195,17 +1213,7 @@ pub async fn submit_batch(
                     store.repair_queued_admission_metadata(&planned_job).await?;
                     existing
                 };
-                checkpoint_accepted(
-                    &store,
-                    &path,
-                    &run_id,
-                    &request,
-                    &request_digest,
-                    index,
-                    &job.job_id,
-                    &owner,
-                )
-                .await?;
+                checkpoint_accepted(&ctx, index, &job.job_id).await?;
                 accepted.push(job);
             }
         }
