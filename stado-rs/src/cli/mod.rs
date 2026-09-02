@@ -1745,7 +1745,8 @@ enum HostCommands {
         json: bool,
     },
 
-    /// Run one approved read-only command on TARGET (allowlist, not a shell).
+    /// Run one approved command on TARGET (allowlist, not a shell). Every
+    /// entry is read-only except the declared provider sign-in repairs.
     Exec {
         target: String,
         /// Emit the report as JSON instead of the host's raw output.
