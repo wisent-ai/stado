@@ -589,6 +589,111 @@ say sanitizer "$sanitizer_state"
 say step probe
 "##;
 
+/// One release object, fetched whole, for either install shape.
+///
+/// The release route answers an unranged GET by streaming until its own
+/// window closes, and it closes the body cleanly when it does. `curl` sees a
+/// complete HTTP/2 response and exits 0 on a file that stopped short: the
+/// darwin archive of 0.13.46 is 73,864,632 bytes, and two unranged reads of
+/// it ended, both HTTP 200, at 22,925,186 and 15,318,446 bytes after about
+/// 300 seconds each. Nothing in the fetch could see that. The short body
+/// surfaced one step later as `verify mismatch`, which says the coordinate
+/// holds bytes that disagree with its manifest -- the two-producer shape --
+/// when the coordinate was whole and the transfer was not.
+///
+/// So the size is asked for before the body, and the body is read in bounded
+/// ranges until it is that size. The route advertises `accept-ranges: bytes`
+/// and answers `--range 0-0` with the object's total, and an 8 MiB range with
+/// exactly 8 MiB in about 94 seconds, well inside the window that truncates
+/// the whole-object read. A range that comes back short or refused is a
+/// failure with its own marker instead of a digest that will not match.
+pub const FETCH_PRELUDE: &str = r##"
+fetch_chunk_bytes=8388608
+
+release_object_total() {
+  /usr/bin/curl -fsS --get \
+    --data-urlencode "uri=$1" \
+    --range 0-0 \
+    --dump-header "$2" \
+    --output /dev/null \
+    "$release_api/api/release/object" || return 1
+  /usr/bin/tr -d '\r' < "$2" |
+    /usr/bin/awk 'tolower($1) == "content-range:" {
+      if (split($2, part, "/") == 2) { total = part[2] }
+    }
+    END { print total }'
+}
+
+# Appends to "$2". The caller owns removing a partial file, because only the
+# caller knows whether a partial file is worth resuming.
+fetch_release_object() {
+  fetch_uri=$1
+  fetch_path=$2
+  fetch_head="$fetch_path.head"
+  fetch_part="$fetch_path.part"
+  fetch_total=$(release_object_total "$fetch_uri" "$fetch_head") || {
+    /bin/rm -f "$fetch_head"
+    say fetch failed
+    return 1
+  }
+  /bin/rm -f "$fetch_head"
+  case "$fetch_total" in
+    ''|*[!0-9]*)
+      say fetch no_declared_size
+      return 1
+      ;;
+  esac
+  say fetch_bytes "$fetch_total"
+  fetch_have=0
+  while [ "$fetch_have" -lt "$fetch_total" ]; do
+    fetch_end=$((fetch_have + fetch_chunk_bytes - 1))
+    if [ "$fetch_end" -ge "$fetch_total" ]; then
+      fetch_end=$((fetch_total - 1))
+    fi
+    fetch_want=$((fetch_end - fetch_have + 1))
+    /bin/rm -f "$fetch_head" "$fetch_part"
+    /usr/bin/curl -fsS --get \
+      --data-urlencode "uri=$fetch_uri" \
+      --range "$fetch_have-$fetch_end" \
+      --dump-header "$fetch_head" \
+      --output "$fetch_part" \
+      "$release_api/api/release/object" || {
+        /bin/rm -f "$fetch_head" "$fetch_part"
+        say fetch "failed_at_$fetch_have"
+        return 1
+      }
+    fetch_status=$(
+      /usr/bin/tr -d '\r' < "$fetch_head" |
+        /usr/bin/awk 'toupper($1) ~ /^HTTP/ { code = $2 } END { print code }'
+    )
+    if [ "$fetch_status" != 206 ]; then
+      /bin/rm -f "$fetch_head" "$fetch_part"
+      say fetch "refused_range_$fetch_status"
+      return 1
+    fi
+    fetch_got=$(/usr/bin/wc -c < "$fetch_part" | /usr/bin/tr -d '[:space:]')
+    if [ "$fetch_got" != "$fetch_want" ]; then
+      /bin/rm -f "$fetch_head" "$fetch_part"
+      say fetch "short_range_${fetch_have}_${fetch_got}_of_$fetch_want"
+      return 1
+    fi
+    /bin/cat "$fetch_part" >> "$fetch_path" || {
+      /bin/rm -f "$fetch_head" "$fetch_part"
+      say fetch "cannot_append_at_$fetch_have"
+      return 1
+    }
+    /bin/rm -f "$fetch_head" "$fetch_part"
+    fetch_have=$((fetch_have + fetch_got))
+  done
+  fetch_size=$(/usr/bin/wc -c < "$fetch_path" | /usr/bin/tr -d '[:space:]')
+  if [ "$fetch_size" != "$fetch_total" ]; then
+    say fetch "truncated_${fetch_size}_of_$fetch_total"
+    return 1
+  fi
+  say fetch ok
+}
+"##;
+
 /// Phase two, program shape: fetch the release archive, verify its catalog
 /// digest, extract exactly the declared archive member, verify the version it
 /// reports, and stage it.
@@ -607,7 +712,7 @@ case "$release_api" in
   https://*|http://127.*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
   *) say fetch refused_not_https; exit 1 ;;
 esac
-for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar; do
+for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar /usr/bin/awk /usr/bin/tr /usr/bin/wc; do
   if [ ! -x "$required" ]; then
     say fetch "missing_${required##*/}"
     exit 1
@@ -616,13 +721,10 @@ done
 
 /bin/mkdir -p "$staged_dir"
 /bin/rm -f "$archive_path" "$incoming"
-if /usr/bin/curl -fsSL --get \
-  --data-urlencode "uri=stado://releases/$product/$version/$platform/$archive_name" \
-  "$release_api/api/release/object" -o "$archive_path"; then
-  say fetch ok
-else
+if ! fetch_release_object \
+  "stado://releases/$product/$version/$platform/$archive_name" \
+  "$archive_path"; then
   /bin/rm -f "$archive_path" "$incoming"
-  say fetch failed
   exit 1
 fi
 
@@ -900,7 +1002,7 @@ case "$release_api" in
   https://*|http://127.*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
   *) say fetch refused_not_https; exit 1 ;;
 esac
-for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar; do
+for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar /usr/bin/awk /usr/bin/tr /usr/bin/wc; do
   if [ ! -x "$required" ]; then
     say fetch "missing_${required##*/}"
     exit 1
@@ -910,13 +1012,10 @@ done
 /bin/mkdir -p "$staged_dir"
 /bin/rm -f "$archive_path" "$payload_path"
 /bin/rm -rf "$incoming"
-if /usr/bin/curl -fsSL --get \
-  --data-urlencode "uri=stado://releases/$product/$version/$platform/$archive_name" \
-  "$release_api/api/release/object" -o "$archive_path"; then
-  say fetch ok
-else
+if ! fetch_release_object \
+  "stado://releases/$product/$version/$platform/$archive_name" \
+  "$archive_path"; then
   /bin/rm -f "$archive_path"
-  say fetch failed
   exit 1
 fi
 
@@ -1170,11 +1269,12 @@ pub fn probe_script(plan: &ReleasePlan) -> String {
 /// The fetch-verify-stage program for one plan.
 pub fn stage_script(plan: &ReleasePlan) -> String {
     match &plan.product.install {
-        Install::Program { .. } => {
-            format!("{}{SANITIZE_PRELUDE}{REMOTE_STAGE_BODY}", bindings(plan))
-        }
+        Install::Program { .. } => format!(
+            "{}{SANITIZE_PRELUDE}{FETCH_PRELUDE}{REMOTE_STAGE_BODY}",
+            bindings(plan)
+        ),
         Install::Tree { .. } => format!(
-            "{}{SANITIZE_PRELUDE}{TREE_PRELUDE}{TREE_STAGE_BODY}",
+            "{}{SANITIZE_PRELUDE}{FETCH_PRELUDE}{TREE_PRELUDE}{TREE_STAGE_BODY}",
             bindings(plan)
         ),
     }
