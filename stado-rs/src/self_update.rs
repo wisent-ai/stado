@@ -415,6 +415,33 @@ async fn install_release_with(
         log_fn(&format!("self-update: verified {name} {to}"));
         staged.push((name.clone(), staged_path));
     }
+    // Leave the receipt the fleet's provenance check reads.
+    //
+    // `stado host release` stages every binary it delivers at
+    // `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, and
+    // `cli::service_converge::attest_installed` decides provenance by
+    // comparing the installed file against exactly that path. Self-update is
+    // the other delivery path and it staged nothing: it verified these bytes
+    // against the published SHA-256 manifest a few lines above, installed
+    // them, and threw the evidence away. So every binary self-update ever
+    // delivered read `unattested` afterwards — the fleet had the provenance
+    // and discarded it, then reported the result as if the bytes were
+    // untrustworthy.
+    //
+    // On 2026-09-01 `lukasz-macbook` reported exactly that for `stado`: nine
+    // versions staged by `host release`, the newest 0.13.24, and an installed
+    // binary with no staged copy at all.
+    //
+    // Never fatal. The bytes are verified and the install is the point; a
+    // receipt that cannot be written is logged and the update continues.
+    for (name, staged_path) in &staged {
+        if let Err(error) = stage_for_attestation(name, &to, platform, staged_path) {
+            log_fn(&format!(
+                "self-update: {name} {to} installed but its attestation copy could not be \
+                 staged, so `stado service converge` will read it as unattested: {error}"
+            ));
+        }
+    }
     for (name, staged_path) in &staged {
         replace_verified(staged_path, &install_dir.join(name))?;
         log_fn(&format!("self-update: installed {name} {to}"));
@@ -425,6 +452,44 @@ async fn install_release_with(
         from: installed,
         to,
     })
+}
+
+/// Copy one verified release member to the coordinate the fleet's provenance
+/// check reads, creating `<binary>/<version>/<platform>/` beneath
+/// `$HOME/.stado/releases`.
+///
+/// The bytes are the extracted archive member — the same file
+/// [`replace_verified`] installs — so the staged copy is byte-identical to
+/// the installed one and `cmp -s` in `attest_installed` matches. Written to a
+/// dot-prefixed name and renamed, so a reader never sees a partial copy at
+/// the coordinate it attests against.
+fn stage_for_attestation(
+    name: &str,
+    version: &str,
+    platform: &str,
+    verified: &Path,
+) -> Result<(), SelfUpdateError> {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        SelfUpdateError::Fetch("HOME is unset, so the attestation copy has nowhere to go".into())
+    })?;
+    let coordinate = PathBuf::from(home)
+        .join(".stado")
+        .join("releases")
+        .join(name)
+        .join(version)
+        .join(platform);
+    std::fs::create_dir_all(&coordinate)?;
+    let destination = coordinate.join(name);
+    let temporary = coordinate.join(format!(".{name}.staging"));
+    std::fs::copy(verified, &temporary)?;
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::File::open(&temporary)?.sync_all()?;
+    if let Err(error) = std::fs::rename(&temporary, &destination) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 /// Restart the OTHER managed units that were executing the binaries this
