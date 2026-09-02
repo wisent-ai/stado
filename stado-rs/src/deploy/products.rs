@@ -21,7 +21,7 @@
 //! neighbour in the canonical registry: the two answer different questions.
 //! *Which version must this host run* is per-host operator intent, changes
 //! without a release, and belongs in the registry — it already lives there.
-//! *What is this product, where does it install, which unit owns it, and how
+//! *What is this product, where does it install, which units own it, and how
 //! is its installed version read back* is a property of the release that
 //! produced the artefact: it changes only when the product's own
 //! `.wisent-release.json` changes, it must be identical on every host, and a
@@ -47,18 +47,18 @@
 //!   the host-local paths a delivery must leave alone (`preserve`), because
 //!   `$HOME/weles` holds `recordings/`, `var/` and `.work/` that no release
 //!   produced and no release may take away.
-//! - **the owning unit** ([`Unit`]), when one exists — the Skarbiec program is
-//!   both a CLI and the executable behind `com.wisent.always-on.skarbiec`, so a
-//!   versioned delivery can converge the daemon instead of leaving stale bytes.
+//! - **the owning units** ([`Unit`]) — Stado's resolver, coordinator, queue
+//!   agent and release agent all run the same installed binary, so a versioned
+//!   delivery restarts every declared owner instead of leaving stale processes.
 //! - **how the installed version is read back** ([`Readback`]) — running the
 //!   program for a program, one member of one JSON file inside the tree for a
 //!   tree. This is the field that decides whether a host is already at the
 //!   requested version, so a product that cannot be read back is a product
 //!   whose delivery could never be checked.
 //!
-//! Nothing here is optional-with-a-default except the unit, which is
-//! `Option` because "no unit owns this" is a real declaration. Every other
-//! missing field is a refusal naming the field, and [`validate`] refuses the
+//! Only lists are optional-with-a-default: no units and no superseded roots
+//! are both real declarations. Every other missing field is a refusal naming
+//! the field, and [`validate`] refuses the
 //! declarations serde cannot: an unknown platform, a root outside `$HOME`, a
 //! `..` in a member, a preserved path the artefact would overwrite, a version
 //! readback that does not match what was installed, two products with one
@@ -82,7 +82,7 @@ const DECLARATION: &str = include_str!("../../data/products.json");
 
 /// The declaration schema this build understands. A document from the future
 /// is refused rather than partially honoured.
-pub const SCHEMA_VERSION: u64 = 1;
+pub const SCHEMA_VERSION: u64 = 2;
 
 /// The platform coordinate segments this fleet publishes for at all.
 ///
@@ -132,9 +132,9 @@ pub struct Product {
     pub install: Install,
     #[serde(rename = "version")]
     pub readback: Readback,
-    /// The unit that runs it, or `None` for a product no unit owns.
+    /// Every unit that runs this product. Empty for a product no unit owns.
     #[serde(default)]
-    pub unit: Option<Unit>,
+    pub units: Vec<Unit>,
     /// Roots where an EARLIER delivery mechanism of this product staged one
     /// directory per version, and where those directories are still sitting.
     ///
@@ -246,7 +246,7 @@ impl Shape {
     }
 }
 
-/// The unit that runs a product on a host.
+/// One unit that runs a product on a host.
 ///
 /// `label` alone is a NAME: it has to be confirmed against the registry's own
 /// declared service set before anything restarts it, which is what keeps this
@@ -593,36 +593,47 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
                 ));
             }
         }
-        if let Some(unit) = &entry.unit {
+        for (unit_index, unit) in entry.units.iter().enumerate() {
             let label = unit.label_for("target");
             if !safe_segment(&label) {
-                return Err(refuse(
-                    "unit.label must be a bare unit name, optionally carrying '{target}'"
-                        .to_string(),
-                ));
+                return Err(refuse(format!(
+                    "units[{unit_index}].label must be a bare unit name, optionally carrying \
+                     '{{target}}'"
+                )));
+            }
+            if entry
+                .units
+                .iter()
+                .filter(|other| other.label_for("target") == label)
+                .count()
+                != 1
+            {
+                return Err(refuse(format!(
+                    "units[{unit_index}].label {label:?} is declared more than once"
+                )));
             }
             match (&unit.kind, &unit.path) {
                 (None, None) => {}
                 (Some(kind), Some(path)) => {
                     if kind != UNIT_LAUNCHD && kind != UNIT_SYSTEMD {
                         return Err(refuse(format!(
-                            "unit.kind {kind:?} must be {UNIT_LAUNCHD} or {UNIT_SYSTEMD}"
+                            "units[{unit_index}].kind {kind:?} must be {UNIT_LAUNCHD} or \
+                             {UNIT_SYSTEMD}"
                         )));
                     }
                     if !unit_path(&path.replace(TARGET_PLACEHOLDER, "target")) {
-                        return Err(refuse(
-                            "unit.path must be a $HOME-relative or absolute unit-file path with \
-                             no '..' component"
-                                .to_string(),
-                        ));
+                        return Err(refuse(format!(
+                            "units[{unit_index}].path must be a $HOME-relative or absolute \
+                             unit-file path with no '..' component"
+                        )));
                     }
                 }
                 _ => {
-                    return Err(refuse(
-                        "unit.kind and unit.path locate the unit file together; declare both or \
-                         neither, and a label alone is confirmed against the registry"
-                            .to_string(),
-                    ));
+                    return Err(refuse(format!(
+                        "units[{unit_index}].kind and units[{unit_index}].path locate the unit \
+                         file together; declare both or neither, and a label alone is confirmed \
+                         against the registry"
+                    )));
                 }
             }
         }
