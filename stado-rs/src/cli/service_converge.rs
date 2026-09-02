@@ -1284,8 +1284,9 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 // Converging
 // ---------------------------------------------------------------------------
 
-/// Deliver the declared version of every `host-behind` binary, and refuse
-/// every `host-ahead` one.
+/// Deliver the declared version of every binary that is behind it or running
+/// bytes the fleet cannot attest, and refuse only what a delivery would take
+/// backwards.
 ///
 /// This is `stado host release --binary NAME --version X.Y.Z TARGET`, called
 /// in-process rather than reimplemented: the digest check against the canonical
@@ -1312,21 +1313,49 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 /// command that moves the declaration to the observed version instead.
 async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedPass {
     let mut pass = AppliedPass::default();
-    // Refused for the opposite reason to `host-ahead`, and the remediation is
-    // deliberately not `declare-version`: writing an unattested version into
-    // the registry is the failure, not the fix. The way out is a delivery of a
-    // published version, which restores both provenance and agreement.
+    // An unattested binary is delivered, not reported at.
+    //
+    // Until 2026-09-02 every `unattested` row was refused with a remediation
+    // naming `stado host release TARGET --binary X --version Y` — which is
+    // `host_release::release_host`, the function this very command calls three
+    // lines further down for a host that is merely behind. So `--apply` printed
+    // the command it owns and declined to run it, and the 0.13.46 train died on
+    // that twice: `deploy-fleet` declared 0.13.46 for charless-mac-mini, found
+    // it running an unattested 0.13.45, refused, and exited non-zero, while the
+    // delivery that fixed it arrived minutes later from the host's own release
+    // agent. Bytes with no provenance are exactly what a delivery replaces.
+    //
+    // The one case still refused is a host strictly AHEAD of its declaration:
+    // there a delivery takes a live host backwards on a stale declaration, and
+    // the remediation stays a delivery rather than `declare-version`, because
+    // writing an unattested version into the registry is the failure, not the
+    // fix.
     for row in rows.iter().filter(|row| row.verdict == UNATTESTED) {
-        pass.refused.push(Refused {
-            binary: row.binary.clone(),
-            declared: row.declared.clone(),
-            installed: row.installed_cell().to_string(),
-            remediation: format!(
-                "stado host release {target} --binary {} --version {} (deliver a published \
-                 version; do NOT declare-version onto bytes the fleet cannot attest)",
-                row.binary, row.declared
-            ),
-        });
+        let ahead = row
+            .installed
+            .as_deref()
+            .and_then(|installed| version_order(installed, &row.declared))
+            == Some(Ordering::Greater);
+        if ahead {
+            pass.refused.push(Refused {
+                binary: row.binary.clone(),
+                declared: row.declared.clone(),
+                installed: row.installed_cell().to_string(),
+                remediation: format!(
+                    "stado host release {target} --binary {} --version {} (deliver a published \
+                     version; do NOT declare-version onto bytes the fleet cannot attest)",
+                    row.binary, row.declared
+                ),
+            });
+            continue;
+        }
+        eprintln!(
+            "{}: runs {}, which this fleet cannot attest: {}",
+            row.binary,
+            row.installed_cell(),
+            row.detail
+        );
+        deliver(target, row, runner, &mut pass).await;
     }
     for row in rows.iter().filter(|row| row.verdict == HOST_AHEAD) {
         let remediation = format!(
@@ -1348,47 +1377,54 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
             row.declared,
             row.installed_cell()
         );
-        if let Err(error) = crate::deploy::products::product(&row.binary) {
-            pass.undeliverable.push(Undeliverable {
-                binary: row.binary.clone(),
-                detail: error.to_string(),
-            });
-            continue;
-        }
-        eprintln!("{target}: releasing {} {}", row.binary, row.declared);
-        match host_release::release_host(target, &row.binary, &row.declared, false, false, runner)
-            .await
-        {
-            Ok(report) => {
-                let status = report
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let delivered = matches!(
-                    status.as_str(),
-                    host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
-                );
-                pass.releases.push(Released {
-                    binary: row.binary.clone(),
-                    version: row.declared.clone(),
-                    status: if delivered { COMPLETED } else { FAILED },
-                    detail: if status.is_empty() {
-                        String::from("the delivery reported no status")
-                    } else {
-                        status
-                    },
-                });
-            }
-            Err(error) => pass.releases.push(Released {
-                binary: row.binary.clone(),
-                version: row.declared.clone(),
-                status: FAILED,
-                detail: error.to_string(),
-            }),
-        }
+        deliver(target, row, runner, &mut pass).await;
     }
     pass
+}
+
+/// One delivery, recorded. The only call site of
+/// [`host_release::release_host`] in this command, so a host that is behind and
+/// a host whose bytes cannot be attested are converged by the same path and
+/// cannot drift apart in what "delivered" means.
+async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPass) {
+    if let Err(error) = crate::deploy::products::product(&row.binary) {
+        pass.undeliverable.push(Undeliverable {
+            binary: row.binary.clone(),
+            detail: error.to_string(),
+        });
+        return;
+    }
+    eprintln!("{target}: releasing {} {}", row.binary, row.declared);
+    match host_release::release_host(target, &row.binary, &row.declared, false, false, runner).await
+    {
+        Ok(report) => {
+            let status = report
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let delivered = matches!(
+                status.as_str(),
+                host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
+            );
+            pass.releases.push(Released {
+                binary: row.binary.clone(),
+                version: row.declared.clone(),
+                status: if delivered { COMPLETED } else { FAILED },
+                detail: if status.is_empty() {
+                    String::from("the delivery reported no status")
+                } else {
+                    status
+                },
+            });
+        }
+        Err(error) => pass.releases.push(Released {
+            binary: row.binary.clone(),
+            version: row.declared.clone(),
+            status: FAILED,
+            detail: error.to_string(),
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1587,12 +1623,37 @@ fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
             pass.undeliverable.len()
         ));
     }
+    // Every refusal used to be reported as `host-ahead`, whatever it was. On
+    // 2026-09-02 charless-mac-mini was BEHIND its declaration — 0.13.45 against
+    // 0.13.46 — and the summary told the release train that a host ahead of the
+    // registry had been refused rather than downgraded, which is the opposite
+    // diagnosis and points an operator at `declare-version` when the answer was
+    // a delivery. A refusal is classified by the row it came from.
     if !pass.refused.is_empty() {
-        effort.push_str(&format!(
-            "; {} host-ahead binary/binaries were refused rather than downgraded — \
-             the declaration is stale, not the host",
-            pass.refused.len()
-        ));
+        let kind = |verdict: &str| {
+            pass.refused
+                .iter()
+                .filter(|entry| {
+                    rows.iter()
+                        .any(|row| row.binary == entry.binary && row.verdict == verdict)
+                })
+                .count()
+        };
+        let ahead = kind(HOST_AHEAD);
+        let unattested = kind(UNATTESTED);
+        if ahead != 0 {
+            effort.push_str(&format!(
+                "; {ahead} host-ahead binary/binaries were refused rather than downgraded — \
+                 the declaration is stale, not the host"
+            ));
+        }
+        if unattested != 0 {
+            effort.push_str(&format!(
+                "; {unattested} binary/binaries run unattested bytes NEWER than the \
+                 declaration, so no delivery was made — move the declaration to a published \
+                 version first"
+            ));
+        }
     }
     eprintln!(
         "{} binary/binaries are not at their declared version after {effort}",
