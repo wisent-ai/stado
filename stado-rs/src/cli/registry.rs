@@ -2047,6 +2047,20 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         None => None,
     };
 
+    // The one host whose unit files this command may open. Everything else
+    // here is read from the store, and the environment a unit actually
+    // carries is in no object in it: the beacon publishes one `state` word
+    // per unit and the registry's own service record has no environment
+    // field at all, so this is the only host where the declaration can be
+    // confronted with the file. A registry that names no target for this
+    // machine leaves it `None`, and every unit is then reported unread
+    // rather than empty.
+    let local_host = registry
+        .lookup_self(&crate::providers::vast::system_hostname())
+        .ok()
+        .flatten()
+        .map(|target| target.name.clone());
+
     for target in &registry.targets {
         let slugs = host_health::beacon_slugs(target, &target.name);
         claimed.extend(slugs.iter().cloned());
@@ -2085,6 +2099,22 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                 finding = finding.about(unit);
             }
             findings.push(finding);
+        }
+        // The same shape again, and the reason this one needed the check
+        // extended rather than a second one built beside it: both loops
+        // above resolve `policy.targets.get(host)` before they compare
+        // anything, so a host no product target names is their skip
+        // condition instead of their finding — and that host is exactly the
+        // one a product's declared environment cannot reach.
+        for unreachable in service::unreachable_product_environments(
+            target,
+            release_control.as_ref(),
+            local_host.as_deref(),
+        ) {
+            findings.push(
+                Finding::new(unreachable.kind(), &target.name, unreachable.sentence())
+                    .about(unreachable.unit.clone()),
+            );
         }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(
