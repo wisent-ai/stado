@@ -133,8 +133,10 @@ struct BuildRun: Decodable, Hashable, Sendable {
     }
 }
 
-/// What `stado builds run <name> --json` answers with: the job it enqueued for
-/// each platform, and the recipe as the registry now records it.
+/// What `stado builds run <name> --run-id <id> --json` answers with: the job it
+/// enqueued for each platform, and the recipe as the registry now records it.
+/// `--run-id` is required by the command, and reusing the same token recovers
+/// the same durable run instead of enqueuing a second one.
 struct BuildRunReceipt: Decodable, Sendable {
     let name: String
     /// Platform to queue job id. One entry per platform the recipe declares.

@@ -509,6 +509,20 @@ use pause, drain, copy, verification, fencing, and explicit cutover.
 Provider resources are mutable only when their ownership and expected state
 match the approved plan. Report-only is the default autonomy level.
 
+The canonical registry is one document, and a write replaces all of it, so
+every write is conditional on the generation it was read at.
+`stado registry pull --with-generation` hands back the document and that
+generation together from one read (`--generation-only` prints just the token),
+and `stado registry push --if-generation <token>` refuses the write unless the
+canonical object is still at that generation. A refused write exits `75` and,
+with `--json`, prints a `stado.registry-push-receipt.v1` object whose state is
+`conflict` and which names both the expected and the actual generation; a
+storage or validation failure keeps exit `1` and prints no receipt, so the two
+are never confused. A reconcile loop answers `75` by re-reading, re-applying
+its change to what the registry now says, and pushing again with the new
+token — never by `--force`, which waves past the deleted-key guard and has no
+bearing on a generation that has moved on.
+
 ### Credentials
 
 Local onboarding requires none. Production callers and adapters use separate,

@@ -763,9 +763,16 @@ async fn edit(name: &str, fields: RecipeEdit, json: bool) -> Result<(), CmdError
         (true, None) => println!(
             "{name}: same source, nothing built yet — the next poll builds the current head"
         ),
+        // The printed command has to be one that runs. `builds run` requires
+        // --run-id, so naming the recipe alone produced a clap usage error for
+        // anyone who copied this line; the token is the caller's to choose and
+        // to keep, because reusing it is what recovers the same durable run
+        // instead of starting a second one.
         (true, Some(state)) => println!(
             "{name}: same source — kept {state}; the next poll builds only when the head moves, \
-             so build it now with `stado builds run {name}`"
+             so build it now with `stado builds run {name} --run-id <token>`, where <token> is \
+             yours to pick and to retain — reuse it to recover this run rather than start \
+             another"
         ),
         (false, None) => println!(
             "{name}: {} changed — there was no last_seen_ref and no recorded run to clear; the \

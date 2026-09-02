@@ -102,10 +102,16 @@ fn merge_transition_destination(
     }
     let mut destination = current.clone();
     destination.state = prefix_state(to_prefix).to_string();
+    // The worker lease belongs to `running/` and to nothing else: a queued or
+    // terminal document carrying an expiry would either fence a reaper that
+    // has no worker to lose to, or leave a dead owner's stamp on a finished
+    // job.
+    destination.lease_expires_at = None;
     match to_prefix {
         "running" => {
             destination.started_at = requested.started_at.clone();
             destination.instance_ref = requested.instance_ref.clone();
+            destination.lease_expires_at = requested.lease_expires_at.clone();
         }
         "queue" if from_prefix == "running" => {
             destination.started_at = requested.started_at.clone();
@@ -958,6 +964,11 @@ impl JobStorage {
     /// Claim through a durable transition record. The running job is derived
     /// from the fresh versioned queue body; stale caller priority/assignment
     /// cannot overwrite a concurrent queued rewrite.
+    ///
+    /// The claimed running document carries a worker lease from the first
+    /// instant it exists, so a claim that dies before its first heartbeat is
+    /// still reaped on a stated expiry rather than on a guess about
+    /// `started_at`.
     pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
         self.recover_job_transition(&job.job_id).await?;
         let queue_path = format!("queue/{}.json", job.job_id);
@@ -977,8 +988,10 @@ impl JobStorage {
         if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
             return Ok(false);
         }
+        let mut claimed = job.clone();
+        claimed.lease_expires_at = Some(Self::lease_deadline());
         let moved = self
-            .transition_job_if_version(job, "queue", "running", Some(&versioned.version))
+            .transition_job_if_version(&claimed, "queue", "running", Some(&versioned.version))
             .await?;
         if !moved {
             return Ok(false);
@@ -987,6 +1000,50 @@ impl JobStorage {
             return Ok(false);
         }
         Ok(true)
+    }
+
+    /// One worker-lease deadline from now, in the window the fleet already
+    /// calls a dead heartbeat.
+    fn lease_deadline() -> String {
+        (Utc::now() + chrono::Duration::minutes(config::HEARTBEAT_STALE_MINUTES)).to_rfc3339()
+    }
+
+    /// Renew the running job's own lease by compare-and-swap on the running
+    /// document.
+    ///
+    /// This is the fence, and it only works because it writes the SAME object
+    /// the reaper pins: a renewal that lands while a reaper is mid-reap
+    /// changes that object's version, so the reaper's version-pinned move
+    /// fails and the live execution keeps its slot. A pulse written beside the
+    /// job cannot do that, however recently it was read.
+    ///
+    /// `false` when the job is no longer a live running document (moved,
+    /// deleted, or fenced mid-transition) — the caller has lost the job, not
+    /// the write.
+    pub async fn renew_running_lease(&self, job_id: &str) -> Result<bool, StorageError> {
+        let path = format!("running/{job_id}.json");
+        for _ in 0..3 {
+            let Some(versioned) = self.read_text_versioned(&path).await? else {
+                return Ok(false);
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            if job.state != crate::models::job_state::RUNNING {
+                return Ok(false);
+            }
+            job.lease_expires_at = Some(Self::lease_deadline());
+            match self
+                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(StorageError::NotFound(_)) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "running/{job_id}.json remained contended during lease renewal"
+        )))
     }
     pub async fn refresh_job_metadata(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
         let blob_path = format!("{}/{}.json", prefix, job.job_id);
@@ -1193,35 +1250,15 @@ impl JobStorage {
         listing::list_jobs(self, prefix, oldest_first).await
     }
 
-    /// Top-N highest-priority jobs via the `queue_priority/` index. Python
-    /// `JobStorage.list_priority_jobs`.
-    pub async fn list_priority_jobs(
+    /// Priority markers first, then oldest-first, counting only jobs the
+    /// caller's own admission rule accepts. See [`listing::JobScan`] for why
+    /// the window and the scanning cost are separate quantities.
+    pub async fn list_claimable_jobs(
         &self,
         prefix: &str,
-        top_n: usize,
+        scan: &listing::JobScan<'_>,
     ) -> Result<Vec<Job>, StorageError> {
-        listing::list_top_n(self, prefix, top_n, i64::MAX).await
-    }
-
-    /// Priority markers first, then FIFO oldest_first, deduped by job_id.
-    /// Python `JobStorage.list_jobs_priority_first`.
-    pub async fn list_jobs_priority_first(
-        &self,
-        prefix: &str,
-        cap: usize,
-    ) -> Result<Vec<Job>, StorageError> {
-        listing::list_priority_first(self, prefix, cap).await
-    }
-
-    /// Priority-aware fitting jobs with metadata pre-filtering. Python
-    /// `JobStorage.list_jobs_fitting` (`cap` defaults to 4000 in Python).
-    pub async fn list_jobs_fitting(
-        &self,
-        prefix: &str,
-        max_gpu_mem_gb: i64,
-        cap: usize,
-    ) -> Result<Vec<Job>, StorageError> {
-        listing::list_fitting(self, prefix, max_gpu_mem_gb, cap).await
+        listing::list_claimable(self, prefix, scan).await
     }
 
     /// All jobs grouped by prefix. Python `JobStorage.list_all_jobs`.

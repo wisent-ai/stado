@@ -57,56 +57,50 @@ pub async fn delete_marker(store: &JobStorage, job_id: &str) -> Result<(), Stora
 
 /// Parallel-fetch job JSONs under `{prefix}/`.
 ///
-/// Python `list_jobs`: `oldest_first > 0` caps to that many blobs picked by
-/// creation time — required for queue/ where 14k+ blobs would otherwise
-/// force the scheduler to download every JSON before slicing per_tick_cap
-/// and blow the 60s function timeout. Fetches fan out 10 ways (Python
-/// `ThreadPoolExecutor(max_workers=min(10, len(paths)))` →
-/// `buffer_unordered(10)`); result order follows the path listing, as in
-/// Python's `pool.map`.
+/// `oldest_first > 0` caps the answer to that many jobs picked by creation
+/// time — required for queue/ where 14k+ blobs would otherwise force the
+/// scheduler to download every JSON before slicing per_tick_cap and blow the
+/// 60s function timeout. Fetches fan out 10 ways.
+///
+/// The window is oldest-first, and the ordered path listing is taken EXACTLY
+/// ONCE: the scheduler's FIFO fairness is "the N oldest queued blobs", and a
+/// re-listing loop that widens a budget pays for the whole prefix again on
+/// every round. Transitional sentinels are skipped without being counted, so
+/// the walk simply continues down the already-ordered list until the window
+/// holds N live jobs or the prefix is exhausted.
 pub async fn list_jobs(
     store: &JobStorage,
     prefix: &str,
     oldest_first: usize,
 ) -> Result<Vec<Job>, StorageError> {
-    // The window has to stay oldest-first: the scheduler's FIFO fairness is
-    // exactly "the N oldest queued blobs", and a lexical slice of job-id
-    // digests starves whatever sorts late. Transitional sentinels are skipped
-    // without spending the window, so the listing budget grows until the
-    // caller's N live jobs are found or the prefix is exhausted.
-    let mut budget = oldest_first;
-    loop {
-        let listed = store.list_paths(&format!("{prefix}/"), budget).await?;
-        let offered = listed.len();
-        let paths: Vec<String> = listed
+    let ordered = if oldest_first > 0 { usize::MAX } else { 0 };
+    let paths: Vec<String> = store
+        .list_paths(&format!("{prefix}/"), ordered)
+        .await?
+        .into_iter()
+        .filter(|path| path.ends_with(".json"))
+        .collect();
+    let mut jobs = Vec::new();
+    for paths in paths.chunks(100) {
+        let texts: Vec<Option<String>> = futures::stream::iter(paths)
+            .map(|path| store.download_text(path))
+            .buffered(10)
+            .collect::<Vec<Result<Option<String>, StorageError>>>()
+            .await
             .into_iter()
-            .filter(|path| path.ends_with(".json"))
-            .collect();
-        let mut jobs = Vec::new();
-        for paths in paths.chunks(100) {
-            let texts: Vec<Option<String>> = futures::stream::iter(paths)
-                .map(|path| store.download_text(path))
-                .buffered(10)
-                .collect::<Vec<Result<Option<String>, StorageError>>>()
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?;
-            for data in texts.into_iter().flatten() {
-                let job = Job::from_json(&data)?;
-                if is_transition_sentinel_state(&job.state) {
-                    continue;
-                }
-                jobs.push(job);
-                if oldest_first > 0 && jobs.len() >= oldest_first {
-                    return Ok(jobs);
-                }
+            .collect::<Result<Vec<_>, _>>()?;
+        for data in texts.into_iter().flatten() {
+            let job = Job::from_json(&data)?;
+            if is_transition_sentinel_state(&job.state) {
+                continue;
+            }
+            jobs.push(job);
+            if oldest_first > 0 && jobs.len() >= oldest_first {
+                return Ok(jobs);
             }
         }
-        if oldest_first == 0 || offered < budget {
-            return Ok(jobs);
-        }
-        budget = budget.saturating_mul(2);
     }
+    Ok(jobs)
 }
 
 /// Python `_download_or_none` fanned out over `paths` with `workers`
@@ -125,194 +119,204 @@ async fn download_many_or_none(
         .await
 }
 
-/// Fetch the top_n highest-priority jobs from `prefix/` via the
-/// `queue_priority/` index. Markers sort ascending by name =
-/// (inv_priority, created_at), so the first `top_n` give priority-desc +
-/// FIFO.
+/// What a caller can actually run, and how much scanning it will pay to find
+/// it.
 ///
-/// Stale priority markers are expected: a job can move out of queue/ after
-/// its marker was written, and older versions only deleted markers on the
-/// queue -> running path. Do not let stale top markers consume the whole
-/// top_n budget, or high-priority fresh jobs disappear behind dead markers.
-/// Keep the scan bounded because agents call this in their polling loop.
+/// The window used to be counted in jobs that merely FIT the caller's VRAM,
+/// while the caller then refused most of them on accelerator, platform,
+/// architecture, provider, assignment, exclusivity and slot state. With a
+/// centrally assigned queue that is a permanent starvation, not a hiccup: if
+/// the first `want` fitting blobs all name another worker, this worker gets a
+/// page of jobs it must refuse, refuses every one of them, and idles on every
+/// poll while its own job sits one place past the window. So the caller's own
+/// full admission predicate decides what consumes a window slot, and the
+/// scanning cost is bounded separately by [`JobScan::scan_budget`] — the two
+/// are different quantities and conflating them is what produced both faults.
+pub struct JobScan<'a> {
+    /// Jobs to return. 0 means "every eligible job in the prefix".
+    pub want: usize,
+    /// Job documents this scan may download while looking for them. 0 means
+    /// "as many as the prefix holds". A scan that exhausts its budget returns
+    /// what it found; the next poll starts from the same ordered head, so
+    /// nothing is permanently unreachable.
+    pub scan_budget: usize,
+    /// Cheap pre-download filter off the blob's stamped `gpu_mem_gb`, so a job
+    /// that cannot fit is never fetched. `i64::MAX` disables it.
+    pub max_gpu_mem_gb: i64,
+    /// The caller's full admission rule, applied before a job takes a window
+    /// slot. It sees the listed generation of the document; a caller that
+    /// re-reads the job before claiming still has to re-apply it.
+    pub eligible: &'a (dyn Fn(&Job) -> bool + Sync),
+}
+
+impl JobScan<'_> {
+    fn window_full(&self, found: usize) -> bool {
+        self.want > 0 && found >= self.want
+    }
+
+    fn budget_spent(&self, scanned: usize) -> bool {
+        self.scan_budget > 0 && scanned >= self.scan_budget
+    }
+
+    fn accepts(&self, job: &Job) -> bool {
+        !is_transition_sentinel_state(&job.state)
+            && job.gpu_mem_gb <= self.max_gpu_mem_gb
+            && (self.eligible)(job)
+    }
+}
+
+/// Priority markers first, then oldest-first, deduped by job_id, counting only
+/// jobs the caller can actually claim.
 ///
-/// `max_gpu_mem_gb` bounds what counts as a hit: a job the caller cannot run
-/// must not consume a budget slot either, or the highest-priority jobs that do
-/// not fit this consumer hide every priority job that does.
-pub async fn list_top_n(
+/// Stale priority markers are expected: a job can move out of queue/ after its
+/// marker was written, and older versions only deleted markers on the
+/// queue -> running path. A stale or ineligible marker costs scan budget, never
+/// a window slot, so dead markers cannot hide the priority jobs behind them.
+///
+/// Calls [`migrations::backfill_priority_markers`] up-front so any pre-0.4.26
+/// queued job gets a retroactive marker.
+pub async fn list_claimable(
     store: &JobStorage,
     prefix: &str,
-    top_n: usize,
-    max_gpu_mem_gb: i64,
+    scan: &JobScan<'_>,
 ) -> Result<Vec<Job>, StorageError> {
-    if top_n == 0 {
-        return Ok(vec![]);
+    migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
+    let mut out: Vec<Job> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut scanned = 0usize;
+    // The marker index names queued jobs and nothing else; resolving it
+    // against another prefix would read whatever happens to share the id.
+    if prefix == "queue" {
+        collect_priority(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
+    }
+    collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
+    Ok(out)
+}
+
+/// The `queue_priority/` index pass. Markers sort ascending by name =
+/// (inv_priority, created_at), so walking them in order is priority-desc then
+/// FIFO.
+async fn collect_priority(
+    store: &JobStorage,
+    prefix: &str,
+    scan: &JobScan<'_>,
+    out: &mut Vec<Job>,
+    seen: &mut HashSet<String>,
+    scanned: &mut usize,
+) -> Result<(), StorageError> {
+    if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
+        return Ok(());
     }
     let marker_paths: Vec<String> = store
         .list_paths("queue_priority/", 0)
         .await?
         .into_iter()
-        .filter(|p| p.ends_with(".json"))
+        .filter(|path| path.ends_with(".json"))
         .collect();
-    if marker_paths.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut out: Vec<Job> = Vec::new();
-    let chunk = 50.max(top_n);
-    let max_scan = marker_paths.len().min((top_n * 20).max(top_n));
-    let mut i = 0;
-    while i < max_scan {
-        let paths = &marker_paths[i..(i + chunk).min(max_scan)];
-        let bodies = download_many_or_none(store, paths, 10.min(paths.len())).await;
-        let mut job_ids: Vec<(&str, String)> = Vec::new();
-        for (path, body) in paths.iter().zip(&bodies) {
-            let Some(body) = body else { continue };
-            // Strict-raise on corrupt marker JSON (post-extraction Python
-            // parity); a missing/non-string job_id just skips the marker.
+    for markers in marker_paths.chunks(50) {
+        let bodies = download_many_or_none(store, markers, 10.min(markers.len())).await;
+        let mut job_ids: Vec<String> = Vec::new();
+        for body in bodies.iter().flatten() {
+            // Strict-raise on corrupt marker JSON; a missing/non-string
+            // job_id just skips the marker.
             let value: serde_json::Value = serde_json::from_str(body)?;
-            if let Some(jid) = value.get("job_id").and_then(serde_json::Value::as_str) {
-                job_ids.push((path, jid.to_string()));
+            if let Some(job_id) = value.get("job_id").and_then(serde_json::Value::as_str) {
+                if !seen.contains(job_id) {
+                    job_ids.push(job_id.to_string());
+                }
             }
         }
         if job_ids.is_empty() {
-            i += chunk;
             continue;
         }
-
         let job_paths: Vec<String> = job_ids
             .iter()
-            .map(|(_, jid)| format!("{prefix}/{jid}.json"))
+            .map(|job_id| format!("{prefix}/{job_id}.json"))
             .collect();
         let blobs = download_many_or_none(store, &job_paths, 10.min(job_paths.len())).await;
-        for ((_marker_path, _jid), data) in job_ids.iter().zip(blobs) {
-            if let Some(data) = data {
-                let job = Job::from_json(&data)?;
-                if is_transition_sentinel_state(&job.state) || job.gpu_mem_gb > max_gpu_mem_gb {
-                    continue;
-                }
+        for data in blobs.into_iter().flatten() {
+            let job = Job::from_json(&data)?;
+            *scanned += 1;
+            if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
                 out.push(job);
-                if out.len() >= top_n {
-                    return Ok(out);
+                if scan.window_full(out.len()) {
+                    return Ok(());
                 }
             }
-        }
-        i += chunk;
-    }
-    Ok(out)
-}
-
-/// Priority markers first, then FIFO oldest_first. Deduped by job_id.
-/// Calls [`migrations::backfill_priority_markers`] up-front so any
-/// pre-0.4.26 queued jobs get retroactive markers.
-pub async fn list_priority_first(
-    store: &JobStorage,
-    prefix: &str,
-    cap: usize,
-) -> Result<Vec<Job>, StorageError> {
-    migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
-    let pri = list_top_n(store, prefix, cap, i64::MAX).await?;
-    let fifo = list_jobs(store, prefix, cap).await?;
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out = Vec::new();
-    for job in pri.into_iter().chain(fifo) {
-        if seen.insert(job.job_id.clone()) {
-            out.push(job);
+            if scan.budget_spent(*scanned) {
+                return Ok(());
+            }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
-/// Priority-aware fitting jobs: `queue_priority/` markers first, then FIFO
-/// from `queue/`. Metadata stamping filters non-fitting blobs before
-/// download.
+/// The oldest-first pass over the prefix itself.
 ///
-/// Python has a gsutil-only fallback (`store._azure_backend is None and
-/// store._sdk_bucket is None` — the first half of which is the never-true
-/// `_azure_backend` bug) that downloads everything. The intended behavior
-/// is the metadata-prefiltering path, and every Rust `BlobBackend`
-/// implements `list_blobs_with_meta`, so only that path is ported.
-pub async fn list_fitting(
+/// The prefix is listed once, with metadata, and ordered by write time before
+/// anything is downloaded. Ordering after a cap is what starved a late-sorting
+/// job; re-listing to widen a budget is what made a poll cost the whole prefix
+/// repeatedly. One listing, one order, early exit.
+async fn collect_oldest_first(
     store: &JobStorage,
     prefix: &str,
-    max_gpu_mem_gb: i64,
-    cap: usize,
-) -> Result<Vec<Job>, StorageError> {
-    let mut out: Vec<Job> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    if prefix == "queue" {
-        for job in list_top_n(store, prefix, cap, max_gpu_mem_gb).await? {
-            if seen.insert(job.job_id.clone()) {
-                out.push(job);
-            }
-        }
+    scan: &JobScan<'_>,
+    out: &mut Vec<Job>,
+    seen: &mut HashSet<String>,
+    scanned: &mut usize,
+) -> Result<(), StorageError> {
+    if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
+        return Ok(());
     }
-    // Oldest-first before any cap: `list_blobs_with_meta` answers in backend
-    // order, so capping it directly would hand the same lexically early jobs
-    // to every poll and starve an older or higher-priority job whose name
-    // sorts late. The whole prefix is listed for its metadata regardless; only
-    // the ordered head of it is downloaded.
-    let mut eligible: Vec<(chrono::DateTime<chrono::Utc>, String)> = Vec::new();
+    let mut ordered: Vec<(chrono::DateTime<chrono::Utc>, String)> = Vec::new();
     for blob in store.list_blobs_with_meta(&format!("{prefix}/")).await? {
         let name = blob.name.rsplit('/').next().unwrap_or("");
-        let jid = name.strip_suffix(".json").unwrap_or(name);
-        if !blob.name.ends_with(".json") || seen.contains(jid) {
+        let job_id = name.strip_suffix(".json").unwrap_or(name);
+        if !blob.name.ends_with(".json") || seen.contains(job_id) {
             continue;
         }
-        // mem_str is None on blobs that predate the metadata stamp -> treat
-        // as eligible. A corrupt int now raises so the operator sees that
-        // the metadata is misbehaving (Python `int(mem_str)` ValueError).
-        let fits = match blob.metadata.get("gpu_mem_gb") {
-            None => true,
-            Some(mem_str) => {
-                let mem: i64 = mem_str.parse().map_err(|_| {
-                    StorageError::Other(format!(
-                        "corrupt gpu_mem_gb metadata on {}: {mem_str:?}",
-                        blob.name
-                    ))
-                })?;
-                mem <= max_gpu_mem_gb
+        // A blob that predates the metadata stamp carries no gpu_mem_gb and
+        // is downloaded rather than assumed unfit. A corrupt integer raises,
+        // so misbehaving metadata is reported instead of silently filtering.
+        if let Some(mem_str) = blob.metadata.get("gpu_mem_gb") {
+            let mem: i64 = mem_str.parse().map_err(|_| {
+                StorageError::Other(format!(
+                    "corrupt gpu_mem_gb metadata on {}: {mem_str:?}",
+                    blob.name
+                ))
+            })?;
+            if mem > scan.max_gpu_mem_gb {
+                continue;
             }
-        };
-        if fits {
-            eligible.push((
-                blob.updated.unwrap_or_else(chrono::Utc::now),
-                blob.name.clone(),
-            ));
         }
+        ordered.push((
+            blob.updated.unwrap_or_else(chrono::Utc::now),
+            blob.name.clone(),
+        ));
     }
-    eligible.sort_by(|left, right| left.cmp(right));
-    let eligible_paths: Vec<String> = if cap > 0 {
-        eligible
+    ordered.sort();
+    let paths: Vec<String> = ordered.into_iter().map(|(_, name)| name).collect();
+    for paths in paths.chunks(32) {
+        let texts: Vec<Option<String>> = futures::stream::iter(paths)
+            .map(|path| store.download_text(path))
+            .buffered(32)
+            .collect::<Vec<Result<Option<String>, StorageError>>>()
+            .await
             .into_iter()
-            .take(cap.saturating_sub(out.len()))
-            .map(|(_, name)| name)
-            .collect()
-    } else {
-        eligible.into_iter().map(|(_, name)| name).collect()
-    };
-
-    // Python `_read`: download errors propagate; only a missing blob (None)
-    // is skipped.
-    let texts: Vec<Option<String>> = futures::stream::iter(&eligible_paths)
-        .map(|path| store.download_text(path))
-        .buffered(32)
-        .collect::<Vec<Result<Option<String>, StorageError>>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-    for data in texts.into_iter().flatten() {
-        let job = Job::from_json(&data)?;
-        if is_transition_sentinel_state(&job.state) || job.gpu_mem_gb > max_gpu_mem_gb {
-            continue;
-        }
-        if !seen.insert(job.job_id.clone()) {
-            continue;
-        }
-        out.push(job);
-        if cap > 0 && out.len() >= cap {
-            return Ok(out);
+            .collect::<Result<Vec<_>, _>>()?;
+        for data in texts.into_iter().flatten() {
+            let job = Job::from_json(&data)?;
+            *scanned += 1;
+            if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
+                out.push(job);
+                if scan.window_full(out.len()) {
+                    return Ok(());
+                }
+            }
+            if scan.budget_spent(*scanned) {
+                return Ok(());
+            }
         }
     }
-    Ok(out)
+    Ok(())
 }

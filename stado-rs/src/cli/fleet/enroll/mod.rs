@@ -17,7 +17,7 @@
 pub mod catalog;
 pub mod legacy;
 
-use crate::cli::registry::{fetch_document, push_document};
+use crate::cli::registry::{commit_document, fetch_document};
 use crate::queue::JobStorage;
 use crate::targets::normalize_hostname;
 use serde_json::{json, Value};
@@ -326,14 +326,21 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
                 .and_then(Value::as_str)
                 .ok_or_else(|| "join request has no architecture".to_string())?;
             let release_platform = release_platform(request_os, request_arch)?;
-            let next = register_target(
-                &document,
-                &name,
-                &kind,
-                std::slice::from_ref(&request_hostname),
-                release_platform,
-            )?;
-            let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+            // Pure: the entry is a function of the document it is appended to
+            // and of the join request, which is already decided. A lost race
+            // is answered by appending it to the newer document.
+            let generation = commit_document(|document| {
+                register_target(
+                    document,
+                    &name,
+                    &kind,
+                    std::slice::from_ref(&request_hostname),
+                    release_platform,
+                )
+                .map_err(crate::cli::CmdError::click)
+            })
+            .await
+            .map_err(|exc| exc.to_string())?;
             println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
             if let Some(fleet) = fleet_name {
                 crate::cli::fleet::ops::assign(&name, fleet).await?;

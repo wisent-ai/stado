@@ -11,14 +11,26 @@
 //! - [`crate::monitor::reap`] deletes per-job blobs of fully-terminal runs
 //!   and never touches live records.
 //!
-//! This reaper keys on the job's worker lease: the
-//! `status/<job_id>/heartbeat` blob every executor refreshes on
-//! [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`]
-//! (`write_heartbeat`), falling back to `started_at` for a worker that died
-//! before its first heartbeat. The TTL is the codebase's own
+//! This reaper keys on the job's worker lease, and the lease lives IN the
+//! running job document (`Job::lease_expires_at`), renewed by
+//! [`crate::queue::storage::JobStorage::renew_running_lease`] every
+//! [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`] from
+//! `write_heartbeat`. The TTL is the codebase's own
 //! [`crate::config::HEARTBEAT_STALE_MINUTES`] — the window
 //! [`super::control::default_drain_timeout_s`] documents as "the window
 //! after which the monitor declares a running job's heartbeat dead".
+//!
+//! Why in the document: while the lease was only the `status/<job_id>/heartbeat`
+//! blob, no amount of re-reading could fence this reaper. It read the running
+//! job at version V, read the pulse, and moved the job at V; a live worker
+//! that refreshed its pulse in that window changed nothing the reaper held,
+//! so the move succeeded, the job was requeued and a second worker started it
+//! while the first was still executing and about to publish its result. A
+//! renewal that is a compare-and-swap on the running document invalidates V,
+//! so the reaper's version-pinned move fails and it loses the race instead of
+//! silently winning it. Jobs claimed before the lease existed carry none, and
+//! for exactly those the heartbeat blob and `started_at` still decide, with a
+//! re-read immediately before the move.
 //!
 //! Retry semantics: the first lease expiry moves the job back to `queue/`
 //! exactly once, incrementing the existing `restarts` retry field (still
@@ -107,26 +119,55 @@ async fn reap_one(
         store.recover_job_transition(job_id).await?;
         return Ok(());
     }
-
-    // Expired iff EVERY liveness signal is older than the lease TTL: the
-    // heartbeat blob when one exists, and started_at (boot grace — a
-    // freshly claimed job has not written its first heartbeat yet). An
-    // undateable job is skipped rather than reaped on an invented fact.
+    // The lease the worker renews INSIDE this document is the authority when
+    // the document carries one. It is also the fence: the renewal is a
+    // compare-and-swap on this very object, so a pulse that lands between
+    // this read and the move below changes `versioned.version` and the
+    // version-pinned move fails. That is the only construction that closes
+    // the race — re-reading a heartbeat blob written beside the job cannot,
+    // because nothing the reaper pins changes when it is written.
+    //
+    // A job claimed before the lease existed carries none. For those the old
+    // signals still decide: the heartbeat blob when one exists, and
+    // `started_at` as boot grace. An undateable job is skipped rather than
+    // reaped on an invented fact.
+    let lease_expiry = job
+        .lease_expires_at
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .and_then(hg::parse_iso_lenient);
     let heartbeat_age = heartbeat_age_seconds(store, job_id, now).await?;
     let started_age = started_age_seconds(&job, now);
-    if heartbeat_age.is_none() && started_age.is_none() {
-        return Ok(());
-    }
     let fresh = |age: Option<i64>| age.is_some_and(|age| age <= lease_ttl_seconds);
-    if fresh(heartbeat_age) || fresh(started_age) {
-        return Ok(());
-    }
-    // The freshest (smallest) stale age, named in the log line.
-    let age = [heartbeat_age, started_age]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or_default();
+    let age = match lease_expiry {
+        Some(expires) => {
+            if expires > now {
+                return Ok(());
+            }
+            // An expired lease beside a FRESH pulse means the renewal write
+            // is failing, not that the worker died: both come from the same
+            // `write_heartbeat`, so a live executor whose compare-and-swap
+            // keeps losing must not be reaped for the storage layer's fault.
+            if fresh(heartbeat_age) {
+                return Ok(());
+            }
+            (now - expires).num_seconds() + lease_ttl_seconds
+        }
+        None => {
+            if heartbeat_age.is_none() && started_age.is_none() {
+                return Ok(());
+            }
+            if fresh(heartbeat_age) || fresh(started_age) {
+                return Ok(());
+            }
+            // The freshest (smallest) stale age, named in the log line.
+            [heartbeat_age, started_age]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or_default()
+        }
+    };
 
     // A command that kills `wc agent` itself is done, not orphaned: the
     // agent's disappearance is the success condition.
@@ -139,13 +180,13 @@ async fn reap_one(
         return Ok(());
     }
 
-    // Heartbeats and checkpoints live outside the versioned job blob. Re-read
-    // them after every potentially long finalizer/checkpoint inspection and
-    // immediately before fencing the job, so a worker that refreshed its lease
-    // during this pass is not reaped from a stale first observation.
-    if fresh(heartbeat_age_seconds(store, job_id, now).await?)
-        || hg::any_job_checkpoint_fresh(store, &job, CHECKPOINT_FRESH_SECONDS).await
-    {
+    // A job with no in-document lease has no fence at all, so the signals it
+    // does have are re-read immediately before the move: a worker that
+    // refreshed while the finalizer and checkpoint inspections above were
+    // running must not be reaped from a stale first observation. A
+    // lease-bearing job needs none of this — its renewal invalidates the
+    // version the move below is pinned to.
+    if lease_expiry.is_none() && fresh(heartbeat_age_seconds(store, job_id, now).await?) {
         return Ok(());
     }
 

@@ -109,8 +109,19 @@ pub async fn plan_queued(
     let wall_times = crate::scheduler::cost::wall_time_table(&history_rows);
     let feedback = super::storage::list_feedback(store).await?;
     let planning_now = Utc::now();
+    // The planner considers the whole queue: it is placing capacity, not
+    // claiming a slot, so nothing here narrows the window and nothing bounds
+    // the scan.
     let mut queued = store
-        .list_jobs_priority_first("queue", usize::default())
+        .list_claimable_jobs(
+            "queue",
+            &crate::queue::listing::JobScan {
+                want: usize::default(),
+                scan_budget: usize::default(),
+                max_gpu_mem_gb: i64::MAX,
+                eligible: &|_| true,
+            },
+        )
         .await?;
     queued.sort_by(job_order);
     for job in queued {

@@ -60,6 +60,20 @@ pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = constants::MIN_RUNTIME_BEFORE_YIELD_
 /// Cache TTL for the native NVIDIA driver-health probe.
 pub const CUDA_PROBE_CACHE_S: u64 = constants::CUDA_PROBE_CACHE_S;
 
+/// Claimable jobs one poll asks the queue for. It is a window over work this
+/// agent may actually admit, not over the queue: the per-tick claim count is
+/// bounded by slots, VRAM and `WC_LOCAL_MAX_CLAIMS_PER_TICK` further down.
+const CLAIM_CANDIDATE_WINDOW: usize = 2_000;
+
+/// Candidates the cooperative-yield scan considers before deciding what to
+/// evict for.
+const YIELD_CANDIDATE_WINDOW: usize = 200;
+
+/// Job documents one scan may read while filling its window. Separating this
+/// from the window is the whole point: a queue full of another host's work
+/// costs scanning, and must not cost this host its candidates.
+const QUEUE_SCAN_BUDGET: usize = 8_000;
+
 /// Python `_log`: `[HH:MM:SS] [agent] msg` on stderr (local time).
 pub fn agent_log(msg: &str) {
     let ts = chrono::Local::now().format("%H:%M:%S");
@@ -393,7 +407,30 @@ pub async fn maybe_yield_for_priority(
     }
     // Highest-priority queued job that needs MORE than current free VRAM but
     // could fit on the full GPU, and is eligible for THIS agent.
-    let mut candidates = store.list_jobs_fitting("queue", total_vram_gb, 200).await?;
+    // The window counts jobs THIS agent could admit. Counting merely fitting
+    // jobs let a page of another worker's or another platform's work fill it
+    // and hid the higher-priority job this host is meant to make room for.
+    let mut candidates = store
+        .list_claimable_jobs(
+            "queue",
+            &crate::queue::listing::JobScan {
+                want: YIELD_CANDIDATE_WINDOW,
+                scan_budget: QUEUE_SCAN_BUDGET,
+                max_gpu_mem_gb: total_vram_gb,
+                eligible: &|job| {
+                    helpers::job_eligible(
+                        job,
+                        gpu_type,
+                        total_vram_gb,
+                        kind,
+                        consumer_id,
+                        slots.len(),
+                        false,
+                    )
+                },
+            },
+        )
+        .await?;
     candidates.sort_by(|a, b| {
         b.priority
             .cmp(&a.priority)
@@ -406,17 +443,6 @@ pub async fn maybe_yield_for_priority(
             .max(estimate_gpu_memory(&j.command, sizing, store).await?);
         if need_j <= free_vram_gb {
             continue; // already fits — not a VRAM-eviction case
-        }
-        if !helpers::job_eligible(
-            j,
-            gpu_type,
-            total_vram_gb,
-            kind,
-            consumer_id,
-            slots.len(),
-            false,
-        ) {
-            continue;
         }
         target = Some((j.clone(), need_j));
         break;
@@ -480,7 +506,25 @@ async fn queued_gpu_job_for_inference(
     pinned_only: bool,
 ) -> Result<Option<(String, i64)>, StorageError> {
     let listed = store
-        .list_jobs_fitting("queue", total_vram_gb, 2000)
+        .list_claimable_jobs(
+            "queue",
+            &crate::queue::listing::JobScan {
+                want: CLAIM_CANDIDATE_WINDOW,
+                scan_budget: QUEUE_SCAN_BUDGET,
+                max_gpu_mem_gb: total_vram_gb,
+                eligible: &|job| {
+                    helpers::job_eligible(
+                        job,
+                        gpu_type,
+                        total_vram_gb,
+                        kind,
+                        consumer_id,
+                        active_slot_count,
+                        pinned_only,
+                    )
+                },
+            },
+        )
         .await?;
     let mut queued = Vec::with_capacity(listed.len());
     for candidate in listed {
@@ -1412,11 +1456,35 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             continue;
         }
 
-        // Centralized assignment writes job.assigned_to on the queue blob;
-        // job_eligible(consumer_id=...) below filters to ONLY the jobs this
-        // agent owns. The coordinator's makespan matcher already made the
-        // choice; this loop executes it.
-        let listed = store.list_jobs_fitting("queue", free_vram_gb, 2000).await?;
+        // Centralized assignment writes job.assigned_to on the queue blob, so
+        // the listing itself applies this agent's full admission rule: the
+        // window must count jobs this host may claim. Counting jobs that
+        // merely fit its VRAM meant a fleet whose oldest two thousand fitting
+        // jobs were assigned elsewhere handed this agent nothing claimable on
+        // every poll, forever, while its own assigned job sat past the window.
+        // The re-read below re-applies the rule to the FRESH document, which
+        // is a different fact from the listed snapshot.
+        let listed = store
+            .list_claimable_jobs(
+                "queue",
+                &crate::queue::listing::JobScan {
+                    want: CLAIM_CANDIDATE_WINDOW,
+                    scan_budget: QUEUE_SCAN_BUDGET,
+                    max_gpu_mem_gb: free_vram_gb,
+                    eligible: &|job| {
+                        helpers::job_eligible(
+                            job,
+                            &gpu_type,
+                            total_vram_gb,
+                            kind,
+                            &consumer_id,
+                            slots.len(),
+                            pinned_only,
+                        )
+                    },
+                },
+            )
+            .await?;
         let mut queued = Vec::with_capacity(listed.len());
         for candidate in listed {
             if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
