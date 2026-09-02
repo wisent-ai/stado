@@ -100,8 +100,6 @@ fn started_age_seconds(job: &Job, now: chrono::DateTime<Utc>) -> Option<i64> {
     Some((now - started).num_seconds())
 }
 
-
-
 /// Reap one running job whose lease is expired: requeue on the first
 /// expiry, fail on the second. Leaves the job alone (fresh, guarded, or
 /// the fence lost to a concurrent writer) without counting it.
