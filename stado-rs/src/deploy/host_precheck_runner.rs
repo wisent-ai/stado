@@ -1128,12 +1128,49 @@ pub async fn bootstrap_developer_id(
                 &production_runner(),
             )
             .await?;
+            // The agent is not a label to choose. Skarbiec verifies the
+            // redeemer's signature against the workload public key its vault
+            // registered for the agent NAMED IN THE CAPABILITY, and the
+            // acquisition catalog registers one consumer per coordinate. The
+            // constant `weles-worker` this command used to name is registered
+            // nowhere, which is why every redemption answered `no live vault
+            // token registers a workload public key` — the same refusal
+            // `weles_browser_task::scope_consumer` was written for after runs
+            // 18e7cc47 and 47d89182 hit it.
+            let routes =
+                super::host_capability::routes(&target, &broker, &production_runner()).await?;
+            let scopes = super::weles_browser_task::host_scopes(
+                &target,
+                super::weles_browser_task::REGISTERED_SCOPES_FILE,
+                &production_runner(),
+            )
+            .await?;
+            let registered_agent = |resource: &str| -> Result<String, DeployError> {
+                let routed = super::weles_browser_task::routed_item(&routes, resource)?;
+                super::weles_browser_task::scope_consumer(&scopes, &routed.item, &routed.field)
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        DeployError(format!(
+                            "{}: {} registers no identity for {}/{}, so a capability for \
+                             {resource} could only name an agent this host's vault does not \
+                             know and its broker would deny at fill time",
+                            target.name,
+                            super::weles_browser_task::REGISTERED_SCOPES_FILE,
+                            routed.item,
+                            routed.field
+                        ))
+                    })
+            };
+            let email_resource = "origin:https://idmsa.apple.com/email";
+            let password_resource = "origin:https://idmsa.apple.com/password";
+            let email_agent = registered_agent(email_resource)?;
+            let password_agent = registered_agent(password_resource)?;
             let email = issue_apple_capability(
                 &target,
                 &broker,
-                execution_agent,
+                &email_agent,
                 "weles.browser.fill",
-                "origin:https://idmsa.apple.com/email",
+                email_resource,
                 &guard_id,
                 &production_runner(),
             )
@@ -1141,17 +1178,22 @@ pub async fn bootstrap_developer_id(
             let password = issue_apple_capability(
                 &target,
                 &broker,
-                execution_agent,
+                &password_agent,
                 "weles.browser.fill",
-                "origin:https://idmsa.apple.com/password",
+                password_resource,
                 &guard_id,
                 &production_runner(),
             )
             .await?;
+            // A challenge resource routes to no vault field by design - its
+            // value is written later, by the relay - so no catalog row can
+            // name it. It still needs an agent the vault registers, and the
+            // password consumer is the one this run has already proven is
+            // registered against the worker's workload key.
             let two_factor = issue_apple_capability(
                 &target,
                 &broker,
-                execution_agent,
+                &password_agent,
                 "weles.apple.2fa",
                 &format!("challenge:apple/{guard_id}"),
                 &guard_id,
