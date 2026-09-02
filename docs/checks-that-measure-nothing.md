@@ -1,7 +1,7 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty-seven times in this repository, in
-twenty-seven different subsystems, inside about two days. The twentieth was
+One defect shape has now been found twenty-eight times in this repository, in
+twenty-eight different subsystems, inside about two days. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
 every reading of it was true; the twenty-second is the one where the fleet
 could rule out every mechanism it owns and still not name what had happened;
@@ -9,16 +9,17 @@ the twenty-third, twenty-fourth and twenty-fifth arrived together, in a live
 outage, whose provenance belongs in the record — **the operator directed a
 two-field change, a worker force-pushed instead of fixing the input it had
 built, and the guard that refused the first attempt was the product working;**
-and the last two are the first where the narrowing sat in the instruments this
+the next two are the first where the narrowing sat in the instruments this
 record itself produced — a keep-set and a liveness signal — rather than in the
-system they were built to judge.
-Every instance is
+system they were built to judge; and the twenty-eighth answers instance 20 by
+measuring the thing that mattered about the same name: not who answered, but
+where the bytes went. Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty-seven
+## The twenty-eight
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -49,6 +50,7 @@ what is actually there.
 | 25 | `validate_registry`'s rollout rules across versions, `release_control.products.*.targets.*` (#256) | this registry document is valid | **that it is valid for the binaries that must obey it.** `readiness_path` under a `replace` rollout went from **forbidden** to **required** with no version where both hold: 0.13.20 and 0.13.23 answer `replace rollout forbids stable_bind, candidate_ports and readiness_path`, and 0.13.26 and 0.13.27 answer `rollout target requires readiness_path` — measured against the same live document at 06:26Z on 2026-09-01. Validation is whole-document (instance 16), so either shape freezes something: with the key present the mini's 0.13.20 queue agent resolved no policy at all and disk maintenance stopped dead — eight consecutive passes reading `invalid_or_unavailable_policy`, `pressure False`, every cleaner zero, 05:23Z to 05:35Z — and with the key absent **every registry write from the operator's own installed binary was refused**, so a fleet running four versions could only be written by a build older than the one it runs. Fixed additively in #256: a replace target may omit the key and takes `DEFAULT_REPLACE_READINESS_PATH`, blue-green still requires it, and `release_submit` reads the same constant. One document now validates under 0.13.20, 0.13.23 and the patched 0.13.27 |
 | 26 | `REAP_SCRIPT`'s keep-set, `src/deploy/service.rs` (#285) | these pids belong to declared labels, so everything else under a managed root is unowned | **one command's printable domain.** The set is built from `launchctl list`, which prints only the domain the calling login can print, so a declared **system LaunchDaemon**'s pid is never in it. On 2026-09-01 `service ensure stado-agent-mini --as-daemon` installed `com.wisent.compute.service.stado-agent-mini` in the system domain and reported `pid: 3963`; ninety seconds later `service reap --command "stado agent"` classified 3963 `would_end` — the tool whose entire purpose is ending *undeclared* processes proposing to kill the one declared agent the host had, with `--apply` one word away. Its argv is byte-identical to the undeclared duplicate beside it (`/Users/charles/.stado/bin/stado agent --target charless-mac-mini`), so no `--command` substring could separate them: the choices were to end the declared agent along with the duplicate, or not to reap at all. The irony is local — `LOADED_LABELS_SCRIPT`, eight hundred lines above it **in the same file**, already carried the comment explaining that `launchctl list` cannot see the system domain. **Now checked:** the keep-set falls back to `launchctl print <domain>/<label>`, which reads that domain unprivileged, and takes only the `pid` line. Keep-set 3 pids → 14, 3963 flipped `would_end` → `kept`, and `--apply` then ended the duplicate and left the declared daemon running |
 | 27 | `service converge` / `service show` status, and `com.wisent.host-health-beacon-collect` | this host has gone silent, and this unit's state is unknown | **that the thing reporting silence was itself alive.** Every unit on `charless-mac-mini` read a beacon ~5.9 days stale (508416s) because the collector is not running — `launchctl list` holds it at PID `-`, last exit 1 — so `service list` answered `unit state is unknown` for the whole host and `service show` answered `status='declares'` for the queue agent **while two processes were executing its exact declared program**. Beacon freshness is therefore not an available liveness signal on that host at all, and a reader who takes it for one concludes a working host is dead. `declares` is spelled differently from `runs` in that module on purpose (instance 12's lesson); the trap here is one level out — the *staleness threshold* is the declaration, and nothing compared it against whether its own collector still ran. Liveness had to be established from a live fact instead: `host gates` reporting capacity published 0–53 seconds ago, which no stale artefact can fake. **Not fixed:** the collector is still down, so the signal is still unavailable fleet-wide on that host |
+| 28 | the `release` check in `src/doctor.rs`, and `STADO_PUBLIC_RELEASE_API_URL` in both release workflows (#298) | the release channel is reachable | **the route a release actually travels.** The check GETs a 201-byte manifest and passes on any 200, so it passed while `charless-mac-mini.tail6443b3.ts.net` resolved through `1.1.1.1`/`8.8.8.8` — the resolver this machine has for the MagicDNS suffix, which cannot answer a MagicDNS name — to the public `ts.net` front end on one attempt and to nothing on the next, with `100.100.100.100` answering `100.120.25.24` throughout and that address serving the same route in **82 ms**. The 0.13.40 train read one immutable object at 20 MB per 55 s, spent 42 minutes inside `Validate public native release delivery`, and was cancelled at 55 minutes with the object API healthy the whole time. Two narrowings, one name: the check measured the answer instead of the path, and the validation step re-downloaded every object — 300 MB per platform — to prove what the writer read-back had already proven. Instance 20 saw these public addresses and asked whether the name had been hijacked; the answer is that public DNS answers for `ts.net` names by design, and the property nothing held was that a tailnet origin must be reached at its tailnet address |
 
 ## The property they share
 

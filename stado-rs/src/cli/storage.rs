@@ -2539,6 +2539,17 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(60));
+    for host in configured_origin_hosts() {
+        // The tailnet states where its own names live. Asking the system
+        // resolver about a MagicDNS name is asking a witness that may not have
+        // been told: on 2026-09-02 it answered the public `ts.net` front end
+        // once and nothing the next time, while the tailnet address served the
+        // same route in 82 ms. SNI and certificate validation still use the
+        // name, so this decides the route and never the identity.
+        if let Some(address) = crate::tailnet::address_of(&host) {
+            builder = builder.resolve(&host, std::net::SocketAddr::new(address, 0));
+        }
+    }
     let ca_file = crate::config::wc_stado_storage_ca_file().trim().to_string();
     if !ca_file.is_empty() {
         let path = crate::config_file::expand_tilde(&ca_file);
@@ -2557,6 +2568,36 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
         builder = builder.add_root_certificate(certificate);
     }
     builder.build().map_err(CmdError::from)
+}
+
+/// Every host this process may address as a Stado HTTP origin.
+///
+/// Read from the accessors that own each origin rather than from raw
+/// environment variables, so a value configured in `config.json` is pinned
+/// exactly like one exported into the process. Malformed values are dropped
+/// here and refused where they are used, because this function decides
+/// routing and must never be the thing that rejects a configuration.
+fn configured_origin_hosts() -> Vec<String> {
+    let mut hosts = Vec::new();
+    let candidates = [
+        crate::config::stado_api_url(),
+        crate::config::wc_stado_storage_url().to_string(),
+        std::env::var("STADO_HOST_HEALTH_API_URL").unwrap_or_default(),
+    ];
+    for candidate in candidates {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        let Ok(url) = url::Url::parse(candidate) else {
+            continue;
+        };
+        let Some(host) = url.host_str() else { continue };
+        if crate::tailnet::is_magicdns_name(host) && !hosts.iter().any(|known| known == host) {
+            hosts.push(host.to_string());
+        }
+    }
+    hosts
 }
 
 fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
