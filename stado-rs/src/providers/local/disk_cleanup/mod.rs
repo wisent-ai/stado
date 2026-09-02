@@ -1389,42 +1389,6 @@ fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("build_caches_resume_from"))
         .and_then(|v| v.as_str().map(str::to_string));
-    // THIS writer's last attempt, not the file's.
-    //
-    // This read used to be `previous["last_attempt_at"]` - the last attempt by
-    // anyone - so any writer's stamp gated every writer. On 2026-08-31
-    // charless-mac-mini had two janitors: the queue agent's in-process pass and
-    // a standalone `disk-cleanup` unit on its own timer. With the thresholds
-    // raised to 40/42 GiB against 31.2 GiB free, the agent reported
-    // `disk_pressure_active: true`, `errors: []`, policy resolved, and all six
-    // cleaners `scanned 0` - because the other process had stamped the file
-    // within the interval. Pressure active, policy resolved, nothing scanned.
-    //
-    // The gate returns before the first scanner AND before `run_with_lock`
-    // reaches the lock, so the lock cannot mediate it: the lock makes two
-    // janitors take turns deleting, while this made the working one never try.
-    // Both are real and only this one silences a pass.
-    //
-    // Removing a redundant unit does not fix this. `stado disk-cleanup --once`
-    // is a supported operator command that writes the same file, so one manual
-    // run would otherwise silence the agent's janitor for a full interval on
-    // any host.
-    let last_attempt = writer_last_attempt(&previous, report.writer);
-    if !force
-        && last_attempt.is_some()
-        && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64
-    {
-        report.outcome = "interval_noop".to_string();
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            last_attempt.unwrap_or(attempted_at),
-            log_fn,
-        );
-    }
-
     let before = match free_bytes(home) {
         Ok(free) => free,
         Err(exc) => {
@@ -1453,6 +1417,55 @@ fn run_with_lock(
             .is_some_and(|r| r.get("pressure_active") == Some(&Value::Bool(true)))
         && before < policy.target_free_gb * GIB;
     report.pressure_active = Some(before < policy.low_free_gb * GIB || continuing_reclaim);
+    // THIS writer's last attempt, not the file's.
+    //
+    // This read used to be `previous["last_attempt_at"]` - the last attempt by
+    // anyone - so any writer's stamp gated every writer. On 2026-08-31
+    // charless-mac-mini had two janitors: the queue agent's in-process pass and
+    // a standalone `disk-cleanup` unit on its own timer. With the thresholds
+    // raised to 40/42 GiB against 31.2 GiB free, the agent reported
+    // `disk_pressure_active: true`, `errors: []`, policy resolved, and all six
+    // cleaners `scanned 0` - because the other process had stamped the file
+    // within the interval. Pressure active, policy resolved, nothing scanned.
+    //
+    // The gate returns before the first scanner AND before `run_with_lock`
+    // reaches the lock, so the lock cannot mediate it: the lock makes two
+    // janitors take turns deleting, while this made the working one never try.
+    // Both are real and only this one silences a pass.
+    //
+    // Removing a redundant unit does not fix this. `stado disk-cleanup --once`
+    // is a supported operator command that writes the same file, so one manual
+    // run would otherwise silence the agent's janitor for a full interval on
+    // any host.
+    let last_attempt = writer_last_attempt(&previous, report.writer);
+    // The interval paces a healthy host; it must not pace a host that is
+    // already under its own declared low watermark. Measuring free space
+    // above this gate is what makes that possible, and it is also what makes
+    // an `interval_noop` report readable: the gate used to return before the
+    // first measurement, so the report said `pressure_active: null` while the
+    // same agent's log line said `disk-pressure-active`. On 2026-09-02
+    // `lukasz-macbook` sat at 9.3 GB free against a 100 GB watermark and its
+    // janitor answered `interval_noop` every pass, hourly, while the release
+    // pipeline kept writing. `cap_reached` plus `continuing_reclaim` already
+    // model a reclaim that must be resumed - and this gate was what refused
+    // to resume it. Concurrency is mediated by the lock below, never by this
+    // stamp: the lock makes two janitors take turns, the stamp made the
+    // working one never try.
+    if !force
+        && report.pressure_active != Some(true)
+        && last_attempt.is_some()
+        && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64
+    {
+        report.outcome = "interval_noop".to_string();
+        return finish(
+            report,
+            started,
+            Some(home),
+            persist,
+            last_attempt.unwrap_or(attempted_at),
+            log_fn,
+        );
+    }
     if !preview && policy.mode == "enforce" {
         rotate_service_logs(home, log_fn);
     }
