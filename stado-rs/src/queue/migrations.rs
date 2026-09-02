@@ -99,16 +99,24 @@ async fn write_sentinel(store: &JobStorage, cursor: &str, done: bool) -> Result<
     store.upload_text(SENTINEL_PATH, &body).await
 }
 
-/// All job_ids that already have a marker. Python
+/// Every marker name that already exists, replacing Python
 /// `_existing_marker_job_ids`.
 ///
-/// Shares [`super::listing::marker_job_id`] with the reader so the backfill
-/// cannot disagree with the walk about which job a marker names.
-async fn existing_marker_job_ids(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
+/// Names, not job_ids, because the name is what the backfill can compute: it
+/// holds the Job, so [`super::listing::marker_path`] tells it exactly which
+/// object should exist. Recovering a job_id from a name is not possible
+/// anyway (see [`super::listing::is_marker`]) — the old parse took the
+/// segment after the last `-` and so never matched a real id, which made
+/// every pass rewrite every marker it had just confirmed.
+///
+/// Comparing names also catches the case comparing ids could not: a marker
+/// sitting under a superseded key is not the marker this job needs, so the
+/// current one still gets written.
+async fn existing_marker_names(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
     let mut out = HashSet::new();
     for path in store.list_paths(super::listing::MARKER_PREFIX, 0).await? {
-        if let Some(job_id) = super::listing::marker_job_id(&path) {
-            out.insert(job_id.to_string());
+        if super::listing::is_marker(&path) {
+            out.insert(path);
         }
     }
     Ok(out)
@@ -146,7 +154,7 @@ pub async fn backfill_priority_markers(
         return Ok(true);
     }
     let chunk: Vec<String> = paths.into_iter().take(batch).collect();
-    let have = existing_marker_job_ids(store).await?;
+    let have = existing_marker_names(store).await?;
     let bodies: Vec<Option<String>> = futures::stream::iter(&chunk)
         .map(|path| store.download_text(path))
         .buffered(DOWNLOAD_WORKERS)
@@ -168,7 +176,7 @@ pub async fn backfill_priority_markers(
         if job.state != crate::models::job_state::QUEUED {
             continue;
         }
-        if have.contains(&job.job_id) {
+        if have.contains(&super::listing::marker_path(&job)) {
             continue;
         }
         store.write_priority_marker(&job).await?;

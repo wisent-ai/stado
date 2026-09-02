@@ -52,21 +52,21 @@ pub fn marker_path(job: &Job) -> String {
     format!("{MARKER_PREFIX}{}-{}.json", priority_key(job), job.job_id)
 }
 
-/// The job_id a marker name encodes, or `None` for the migration sentinel and
-/// anything else that is not a marker.
+/// Whether this path is a marker rather than the migration sentinel (or any
+/// other bookkeeping object that shares the prefix).
 ///
-/// The name carries the job_id, so the reader does not download the marker
-/// body to learn which job to resolve: the body would be a second fetch per
-/// candidate to recover what the name already said. `created_at` contributes
-/// `-` characters of its own, so the id is the segment after the LAST `-`,
-/// which is the same parse the backfill has always used.
-pub fn marker_job_id(path: &str) -> Option<&str> {
-    let name = path.rsplit('/').next()?;
-    if name.starts_with('.') {
-        return None;
-    }
-    let id = name.strip_suffix(".json")?.rsplit('-').next()?;
-    (!id.is_empty()).then_some(id)
+/// Deliberately NOT a job_id parse. The name is
+/// `<inv_priority>-<created_at>-<job_id>.json` and BOTH of the trailing
+/// fields contain `-` of their own: `created_at` carries the date separators
+/// (and a negative UTC offset would carry another), and a job_id looks like
+/// `job-906b84bcaf55e7935aa9ba2d`. So there is no split position derivable
+/// from the name alone — taking the segment after the last `-` yields
+/// `906b84bcaf55e7935aa9ba2d`, an id that resolves to nothing. The marker
+/// body states the job_id, and that is what readers use.
+pub fn is_marker(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|name| !name.starts_with('.') && name.ends_with(".json"))
 }
 
 /// Index entry for a queued job.
@@ -97,14 +97,19 @@ pub async fn delete_marker_for(store: &JobStorage, job: &Job) -> Result<(), Stor
 /// cases where the name is genuinely not computable: a marker orphaned from a
 /// job that no longer exists, and a marker left under a superseded key after
 /// a priority change (the pre-change key cannot be derived from the
-/// post-change job). Everything on a hot path uses
-/// [`delete_marker_for`] instead.
+/// post-change job). Everything on a hot path uses [`delete_marker_for`]
+/// instead.
+///
+/// Matched on the `-<job_id>.json` suffix, which is exact here because job
+/// ids are fixed-shape (`job-` + hex) and so no id can be a dash-delimited
+/// suffix of another.
 pub async fn delete_markers_scanning(
     store: &JobStorage,
     job_id: &str,
 ) -> Result<(), StorageError> {
+    let suffix = format!("-{job_id}.json");
     for path in store.list_paths(MARKER_PREFIX, 0).await? {
-        if marker_job_id(&path) == Some(job_id) {
+        if is_marker(&path) && path.ends_with(&suffix) {
             store.delete_blob(&path).await?;
         }
     }
@@ -315,15 +320,34 @@ async fn collect_from_index(
             wrapped = true;
             continue 'walk;
         };
-        // Marker name beside the job it names, for the real markers on this
-        // page. The marker BODY is never fetched: its name already carried
-        // the job_id, so reading it would be a second request per candidate
-        // to recover something already in hand.
-        let entries: Vec<(&str, &str)> = page
-            .iter()
-            .filter_map(|path| marker_job_id(path).map(|job_id| (path.as_str(), job_id)))
-            .filter(|(_, job_id)| !seen.contains(*job_id))
-            .collect();
+        // Resolve this page: marker bodies first, then the jobs they name.
+        // The body is the only place the job_id is stated unambiguously — see
+        // [`is_marker`] for why the name cannot be parsed for it — so this is
+        // two fan-outs per page. It still reads far less than the pass it
+        // replaces, which listed the whole prefix and fetched every body in
+        // it before anything could be cut.
+        let markers: Vec<&String> = page.iter().filter(|path| is_marker(path)).collect();
+        let marker_paths: Vec<String> = markers.iter().map(|path| (*path).clone()).collect();
+        let marker_bodies =
+            download_many_or_none(store, &marker_paths, 10.min(marker_paths.len())).await;
+        let mut entries: Vec<(&str, String)> = Vec::new();
+        for (marker, body) in markers.iter().zip(marker_bodies) {
+            let Some(body) = body else {
+                // The marker was deleted between the listing and this read:
+                // its job left the queue, which is exactly the state the
+                // reader is meant to shrug at.
+                continue;
+            };
+            // Strict-raise on corrupt marker JSON; a missing/non-string
+            // job_id just skips the marker.
+            let value: serde_json::Value = serde_json::from_str(&body)?;
+            let Some(job_id) = value.get("job_id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if !seen.contains(job_id) {
+                entries.push((marker.as_str(), job_id.to_string()));
+            }
+        }
         let job_paths: Vec<String> = entries
             .iter()
             .map(|(_, job_id)| format!("{prefix}/{job_id}.json"))
