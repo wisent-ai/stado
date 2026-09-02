@@ -134,12 +134,15 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[(
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
 ///
-/// It is `argv[0]` of the sign-in entries. Running the gateway binary directly
-/// would be the wrong program: `brama subscription sign-in` needs the
-/// admission credential the launcher acquires from Skarbiec under Brama's own
-/// workload identity at every start, and the launcher runs a named CLI verb
-/// inside exactly that environment. Nothing here carries a secret — the
-/// launcher fetches it on the host and it never reaches an argument vector.
+/// It is `argv[0]` of the sign-in entries, and it is the canonical spelling
+/// rather than a path that exists: the launcher ships inside the release
+/// bundle, so where it actually lives is [`AccountProgram::candidates`].
+/// Running the gateway binary directly would be the wrong program: `brama
+/// subscription sign-in` needs the admission credential the launcher acquires
+/// from Skarbiec under Brama's own workload identity at every start, and the
+/// launcher runs a named CLI verb inside exactly that environment. Nothing
+/// here carries a secret — the launcher fetches it on the host and it never
+/// reaches an argument vector.
 const BRAMA_LAUNCHER: &str = "~/.stado/bin/start-with-skarbiec";
 
 /// The prefix that marks a program, or one of its environment values, as
@@ -154,6 +157,9 @@ struct AccountProgram {
     /// it. Keyed on the program, like [`PROGRAM_CANDIDATES`], so one row
     /// covers every verb of the same program.
     program: &'static str,
+    /// Every path in the account's home this program is installed at, in probe
+    /// order. The first executable one runs.
+    candidates: &'static [&'static str],
     /// Fixed environment for that program, home-relative where a value is a
     /// path. Compile-time constants of this module: an operator's words select
     /// an entry and never become part of this.
@@ -171,15 +177,35 @@ struct AccountProgram {
 /// Every program in the table that the managed account owns.
 const ACCOUNT_PROGRAMS: &[AccountProgram] = &[AccountProgram {
     program: BRAMA_LAUNCHER,
+    // The launcher is part of the release bundle, and the live bundle is the
+    // `current` link the service unit itself runs through -- never a pinned
+    // version, which would go stale at the next release and send a repair into
+    // a launcher older than the vault it talks to. Both platform directory
+    // spellings the fleet has shipped are probed, newest layout first, and the
+    // standalone copy some accounts keep in `~/.stado/bin` is last.
+    candidates: &[
+        "~/.stado/services/brama/current/darwin-arm64/bin/start-with-skarbiec",
+        "~/.stado/services/brama/current/darwin-arm/bin/start-with-skarbiec",
+        BRAMA_LAUNCHER,
+    ],
+    // Two paths this run must not share with the gateway it is repairing.
+    //
     // The launcher ends whatever holds its capability-broker socket and then
     // rebinds it. On its stable default path that is the live gateway's own
     // broker, so a CLI run beside a serving Brama would take the service's
-    // credential redemption down with it. A run of its own gets a socket of
-    // its own, under the fleet's scratch area, and the service is untouched.
-    environment: &[(
-        "BRAMA_CAP_SOCKET",
-        "~/.stado/work/brama-sign-in/capability.sock",
-    )],
+    // credential redemption down with it. And the runtime directory is named
+    // after the installation, which for a CLI run out of the live bundle is
+    // the live one: the launcher rebuilds the subscription manifest and the
+    // capability catalog in it at every start, so sharing it would rewrite the
+    // serving gateway's own runtime state. Both get a copy of their own under
+    // the fleet's scratch area, and the service is untouched.
+    environment: &[
+        (
+            "BRAMA_CAP_SOCKET",
+            "~/.stado/work/brama-sign-in/capability.sock",
+        ),
+        ("BRAMA_RUNTIME_DIR", "~/.stado/work/brama-sign-in/runtime"),
+    ],
     timeout_seconds: 1500,
 }];
 
@@ -200,7 +226,7 @@ fn home_anchored(word: &str) -> String {
     }
 }
 
-/// The remote script for an account-owned entry: prove the program is there,
+/// The remote script for an account-owned entry: find the installed copy,
 /// export the entry's fixed environment, then become it.
 ///
 /// Every word is a compile-time constant of this module and is quoted for the
@@ -209,14 +235,19 @@ fn home_anchored(word: &str) -> String {
 /// so barrier three holds exactly as it does on the
 /// [`host_channel::run_program`] path.
 fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
-    let program = home_anchored(account.program);
-    let mut script = String::from("set -eu\n");
-    script.push_str(&format!("program={program}\n"));
+    let mut script = String::from("set -eu\nprogram=\n");
+    for candidate in account.candidates {
+        script.push_str(&format!(
+            "[ -n \"$program\" ] || [ ! -x {candidate} ] || program={candidate}\n",
+            candidate = home_anchored(candidate)
+        ));
+    }
     script.push_str(&format!(
-        "[ -x \"$program\" ] || {{ printf '%s\\n' {} >&2; exit 127; }}\n",
+        "[ -n \"$program\" ] || {{ printf '%s\\n' {} >&2; exit 127; }}\n",
         shlex_quote(&format!(
-            "this program is not installed in the managed account's home on this host: {}",
-            account.program
+            "this program is installed at none of its approved paths in the managed \
+             account's home on this host: {}",
+            account.candidates.join(", ")
         ))
     ));
     for (name, value) in account.environment {
@@ -480,27 +511,41 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
     // moment every model call the fleet routed through that gateway had one live
     // provider and no way for an operator to repair it without a private ssh
     // session outside the registry-authorized channel. Each entry names one
-    // provider and carries its own fixed reason, because the reason is recorded
-    // in Brama's journal beside the verdict and an operator-supplied one would
-    // be an operator-supplied argument.
+    // provider, one exact Weles sign-in row, and its own fixed reason. The row
+    // is named rather than inferred because Weles holds seven codex accounts
+    // and two claude ones, and the cost of getting that wrong is one real
+    // sign-in into somebody else's account; the reason is fixed because it is
+    // recorded in Brama's journal beside the verdict and an operator-supplied
+    // one would be an operator-supplied argument.
+    //
+    // The login budget is deliberately above the ten minutes the reauth
+    // trajectory's own `login.mjs` allows itself. Setting the two equal, which
+    // this table did first, meant the outer kill landed in the same second as
+    // the inner cap: Weles answered 502 with no run detail and the trajectory
+    // was SIGKILLed before it could write the page it was stuck on, which is
+    // the one artifact the operator actually needs. The inner cap must be the
+    // one that fires.
     ApprovedCommand {
         argv: &[
             BRAMA_LAUNCHER,
             "subscription",
             "sign-in",
             "codex",
+            "--login-item",
+            "codex-wisent-google-sso",
             "--reason",
             "codex-grant-disowned-2026-08-27-gateway-has-one-live-provider",
             "--login-timeout-ms",
-            "600000",
+            "900000",
             "--json",
         ],
         why: "asks Weles to sign the codex account in on the host that holds the vault, then \
-              proves the repair by Brama's own refresh. It changes exactly one thing: the \
-              stored provider credential of the subscription Weles declares for its primary \
-              codex row. It cannot be pointed at another account -- the row and the \
-              subscription are Weles's own declaration, checked against each other before a \
-              browser opens -- and it cannot spend money, because a sign-in buys nothing. No \
+              proves the repair by Brama's own refresh. The row is the one Weles declares \
+              primary for codex and maps to `brama-sub-wisent-app-codex-primary`, which is \
+              the subscription the provider disowned; it is also the row Brama's own renewal \
+              sweep already drives, so this entry cannot reach an account that sweep would \
+              not. It changes exactly one thing: that subscription's stored provider \
+              credential. It cannot spend money, because a sign-in buys nothing. No \
               credential reaches this command: Weles writes what it mints into the vault \
               directly, the admission bearer is acquired on the host, and the verdict this \
               prints carries a result, a reason and a login row and never a secret",
@@ -511,19 +556,21 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
             "subscription",
             "sign-in",
             "claude-code",
+            "--login-item",
+            "claude-wisent-google-sso",
             "--reason",
             "claude-code-vault-row-yields-no-credential-second-live-provider",
             "--login-timeout-ms",
-            "600000",
+            "900000",
             "--json",
         ],
         why: "the same repair for claude-code, whose stored document is account metadata \
               carrying no credential material: its pool contributes no model at all, and a \
               sign-in is what would put a credential there. A gateway with one live provider \
               is a gateway that stops serving at the next lapsed session, which is the state \
-              this fleet was in on 2026-08-27. Same guarantees as the codex entry: one \
-              declared row, one declared subscription, no argument, no purchase, no secret in \
-              argv or output",
+              this fleet was in on 2026-08-27. The row is Weles's declared primary for \
+              claude, mapped to `brama-sub-wisent-app-claude-primary`. Same guarantees as \
+              the codex entry: no argument, no purchase, no secret in argv or output",
     },
     ApprovedCommand {
         argv: &[
@@ -531,15 +578,43 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
             "subscription",
             "sign-in",
             "kimi",
+            "--login-item",
+            "kimi-lukasz-google-sso",
             "--reason",
             "kimi-vault-row-yields-no-credential-second-live-provider",
             "--login-timeout-ms",
-            "600000",
+            "900000",
             "--json",
         ],
         why: "the same repair for kimi, in the same state as claude-code: a stored document \
-              with no credential material and a pool that contributes no model. Same \
-              guarantees as the codex entry",
+              with no credential material and a pool that contributes no model. The row is \
+              Weles's only kimi account and its declared primary, mapped to \
+              `brama-sub-wisent-app-kimi-primary`. Same guarantees as the codex entry",
+    },
+    // The proof the sign-in entries above are judged by, added 2026-09-02. A
+    // repaired credential that redeems is not a repaired gateway: the vault can
+    // yield a value the provider then refuses, which is exactly the state
+    // 2026-08-27 left, and only a real completion separates the two. It runs
+    // through the same subscription dispatch a caller reaches, on the host, so
+    // no bearer of any kind crosses this channel.
+    ApprovedCommand {
+        argv: &[
+            BRAMA_LAUNCHER,
+            "test",
+            "--model",
+            "codex/gpt-5.3-codex-spark",
+            "--agent-id",
+            "wisent-app",
+            "--allow-provider-cost",
+        ],
+        why: "sends one fixed prompt through Brama's subscription dispatch and prints the \
+              model, the token counts and the latency. The route is the provider's own \
+              cheapest codex model -- the one its plan-probe table already names -- and the \
+              request is covered by the subscription the account already holds, so it buys \
+              nothing, renews nothing and raises no limit. `--allow-provider-cost` is \
+              Brama's own acknowledgement flag and is fixed here because this entry exists \
+              to spend exactly one completion; the prompt and the agent are compile-time \
+              constants, and the answer carries no credential",
     },
 ];
 
@@ -645,8 +720,11 @@ pub async fn exec_host(
     // fixed argv IS the command line, and probing a single path on the host
     // would only replace the remote shell's own report of a missing program
     // with a worse one.
-    let candidates = approved.candidates();
     let account = account_program(approved.argv.first().copied().unwrap_or_default());
+    let candidates = match account {
+        Some(account) => account.candidates,
+        None => approved.candidates(),
+    };
     let output = match (approved.argv.split_first(), account) {
         (Some((_, arguments)), Some(account)) => {
             let script = account_script(account, arguments);
