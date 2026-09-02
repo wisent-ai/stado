@@ -1267,23 +1267,21 @@ pub async fn measure_outcomes(
             pending_savings.push(record);
         }
     }
-    let artifact_seconds = i64::try_from(
-        policy.idle.artifact_days * crate::monitor::billing::SECONDS_PER_DAY,
-    )
-    .unwrap_or(i64::MAX);
-    let mut outstanding: std::collections::BTreeSet<String> = super::storage::list_decision_index(
-        store,
-    )
-    .await?
-    .into_iter()
-    .filter(|(decision_id, updated)| {
-        !feedback_ids.contains(decision_id)
-            && updated.is_none_or(|updated| {
-                now.signed_duration_since(updated).num_seconds() < artifact_seconds
+    let artifact_seconds =
+        i64::try_from(policy.idle.artifact_days * crate::monitor::billing::SECONDS_PER_DAY)
+            .unwrap_or(i64::MAX);
+    let mut outstanding: std::collections::BTreeSet<String> =
+        super::storage::list_decision_index(store)
+            .await?
+            .into_iter()
+            .filter(|(decision_id, updated)| {
+                !feedback_ids.contains(decision_id)
+                    && updated.is_none_or(|updated| {
+                        now.signed_duration_since(updated).num_seconds() < artifact_seconds
+                    })
             })
-    })
-    .map(|(decision_id, _)| decision_id)
-    .collect();
+            .map(|(decision_id, _)| decision_id)
+            .collect();
     outstanding.extend(
         pending_savings
             .iter()

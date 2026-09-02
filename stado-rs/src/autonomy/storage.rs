@@ -579,11 +579,13 @@ pub async fn list_savings_ids(store: &JobStorage) -> Result<BTreeSet<String>, St
 pub async fn list_measured_savings_ids(
     store: &JobStorage,
 ) -> Result<BTreeSet<String>, StorageError> {
-    Ok(list_record_ids(store, &format!("{SAVINGS_MEASUREMENT_PREFIX}/"))
-        .await?
-        .into_iter()
-        .filter_map(|id| id.strip_prefix("measurement-").map(str::to_string))
-        .collect())
+    Ok(
+        list_record_ids(store, &format!("{SAVINGS_MEASUREMENT_PREFIX}/"))
+            .await?
+            .into_iter()
+            .filter_map(|id| id.strip_prefix("measurement-").map(str::to_string))
+            .collect(),
+    )
 }
 
 /// One savings record by id.

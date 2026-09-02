@@ -484,13 +484,8 @@ pub(crate) async fn recent_runs(
                 if let Some(compiled) = compiling_count(&store, &job_id).await {
                     let mut progress = Map::new();
                     progress.insert("compiled".into(), Value::from(compiled));
-                    if let Some(total) = previous_compile_total(
-                        &store,
-                        &older,
-                        &product_name,
-                        platform_name,
-                    )
-                    .await
+                    if let Some(total) =
+                        previous_compile_total(&store, &older, &product_name, platform_name).await
                     {
                         progress.insert("of_previous_run".into(), Value::from(total));
                         if let Some(ratio) = (compiled * 100).checked_div(total) {
