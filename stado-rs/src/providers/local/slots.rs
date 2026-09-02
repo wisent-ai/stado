@@ -147,19 +147,20 @@ pub async fn write_status(
 /// job a moment ago is holding a version this renewal invalidates, so its
 /// move fails instead of requeueing a job that is still executing.
 pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
+    // Renew the authoritative fence FIRST. A slow or failed operator-facing
+    // status upload must not postpone the CAS that keeps a live execution from
+    // being reaped. `false` means the job already left running/, so publishing
+    // another pulse beside it would only create a stale liveness signal.
+    if !store.renew_running_lease(job_id).await? {
+        return Ok(());
+    }
     let ts = isoformat_utc(Utc::now());
     store
         .upload_text(
             &format!("status/{job_id}/heartbeat"),
             &format!("RUNNING {ts}"),
         )
-        .await?;
-    // `false` means this job is no longer a live running document — it was
-    // moved, cancelled or already reaped. The slot's own advance pass reaches
-    // that conclusion through the job record; a heartbeat is not the place to
-    // decide it, and it is not a write failure.
-    store.renew_running_lease(job_id).await?;
-    Ok(())
+        .await
 }
 
 /// Stamp status/<job>/heartbeat every HEARTBEAT_INTERVAL_S for as long as

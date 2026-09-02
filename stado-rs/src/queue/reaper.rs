@@ -180,13 +180,16 @@ async fn reap_one(
         return Ok(());
     }
 
-    // A job with no in-document lease has no fence at all, so the signals it
-    // does have are re-read immediately before the move: a worker that
-    // refreshed while the finalizer and checkpoint inspections above were
-    // running must not be reaped from a stale first observation. A
-    // lease-bearing job needs none of this — its renewal invalidates the
-    // version the move below is pinned to.
-    if lease_expiry.is_none() && fresh(heartbeat_age_seconds(store, job_id, now).await?) {
+    // A job with no in-document lease has no fence at all, so every external
+    // signal it does have is re-read immediately before the move: a worker
+    // that refreshed its heartbeat or checkpoint while the finalizer and
+    // first checkpoint inspection above were running must not be reaped from
+    // the stale observation. A lease-bearing job needs none of this — its
+    // renewal invalidates the version the move below is pinned to.
+    if lease_expiry.is_none()
+        && (fresh(heartbeat_age_seconds(store, job_id, now).await?)
+            || hg::any_job_checkpoint_fresh(store, &job, CHECKPOINT_FRESH_SECONDS).await)
+    {
         return Ok(());
     }
 

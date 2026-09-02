@@ -650,6 +650,9 @@ where
     for _ in 0..COMMIT_ROUNDS {
         let (document, expected_generation) = fetch_versioned_document().await?;
         let next = transform(&document)?;
+        if next == document {
+            return Ok(expected_generation);
+        }
         match push_document_if(&next, &expected_generation).await {
             Ok(generation) => return Ok(generation),
             Err(error) if error.code == REGISTRY_CONFLICT_EXIT => continue,
