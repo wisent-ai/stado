@@ -8,6 +8,15 @@ beside the managed binary. Each managed queue agent finishes its active slots,
 detects that its loaded version differs, and exits through its declared
 `KeepAlive` or `Restart=on-failure` policy; the supervisor then starts the
 installed release without unloading the unit or interrupting a job.
+Before executing an artifact, every delivery verifies both the newest submitted
+source in the product catalog and the exact published platform coordinate in
+its still-delivering run. This fences an older queued delivery without assuming
+the product has a separate release-control rollout policy.
+The Stado delivery job starts its worker from the digest-pinned candidate
+archive and that worker uses itself for `install-local`; a broken older
+installed worker therefore cannot prevent the release that repairs it.
+
+
 
 
 ## Create and run a recipe

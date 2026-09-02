@@ -22,12 +22,14 @@ pub const RAM_SAFETY_BUFFER_MIN_GB: u64 = 4;
 
 /// DESIGN: stale scratch/output dirs older than this are safe to evict.
 pub const STALE_TRAINING_MAX_AGE_S: u64 = 3600;
-/// Exact queue command for a signed Stado release delivery. This is the only
-/// workload admitted while a host is below its disk watermark: it replaces the
-/// agent binary that owns cleanup and admission, so blocking it would make a
-/// broken disk-policy implementation impossible to repair through Stado.
+/// Exact queue command for a signed Stado release delivery. The agent's
+/// artifact resolver has already pinned `release.tar.gz` to its declared
+/// digest; running that candidate's delivery worker lets a release repair an
+/// older installed worker whose delivery semantics are the defect. This is the
+/// only workload admitted while a host is below its disk watermark: it replaces
+/// the agent binary that owns cleanup and admission.
 pub const RELEASE_DELIVERY_JOB_COMMAND: &str =
-    "$HOME/.stado/bin/stado release delivery-worker --request delivery-request.json";
+    "/usr/bin/tar -xzf release.tar.gz && exec ./bin/stado release delivery-worker --request delivery-request.json";
 /// Release qualification and delivery unblock declared fleet versions, so
 /// routine batch work must not leave them at the zero-priority FIFO tail.
 pub const RELEASE_JOB_PRIORITY: i64 = 90_000_000;
