@@ -52,11 +52,17 @@ fn binary() -> Option<PathBuf> {
 /// the tailnet's map does not change under a single command; a command that
 /// asks no tailnet origin never pays it, because [`address_of`] rejects
 /// non-tailnet names before this is read.
-static MAP: LazyLock<BTreeMap<String, IpAddr>> =
-    LazyLock::new(|| binary().and_then(|binary| read(&binary)).unwrap_or_default());
+static MAP: LazyLock<BTreeMap<String, IpAddr>> = LazyLock::new(|| {
+    binary()
+        .and_then(|binary| read(&binary))
+        .unwrap_or_default()
+});
 
 fn read(binary: &Path) -> Option<BTreeMap<String, IpAddr>> {
-    let output = Command::new(binary).args(["status", "--json"]).output().ok()?;
+    let output = Command::new(binary)
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
