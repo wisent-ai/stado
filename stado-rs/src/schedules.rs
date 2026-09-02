@@ -425,9 +425,9 @@ impl Schedule {
 // store (Python schedules/store.py)
 //
 // Reuses JobStorage's prefix-agnostic blob helpers for the common paths.
-// The one special case is claim_due(): an atomic compare-and-set on
-// next_due_at, so two overlapping coordinator invocations can never
-// double-fire the same occurrence.
+// Every mutation is a compare-and-swap over a versioned read: the occurrence
+// reservation and next_due_at advance in one swap, so two overlapping
+// coordinator invocations can never double-fire the same occurrence.
 // ---------------------------------------------------------------------------
 
 fn path(schedule_id: &str) -> String {
@@ -744,6 +744,42 @@ async fn release_pending_occurrence(
         .await;
 }
 
+/// Retire a reservation whose request the queue rejected outright, so the
+/// schedule's later occurrences are not blocked behind an unsatisfiable one.
+async fn abandon_pending_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    occurrence_key: &str,
+    owner: &str,
+) -> Result<(), StorageError> {
+    let path = path(schedule_id);
+    for _ in 0..16 {
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            return Ok(());
+        };
+        let mut sched = Schedule::from_json(&versioned.content)?;
+        let Some(pending) = sched.pending_occurrence.as_ref() else {
+            return Ok(());
+        };
+        if pending.occurrence_key != occurrence_key || pending.owner != owner {
+            return Ok(());
+        }
+        sched.pending_occurrence = None;
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(StorageError::NotFound(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StorageError::StorageConflict(format!(
+        "schedule {schedule_id} remained contended while abandoning occurrence"
+    )))
+}
+
 async fn accept_pending_occurrence(
     store: &JobStorage,
     schedule_id: &str,
@@ -844,15 +880,38 @@ async fn enqueue_pending_occurrence(
     let mut jobs = match submit_batch(&commands, &options).await {
         Ok(jobs) => jobs,
         Err(error) => {
-            release_pending_occurrence(
-                store,
-                &sched.schedule_id,
-                &pending.occurrence_key,
-                owner,
-            )
-            .await;
+            // A validation rejection is a property of this exact request, so
+            // retrying it forever would pin the reservation and silently
+            // retire the schedule. Drop the occurrence and let the cadence
+            // continue; only transient failures stay recoverable.
+            let rejected = matches!(
+                error,
+                crate::queue::submit::SubmitError::Validation(_)
+            );
+            if rejected {
+                abandon_pending_occurrence(
+                    store,
+                    &sched.schedule_id,
+                    &pending.occurrence_key,
+                    owner,
+                )
+                .await?;
+            } else {
+                release_pending_occurrence(
+                    store,
+                    &sched.schedule_id,
+                    &pending.occurrence_key,
+                    owner,
+                )
+                .await;
+            }
             return Err(StorageError::Other(format!(
-                "durable schedule enqueue failed: {error}"
+                "durable schedule enqueue {}: {error}",
+                if rejected {
+                    "rejected this occurrence"
+                } else {
+                    "failed"
+                }
             )));
         }
     };
@@ -1017,19 +1076,27 @@ pub async fn fire_schedule_now(
             &run_id,
         )
         .map_err(|error| StorageError::Other(error.to_string()))?;
-        if let Some(job) = manifest
+        // Only an entry the queue already admitted answers a repeat. A run
+        // manifest that stopped at planned/claimed/enqueuing has no job yet:
+        // replaying its planned document would report a fire that never
+        // reached the queue, so that retry has to finish the submission.
+        if let Some(entry) = manifest
             .get("entries")
             .and_then(serde_json::Value::as_array)
             .and_then(|entries| entries.first())
-            .and_then(|entry| {
-                entry
-                    .get("outcome")
-                    .and_then(|outcome| outcome.get("job"))
-                    .or_else(|| entry.get("planned_job"))
-            })
-            .cloned()
         {
-            return serde_json::from_value(job).map(Some).map_err(StorageError::Json);
+            let admitted = matches!(
+                entry.get("state").and_then(serde_json::Value::as_str),
+                Some("accepted" | "terminal" | "reaped")
+            );
+            let retained = entry
+                .get("outcome")
+                .and_then(|outcome| outcome.get("job"))
+                .or_else(|| entry.get("planned_job"))
+                .cloned();
+            if let (true, Some(job)) = (admitted, retained) {
+                return serde_json::from_value(job).map(Some).map_err(StorageError::Json);
+            }
         }
     }
     let Some(sched) = read_schedule(store, schedule_id).await? else {

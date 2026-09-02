@@ -467,11 +467,7 @@ pub async fn retry_gaps(
         );
         let run_id = stable_run_id("coverage", &token);
         let options = SubmitOptions {
-            batch_id: if batch_id.is_empty() {
-                run_id.clone()
-            } else {
-                batch_id.clone()
-            },
+            batch_id: batch_id.clone(),
             run_id,
             bucket: config::bucket().to_string(),
             verify_command,

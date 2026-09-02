@@ -69,33 +69,44 @@ pub async fn list_jobs(
     prefix: &str,
     oldest_first: usize,
 ) -> Result<Vec<Job>, StorageError> {
-    let paths: Vec<String> = store
-        .list_paths(&format!("{prefix}/"), 0)
-        .await?
-        .into_iter()
-        .filter(|path| path.ends_with(".json"))
-        .collect();
-    let mut jobs = Vec::new();
-    let chunk_size = oldest_first.max(100);
-    for paths in paths.chunks(chunk_size) {
-        let texts: Vec<Option<String>> = futures::stream::iter(paths)
-            .map(|path| store.download_text(path))
-            .buffered(10)
-            .collect::<Vec<Result<Option<String>, StorageError>>>()
-            .await
+    // The window has to stay oldest-first: the scheduler's FIFO fairness is
+    // exactly "the N oldest queued blobs", and a lexical slice of job-id
+    // digests starves whatever sorts late. Transitional sentinels are skipped
+    // without spending the window, so the listing budget grows until the
+    // caller's N live jobs are found or the prefix is exhausted.
+    let mut budget = oldest_first;
+    loop {
+        let listed = store.list_paths(&format!("{prefix}/"), budget).await?;
+        let offered = listed.len();
+        let paths: Vec<String> = listed
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
-        for data in texts.into_iter().flatten() {
-            let job = Job::from_json(&data)?;
-            if !is_transition_sentinel_state(&job.state) {
+            .filter(|path| path.ends_with(".json"))
+            .collect();
+        let mut jobs = Vec::new();
+        for paths in paths.chunks(100) {
+            let texts: Vec<Option<String>> = futures::stream::iter(paths)
+                .map(|path| store.download_text(path))
+                .buffered(10)
+                .collect::<Vec<Result<Option<String>, StorageError>>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+            for data in texts.into_iter().flatten() {
+                let job = Job::from_json(&data)?;
+                if is_transition_sentinel_state(&job.state) {
+                    continue;
+                }
                 jobs.push(job);
                 if oldest_first > 0 && jobs.len() >= oldest_first {
                     return Ok(jobs);
                 }
             }
         }
+        if oldest_first == 0 || offered < budget {
+            return Ok(jobs);
+        }
+        budget = budget.saturating_mul(2);
     }
-    Ok(jobs)
 }
 
 /// Python `_download_or_none` fanned out over `paths` with `workers`
@@ -255,6 +266,9 @@ pub async fn list_fitting(
                     eligible_paths.push(blob.name.clone());
                 }
             }
+        }
+        if cap > 0 && eligible_paths.len() + out.len() >= cap {
+            break;
         }
     }
 
