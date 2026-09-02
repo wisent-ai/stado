@@ -820,3 +820,48 @@ jobs:
               cargo clean --manifest-path "$manifest"
             fi
           fi
+
+  deploy-fleet:
+    needs: [identity, publish-linux, deploy-control-plane]
+    if: needs.identity.outputs.channel == 'stable'
+    runs-on: [self-hosted, stado-control-plane]
+    permissions:
+      contents: read
+    env:
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_VERSION: ${{ needs.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Converge every required Stado delivery
+        run: |
+          set -euo pipefail
+          stado_bin="$HOME/.stado/bin/stado"
+          test -x "$stado_bin"
+          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+          declared="${version_line#*\"}"
+          declared="${declared%%\"*}"
+          test "$declared" = "$STADO_VERSION"
+          targets="$(
+            jq -er '
+              [
+                .deliveries[]
+                | select(.required == true)
+                | select(.argv == ["stado", "release", "install-local"])
+                | .target
+              ]
+              | if length > 0 and length == (unique | length)
+                then .[]
+                else error("required Stado delivery targets must be present and unique")
+                end
+            ' .wisent-release.json
+          )"
+          while IFS= read -r target; do
+            test -n "$target"
+            "$stado_bin" host declare-version "$target" \
+              --binary stado \
+              --version "$STADO_VERSION" \
+              --json
+            "$stado_bin" service converge "$target" stado --apply --json
+          done <<<"$targets"
