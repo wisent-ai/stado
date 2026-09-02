@@ -18,7 +18,7 @@ use futures::StreamExt;
 
 use crate::models::Job;
 
-use super::storage::JobStorage;
+use super::storage::{is_transition_sentinel_state, JobStorage};
 use super::{json_str, migrations, StorageError};
 
 /// Sortable name component: lower = higher real priority + older.
@@ -87,7 +87,7 @@ pub async fn list_jobs(
             .collect::<Result<Vec<_>, _>>()?;
         for data in texts.into_iter().flatten() {
             let job = Job::from_json(&data)?;
-            if !job.state.starts_with("transition-cleaned:") {
+            if !is_transition_sentinel_state(&job.state) {
                 jobs.push(job);
                 if oldest_first > 0 && jobs.len() >= oldest_first {
                     return Ok(jobs);
@@ -172,7 +172,7 @@ pub async fn list_top_n(
         for ((_marker_path, _jid), data) in job_ids.iter().zip(blobs) {
             if let Some(data) = data {
                 let job = Job::from_json(&data)?;
-                if job.state.starts_with("transition-cleaned:") {
+                if is_transition_sentinel_state(&job.state) {
                     continue;
                 }
                 out.push(job);
@@ -269,7 +269,7 @@ pub async fn list_fitting(
         .collect::<Result<Vec<_>, _>>()?;
     for data in texts.into_iter().flatten() {
         let job = Job::from_json(&data)?;
-        if !job.state.starts_with("transition-cleaned:")
+        if !is_transition_sentinel_state(&job.state)
             && job.gpu_mem_gb <= max_gpu_mem_gb
         {
             out.push(job);

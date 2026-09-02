@@ -177,15 +177,14 @@ pub async fn reap_terminal_runs(
         .map_err(|error| StorageError::Other(error.to_string()))?;
 
         for job_id in &job_ids {
-            for prefix in TERMINAL_PREFIXES {
-                if store.read_job(prefix, job_id).await?.is_some() {
+            for prefix in TERMINAL_PREFIXES
+                .iter()
+                .copied()
+                .chain(["queue", "running"])
+            {
+                let path = format!("{prefix}/{job_id}.json");
+                if store.backend().exists(&path).await? {
                     store.delete_job(prefix, job_id).await?;
-                    summary.deleted_jobs += 1;
-                }
-            }
-            for source_prefix in ["queue", "running"] {
-                if store.read_job(source_prefix, job_id).await?.is_some() {
-                    store.delete_job(source_prefix, job_id).await?;
                     summary.deleted_jobs += 1;
                 }
             }

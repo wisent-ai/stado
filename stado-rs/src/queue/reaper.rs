@@ -139,6 +139,16 @@ async fn reap_one(
         return Ok(());
     }
 
+    // Heartbeats and checkpoints live outside the versioned job blob. Re-read
+    // them after every potentially long finalizer/checkpoint inspection and
+    // immediately before fencing the job, so a worker that refreshed its lease
+    // during this pass is not reaped from a stale first observation.
+    if fresh(heartbeat_age_seconds(store, job_id, now).await?)
+        || hg::any_job_checkpoint_fresh(store, &job, CHECKPOINT_FRESH_SECONDS).await
+    {
+        return Ok(());
+    }
+
     let second_expiry = job.error.as_deref() == Some(LEASE_EXPIRED_REASON);
     if second_expiry || job.restarts + 1 > job.max_restarts {
         job.state = job_state::FAILED.to_string();

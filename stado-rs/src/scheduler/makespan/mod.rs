@@ -342,7 +342,10 @@ pub async fn repair_conflicting_pinned_assignments(
             continue;
         };
         let mut job = Job::from_json(&versioned.content)?;
-        if job.pinned_host.is_empty() || job.assigned_to.eq_ignore_ascii_case(&job.pinned_host) {
+        if job.state != crate::models::job_state::QUEUED
+            || job.pinned_host.is_empty()
+            || job.assigned_to.eq_ignore_ascii_case(&job.pinned_host)
+        {
             continue;
         }
         let pinned_host = job.pinned_host.clone();

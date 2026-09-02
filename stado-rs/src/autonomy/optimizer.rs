@@ -666,6 +666,9 @@ async fn update_job_placement(
     let mut current = Job::from_json(&versioned.content).map_err(|error| {
         StorageError::Other(format!("invalid queued job {}: {error}", original.job_id))
     })?;
+    if current.state != crate::models::job_state::QUEUED {
+        return Ok(false);
+    }
     let assignment_matches = if selected.existing_capacity {
         current.assigned_to == selected.target_id
     } else {

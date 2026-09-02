@@ -70,11 +70,19 @@ fn prefix_state(prefix: &str) -> &str {
     }
 }
 
+const TRANSITION_FENCE_PREFIX: &str = "transitioning:";
+const TRANSITION_CLEANED_PREFIX: &str = "transition-cleaned:";
+
 fn transition_fence_state(transition_id: &str) -> String {
-    format!("transitioning:{transition_id}")
+    format!("{TRANSITION_FENCE_PREFIX}{transition_id}")
 }
 fn transition_cleaned_state(transition_id: &str) -> String {
-    format!("transition-cleaned:{transition_id}")
+    format!("{TRANSITION_CLEANED_PREFIX}{transition_id}")
+}
+
+pub(crate) fn is_transition_sentinel_state(state: &str) -> bool {
+    state.starts_with(TRANSITION_FENCE_PREFIX)
+        || state.starts_with(TRANSITION_CLEANED_PREFIX)
 }
 
 
@@ -760,7 +768,7 @@ impl JobStorage {
                 continue;
             };
             let existing = Job::from_json(&existing_versioned.content)?;
-            if existing.state.starts_with("transition-cleaned:") {
+            if existing.state.starts_with(TRANSITION_CLEANED_PREFIX) {
                 match self
                     .compare_and_swap_text(
                         &destination_path,
@@ -870,7 +878,7 @@ impl JobStorage {
                             requested.job_id
                         )));
                     }
-                    if existing.state.starts_with("transition-cleaned:") {
+                    if existing.state.starts_with(TRANSITION_CLEANED_PREFIX) {
                         (requested.clone(), Some(existing_versioned.version))
                     } else if existing.state == prefix_state(to_prefix) {
                         (existing, Some(existing_versioned.version))
@@ -1011,9 +1019,7 @@ impl JobStorage {
             return Ok(None);
         };
         let job = Job::from_json(&data)?;
-        if job.state.starts_with("transition-cleaned:")
-            || job.state.starts_with("transition-fence:")
-        {
+        if is_transition_sentinel_state(&job.state) {
             return Ok(None);
         }
         Ok(Some(job))

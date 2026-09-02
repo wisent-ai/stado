@@ -33,6 +33,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -358,6 +360,11 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
     }
 }
 
+const ARCHIVE_MAX_ENTRIES: usize = 1_000_000;
+const ARCHIVE_MAX_PATH_BYTES: usize = 4 * 1024;
+const ARCHIVE_MAX_MEMBER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const ARCHIVE_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+
 fn sorted_archive_paths(
     root: &std::path::Path,
     directory: &std::path::Path,
@@ -380,6 +387,19 @@ fn sorted_archive_paths(
                     "archive source contains unsupported symlink: {}",
                     path.display()
                 ),
+            ));
+        }
+        let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
+        if paths.len() >= ARCHIVE_MAX_ENTRIES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "archive source exceeds the one-million-entry limit",
+            ));
+        }
+        if relative.as_os_str().as_encoded_bytes().len() > ARCHIVE_MAX_PATH_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("archive member path exceeds 4096 bytes: {}", path.display()),
             ));
         }
         paths.push(path.clone());
@@ -416,11 +436,13 @@ fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
             "archive output must be outside the source directory",
         ));
     }
+    let mut output_created = false;
     let create_result = (|| -> std::io::Result<()> {
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(output)?;
+        output_created = true;
         let encoder = flate2::GzBuilder::new()
             .mtime(0)
             .write(file, flate2::Compression::default());
@@ -434,20 +456,78 @@ fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
                 .unwrap_or(left)
                 .cmp(right.strip_prefix(&source).unwrap_or(right))
         });
+        let mut total_member_bytes = 0_u64;
         for path in paths {
             let name = path.strip_prefix(&source).map_err(std::io::Error::other)?;
-            if std::fs::symlink_metadata(&path)?.is_dir() {
-                archive.append_dir(name, &path)?;
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "archive source contains unsupported symlink: {}",
+                        path.display()
+                    ),
+                ));
+            }
+            let mut open = std::fs::OpenOptions::new();
+            open.read(true);
+            #[cfg(target_os = "macos")]
+            open.custom_flags(0x0000_0100);
+            #[cfg(target_os = "linux")]
+            open.custom_flags(0x0002_0000);
+            let mut member = open.open(&path)?;
+            let opened_metadata = member.metadata()?;
+            if opened_metadata.is_dir() && metadata.is_dir() {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_mode(0o755);
+                header.set_uid(0);
+                header.set_gid(0);
+                header.set_mtime(0);
+                header.set_cksum();
+                archive.append_data(&mut header, name, std::io::empty())?;
+            } else if opened_metadata.is_file() && metadata.is_file() {
+                let member_bytes = opened_metadata.len();
+                if member_bytes > ARCHIVE_MAX_MEMBER_BYTES {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("archive member exceeds the 8 GiB limit: {}", path.display()),
+                    ));
+                }
+                total_member_bytes = total_member_bytes.checked_add(member_bytes).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "archive member byte total overflowed",
+                    )
+                })?;
+                if total_member_bytes > ARCHIVE_MAX_TOTAL_BYTES {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "archive source exceeds the 32 GiB uncompressed limit",
+                    ));
+                }
+                archive.append_file(name, &mut member)?;
             } else {
-                archive.append_path_with_name(&path, name)?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "archive member changed type or is unsupported: {}",
+                        path.display()
+                    ),
+                ));
             }
         }
         let encoder = archive.into_inner()?;
         let file = encoder.finish()?;
-        file.sync_all()
+        file.sync_all()?;
+        drop(file);
+        std::fs::File::open(&output_parent)?.sync_all()
     })();
     if let Err(error) = create_result {
-        let _ = std::fs::remove_file(output);
+        if output_created {
+            let _ = std::fs::remove_file(output);
+        }
         return Err(CmdError::click(format!(
             "cannot create release archive {}: {error}",
             output.display()

@@ -472,7 +472,7 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
 fn extract_resolved_executable(
     stderr: &mut String,
     candidates: &[&str],
-) -> Result<String, DeployError> {
+) -> Result<Option<String>, DeployError> {
     let mut resolved: Option<String> = None;
     let mut retained = String::with_capacity(stderr.len());
     for segment in stderr.split_inclusive('\n') {
@@ -491,11 +491,11 @@ fn extract_resolved_executable(
             retained.push_str(segment);
         }
     }
-    let resolved = resolved.ok_or_else(|| {
-        DeployError("host returned no resolved executable marker".into())
-    })?;
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
     *stderr = retained;
-    Ok(resolved)
+    Ok(Some(resolved))
 }
 
 
@@ -523,7 +523,15 @@ pub async fn exec_host(
         _ => host_channel::run_program(&target, approved.argv, runner).await?,
     };
     let resolved_executable = if candidates.len() > usize::from(true) {
-        extract_resolved_executable(&mut output.stderr, candidates)?
+        match extract_resolved_executable(&mut output.stderr, candidates)? {
+            Some(path) => path,
+            None if !output.ok() => String::new(),
+            None => {
+                return Err(DeployError(
+                    "host returned no resolved executable marker".into(),
+                ))
+            }
+        }
     } else {
         candidates.first().copied().unwrap_or_default().to_string()
     };

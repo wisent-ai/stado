@@ -1143,7 +1143,13 @@ pub async fn submit_batch(
         }
     };
     let planned = validate_run_manifest(&manifest, &run_id, &request, &request_digest)?;
-    let owner = uuid::Uuid::new_v4().simple().to_string();
+    // Submission ownership is stable for the immutable request. If a caller
+    // drops this future after a machine-request lease renewal failure, the next
+    // idempotent replay can resume immediately instead of waiting fifteen
+    // minutes for a random, now-ownerless token to expire. Concurrent replays
+    // share only this exact request digest and all side effects remain
+    // create-if-absent/CAS fenced.
+    let owner = format!("submission:{request_digest}");
     let mut accepted = Vec::with_capacity(planned.len());
     for index in 0..planned.len() {
         match claim_entry(
@@ -1218,6 +1224,11 @@ pub async fn submit_batch(
 fn validate_submission(command: &str, options: &SubmitOptions) -> Result<(), SubmitError> {
     if command.trim().is_empty() {
         return Err(SubmitError::Validation("command cannot be empty".into()));
+    }
+    if command.len() > 1024 * 1024 {
+        return Err(SubmitError::Validation(
+            "command exceeds the 1 MiB durable manifest limit".into(),
+        ));
     }
     if !options.max_cost_per_hour_usd.is_finite() || options.max_cost_per_hour_usd < 0.0 {
         return Err(SubmitError::Validation(

@@ -138,7 +138,7 @@ pub async fn backfill_priority_markers(
             continue;
         }
         let job = Job::from_json(&body)?;
-        if job.priority <= 0 {
+        if job.state != crate::models::job_state::QUEUED || job.priority <= 0 {
             continue;
         }
         if have.contains(&job.job_id) {
