@@ -341,10 +341,10 @@ jobs:
               > "$RUNNER_TEMP/release-lifecycles.json"
             jq -e '
               .items == ["stado-release-publisher"] and
-              (.publisher_lifecycles | type == "array") and
-              (.publisher_lifecycles | length) == 1 and
+              (.source_lifecycles | type == "array") and
+              (.source_lifecycles | length) == 1 and
               all(
-                .publisher_lifecycles[];
+                .source_lifecycles[];
                 (.item | type == "string" and length > 0) and
                 (.controller | type == "string" and length > 0) and
                 (.mode == "owner" or .mode == "managed" or .mode == "external") and
