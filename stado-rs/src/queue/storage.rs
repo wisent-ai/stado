@@ -1200,7 +1200,7 @@ impl JobStorage {
         prefix: &str,
         top_n: usize,
     ) -> Result<Vec<Job>, StorageError> {
-        listing::list_top_n(self, prefix, top_n).await
+        listing::list_top_n(self, prefix, top_n, i64::MAX).await
     }
 
     /// Priority markers first, then FIFO oldest_first, deduped by job_id.

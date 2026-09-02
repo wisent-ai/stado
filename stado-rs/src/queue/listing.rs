@@ -135,10 +135,15 @@ async fn download_many_or_none(
 /// queue -> running path. Do not let stale top markers consume the whole
 /// top_n budget, or high-priority fresh jobs disappear behind dead markers.
 /// Keep the scan bounded because agents call this in their polling loop.
+///
+/// `max_gpu_mem_gb` bounds what counts as a hit: a job the caller cannot run
+/// must not consume a budget slot either, or the highest-priority jobs that do
+/// not fit this consumer hide every priority job that does.
 pub async fn list_top_n(
     store: &JobStorage,
     prefix: &str,
     top_n: usize,
+    max_gpu_mem_gb: i64,
 ) -> Result<Vec<Job>, StorageError> {
     if top_n == 0 {
         return Ok(vec![]);
@@ -183,7 +188,7 @@ pub async fn list_top_n(
         for ((_marker_path, _jid), data) in job_ids.iter().zip(blobs) {
             if let Some(data) = data {
                 let job = Job::from_json(&data)?;
-                if is_transition_sentinel_state(&job.state) {
+                if is_transition_sentinel_state(&job.state) || job.gpu_mem_gb > max_gpu_mem_gb {
                     continue;
                 }
                 out.push(job);
@@ -206,7 +211,7 @@ pub async fn list_priority_first(
     cap: usize,
 ) -> Result<Vec<Job>, StorageError> {
     migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
-    let pri = list_top_n(store, prefix, cap).await?;
+    let pri = list_top_n(store, prefix, cap, i64::MAX).await?;
     let fifo = list_jobs(store, prefix, cap).await?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
@@ -236,14 +241,18 @@ pub async fn list_fitting(
     let mut out: Vec<Job> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     if prefix == "queue" {
-        for job in list_top_n(store, prefix, cap).await? {
-            if job.gpu_mem_gb <= max_gpu_mem_gb && !seen.contains(&job.job_id) {
-                seen.insert(job.job_id.clone());
+        for job in list_top_n(store, prefix, cap, max_gpu_mem_gb).await? {
+            if seen.insert(job.job_id.clone()) {
                 out.push(job);
             }
         }
     }
-    let mut eligible_paths: Vec<String> = Vec::new();
+    // Oldest-first before any cap: `list_blobs_with_meta` answers in backend
+    // order, so capping it directly would hand the same lexically early jobs
+    // to every poll and starve an older or higher-priority job whose name
+    // sorts late. The whole prefix is listed for its metadata regardless; only
+    // the ordered head of it is downloaded.
+    let mut eligible: Vec<(chrono::DateTime<chrono::Utc>, String)> = Vec::new();
     for blob in store.list_blobs_with_meta(&format!("{prefix}/")).await? {
         let name = blob.name.rsplit('/').next().unwrap_or("");
         let jid = name.strip_suffix(".json").unwrap_or(name);
@@ -253,8 +262,8 @@ pub async fn list_fitting(
         // mem_str is None on blobs that predate the metadata stamp -> treat
         // as eligible. A corrupt int now raises so the operator sees that
         // the metadata is misbehaving (Python `int(mem_str)` ValueError).
-        match blob.metadata.get("gpu_mem_gb") {
-            None => eligible_paths.push(blob.name.clone()),
+        let fits = match blob.metadata.get("gpu_mem_gb") {
+            None => true,
             Some(mem_str) => {
                 let mem: i64 = mem_str.parse().map_err(|_| {
                     StorageError::Other(format!(
@@ -262,15 +271,26 @@ pub async fn list_fitting(
                         blob.name
                     ))
                 })?;
-                if mem <= max_gpu_mem_gb {
-                    eligible_paths.push(blob.name.clone());
-                }
+                mem <= max_gpu_mem_gb
             }
-        }
-        if cap > 0 && eligible_paths.len() + out.len() >= cap {
-            break;
+        };
+        if fits {
+            eligible.push((
+                blob.updated.unwrap_or_else(chrono::Utc::now),
+                blob.name.clone(),
+            ));
         }
     }
+    eligible.sort_by(|left, right| left.cmp(right));
+    let eligible_paths: Vec<String> = if cap > 0 {
+        eligible
+            .into_iter()
+            .take(cap.saturating_sub(out.len()))
+            .map(|(_, name)| name)
+            .collect()
+    } else {
+        eligible.into_iter().map(|(_, name)| name).collect()
+    };
 
     // Python `_read`: download errors propagate; only a missing blob (None)
     // is skipped.
@@ -283,13 +303,15 @@ pub async fn list_fitting(
         .collect::<Result<Vec<_>, _>>()?;
     for data in texts.into_iter().flatten() {
         let job = Job::from_json(&data)?;
-        if !is_transition_sentinel_state(&job.state)
-            && job.gpu_mem_gb <= max_gpu_mem_gb
-        {
-            out.push(job);
-            if cap > 0 && out.len() >= cap {
-                return Ok(out);
-            }
+        if is_transition_sentinel_state(&job.state) || job.gpu_mem_gb > max_gpu_mem_gb {
+            continue;
+        }
+        if !seen.insert(job.job_id.clone()) {
+            continue;
+        }
+        out.push(job);
+        if cap > 0 && out.len() >= cap {
+            return Ok(out);
         }
     }
     Ok(out)

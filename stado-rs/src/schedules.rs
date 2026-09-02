@@ -1099,20 +1099,46 @@ pub async fn fire_schedule_now(
             }
         }
     }
-    let Some(sched) = read_schedule(store, schedule_id).await? else {
-        return Ok(None);
-    };
-    if sched.deleted && sched.pending_occurrence.is_none() {
-        return Ok(None);
+    // A pending occurrence that is not this token's is somebody else's work —
+    // a crashed coordinator fire, typically. Finish it first, then reserve and
+    // enqueue the occurrence this token names: returning that unrelated job as
+    // the manual fire would report work the operator asked for as done while
+    // it was never submitted.
+    for _ in 0..2 {
+        let Some(sched) = read_schedule(store, schedule_id).await? else {
+            return Ok(None);
+        };
+        if sched.deleted && sched.pending_occurrence.is_none() {
+            return Ok(None);
+        }
+        let owner = uuid::Uuid::new_v4().simple().to_string();
+        match sched.pending_occurrence.as_ref() {
+            Some(pending) if pending.run_id != run_id => {
+                let Some(claimed) =
+                    takeover_pending_occurrence(store, schedule_id, &owner).await?
+                else {
+                    return Ok(None);
+                };
+                enqueue_pending_occurrence(store, claimed, &owner, now).await?;
+                continue;
+            }
+            Some(_) => {
+                let Some(claimed) =
+                    takeover_pending_occurrence(store, schedule_id, &owner).await?
+                else {
+                    return Ok(None);
+                };
+                return enqueue_pending_occurrence(store, claimed, &owner, now).await;
+            }
+            None => {
+                let Some(claimed) =
+                    reserve_manual_occurrence(store, schedule_id, &owner, retry_token).await?
+                else {
+                    return Ok(None);
+                };
+                return enqueue_pending_occurrence(store, claimed, &owner, now).await;
+            }
+        }
     }
-    let owner = uuid::Uuid::new_v4().simple().to_string();
-    let claimed = if sched.pending_occurrence.is_some() {
-        takeover_pending_occurrence(store, schedule_id, &owner).await?
-    } else {
-        reserve_manual_occurrence(store, schedule_id, &owner, retry_token).await?
-    };
-    let Some(claimed) = claimed else {
-        return Ok(None);
-    };
-    enqueue_pending_occurrence(store, claimed, &owner, now).await
+    Ok(None)
 }
