@@ -2601,13 +2601,24 @@ fn configured_origin_hosts() -> Vec<String> {
 }
 
 fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
-    let value = match std::env::var(variable) {
+    // `STADO_API_URL` is a configuration field -- `api.url` -- and not an
+    // environment-only switch: `config::stado_api_url` resolves it from the
+    // environment first and the configuration second, and that is how the
+    // scheduler, the doctor and every enrolment path read it. This reader
+    // consulted the environment alone, so `stado host release` refused a fleet
+    // delivery with "STADO_API_URL is required for canonical release reads" on
+    // a host whose own configuration declared the canonical origin, and
+    // printed it back under `host config-show` while refusing to use it.
+    let mut value = match std::env::var(variable) {
         Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotPresent) => String::new(),
         Err(std::env::VarError::NotUnicode(_)) => {
             return Err(CmdError::click(format!("{variable} must be valid Unicode")));
         }
     };
+    if value.trim().is_empty() && variable == "STADO_API_URL" {
+        value = crate::config::stado_api_url();
+    }
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);

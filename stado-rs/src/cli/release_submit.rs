@@ -959,6 +959,52 @@ async fn publish(
     Ok(a)
 }
 
+/// Refuse a release whose runtime declaration omits the version it would
+/// replace, before anything is built, signed or published.
+///
+/// The host enforces the same rule at rollout, and enforcing it only there is
+/// expensive: `release_agent` quarantines the candidate digest as
+/// `rollback_compatibility_undeclared`, and a quarantined immutable coordinate
+/// is spent -- the version can be abandoned but never retried, because a
+/// rebuild of the same version writes different bytes to a coordinate that
+/// refuses to differ. Brama burnt 0.2.40, 0.2.44, 0.2.54 and 0.2.59 exactly
+/// that way, each time because a hand-kept list had not been told about the
+/// release that shipped before it. Both sides of the comparison are readable
+/// here, one document read before the first build, so the answer arrives while
+/// it is still free and names the edit that fixes it.
+async fn require_rollback_compatibility(
+    manifest: &ReleasePipelineManifest,
+    version: &str,
+) -> Result<(), CmdError> {
+    let Some(runtime) = manifest.runtime.as_ref() else {
+        return Ok(());
+    };
+    let (document, _) = super::registry::fetch_versioned_document().await?;
+    let Some(control) = release_control::control(&document)? else {
+        return Ok(());
+    };
+    let Some(policy) = control.products.get(&manifest.product) else {
+        return Ok(());
+    };
+    let Some(desired) = policy.desired.as_ref() else {
+        return Ok(());
+    };
+    if desired.version == version
+        || runtime
+            .rollback_compatible_with
+            .iter()
+            .any(|declared| declared == &desired.version)
+    {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{} {version} does not declare rollback compatibility with {}, the release it would \
+         replace; add \"{}\" to runtime.rollback_compatible_with in {PRODUCT_MANIFEST}. Without \
+         it every rollout target quarantines this digest and the coordinate is spent.",
+        manifest.product, desired.version, desired.version
+    )))
+}
+
 pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let root = args.source.canonicalize()?;
     let manifest_bytes = std::fs::read(root.join(PRODUCT_MANIFEST))?;
@@ -979,6 +1025,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             "requested channel is forbidden by promotion policy",
         ));
     }
+    require_rollback_compatibility(&m, &args.version).await?;
     // An explicit endpoint may be a Stado-managed loopback forward to the
     // control host. Only an absent endpoint means this caller owns the local
     // object daemon and must ensure it before publishing.
