@@ -33,6 +33,31 @@ manifest_name="release-manifest-$platform.json"
 test -f "$release_dir/$archive_name"
 test -f "$release_dir/$manifest_name"
 
+# One coordinate, two producers. This workflow publishes the executables,
+# SHA256SUMS, the platform archive and the platform manifest. The product's own
+# signed-release path publishes `release.json`, `release.sig`, `release.tar.gz`
+# and `qualification.json` into the SAME prefix — see
+# `cli::release_submit::publish`, which records
+# `stado://releases/<product>/<version>/<platform>/qualification.json` as the
+# run's qualification URI. 0.13.45's linux leg is exactly that state: nine
+# objects from here, four from there, and a check that expected the coordinate
+# to hold only what this runner had on disk refused a complete release.
+#
+# The four names are declared once, in `release_control.rs`, and read out of
+# that declaration here so this check cannot drift from the writer that makes
+# them.
+control_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/stado-rs/src/release_control.rs"
+test -f "$control_source"
+control_names="$(
+  sed -n 's/^pub const RELEASE_[A-Z]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source"
+)"
+declared_control="$(printf '%s\n' "$control_names" | sed '/^$/d' | /usr/bin/wc -l | tr -d '[:space:]')"
+if [ "$declared_control" -lt 4 ]; then
+  echo "$control_source declares $declared_control signed-release object name(s);" \
+    "this check needs them to know which members the release pipeline writes" >&2
+  exit 1
+fi
+
 # Every immutable put already reads the exact bytes back through the authenticated
 # writer. Public validation therefore has a different job: prove that the public
 # route exposes that complete coordinate. The archive contains every executable
@@ -51,7 +76,6 @@ listing="$(
   $stado_bin storage objects releases "$product/$version/$platform/" --json |
     jq -c '{objects: [.objects[] | select((.key // .uri) | contains(".__stado_upload/") | not)]}'
 )"
-local_count=0
 for source in "$release_dir"/*; do
   name="${source##*/}"
   uri="$prefix/$name"
@@ -62,12 +86,24 @@ for source in "$release_dir"/*; do
     echo "public release coordinate omitted $uri at its writer-verified size $size" >&2
     exit 1
   fi
-  local_count=$((local_count + 1))
 done
 
-listed_count="$(jq -er '.objects | length' <<<"$listing")"
-if [ "$listed_count" -ne "$local_count" ]; then
-  echo "public release coordinate contains $listed_count objects; expected $local_count" >&2
+# Every member is now accounted for by one of the two producers, so anything
+# left over is an object nobody declares — a stray write into an immutable
+# coordinate, which is what this check is for.
+declared="$(
+  {
+    printf '%s\n' "$control_names"
+    for source in "$release_dir"/*; do printf '%s\n' "${source##*/}"; done
+  } | jq -R -s 'split("\n") | map(select(length > 0))'
+)"
+undeclared="$(
+  jq -r --argjson declared "$declared" '
+    ([.objects[] | (.key // .uri) | sub(".*/"; "")] - $declared) | unique | join(" ")
+  ' <<<"$listing"
+)"
+if [ -n "$undeclared" ]; then
+  echo "public release coordinate carries member(s) neither producer declares: $undeclared" >&2
   exit 1
 fi
 
