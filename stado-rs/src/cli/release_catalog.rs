@@ -48,6 +48,41 @@ fn product(manifest: &ProductManifest) -> &str {
 fn catalog_uri(product: &str) -> String {
     format!("stado://system/{CATALOG_PREFIX}/{product}.json")
 }
+/// Refuse a delivery whose source is no longer the product catalog's newest
+/// submitted source. The catalog is written before queueing builds, through
+/// compare-and-swap, and therefore exists for pipeline-only products which do
+/// not have a release-control rollout policy.
+pub(crate) async fn require_current_source(
+    product: &str,
+    source_sha256: &str,
+    source_uri: &str,
+) -> Result<(), CmdError> {
+    let uri = catalog_uri(product);
+    let Some((bytes, _)) = super::storage::fetch_object_versioned(&uri).await? else {
+        return Err(CmdError::click(format!(
+            "release catalog has no source declaration for {product}"
+        )));
+    };
+    let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)
+        .map_err(|error| CmdError::click(format!("invalid {product} release catalog: {error}")))?;
+    release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
+    let source = entry.source.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "{product} release catalog has no submitted source identity"
+        ))
+    })?;
+    let exact = entry.product == product
+        && source.source_sha256 == source_sha256
+        && source.source_uri == source_uri;
+    if !exact {
+        return Err(CmdError::click(format!(
+            "delivery for {product} source {source_sha256} was superseded by catalog source {}; \
+             refusing the stale coordinate",
+            source.source_sha256
+        )));
+    }
+    Ok(())
+}
 
 pub(crate) async fn publish_entry(
     manifest: ProductManifest,
