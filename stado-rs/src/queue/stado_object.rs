@@ -280,6 +280,40 @@ impl StadoObjectBackend {
         StorageError::Stado { status, body }
     }
 
+    /// The whole body of one successful object response.
+    ///
+    /// `bytes()` yields what arrived, which is not the same claim as what the
+    /// object is: the route answers every read with a `Content-Length` and
+    /// `Accept-Ranges: bytes`, so a body that stops short of that number is a
+    /// transfer that did not finish and the response itself says so. Nothing
+    /// here used to look. A short registry document then reached
+    /// `serde_json::from_str` and was reported as a document that does not
+    /// parse — `providers::local::disk_cleanup` journals that class as
+    /// `ValueError` — so a transport failure was recorded as the registry
+    /// being malformed, about bytes that were never the registry. The same
+    /// shape on the sibling release route is what #317 is open for.
+    ///
+    /// A declared length is the only thing that can be checked, so it is the
+    /// only thing that is: a chunked or otherwise unlengthed response has
+    /// nothing to disagree with and passes through exactly as before.
+    async fn whole_body(response: Response, path: &str) -> Result<Vec<u8>, StorageError> {
+        let declared = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<usize>().ok());
+        let bytes = response.bytes().await?.to_vec();
+        if let Some(declared) = declared {
+            if bytes.len() != declared {
+                return Err(StorageError::Other(format!(
+                    "Stado object API returned {} of {declared} declared bytes for {path}",
+                    bytes.len()
+                )));
+            }
+        }
+        Ok(bytes)
+    }
+
     async fn upload(
         &self,
         path: &str,
@@ -418,7 +452,7 @@ impl BlobBackend for StadoObjectBackend {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        Ok(Some(response.bytes().await?.to_vec()))
+        Ok(Some(Self::whole_body(response, path).await?))
     }
 
     /// One `stado://releases/...` object off the fleet's public release
@@ -490,7 +524,7 @@ impl BlobBackend for StadoObjectBackend {
                 ))
             })?
             .to_string();
-        let bytes = response.bytes().await?.to_vec();
+        let bytes = Self::whole_body(response, path).await?;
         let content = String::from_utf8(bytes)
             .map_err(|error| StorageError::Other(format!("invalid UTF-8 in {path}: {error}")))?;
         Ok(Some(VersionedText { content, version }))
