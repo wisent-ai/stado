@@ -49,12 +49,60 @@
 
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::host_channel;
 use super::{py_str_repr, shlex_quote, DeployError, Runner};
 
 const RESOLVED_EXECUTABLE_MARKER: &str = "STADO_RESOLVED_EXECUTABLE\t";
+
+/// The exact document `stado host exec --json` prints.
+///
+/// Typed, and `deny_unknown_fields`, because this is a machine document: one
+/// of our own reconcile scripts reads it with jq, so a misspelled or renamed
+/// key has to be a compile error here rather than a quietly different report
+/// its consumer discovers in production. `schema` is what a consumer gates a
+/// version on, and a map carrying only the target and its connection detail
+/// gives it nothing to gate on.
+///
+/// Built directly instead of by validating a
+/// [`host_channel::base_report`] map on the way out: that map's string keys
+/// would be a second shape for the same document, checked no earlier than
+/// the call that happens to exercise it, whereas one struct cannot drift
+/// from itself. Field names, and the omission of the conditional ones,
+/// reproduce the map this replaced, so the printed document is unchanged.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostExecReceipt {
+    schema: String,
+    target: String,
+    ssh: Option<String>,
+    ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
+    command: String,
+    argv: Vec<String>,
+    /// Only for an entry installed at more than one path: `argv[0]` is then
+    /// one candidate among several and is not evidence of where the host
+    /// found it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    program_candidates: Option<Vec<String>>,
+    /// Only when the host reported which candidate it execed. The account
+    /// script resolves `$program` in the remote shell and reports nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved_executable: Option<String>,
+    /// Only for an account-owned entry, which runs under its own budget.
+    /// Without it a channel cut at the cap reads like a program that failed
+    /// fast, and the two ask for different next steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_seconds: Option<u64>,
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    status: String,
+    /// Only on failure: the remote's own last line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
 /// `status` for a command that ran and exited clean.
 pub const OK_STATUS: &str = "ok";
@@ -799,30 +847,30 @@ pub async fn exec_host(
         candidates.first().copied().map(str::to_string)
     };
 
-    let mut report = host_channel::base_report(&target);
-    report.insert("command".to_string(), json!(approved.display()));
-    report.insert("argv".to_string(), json!(approved.argv));
-    // Where this program may live, for an entry that has more than one install
-    // path: `argv[0]` is one candidate among several and is not evidence of
-    // where the host actually found it.
-    if candidates.len() > usize::from(true) {
-        report.insert("program_candidates".to_string(), json!(candidates));
-    }
-    // Which of them ran, when the host told us.
-    if let Some(resolved) = &resolved_executable {
-        report.insert("resolved_executable".to_string(), json!(resolved));
-    }
-    // The budget an account-owned repair ran under. Without it a channel cut at
-    // the cap is indistinguishable in this report from a program that failed
-    // fast, and the two ask for different next steps.
-    if let Some(account) = account {
-        report.insert(
-            "timeout_seconds".to_string(),
-            json!(account.timeout_seconds),
-        );
-    }
-    report.insert("stdout".to_string(), json!(output.stdout));
-    report.insert("stderr".to_string(), json!(output.stderr));
-    host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
-    Ok(Value::Object(report))
+    let ok = output.ok();
+    // Read the remote's own last line before the body is moved into the
+    // receipt.
+    let error = (!ok).then(|| host_channel::last_error_line(&output, "ssh failed"));
+    let receipt = HostExecReceipt {
+        schema: "stado.host-exec-receipt.v1".into(),
+        target: target.name,
+        ssh: target.ssh,
+        ssh_fallbacks: target.ssh_fallbacks,
+        command: approved.display(),
+        argv: approved.argv.iter().map(|word| (*word).to_string()).collect(),
+        program_candidates: (candidates.len() > usize::from(true))
+            .then(|| candidates.iter().map(|path| (*path).to_string()).collect()),
+        resolved_executable,
+        timeout_seconds: account.map(|account| account.timeout_seconds),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.code,
+        status: if ok {
+            OK_STATUS.into()
+        } else {
+            host_channel::FAILED_STATUS.into()
+        },
+        error,
+    };
+    serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()))
 }
