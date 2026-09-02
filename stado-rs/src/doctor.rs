@@ -453,10 +453,20 @@ fn object_auth_deadline() -> Duration {
 
 /// Allowance for resolving alert channels. Each enabled channel reads its own
 /// destination and provider material out of the vault, through the same
-/// single-threaded listener the gateway sweep is using at the same moment.
+/// single-threaded listener the gateway sweep is using at the same moment —
+/// and the resolved channel is then asked of its provider over the internet.
+///
+/// The provider round trip was never in this budget, and with one declared
+/// channel the whole check had 16 seconds for a vault read plus an HTTPS
+/// exchange. It elapsed twice on 2026-09-02, at 19:31:04 and 19:46:16, and
+/// each time a timed-out probe was rendered as `alerts FAIL` under the remedy
+/// "configure at least one non-GCP channel" — which blocked a release
+/// delivery over a channel that was configured and, measured two minutes
+/// later, working. One deadline per declared channel plus one for the
+/// provider exchange keeps the bound honest and still bounded.
 fn alerts_deadline() -> Duration {
     let channels = crate::config::alert_channels().len();
-    PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(channels).unwrap_or_default()
+    PROBE_TIMEOUT * 2 + PROBE_TIMEOUT * u32::try_from(channels).unwrap_or_default()
 }
 
 /// Run the selected preflight probes. Never returns an error: an unreachable
@@ -1940,7 +1950,22 @@ async fn check_alerts() -> Check {
     // authority on whether this key is still valid and whether it may send as
     // this sender, and asking costs one read: the deployment sat green for
     // weeks holding a key Resend had already revoked.
-    let resend_problem = match &channels.resend {
+    // What the operator declared, held apart from what resolved here.
+    //
+    // A vault that did not answer this second is not a deployment with no
+    // alerts. On 2026-09-02 at 19:31:04 this check FAILED a release delivery
+    // with "no alert channel is configured at all" while `alerts.channels`
+    // held `resend` and `alerts.email_to` its destination; the same check
+    // PASSED two minutes later against the same file, because that time the
+    // material read succeeded. Instance 9's shape, inside the preflight that
+    // gates delivery: absent and unreachable need opposite responses.
+    let declared: Vec<&str> = config::alert_channels()
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let resolved_any = !configured.is_empty();
+
+    let resend_problem: Option<(Status, String)> = match &channels.resend {
         Some(resend) => {
             let client = reqwest::Client::new();
             match crate::monitor::alerts::resend_verified_domains(&client, resend).await {
@@ -1950,16 +1975,34 @@ async fn check_alerts() -> Check {
                         None
                     } else {
                         configured.retain(|channel| *channel != "resend");
-                        Some(format!(
-                            "resend sender {} is not on a verified domain; verified: [{}]",
-                            resend.from,
-                            domains.join(",")
+                        Some((
+                            Status::Fail,
+                            format!(
+                                "resend sender {} is not on a verified domain; verified: [{}]",
+                                resend.from,
+                                domains.join(",")
+                            ),
                         ))
                     }
                 }
+                // The provider answering "no" and this host being unable to
+                // ask are different facts with different owners. `HTTP <code>`
+                // is the provider's own verdict; anything else is a transport
+                // this deployment can retry, and failing a delivery on it
+                // pages nobody about a channel that works.
                 Err(error) => {
                     configured.retain(|channel| *channel != "resend");
-                    Some(format!("resend key was refused by the provider: {error}"))
+                    if error.starts_with("HTTP ") {
+                        Some((
+                            Status::Fail,
+                            format!("resend key was refused by the provider: {error}"),
+                        ))
+                    } else {
+                        Some((
+                            Status::Warn,
+                            format!("resend could not be asked from this host: {error}"),
+                        ))
+                    }
                 }
             }
         }
@@ -1975,7 +2018,35 @@ async fn check_alerts() -> Check {
         || provider_enabled(crate::capabilities::ProviderId::Gcp);
     let mut findings = Findings::default();
 
-    if configured.is_empty() {
+    if !configured.is_empty() {
+        findings.note(
+            Status::Pass,
+            format!("non-GCP channel(s) configured: {}", configured.join(",")),
+        );
+    } else if resolved_any {
+        // Something resolved and the checks below disqualified it. Their own
+        // sentences carry the verdict; this line must not claim the operator
+        // configured nothing.
+        findings.note(
+            Status::Warn,
+            "every channel that resolved was disqualified by the finding(s) below".to_string(),
+        );
+    } else if !declared.is_empty() {
+        findings.note(
+            Status::Warn,
+            format!(
+                "alerts.channels declares [{}] and none of them resolved their material on this \
+                 host; that is an unreadable channel, not an unconfigured one — \
+                 `stado alerts channels` names the read that failed",
+                declared.join(",")
+            ),
+        );
+        findings.remedy(
+            "read the failing channel's material with `stado alerts channels`; a vault or broker \
+             that did not answer is the thing to fix, and the declaration in alerts.channels is \
+             already correct",
+        );
+    } else {
         let detail = if topic.is_empty() {
             "no alert channel is configured at all; nothing anywhere will page an operator"
                 .to_string()
@@ -1999,15 +2070,10 @@ async fn check_alerts() -> Check {
         };
         findings.note(status, detail);
         findings.remedy(ALERTS_REMEDY);
-    } else {
-        findings.note(
-            Status::Pass,
-            format!("non-GCP channel(s) configured: {}", configured.join(",")),
-        );
     }
 
-    if let Some(problem) = resend_problem {
-        findings.note(Status::Fail, problem);
+    if let Some((status, problem)) = resend_problem {
+        findings.note(status, problem);
         findings.remedy(
             "point alerts.resend_item at an item holding a key the provider accepts, and \
              alerts.email_from at a verified sending domain; `stado alerts channels` shows \
