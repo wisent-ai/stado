@@ -441,7 +441,10 @@ pub async fn retry_gaps(
         .collect::<Vec<_>>()
         .join("\0");
     let batch_id = if batch_label.is_empty() {
-        stable_run_id("coverage-batch", &format!("{}\0{generation}", universe.id()))
+        stable_run_id(
+            "coverage-batch",
+            &format!("{}\0{generation}", universe.id()),
+        )
     } else {
         batch_label.to_string()
     };

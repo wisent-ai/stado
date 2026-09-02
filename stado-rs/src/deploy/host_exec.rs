@@ -857,7 +857,11 @@ pub async fn exec_host(
         ssh: target.ssh,
         ssh_fallbacks: target.ssh_fallbacks,
         command: approved.display(),
-        argv: approved.argv.iter().map(|word| (*word).to_string()).collect(),
+        argv: approved
+            .argv
+            .iter()
+            .map(|word| (*word).to_string())
+            .collect(),
         program_candidates: (candidates.len() > usize::from(true))
             .then(|| candidates.iter().map(|path| (*path).to_string()).collect()),
         resolved_executable,

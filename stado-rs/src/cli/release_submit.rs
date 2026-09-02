@@ -777,8 +777,8 @@ async fn enqueue(
         secret_env: secret_refs(&recipe.secret_env),
         ..Default::default()
     };
-    let command = "$HOME/.stado/bin/stado release worker --request release-request.json"
-        .to_string();
+    let command =
+        "$HOME/.stado/bin/stado release worker --request release-request.json".to_string();
     let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
     let job = jobs
         .pop()
@@ -1349,10 +1349,7 @@ async fn run_deliveries(
             let options = SubmitOptions {
                 pinned_host: consumer,
                 priority: crate::constants::RELEASE_JOB_PRIORITY,
-                run_id: stable_run_id(
-                    "release-delivery",
-                    &format!("{}\0{}", run.run_id, d.name),
-                ),
+                run_id: stable_run_id("release-delivery", &format!("{}\0{}", run.run_id, d.name)),
                 output_uri: run_uri(
                     &run.product,
                     &run.run_id,

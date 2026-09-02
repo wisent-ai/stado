@@ -29,9 +29,9 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufReader, Read, Write};
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
@@ -417,10 +417,7 @@ fn create_owned_machine_file(
 ) -> Result<(OwnedMachineFile, std::fs::File), std::io::Error> {
     let root = machine_source_work_root()?;
     for _ in 0..16 {
-        let path = root.join(format!(
-            "{purpose}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let path = root.join(format!("{purpose}-{}", uuid::Uuid::new_v4().simple()));
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create_new(true);
         #[cfg(unix)]
@@ -428,10 +425,7 @@ fn create_owned_machine_file(
         match options.open(&path) {
             Ok(file) => {
                 std::fs::File::open(&root)?.sync_all()?;
-                return Ok((
-                    OwnedMachineFile { path: Some(path) },
-                    file,
-                ));
+                return Ok((OwnedMachineFile { path: Some(path) }, file));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -461,9 +455,7 @@ fn validate_staged_source_archive(path: &Path) -> Result<(), MachineError> {
     fn invalid(msg: impl Into<String>) -> MachineError {
         MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
     }
-    let tar_invalid = |error: std::io::Error| {
-        invalid(format!("invalid tar.gz archive: {error}"))
-    };
+    let tar_invalid = |error: std::io::Error| invalid(format!("invalid tar.gz archive: {error}"));
     let file = std::fs::File::open(path)
         .map_err(|error| invalid(format!("staged source archive is not readable: {error}")))?;
     let decoder = flate2::bufread::GzDecoder::new(BufReader::new(file));
@@ -617,27 +609,22 @@ async fn readback_machine_source(
     store: &JobStorage,
     blob_path: &str,
 ) -> Result<Option<OwnedMachineFile>, MachineError> {
-    let (readback, file) = create_owned_machine_file("readback").map_err(|error| {
-        MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
-    })?;
+    let (readback, file) = create_owned_machine_file("readback")
+        .map_err(|error| MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string()))?;
     drop(file);
     if !store
         .download_blob(blob_path, readback.path())
         .await
-        .map_err(|error| {
-            MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
-        })?
+        .map_err(|error| MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string()))?
     {
-        readback.cleanup().map_err(|error| {
-            MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
-        })?;
+        readback
+            .cleanup()
+            .map_err(|error| MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string()))?;
         return Ok(None);
     }
     std::fs::File::open(readback.path())
         .and_then(|file| file.sync_all())
-        .map_err(|error| {
-            MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
-        })?;
+        .map_err(|error| MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string()))?;
     Ok(Some(readback))
 }
 
@@ -672,9 +659,7 @@ async fn renew_machine_request_lease(
         }
         reservation.insert(
             "lease_expires_at".into(),
-            Value::from(
-                (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
-            ),
+            Value::from((chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339()),
         );
         reservation.insert("phase".into(), Value::from(phase));
         match store
@@ -713,7 +698,6 @@ async fn renew_machine_request_enqueue(
 ) -> Result<(), MachineError> {
     renew_machine_request_lease(store, record_path, owner, "enqueuing", phase).await
 }
-
 
 /// Python `_validate_request`: strict field whitelist, required fields,
 /// per-field types and value rules. Returns the normalized request (defaults
@@ -992,8 +976,7 @@ impl MachineFacade {
         let record_path = format!("machine_requests/{request_id}.json");
         let run_id = stable_run_id("machine", &request_id);
         let owner = uuid::Uuid::new_v4().simple().to_string();
-        let lease_expires_at =
-            (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+        let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
         let mut source_uri = String::new();
         let mut source_sha = String::new();
         let mut source_bytes = 0u64;
@@ -1068,14 +1051,15 @@ impl MachineFacade {
                     }
                 }
                 if source_requested {
-                    let (staged, current_sha, current_bytes) =
-                        stage_source_archive(request.get("source_archive_path"))?
-                            .ok_or_else(|| {
-                                MachineError::new(
-                                    "INVALID_SOURCE_ARCHIVE",
-                                    "source archive path is required",
-                                )
-                            })?;
+                    let (staged, current_sha, current_bytes) = stage_source_archive(
+                        request.get("source_archive_path"),
+                    )?
+                    .ok_or_else(|| {
+                        MachineError::new(
+                            "INVALID_SOURCE_ARCHIVE",
+                            "source archive path is required",
+                        )
+                    })?;
                     if current_sha != retained_sha || current_bytes != retained_bytes {
                         return Err(MachineError::new(
                             "IDEMPOTENCY_CONFLICT",
@@ -1086,16 +1070,11 @@ impl MachineFacade {
                 }
                 let mut digest_request = request.clone();
                 if source_requested {
-                    digest_request.insert(
-                        "source_archive_path".into(),
-                        Value::from(retained_sha),
-                    );
+                    digest_request.insert("source_archive_path".into(), Value::from(retained_sha));
                 }
                 let digest = request_digest(&digest_request);
-                if existing.get("request_digest").and_then(Value::as_str)
-                    != Some(digest.as_str())
-                    || existing.get("run_id").and_then(Value::as_str)
-                        != Some(run_id.as_str())
+                if existing.get("request_digest").and_then(Value::as_str) != Some(digest.as_str())
+                    || existing.get("run_id").and_then(Value::as_str) != Some(run_id.as_str())
                 {
                     return Err(MachineError::new(
                         "IDEMPOTENCY_CONFLICT",
@@ -1151,13 +1130,12 @@ impl MachineFacade {
             let mut digest_request = request.clone();
             if source_requested {
                 let (staged, sha, bytes) =
-                    stage_source_archive(request.get("source_archive_path"))?
-                        .ok_or_else(|| {
-                            MachineError::new(
-                                "INVALID_SOURCE_ARCHIVE",
-                                "source archive path is required",
-                            )
-                        })?;
+                    stage_source_archive(request.get("source_archive_path"))?.ok_or_else(|| {
+                        MachineError::new(
+                            "INVALID_SOURCE_ARCHIVE",
+                            "source archive path is required",
+                        )
+                    })?;
                 staged_source = Some(staged);
                 source_sha = sha;
                 source_bytes = bytes;
@@ -1189,21 +1167,12 @@ impl MachineFacade {
                     "source_archive_uri".into(),
                     Value::from(source_uri.as_str()),
                 );
-                reservation.insert(
-                    "source_sha256".into(),
-                    Value::from(source_sha.as_str()),
-                );
-                reservation.insert(
-                    "source_size_bytes".into(),
-                    Value::from(source_bytes),
-                );
+                reservation.insert("source_sha256".into(), Value::from(source_sha.as_str()));
+                reservation.insert("source_size_bytes".into(), Value::from(source_bytes));
             }
             if self
                 .store
-                .create_text_if_absent(
-                    &record_path,
-                    &canonical_json(&Value::Object(reservation)),
-                )
+                .create_text_if_absent(&record_path, &canonical_json(&Value::Object(reservation)))
                 .await?
             {
                 claimed = true;
@@ -1233,8 +1202,7 @@ impl MachineFacade {
                     "retained-source-readback",
                 )
                 .await?;
-                authoritative_readback =
-                    readback_machine_source(&self.store, &source_blob).await?;
+                authoritative_readback = readback_machine_source(&self.store, &source_blob).await?;
                 renew_machine_request_claim(
                     &self.store,
                     &record_path,
@@ -1242,20 +1210,14 @@ impl MachineFacade {
                     "retained-source-readback-complete",
                 )
                 .await?;
-
             }
 
             if authoritative_readback.is_none() {
                 let staged = staged_source.as_ref().ok_or_else(|| {
                     MachineError::new("INTERNAL", "staged source archive is unavailable")
                 })?;
-                renew_machine_request_claim(
-                    &self.store,
-                    &record_path,
-                    &owner,
-                    "source-upload",
-                )
-                .await?;
+                renew_machine_request_claim(&self.store, &record_path, &owner, "source-upload")
+                    .await?;
                 self.store
                     .upload_file_if_absent(&source_blob, staged.path())
                     .await
@@ -1269,15 +1231,9 @@ impl MachineFacade {
                     "source-upload-complete",
                 )
                 .await?;
-                renew_machine_request_claim(
-                    &self.store,
-                    &record_path,
-                    &owner,
-                    "source-readback",
-                )
-                .await?;
-                authoritative_readback =
-                    readback_machine_source(&self.store, &source_blob).await?;
+                renew_machine_request_claim(&self.store, &record_path, &owner, "source-readback")
+                    .await?;
+                authoritative_readback = readback_machine_source(&self.store, &source_blob).await?;
                 renew_machine_request_claim(
                     &self.store,
                     &record_path,
@@ -1304,13 +1260,8 @@ impl MachineFacade {
                     "retained source archive byte count differs from its reservation",
                 ));
             }
-            renew_machine_request_claim(
-                &self.store,
-                &record_path,
-                &owner,
-                "source-validation",
-            )
-            .await?;
+            renew_machine_request_claim(&self.store, &record_path, &owner, "source-validation")
+                .await?;
             validate_staged_source_archive(readback.path()).map_err(|error| {
                 MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
             })?;
@@ -1340,13 +1291,7 @@ impl MachineFacade {
             }
         }
 
-        renew_machine_request_claim(
-            &self.store,
-            &record_path,
-            &owner,
-            "ready-to-enqueue",
-        )
-        .await?;
+        renew_machine_request_claim(&self.store, &record_path, &owner, "ready-to-enqueue").await?;
 
         let versioned = self
             .store
@@ -1358,9 +1303,7 @@ impl MachineFacade {
         let mut active: Map<String, Value> = serde_json::from_str::<Value>(&versioned.content)?
             .as_object()
             .cloned()
-            .ok_or_else(|| {
-                MachineError::new("INTERNAL", "stored idempotency record is invalid")
-            })?;
+            .ok_or_else(|| MachineError::new("INTERNAL", "stored idempotency record is invalid"))?;
         if active.get("owner").and_then(Value::as_str) != Some(owner.as_str())
             || active.get("state").and_then(Value::as_str) != Some("claimed")
         {
@@ -1499,13 +1442,8 @@ impl MachineFacade {
                 }
             }
         };
-        renew_machine_request_enqueue(
-            &self.store,
-            &record_path,
-            &owner,
-            "enqueue-complete",
-        )
-        .await?;
+        renew_machine_request_enqueue(&self.store, &record_path, &owner, "enqueue-complete")
+            .await?;
         let job = match submitted {
             Ok(mut jobs) => jobs.pop().ok_or_else(|| {
                 MachineError::retryable("SUBMIT_FAILED", "durable submission returned no job")

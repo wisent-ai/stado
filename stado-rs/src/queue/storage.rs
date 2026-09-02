@@ -96,10 +96,8 @@ fn transition_cleaned_state(transition_id: &str) -> String {
 }
 
 pub(crate) fn is_transition_sentinel_state(state: &str) -> bool {
-    state.starts_with(TRANSITION_FENCE_PREFIX)
-        || state.starts_with(TRANSITION_CLEANED_PREFIX)
+    state.starts_with(TRANSITION_FENCE_PREFIX) || state.starts_with(TRANSITION_CLEANED_PREFIX)
 }
-
 
 fn merge_transition_destination(
     current: &Job,
@@ -134,8 +132,7 @@ fn merge_transition_destination(
             destination.restarts = destination.restarts.max(requested.restarts);
             destination.last_restart = requested.last_restart.clone();
             destination.error = requested.error.clone();
-            destination.preempt_count =
-                destination.preempt_count.max(requested.preempt_count);
+            destination.preempt_count = destination.preempt_count.max(requested.preempt_count);
             destination.yield_count = destination.yield_count.max(requested.yield_count);
             destination.assigned_to = requested.assigned_to.clone();
         }
@@ -152,8 +149,7 @@ fn merge_transition_destination(
         _ => {}
     }
     if crate::queue::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
-        destination.peak_vram_gb =
-            destination.peak_vram_gb.max(requested.peak_vram_gb);
+        destination.peak_vram_gb = destination.peak_vram_gb.max(requested.peak_vram_gb);
         destination.peak_vram_per_gpu |= requested.peak_vram_per_gpu;
         for artifact in &requested.artifact_paths {
             if !destination.artifact_paths.contains(artifact) {
@@ -534,7 +530,6 @@ impl JobStorage {
 
     // ---- job operations ----
 
-
     /// Create a queued job exactly once. Existing content is never overwritten;
     /// callers must read it back and verify its submission identity.
     pub async fn create_queued_job_if_absent(&self, job: &Job) -> Result<bool, StorageError> {
@@ -671,10 +666,7 @@ impl JobStorage {
         &self,
         transition: &JobTransition,
     ) -> Result<(), StorageError> {
-        let source_path = format!(
-            "{}/{}.json",
-            transition.from_prefix, transition.job_id
-        );
+        let source_path = format!("{}/{}.json", transition.from_prefix, transition.job_id);
         let fence_state = transition_fence_state(&transition.transition_id);
         let cleaned_state = transition_cleaned_state(&transition.transition_id);
         for _ in 0..16 {
@@ -717,10 +709,7 @@ impl JobStorage {
         &self,
         transition: &JobTransition,
     ) -> Result<bool, StorageError> {
-        let destination_path = format!(
-            "{}/{}.json",
-            transition.to_prefix, transition.job_id
-        );
+        let destination_path = format!("{}/{}.json", transition.to_prefix, transition.job_id);
         let destination = self
             .read_job(&transition.to_prefix, &transition.job_id)
             .await?
@@ -740,12 +729,8 @@ impl JobStorage {
             )));
         }
         if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
-            crate::queue::runs::record_terminal_outcome(
-                self,
-                &destination,
-                &transition.to_prefix,
-            )
-            .await?;
+            crate::queue::runs::record_terminal_outcome(self, &destination, &transition.to_prefix)
+                .await?;
         }
         self.retire_transition_source(transition).await?;
         tombstone::on_transition(self, &destination, &transition.to_prefix).await;
@@ -797,12 +782,8 @@ impl JobStorage {
             Some(versioned) => {
                 let source = Job::from_json(&versioned.content)?;
                 if source.state != fence_state {
-                    self.set_transition_state(
-                        &transition.transition_id,
-                        job_id,
-                        "aborted",
-                    )
-                    .await?;
+                    self.set_transition_state(&transition.transition_id, job_id, "aborted")
+                        .await?;
                     return Ok(false);
                 }
             }
@@ -814,9 +795,7 @@ impl JobStorage {
                     )));
                 };
                 if crate::queue::submit::immutable_job_projection(&destination)
-                    != crate::queue::submit::immutable_job_projection(
-                        &transition.destination_job,
-                    )
+                    != crate::queue::submit::immutable_job_projection(&transition.destination_job)
                     || destination.state != prefix_state(&transition.to_prefix)
                 {
                     return Err(StorageError::StorageConflict(format!(
@@ -836,10 +815,7 @@ impl JobStorage {
             let Some(existing_versioned) = existing_versioned else {
                 if self
                     .backend
-                    .upload_text_if_absent(
-                        &destination_path,
-                        &transition.destination_job.to_json(),
-                    )
+                    .upload_text_if_absent(&destination_path, &transition.destination_job.to_json())
                     .await?
                 {
                     installed_destination = Some(transition.destination_job.clone());
@@ -866,9 +842,7 @@ impl JobStorage {
                 }
             }
             if crate::queue::submit::immutable_job_projection(&existing)
-                != crate::queue::submit::immutable_job_projection(
-                    &transition.destination_job,
-                )
+                != crate::queue::submit::immutable_job_projection(&transition.destination_job)
                 || existing.state != prefix_state(&transition.to_prefix)
             {
                 return Err(StorageError::StorageConflict(format!(
@@ -948,8 +922,9 @@ impl JobStorage {
                 self.recover_job_transition(&requested.job_id).await?;
                 return Ok(false);
             }
-            let destination_versioned =
-                self.read_text_versioned(&format!("{to_prefix}/{}.json", requested.job_id)).await?;
+            let destination_versioned = self
+                .read_text_versioned(&format!("{to_prefix}/{}.json", requested.job_id))
+                .await?;
             let (destination_basis, destination_version) = match destination_versioned {
                 Some(existing_versioned) => {
                     let existing = Job::from_json(&existing_versioned.content)?;
@@ -974,12 +949,8 @@ impl JobStorage {
                 }
                 None => (requested.clone(), None),
             };
-            let destination = merge_transition_destination(
-                &current,
-                &destination_basis,
-                from_prefix,
-                to_prefix,
-            )?;
+            let destination =
+                merge_transition_destination(&current, &destination_basis, from_prefix, to_prefix)?;
             let transition_id = sha256_hex(
                 format!(
                     "{}\0{}\0{}\0{}\0{}",
@@ -1263,10 +1234,8 @@ impl JobStorage {
         job_id: &str,
         assigned_to: &str,
     ) -> Result<Option<Job>, StorageError> {
-        self.rewrite_queued_job(job_id, |job| {
-            job.assigned_to = assigned_to.to_string()
-        })
-        .await
+        self.rewrite_queued_job(job_id, |job| job.assigned_to = assigned_to.to_string())
+            .await
     }
 
     /// Delete the job blob; also drops the priority marker in `queue/`.
@@ -1320,13 +1289,8 @@ impl JobStorage {
         to_prefix: &str,
         expected_version: &str,
     ) -> Result<bool, StorageError> {
-        self.transition_job_if_version(
-            job,
-            from_prefix,
-            to_prefix,
-            Some(expected_version),
-        )
-        .await
+        self.transition_job_if_version(job, from_prefix, to_prefix, Some(expected_version))
+            .await
     }
 
     // ---- delegates to queue/listing/ (priority markers + bulk fetch) ----
