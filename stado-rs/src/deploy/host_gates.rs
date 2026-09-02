@@ -151,6 +151,41 @@ pub const AGENT_STORE_UNREADABLE: &str = "agent_store_unreadable";
 /// are and never how large they are.
 pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 
+/// This host's janitor has not completed a pass within
+/// [`STALL_INTERVALS`] times its own declared `check_interval_seconds`.
+///
+/// A BLOCKER, and its own condition rather than a shade of
+/// [`DISK_PRESSURE_UNRESOLVED`]: those two are the disk being full and the
+/// mechanism that empties it being dead, they fail at different times, and
+/// the second one is the one nothing in this product could see. On
+/// `lukasz-macbook` the janitor logged 12,197 passes between 2026-08-18 and
+/// 2026-09-02 and deleted nothing in any of them — 8,539 never resolved a
+/// policy and 2,030 never got the run lock — so `last_success_at` stayed
+/// null for fifteen days while every gate in the fleet read green. The host
+/// then crossed its low watermark, releases stopped fleet-wide, and the
+/// space came back by hand at one in the morning.
+///
+/// Blocking and not a note, unlike [`LOCAL_SNAPSHOTS_UNRECLAIMABLE`],
+/// because this is not context for a verdict somebody else reached: a host
+/// whose disk-safety mechanism has not run is a host whose free space is
+/// unmanaged, and admitting work onto it is how the incident above happened
+/// a second time. Hosts that declare `mode: "off"` are exempt — a janitor
+/// nobody armed is not a janitor that stalled — and so is a host with no
+/// declared interval to be late against, which [`DISK_CLEANUP_POLICY_UNKNOWN`]
+/// already reports.
+pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
+
+/// How many of its own check intervals a janitor may miss before
+/// [`DISK_CLEANUP_STALLED`] fires.
+///
+/// Four, because one missed pass is a lock this host lost to its own agent
+/// tick and two is a registry read that timed out twice — both routine, both
+/// self-correcting, and a gate that fires on them is a gate that gets muted.
+/// Four consecutive misses is no longer weather: at the hourly interval this
+/// fleet declares it is a janitor that has been silent for half a working
+/// day, and at the ten-second agent tick it is forty seconds.
+const STALL_INTERVALS: i64 = 4;
+
 /// Everything one host answered about whether it can claim.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostGates {
@@ -162,6 +197,17 @@ pub struct HostGates {
     pub claiming: bool,
     pub blockers: Vec<String>,
     pub disk_pressure_unresolved: bool,
+    /// [`DISK_CLEANUP_STALLED`]: the janitor has not completed a pass within
+    /// `STALL_INTERVALS` of its own declared interval. Carried as a field and
+    /// not only as a blocker string because the release verdict embeds it
+    /// beside `disk_pressure_unresolved` ([`gates_section`]), and an operator
+    /// reading "free 45 GiB against a 100 GiB watermark" has to be able to see
+    /// in the same object whether anything is still trying to fix it.
+    pub disk_cleanup_stalled: bool,
+    /// Seconds since the janitor last completed a pass, or `None` when it has
+    /// never recorded one. `None` with a declared interval is the fifteen-day
+    /// case, and is not the same finding as "it succeeded a long time ago".
+    pub cleanup_success_age_seconds: Option<i64>,
     /// `df -Pk /` available blocks as GiB, one decimal.
     pub free_gb: Option<f64>,
     /// The threshold admission is actually gated on: the janitor's own
@@ -369,6 +415,34 @@ fn assemble(
         ),
     };
 
+    // How late the janitor is against the interval IT declares, measured from
+    // the last pass that actually completed. `last_success_at` and not
+    // `last_pass_at`: the incident this exists for logged a pass every sixty
+    // seconds for fifteen days, so "it ran recently" was true throughout and
+    // meant nothing.
+    let cleanup_success_age_seconds = reading
+        .state
+        .last_success_at
+        .as_deref()
+        .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
+        .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds());
+    // Armed only where the host declares a janitor that is supposed to run.
+    // `mode: "off"` is a deliberate choice and never late, and a host with no
+    // declared interval has nothing to be late against — that is
+    // `disk_cleanup_policy_unknown`, which is already a blocker of its own.
+    let stall_after_seconds = policy
+        .filter(|policy| policy.mode != "off")
+        .map(|policy| policy.check_interval_seconds * STALL_INTERVALS);
+    let disk_cleanup_stalled = match (stall_after_seconds, cleanup_success_age_seconds) {
+        (None, _) => false,
+        // Declared, armed, and no completed pass on record at all. Reported
+        // rather than excused: a janitor that has never finished a pass is the
+        // fifteen-day case exactly, and the state file being absent or fresh
+        // says nothing about whether the thing ever worked.
+        (Some(_), None) => true,
+        (Some(limit), Some(age)) => age > limit,
+    };
+
     let mut blockers: Vec<String> = Vec::new();
     // First in the vector, ahead of the staleness it causes: an agent bound to
     // a device-local store cannot publish anything this control plane will
@@ -387,6 +461,12 @@ fn assemble(
     }
     if disk_pressure_unresolved {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
+    }
+    // Directly after the pressure it explains: an operator who reads
+    // "free 45 GiB, watermark 100 GiB" needs the next line to say whether
+    // anything is still trying, and for fifteen days there was no such line.
+    if disk_cleanup_stalled {
+        blockers.push(DISK_CLEANUP_STALLED.to_string());
     }
     if diag_flag(payload, "disk_cleanup_policy_known") == Some(false) || low_watermark_gb.is_none()
     {
@@ -420,6 +500,8 @@ fn assemble(
         claiming: blockers.is_empty(),
         blockers,
         disk_pressure_unresolved,
+        disk_cleanup_stalled,
+        cleanup_success_age_seconds,
         free_gb,
         low_watermark_gb,
         target_free_gb: policy.map(|policy| policy.target_free_gb),
@@ -600,6 +682,10 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             // reading "free 2 GiB, watermark 55 GiB" is not left to guess.
             // Null on a host that has no such notion at all.
             "local_snapshots": gates.local_snapshots,
+            // Whether anything is still trying to keep the two numbers above
+            // apart, and how long since it last managed to.
+            "cleanup_stalled": gates.disk_cleanup_stalled,
+            "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
         }),
     );
     report.insert(
@@ -641,16 +727,25 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
     report
 }
 
-/// The three fields a release verdict embeds when it has to say why a host is
-/// not building anything.
+/// The fields a release verdict embeds when it has to say why a host is not
+/// building anything.
 ///
 /// Exported so `stado release doctor` reports the claiming gates from this
 /// reader instead of growing a second one: two readers of
 /// `capacity/<consumer>.json` would eventually give two answers to one
 /// question, and the operator would believe whichever they ran first.
+///
+/// `disk_cleanup_stalled` rides here beside the pressure and the two numbers
+/// because a release verdict is where this fleet actually looks. The host
+/// that stopped every release on 2026-09-02 had reported the pressure and the
+/// numbers correctly for days; what no verdict anywhere said was that the
+/// janitor which was supposed to resolve them had not completed a pass since
+/// 2026-08-18.
 pub fn gates_section(gates: &HostGates) -> Value {
     json!({
         "disk_pressure_unresolved": gates.disk_pressure_unresolved,
+        "disk_cleanup_stalled": gates.disk_cleanup_stalled,
+        "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
         "free_gb": gates.free_gb,
         "low_watermark_gb": gates.low_watermark_gb,
     })
