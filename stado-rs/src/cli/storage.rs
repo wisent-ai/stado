@@ -2463,7 +2463,25 @@ impl RemoteObjectApi {
                             }
                             body.extend_from_slice(&chunk);
                         }
-                        Ok(None) => return Ok(body),
+                        // The stream ending is not the object ending. The
+                        // release route streams an unranged GET until its own
+                        // window closes and then closes the body cleanly, with
+                        // no length declared and no error to read: the darwin
+                        // archive of 0.13.46 is 73,864,632 bytes and two reads
+                        // of it here returned 22,925,186 and 15,318,446, both
+                        // as `Ok`. A short object with a successful exit is
+                        // worse than a failed download, because every caller
+                        // downstream -- digest verification, archive extract,
+                        // a host staging a release -- reports its own true
+                        // finding about bytes that were never the object.
+                        //
+                        // Whole is provable only against a declared total, so
+                        // that is the only thing accepted here. Anything else
+                        // goes to the bounded byte-range reader below, which
+                        // asks for one chunk at a time and knows the total
+                        // from every `Content-Range` it gets back.
+                        Ok(None) if total == Some(body.len()) => return Ok(body),
+                        Ok(None) => return self.get_release_in_ranges(origin).await,
                         Err(error) => {
                             last_read_error = Some(format!(
                                 "Stado object API release GET response body connection closed \
