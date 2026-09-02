@@ -46,9 +46,10 @@
 //! half-migrated fleet stays paused on BOTH stores instead of waking up
 //! mid-copy.
 //!
-//! Writes are compare-and-swap over a versioned read — the pattern of
-//! `schedules.rs::claim_due`, including its create-if-absent fallback —
-//! because this blob is overwritten in place rather than written once.
+//! Writes are compare-and-swap over a versioned read — the pattern
+//! `schedules.rs` uses for occurrence reservations, including its
+//! create-if-absent fallback — because this blob is overwritten in place
+//! rather than written once.
 //! Two operators flipping the switch in the same second must not silently
 //! lose one intent. Reads pin the download to the current generation for
 //! the reason `schedules.rs::read_fresh_text` documents: an in-place
@@ -148,7 +149,7 @@ pub async fn read(store: &JobStorage) -> Result<QueueControl, StorageError> {
 ///
 /// Compare-and-swap over the versioned read: an absent blob is created
 /// create-only, and a blob deleted between the read and the swap falls
-/// back to that same create-only path (`schedules.rs::claim_due`). A lost
+/// back to that same create-only path. A lost
 /// race is reported, never retried silently — two operators disagreeing
 /// about maintenance mode is exactly the case where the loser has to see
 /// the winner's write before deciding again.

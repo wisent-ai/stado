@@ -1,11 +1,15 @@
 //! Fleet write operations: `create` and `assign`.
 //!
-//! Every write is a pure document-to-document transform followed by the
-//! validated compare-and-swap `push_document` — the exact write path of
-//! `stado registry push` — so a malformed fleet change is refused before
-//! anything reaches the canonical registry.
+//! Every write is a pure document-to-document transform followed by a
+//! compare-and-swap against the generation the transform's own input was read
+//! at — `create`, `delete` and `assign` through `commit_document`, which
+//! re-reads and re-applies the transform when another writer got there first.
+//! `enroll` cannot: it installs a key and probes the machine between its read
+//! and its write, so re-applying its transform would republish a decision
+//! taken against a host that has since been described differently. It takes
+//! one conditional attempt and lets the conflict reach the operator.
 
-use crate::cli::registry::{fetch_document, push_document};
+use crate::cli::registry::{commit_document, fetch_versioned_document, push_document_if};
 use serde_json::{json, Value};
 
 use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
@@ -65,9 +69,13 @@ pub fn assign_target(
 
 /// `stado fleet create NAME` — declare a fleet in the canonical registry.
 pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    let next = create_fleet(&document, name, notes)?;
-    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    // Pure: the fleet entry is a function of the document it is appended to,
+    // so a lost race is answered by appending it to the newer document.
+    let generation = commit_document(|document| {
+        create_fleet(document, name, notes).map_err(crate::cli::CmdError::click)
+    })
+    .await
+    .map_err(|exc| exc.to_string())?;
     println!("fleet '{name}' created (generation {generation})");
     Ok(true)
 }
@@ -99,9 +107,14 @@ pub fn delete_fleet(document: &Value, name: &str) -> Result<Value, String> {
 
 /// `stado fleet delete NAME` — retire a declared fleet.
 pub async fn delete(name: &str) -> Result<bool, String> {
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    let next = delete_fleet(&document, name)?;
-    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    // Pure, and the member check has to be re-run against the newer document
+    // anyway: a fleet that gained a member since this command started is one
+    // whose declaration must not be dropped.
+    let generation = commit_document(|document| {
+        delete_fleet(document, name).map_err(crate::cli::CmdError::click)
+    })
+    .await
+    .map_err(|exc| exc.to_string())?;
     println!("fleet '{name}' deleted (generation {generation})");
     Ok(true)
 }
@@ -112,7 +125,7 @@ pub async fn delete(name: &str) -> Result<bool, String> {
 /// names: the agent resolves itself by hostname (`lookup_self`), so an
 /// entry without them only ever matches a machine whose hostname equals
 /// the target name. Duplicate names are refused; the result is validated
-/// by the registry-v2 contract inside `push_document`. Pure.
+/// by the registry-v2 contract inside `push_document_if`. Pure.
 pub fn register_target(
     document: &Value,
     name: &str,
@@ -196,9 +209,13 @@ async fn probe_identity(
 
 /// `stado fleet assign TARGET FLEET` — add a registered machine to a fleet.
 pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    let next = assign_target(&document, target, fleet_name)?;
-    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    // Pure: the assignment is one field on one target, and re-applying it to
+    // a newer document is exactly the intent.
+    let generation = commit_document(|document| {
+        assign_target(document, target, fleet_name).map_err(crate::cli::CmdError::click)
+    })
+    .await
+    .map_err(|exc| exc.to_string())?;
     println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
     Ok(true)
 }
@@ -264,7 +281,12 @@ pub async fn enroll(
                 .to_string(),
         );
     };
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    // The generation this whole run is conditional on: every check below, and
+    // the key install and identity probe that follow them, were decided
+    // against THIS document. If it has moved by the time the entry is
+    // written, the decisions no longer hold and the operator has to see that.
+    let (document, expected_generation) =
+        fetch_versioned_document().await.map_err(|exc| exc.to_string())?;
     crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
     if install_key {
         crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)?;
@@ -296,11 +318,20 @@ pub async fn enroll(
     if let Some(fleet) = fleet_name {
         next = assign_target(&next, name, fleet)?;
     }
-    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    let generation = push_document_if(&next, &expected_generation)
+        .await
+        .map_err(|exc| exc.to_string())?;
     println!("registered '{name}', verified as '{hostname}' (generation {generation})");
     if bootstrap {
         if let Err(exc) = crate::cli::bootstrap::run(Some(name.to_string()), false, false).await {
-            let current = fetch_document().await.map_err(|err| err.to_string())?;
+            // The rollback's own expected generation: the re-read here is what
+            // the removal is computed from, so it is also what the removal is
+            // conditional on. A writer that lands in between leaves the entry
+            // in place, said out loud, rather than having its edit erased by a
+            // rollback that never saw it.
+            let (current, current_generation) = fetch_versioned_document()
+                .await
+                .map_err(|err| err.to_string())?;
             let rolled_back = if takeover {
                 crate::cli::fleet::enroll::legacy::rollback_registration(
                     &current, &document, name, true,
@@ -308,7 +339,7 @@ pub async fn enroll(
             } else {
                 remove_target(&current, name)?
             };
-            push_document(&rolled_back)
+            push_document_if(&rolled_back, &current_generation)
                 .await
                 .map_err(|err| err.to_string())?;
             return Err(format!(

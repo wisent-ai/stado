@@ -33,12 +33,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Args, Subcommand};
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -50,6 +53,34 @@ use crate::queue::{BlobBackend, BlobInfo, JobStorage};
 
 use super::table::print as print_table;
 use super::CmdError;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StorageStatReceipt {
+    schema: String,
+    backend: String,
+    bucket: String,
+    path: String,
+    state: String,
+    size: Option<usize>,
+    updated_at: Value,
+    version: Option<String>,
+    metadata: BTreeMap<String, String>,
+    detail: Option<String>,
+    metadata_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoragePutReceipt {
+    schema: String,
+    state: String,
+    created: bool,
+    uri: String,
+    sha256: String,
+    bytes: usize,
+    content_type: String,
+}
 
 #[derive(Subcommand)]
 pub enum StorageCommands {
@@ -329,6 +360,56 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
     }
 }
 
+const ARCHIVE_MAX_ENTRIES: usize = 1_000_000;
+const ARCHIVE_MAX_PATH_BYTES: usize = 4 * 1024;
+const ARCHIVE_MAX_MEMBER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const ARCHIVE_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+
+fn sorted_archive_paths(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    paths: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
+    let mut entries = std::fs::read_dir(directory)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by(|left, right| {
+        left.strip_prefix(root)
+            .unwrap_or(left)
+            .cmp(right.strip_prefix(root).unwrap_or(right))
+    });
+    for path in entries {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "archive source contains unsupported symlink: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
+        if paths.len() >= ARCHIVE_MAX_ENTRIES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "archive source exceeds the one-million-entry limit",
+            ));
+        }
+        if relative.as_os_str().as_encoded_bytes().len() > ARCHIVE_MAX_PATH_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("archive member path exceeds 4096 bytes: {}", path.display()),
+            ));
+        }
+        paths.push(path.clone());
+        if metadata.is_dir() {
+            sorted_archive_paths(root, &path, paths)?;
+        }
+    }
+    Ok(())
+}
+
 fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
     let source = std::path::Path::new(&args.source);
     let metadata = std::fs::symlink_metadata(source)?;
@@ -355,21 +436,98 @@ fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
             "archive output must be outside the source directory",
         ));
     }
+    let mut output_created = false;
     let create_result = (|| -> std::io::Result<()> {
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(output)?;
-        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        output_created = true;
+        let encoder = flate2::GzBuilder::new()
+            .mtime(0)
+            .write(file, flate2::Compression::default());
         let mut archive = tar::Builder::new(encoder);
         archive.mode(tar::HeaderMode::Deterministic);
-        archive.append_dir_all(".", &source)?;
+        archive.follow_symlinks(false);
+        let mut paths = Vec::new();
+        sorted_archive_paths(&source, &source, &mut paths)?;
+        paths.sort_by(|left, right| {
+            left.strip_prefix(&source)
+                .unwrap_or(left)
+                .cmp(right.strip_prefix(&source).unwrap_or(right))
+        });
+        let mut total_member_bytes = 0_u64;
+        for path in paths {
+            let name = path.strip_prefix(&source).map_err(std::io::Error::other)?;
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "archive source contains unsupported symlink: {}",
+                        path.display()
+                    ),
+                ));
+            }
+            let mut open = std::fs::OpenOptions::new();
+            open.read(true);
+            #[cfg(target_os = "macos")]
+            open.custom_flags(0x0000_0100);
+            #[cfg(target_os = "linux")]
+            open.custom_flags(0x0002_0000);
+            let mut member = open.open(&path)?;
+            let opened_metadata = member.metadata()?;
+            if opened_metadata.is_dir() && metadata.is_dir() {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_mode(0o755);
+                header.set_uid(0);
+                header.set_gid(0);
+                header.set_mtime(0);
+                header.set_cksum();
+                archive.append_data(&mut header, name, std::io::empty())?;
+            } else if opened_metadata.is_file() && metadata.is_file() {
+                let member_bytes = opened_metadata.len();
+                if member_bytes > ARCHIVE_MAX_MEMBER_BYTES {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("archive member exceeds the 8 GiB limit: {}", path.display()),
+                    ));
+                }
+                total_member_bytes = total_member_bytes.checked_add(member_bytes).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "archive member byte total overflowed",
+                    )
+                })?;
+                if total_member_bytes > ARCHIVE_MAX_TOTAL_BYTES {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "archive source exceeds the 32 GiB uncompressed limit",
+                    ));
+                }
+                archive.append_file(name, &mut member)?;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "archive member changed type or is unsupported: {}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
         let encoder = archive.into_inner()?;
         let file = encoder.finish()?;
-        file.sync_all()
+        file.sync_all()?;
+        drop(file);
+        std::fs::File::open(&output_parent)?.sync_all()
     })();
     if let Err(error) = create_result {
-        let _ = std::fs::remove_file(output);
+        if output_created {
+            let _ = std::fs::remove_file(output);
+        }
         return Err(CmdError::click(format!(
             "cannot create release archive {}: {error}",
             output.display()
@@ -1085,18 +1243,19 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     };
 
     if args.json {
-        echo_json(&json!({
-            "backend": store_backend,
-            "bucket": store_bucket,
-            "path": args.path,
-            "state": state,
-            "size": size,
-            "updated_at": render_optional_stamp(updated),
-            "version": version,
-            "metadata": metadata,
-            "detail": detail,
-            "metadata_error": metadata_error,
-        }))?;
+        echo_json(&serde_json::to_value(StorageStatReceipt {
+            schema: "stado.storage-stat-receipt.v1".into(),
+            backend: store_backend,
+            bucket: store_bucket,
+            path: args.path.clone(),
+            state: state.into(),
+            size,
+            updated_at: render_optional_stamp(updated),
+            version,
+            metadata,
+            detail,
+            metadata_error,
+        })?)?;
     } else {
         let mut rows = vec![
             vec!["path".to_string(), args.path.clone()],
@@ -2753,6 +2912,12 @@ fn read_object_source(source: &str) -> Result<Vec<u8>, CmdError> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct StoreObjectOutcome {
+    uri: String,
+    created: bool,
+}
+
 /// Store one object through whichever route its namespace requires, create-only
 /// for `releases` whether or not the caller asks.
 ///
@@ -2774,6 +2939,26 @@ pub(crate) async fn store_object_with_metadata(
     if_absent: bool,
     extra_metadata: &BTreeMap<String, String>,
 ) -> Result<String, CmdError> {
+    Ok(
+        store_object_with_metadata_outcome(
+            uri,
+            source,
+            content_type,
+            if_absent,
+            extra_metadata,
+        )
+        .await?
+        .uri,
+    )
+}
+
+async fn store_object_with_metadata_outcome(
+    uri: &str,
+    source: &str,
+    content_type: &str,
+    if_absent: bool,
+    extra_metadata: &BTreeMap<String, String>,
+) -> Result<StoreObjectOutcome, CmdError> {
     let object = crate::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     let create_only = if_absent || object.namespace() == "releases";
@@ -2795,7 +2980,12 @@ pub(crate) async fn store_object_with_metadata(
         let bytes = read_object_source(source)?;
         if create_only {
             match remote.get_optional(&uri).await? {
-                Some(existing) if existing == bytes => return Ok(uri),
+                Some(existing) if existing == bytes => {
+                    return Ok(StoreObjectOutcome {
+                        uri,
+                        created: false,
+                    })
+                }
                 Some(_) => {
                     return Err(CmdError::click(format!(
                         "immutable object already differs on the writer: {uri}"
@@ -2814,15 +3004,19 @@ pub(crate) async fn store_object_with_metadata(
                 "object writer read-back differs immediately after PUT: {uri}"
             )));
         }
-        return Ok(uri);
+        return Ok(StoreObjectOutcome { uri, created: true });
     }
     let path = object.storage_path();
     let store = JobStorage::new().await?;
+    let stdin_bytes = if create_only && source == "-" {
+        Some(read_object_source(source)?)
+    } else {
+        None
+    };
     let uploaded = if create_only {
-        if source == "-" {
-            let bytes = read_object_source(source)?;
+        if let Some(bytes) = stdin_bytes.as_ref() {
             let mut staged = tempfile::NamedTempFile::new()?;
-            staged.write_all(&bytes)?;
+            staged.write_all(bytes)?;
             store.upload_file_if_absent(&path, staged.path()).await?
         } else {
             store
@@ -2835,6 +3029,21 @@ pub(crate) async fn store_object_with_metadata(
         true
     };
     if !uploaded {
+        let incoming = match stdin_bytes {
+            Some(bytes) => bytes,
+            None => read_object_source(source)?,
+        };
+        let existing = store.read_bytes(&path).await?.ok_or_else(|| {
+            CmdError::click(format!(
+                "{object} won create-only admission but is no longer readable"
+            ))
+        })?;
+        if Sha256::digest(&existing) == Sha256::digest(&incoming) {
+            return Ok(StoreObjectOutcome {
+                uri,
+                created: false,
+            });
+        }
         let policy = if object.namespace() == "releases" {
             "release objects are immutable"
         } else {
@@ -2845,19 +3054,37 @@ pub(crate) async fn store_object_with_metadata(
         )));
     }
     store.backend().set_metadata(&path, &metadata).await?;
-    Ok(uri)
+    Ok(StoreObjectOutcome { uri, created: true })
 }
 
 async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
-    let uri = store_object(&args.uri, &args.source, &args.content_type, args.if_absent).await?;
+    let outcome = store_object_with_metadata_outcome(
+        &args.uri,
+        &args.source,
+        &args.content_type,
+        args.if_absent,
+        &BTreeMap::new(),
+    )
+    .await?;
     if args.json {
-        echo_json(&json!({
-            "state": "stored",
-            "uri": uri,
-            "content_type": args.content_type,
-        }))?;
+        let stored = fetch_object_from_writer(&outcome.uri).await?;
+        echo_json(&serde_json::to_value(StoragePutReceipt {
+            schema: "stado.storage-put-receipt.v1".into(),
+            state: if outcome.created {
+                "stored".into()
+            } else {
+                "replayed".into()
+            },
+            created: outcome.created,
+            uri: outcome.uri,
+            sha256: hex::encode(Sha256::digest(&stored)),
+            bytes: stored.len(),
+            content_type: args.content_type.clone(),
+        })?)?;
+    } else if outcome.created {
+        println!("stored {}", outcome.uri);
     } else {
-        println!("{uri}");
+        println!("replayed {}", outcome.uri);
     }
     Ok(())
 }

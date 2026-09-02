@@ -16,10 +16,13 @@
 //!   tail — only for units whose beacon state is `failed`; those reads
 //!   degrade to a note, never to a failed command.
 //! - `adopt`, `retire` and `deploy` mutate the canonical registry through
-//!   `cli/registry.rs::{fetch_document, push_document}` — the validated
-//!   write path — and never hand-edit the document. `push_document`
-//!   validates before it writes, so a mutation that would produce an
-//!   invalid registry is refused with nothing uploaded.
+//!   `cli/registry.rs::{commit_document, push_document_if}` — the validated
+//!   conditional write path — and never hand-edit the document. Validation
+//!   runs before the write, so a mutation that would produce an invalid
+//!   registry is refused with nothing uploaded, and every write names the
+//!   generation it is conditional on: `commit_document` where the transform
+//!   is a pure function of the document, a single attempt from the command's
+//!   own read where something has already happened on the host.
 
 use clap::Subcommand;
 use serde::Deserialize;
@@ -2853,7 +2856,53 @@ async fn record_released_service_source(
                 artifact.archive_uri
             ))
         })?;
-    let mut document = registry::fetch_document().await?;
+    // The decision read: whether the pin has to move at all. A directory that
+    // already names this artifact is not written, so a release that changed
+    // nothing does not spend a compare-and-swap or advance the counter.
+    let document = registry::fetch_document().await?;
+    let logical = released_route(&document, options.name)?;
+    if !source_pin_moves(&document, &logical, source_ref, &artifact.artifact_sha256)? {
+        return Ok(());
+    }
+    // Pure: the artifact coordinate is already fixed by the release that just
+    // succeeded, so pinning it is a function of the document it is pinned in.
+    // `advance_generation` runs INSIDE the transform, on the document that
+    // round read, because the counter it derives belongs to that document.
+    registry::commit_document(|current| {
+        let mut document = current.clone();
+        let logical = released_route(&document, options.name)?;
+        if !source_pin_moves(&document, &logical, source_ref, &artifact.artifact_sha256)? {
+            // Another writer pinned the same artifact first. Its document is
+            // already the answer, so this round republishes it verbatim rather
+            // than advancing a counter for a change nobody made.
+            return Ok(document);
+        }
+        let source = document
+            .get_mut("service_directory")
+            .and_then(|directory| directory.get_mut("services"))
+            .and_then(|services| services.get_mut(&logical))
+            .and_then(Value::as_object_mut)
+            .and_then(|entry| entry.get_mut("declaration"))
+            .and_then(Value::as_object_mut)
+            .and_then(|declaration| declaration.get_mut("source"))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| CmdError::click("release service route disappeared"))?;
+        source.insert("artifact".to_string(), json!(source_ref));
+        source.insert(
+            "sha256".to_string(),
+            json!(artifact.artifact_sha256.as_str()),
+        );
+        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        Ok(document)
+    })
+    .await?;
+    Ok(())
+}
+
+/// The one directory route that carries this managed service. Ambiguity is
+/// refused rather than guessed: pinning the wrong route's artifact is how a
+/// release lands on a service nobody released.
+fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
     let services = document
         .get("service_directory")
         .and_then(|directory| directory.get("services"))
@@ -2862,63 +2911,46 @@ async fn record_released_service_source(
     let matching = services
         .iter()
         .filter(|(logical, entry)| {
-            logical.as_str() == options.name
-                || entry.get("managed_service").and_then(Value::as_str) == Some(options.name)
+            logical.as_str() == name
+                || entry.get("managed_service").and_then(Value::as_str) == Some(name)
         })
         .map(|(logical, _)| logical.clone())
         .collect::<Vec<_>>();
-    let logical = match matching.as_slice() {
-        [logical] => logical.clone(),
-        [] => {
-            return Err(CmdError::click(format!(
-                "service directory carries no route for managed service {:?}",
-                options.name
-            )))
-        }
-        several => {
-            return Err(CmdError::click(format!(
-                "managed service {:?} is shared by {} directory routes ({}); refusing to \
-                 change an ambiguous declaration",
-                options.name,
-                several.len(),
-                several.join(", ")
-            )))
-        }
-    };
-    let changed = {
-        let entry = document
-            .get_mut("service_directory")
-            .and_then(|directory| directory.get_mut("services"))
-            .and_then(|services| services.get_mut(&logical))
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| CmdError::click("release service route disappeared"))?;
-        let source = entry
-            .get_mut("declaration")
-            .and_then(Value::as_object_mut)
-            .and_then(|declaration| declaration.get_mut("source"))
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!(
-                    "service directory route {logical:?} has no declaration source"
-                ))
-            })?;
-        let changed = source.get("artifact").and_then(Value::as_str) != Some(source_ref)
-            || source.get("sha256").and_then(Value::as_str)
-                != Some(artifact.artifact_sha256.as_str());
-        if changed {
-            source.insert("artifact".to_string(), json!(source_ref));
-            source.insert(
-                "sha256".to_string(),
-                json!(artifact.artifact_sha256.as_str()),
-            );
-        }
-        changed
-    };
-    if changed {
-        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
-        registry::push_document(&document).await?;
+    match matching.as_slice() {
+        [logical] => Ok(logical.clone()),
+        [] => Err(CmdError::click(format!(
+            "service directory carries no route for managed service {name:?}"
+        ))),
+        several => Err(CmdError::click(format!(
+            "managed service {name:?} is shared by {} directory routes ({}); refusing to \
+             change an ambiguous declaration",
+            several.len(),
+            several.join(", ")
+        ))),
     }
-    Ok(())
+}
+
+/// Whether pinning `artifact`/`sha256` on this route would change anything.
+fn source_pin_moves(
+    document: &Value,
+    logical: &str,
+    artifact: &str,
+    sha256: &str,
+) -> Result<bool, CmdError> {
+    let source = document
+        .get("service_directory")
+        .and_then(|directory| directory.get("services"))
+        .and_then(|services| services.get(logical))
+        .and_then(|entry| entry.get("declaration"))
+        .and_then(|declaration| declaration.get("source"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "service directory route {logical:?} has no declaration source"
+            ))
+        })?;
+    Ok(source.get("artifact").and_then(Value::as_str) != Some(artifact)
+        || source.get("sha256").and_then(Value::as_str) != Some(sha256))
 }
 
 async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
@@ -4814,36 +4846,41 @@ fn fail_if_any(failures: &[String], action: &str) -> Result<(), CmdError> {
 // Adopt / retire / deploy — the registry mutations
 // ---------------------------------------------------------------------------
 
-/// Declare a service through the validated write path.
+/// Declare a service through the validated conditional write path.
 ///
-/// `push_document` runs `targets::validate_registry` before it writes, so a
-/// declaration that would produce an invalid registry is refused with
-/// Nothing uploaded. Returns the new generation.
+/// `commit_document` runs `targets::validate_registry` before it writes, so a
+/// declaration that would produce an invalid registry is refused with nothing
+/// uploaded. Pure: the record is already decided, and adding it is a function
+/// of the document it is added to, so a lost race re-applies it to the newer
+/// document. Returns the new generation.
 async fn record_declaration(record: &ManagedService) -> Result<String, CmdError> {
-    let mut document = registry::fetch_document().await?;
-    // A placeholder left by `service declare` is the declaration, not the
-    // unit: deploy replaces it with the real record rather than refusing on
-    // a name it put there itself.
-    if let Some(services) = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .and_then(|targets| {
-            targets
-                .iter_mut()
-                .find(|target| {
-                    target.get("name").and_then(Value::as_str) == Some(record.host.as_str())
-                })
-                .and_then(|target| target.get_mut("services"))
-                .and_then(Value::as_array_mut)
-        })
-    {
-        services.retain(|existing| {
-            !(existing.get("name").and_then(Value::as_str) == Some(record.name.as_str())
-                && existing.get("declared_only").and_then(Value::as_bool) == Some(true))
-        });
-    }
-    service::add_service(&mut document, record).map_err(click)?;
-    registry::push_document(&document).await
+    registry::commit_document(|current| {
+        let mut document = current.clone();
+        // A placeholder left by `service declare` is the declaration, not the
+        // unit: deploy replaces it with the real record rather than refusing on
+        // a name it put there itself.
+        if let Some(services) = document
+            .get_mut("targets")
+            .and_then(Value::as_array_mut)
+            .and_then(|targets| {
+                targets
+                    .iter_mut()
+                    .find(|target| {
+                        target.get("name").and_then(Value::as_str) == Some(record.host.as_str())
+                    })
+                    .and_then(|target| target.get_mut("services"))
+                    .and_then(Value::as_array_mut)
+            })
+        {
+            services.retain(|existing| {
+                !(existing.get("name").and_then(Value::as_str) == Some(record.name.as_str())
+                    && existing.get("declared_only").and_then(Value::as_bool) == Some(true))
+            });
+        }
+        service::add_service(&mut document, record).map_err(click)?;
+        Ok(document)
+    })
+    .await
 }
 
 struct OnboardingOptions<'a> {
@@ -4860,23 +4897,34 @@ struct OnboardingOptions<'a> {
 }
 
 async fn onboarding(options: OnboardingOptions<'_>) -> Result<(), CmdError> {
-    let mut document = registry::fetch_document().await?;
-    let record = service::set_service_onboarding(
-        &mut document,
-        options.host,
-        options.name,
-        service::OnboardingProduct {
-            product_id: options.product_id.to_string(),
-            display_name: options.display_name.to_string(),
-            repository: options.repository.to_string(),
-            surface_kinds: options.surfaces,
-            first_success_fact: options.first_success_fact.to_string(),
-            onboarding_kind: options.onboarding_kind.to_string(),
-            status: options.status.to_string(),
-        },
-    )
-    .map_err(click)?;
-    let generation = registry::push_document(&document).await?;
+    // Pure: the onboarding block is a function of the options and of the
+    // document it is written into. The record the write produced is what gets
+    // rendered, so it is captured from the round that actually landed.
+    let recorded = std::cell::RefCell::new(None);
+    let generation = registry::commit_document(|current| {
+        let mut document = current.clone();
+        let record = service::set_service_onboarding(
+            &mut document,
+            options.host,
+            options.name,
+            service::OnboardingProduct {
+                product_id: options.product_id.to_string(),
+                display_name: options.display_name.to_string(),
+                repository: options.repository.to_string(),
+                surface_kinds: options.surfaces.clone(),
+                first_success_fact: options.first_success_fact.to_string(),
+                onboarding_kind: options.onboarding_kind.to_string(),
+                status: options.status.to_string(),
+            },
+        )
+        .map_err(click)?;
+        recorded.replace(Some(record));
+        Ok(document)
+    })
+    .await?;
+    let record = recorded
+        .into_inner()
+        .ok_or_else(|| CmdError::click("onboarding wrote the registry without a record"))?;
     render_mutation("onboarding", &record, &generation, None, options.as_json)
 }
 
@@ -4963,10 +5011,14 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     // asking launchd to boot out an empty label produced the unusable-unit
     // error and made a declaration impossible to undo from either CLI or GUI.
     if found.unit_id().is_empty() && found.path.is_empty() {
-        let mut document = registry::fetch_document().await?;
+        // Expected generation: this read. `found` came from the target this
+        // command resolved before it, so the decision to retire was taken
+        // against a document that may already have moved; no retry, because a
+        // second round would remove a declaration nobody checked.
+        let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
         let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
         remove_directory_declaration(&mut document, unit);
-        let generation = registry::push_document(&document).await?;
+        let generation = registry::push_document_if(&document, &expected_generation).await?;
         return render_mutation("retired", &removed, &generation, None, json);
     }
 
@@ -4989,10 +5041,15 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
 
-    let mut document = registry::fetch_document().await?;
+    // Expected generation: this read, taken after the unit was stopped on the
+    // host. That stop is not repeatable, so a lost race is reported rather
+    // than retried: re-running the removal against a newer document would
+    // erase whatever the winning writer said about this service while the
+    // host was being drained.
+    let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
     remove_directory_declaration(&mut document, unit);
-    let generation = registry::push_document(&document).await?;
+    let generation = registry::push_document_if(&document, &expected_generation).await?;
     render_mutation(
         "retired",
         &removed,
@@ -5029,10 +5086,13 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     }
     let path = found.path.clone();
     if found.unit_id().is_empty() && path.is_empty() {
-        let mut document = registry::fetch_document().await?;
+        // Expected generation: this read. `found` predates it, so the decision
+        // to remove was taken against a document that may have moved; no
+        // retry, for the same reason `retire` does not.
+        let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
         let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
         remove_directory_declaration(&mut document, unit);
-        let generation = registry::push_document(&document).await?;
+        let generation = registry::push_document_if(&document, &expected_generation).await?;
         if json {
             return print_json(&json!({
                 "target": target.name,
@@ -5062,10 +5122,14 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
 
-    let mut document = registry::fetch_document().await?;
+    // Expected generation: this read, taken after the unit was stopped and
+    // before its file is deleted. Neither half is repeatable, so a lost race
+    // is reported and the file is left alone rather than deleted under a
+    // declaration somebody else has just rewritten.
+    let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
     remove_directory_declaration(&mut document, unit);
-    let generation = registry::push_document(&document).await?;
+    let generation = registry::push_document_if(&document, &expected_generation).await?;
 
     // The registry is already clean: the file half runs last, because a
     // failed delete must leave a service the fleet can still see, not a file
@@ -5223,91 +5287,100 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         }
     }
 
-    let mut document = registry::fetch_document().await?;
-    let known_target = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .is_some_and(|targets| {
-            targets
-                .iter()
-                .any(|target| target.get("name").and_then(Value::as_str) == Some(host))
-        });
-    if !known_target {
-        return Err(CmdError::usage(format!(
-            "{file}: 'host' names {host}, which is not a registry target"
-        )));
-    }
-    let directory = document
-        .get_mut("service_directory")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| {
-            CmdError::click(
-                "registry has no service_directory; an authority must publish it before services can be declared",
-            )
-        })?;
-    let services = directory
-        .entry("services")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("service_directory.services: must be an object"))?;
-    let entry = services
-        .entry(name.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "service_directory.services.{name}: must be an object"
-            ))
-        })?;
-    entry.insert("active_host".to_string(), json!(host));
-    entry.insert("endpoints".to_string(), Value::Object(endpoints));
-    // The directory contract binds every fixed route to the managed unit on
-    // its active host, and the unit lands when `deploy` runs — so declare
-    // writes the link now and a placeholder record on the host, which
-    // `deploy` replaces with the real one. Declared-but-not-yet-deployed is
-    // a designed state, not an error: the registry says what should run,
-    // the beacons say what does.
-    entry.insert("managed_service".to_string(), json!(name));
-    if let Some(consumers) = value.get("consumers") {
-        entry.insert("consumers".to_string(), consumers.clone());
-    }
-    if let Some(descriptor) = verify {
-        entry.insert("verify".to_string(), descriptor);
-    }
-    entry.insert(
-        "declaration".to_string(),
-        serde_json::to_value(&declaration)
-            .map_err(|error| CmdError::click(format!("declaration: {error}")))?,
-    );
-    let target_entry = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .and_then(|targets| {
-            targets
-                .iter_mut()
-                .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
-        })
-        .ok_or_else(|| CmdError::click(format!("registry targets lost {host}")))?;
-    let host_services = target_entry
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target: must be an object"))?
-        .entry("services")
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| {
-            CmdError::click(format!("registry target {host}: services must be an array"))
-        })?;
-    let already = host_services
-        .iter()
-        .any(|record| record.get("name").and_then(Value::as_str) == Some(name));
-    if !already {
-        host_services.push(json!({"name": name, "declared_only": true}));
-    }
-    // `declare` writes `service_directory.services.<name>` above, so the
-    // publication counter must advance with it or a consumer's cached copy
-    // never learns the entry exists.
-    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
-    let generation = registry::push_document(&document).await?;
+    // Pure: the whole entry is a function of the file that was just parsed
+    // and of the document it lands in, so a lost race re-applies it to the
+    // newer document. `advance_generation` runs INSIDE the transform because
+    // it derives the next counter from the document it was handed; deriving
+    // it once from the first read and reusing it after a retry would publish
+    // a number the newer document has already used.
+    let generation = registry::commit_document(|current| {
+        let mut document = current.clone();
+        let known_target = document
+            .get("targets")
+            .and_then(Value::as_array)
+            .is_some_and(|targets| {
+                targets
+                    .iter()
+                    .any(|target| target.get("name").and_then(Value::as_str) == Some(host))
+            });
+        if !known_target {
+            return Err(CmdError::usage(format!(
+                "{file}: 'host' names {host}, which is not a registry target"
+            )));
+        }
+        let directory = document
+            .get_mut("service_directory")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(
+                    "registry has no service_directory; an authority must publish it before services can be declared",
+                )
+            })?;
+        let services = directory
+            .entry("services")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("service_directory.services: must be an object"))?;
+        let entry = services
+            .entry(name.to_string())
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "service_directory.services.{name}: must be an object"
+                ))
+            })?;
+        entry.insert("active_host".to_string(), json!(host));
+        entry.insert("endpoints".to_string(), Value::Object(endpoints.clone()));
+        // The directory contract binds every fixed route to the managed unit on
+        // its active host, and the unit lands when `deploy` runs — so declare
+        // writes the link now and a placeholder record on the host, which
+        // `deploy` replaces with the real one. Declared-but-not-yet-deployed is
+        // a designed state, not an error: the registry says what should run,
+        // the beacons say what does.
+        entry.insert("managed_service".to_string(), json!(name));
+        if let Some(consumers) = value.get("consumers") {
+            entry.insert("consumers".to_string(), consumers.clone());
+        }
+        if let Some(descriptor) = verify.clone() {
+            entry.insert("verify".to_string(), descriptor);
+        }
+        entry.insert(
+            "declaration".to_string(),
+            serde_json::to_value(&declaration)
+                .map_err(|error| CmdError::click(format!("declaration: {error}")))?,
+        );
+        let target_entry = document
+            .get_mut("targets")
+            .and_then(Value::as_array_mut)
+            .and_then(|targets| {
+                targets
+                    .iter_mut()
+                    .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
+            })
+            .ok_or_else(|| CmdError::click(format!("registry targets lost {host}")))?;
+        let host_services = target_entry
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("registry target: must be an object"))?
+            .entry("services")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| {
+                CmdError::click(format!("registry target {host}: services must be an array"))
+            })?;
+        let already = host_services
+            .iter()
+            .any(|record| record.get("name").and_then(Value::as_str) == Some(name));
+        if !already {
+            host_services.push(json!({"name": name, "declared_only": true}));
+        }
+        // `declare` writes `service_directory.services.<name>` above, so the
+        // publication counter must advance with it or a consumer's cached copy
+        // never learns the entry exists.
+        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        Ok(document)
+    })
+    .await?;
     if !as_json {
         println!("declared {name} on {host} (generation {generation})");
     } else {
@@ -5880,10 +5953,15 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         // naming a file the host does not have is one no later command can
         // act on, so the declaration is corrected in one document write.
         Some(existing) if existing.source == SOURCE_REGISTRY => {
-            let mut document = registry::fetch_document().await?;
+            // Expected generation: this read. `existing` and `record` were
+            // decided before it — the unit was already ensured on the host —
+            // so a lost race is reported instead of retried: re-running the
+            // correction would replace a declaration this pass never saw.
+            let (mut document, expected_generation) =
+                registry::fetch_versioned_document().await?;
             service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
             service::add_service(&mut document, &record).map_err(click)?;
-            Some(registry::push_document(&document).await?)
+            Some(registry::push_document_if(&document, &expected_generation).await?)
         }
         // Undeclared, or carried by the fixed host-recovery list. Both become
         // an explicit registry declaration, which for the recovery case is

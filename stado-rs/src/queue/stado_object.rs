@@ -358,6 +358,18 @@ impl StadoObjectBackend {
             })
             .transpose()
     }
+
+    /// The listing URL for `prefix`, with the prefix validation every listing
+    /// route needs: the gateway takes a namespace and a prefix and nothing
+    /// else, so both listings address exactly the same endpoint.
+    fn list_url(&self, prefix: &str) -> Result<Url, StorageError> {
+        ObjectRef::new(&self.namespace, &format!("{prefix}sentinel"))?;
+        let mut url = self.url("/api/object/list");
+        url.query_pairs_mut()
+            .append_pair("namespace", &self.namespace)
+            .append_pair("prefix", prefix);
+        Ok(url)
+    }
 }
 
 #[async_trait]
@@ -556,6 +568,45 @@ impl BlobBackend for StadoObjectBackend {
         Ok(blobs.into_iter().map(|blob| blob.name).collect())
     }
 
+    /// The gateway has no server-side cursor to use: `/api/object/list` takes
+    /// a namespace and a prefix, and answers with the whole authorized prefix
+    /// as descriptors — there is no offset, no limit, and no name-only
+    /// projection to ask for, and inventing one would page against a server
+    /// that ignores it and silently return the wrong window. So the cut stays
+    /// on this side and the round-trip is the same one [`Self::list_paths`]
+    /// would make.
+    ///
+    /// What the override does buy is the metadata work behind that response.
+    /// The default reaches `list_paths`, which builds a [`BlobInfo`] per
+    /// object and parses every RFC 3339 `updated_at` in the prefix — 14k
+    /// timestamp parses and 14k metadata maps to answer a request for a few
+    /// names that need none of it. Worse, that parse is fallible, so one
+    /// malformed timestamp anywhere under the prefix fails a page that would
+    /// never have returned the object. Reading only the keys is both cheaper
+    /// and harder to break, and this is the single place to add a cursor when
+    /// the gateway grows one.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        let response =
+            Self::send_through_boundary(self.request(Method::GET, self.list_url(prefix)?)).await?;
+        if !response.status().is_success() {
+            return Err(Self::response_error(response).await);
+        }
+        let payload: ObjectList = response.json().await?;
+        let mut names: Vec<String> = payload.objects.into_iter().map(|object| object.key).collect();
+        names.sort_unstable();
+        let cut = names.partition_point(|name| name.as_str() <= start_after);
+        names.drain(..cut);
+        if limit > 0 {
+            names.truncate(limit);
+        }
+        Ok(names)
+    }
+
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
         let Some(stat) = self.stat(path).await? else {
             return Ok(None);
@@ -587,11 +638,7 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
-        ObjectRef::new(&self.namespace, &format!("{prefix}sentinel"))?;
-        let mut url = self.url("/api/object/list");
-        url.query_pairs_mut()
-            .append_pair("namespace", &self.namespace)
-            .append_pair("prefix", prefix);
+        let url = self.list_url(prefix)?;
         let response = Self::send_through_boundary(self.request(Method::GET, url)).await?;
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);

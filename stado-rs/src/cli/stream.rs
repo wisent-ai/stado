@@ -258,25 +258,35 @@ async fn declare(
         .validate(&format!("targets[{target_name}].display_stream"))
         .map_err(CmdError::click)?;
 
-    let mut document = super::registry::fetch_document().await?;
-    let targets = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry carries no targets array"))?;
-    let entry = targets
-        .iter_mut()
-        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target_name))
-        .ok_or_else(|| CmdError::click(format!("registry has no target named {target_name:?}")))?;
-    let object = entry
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target is not an object"))?;
-    object.insert(
-        "display_stream".to_string(),
-        serde_json::to_value(&declaration)?,
-    );
-    crate::targets::load_registry_from_str(&serde_json::to_string(&document)?)
-        .map_err(|error| CmdError::click(format!("the edited registry does not load: {error}")))?;
-    let version = super::registry::push_document(&document).await?;
+    // Pure: the declaration was decided by probing the host above, and
+    // writing it onto the target entry is a function of whatever document is
+    // current. A lost race re-applies it to the newer document rather than
+    // republishing this one over the winner's edit.
+    let version = super::registry::commit_document(|current| {
+        let mut document = current.clone();
+        let targets = document
+            .get_mut("targets")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| CmdError::click("registry carries no targets array"))?;
+        let entry = targets
+            .iter_mut()
+            .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target_name))
+            .ok_or_else(|| {
+                CmdError::click(format!("registry has no target named {target_name:?}"))
+            })?;
+        let object = entry
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("registry target is not an object"))?;
+        object.insert(
+            "display_stream".to_string(),
+            serde_json::to_value(&declaration)?,
+        );
+        crate::targets::load_registry_from_str(&serde_json::to_string(&document)?).map_err(
+            |error| CmdError::click(format!("the edited registry does not load: {error}")),
+        )?;
+        Ok(document)
+    })
+    .await?;
 
     if json {
         println!(

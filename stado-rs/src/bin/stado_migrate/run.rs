@@ -6,7 +6,7 @@
 //! path shared with `stado registry push`, never a hand-rolled upload.
 
 use serde_json::Value;
-use stado::cli::registry::{fetch_document, push_document};
+use stado::cli::registry::{commit_document, fetch_document};
 use stado::config;
 use stado::deploy::bootstrap::{install_spec, ssh_argv};
 use stado::deploy::{production_runner, CommandSpec, Runner};
@@ -181,23 +181,32 @@ async fn bootstrap_target(runner: &Runner, plan: &MigrationPlan) -> Result<(), S
 
 /// The single atomic registry mutation of the whole migration: one
 /// compare-and-swapped document where exactly the target is active.
+///
+/// Pure — "exactly this coordinator is active" is a function of the
+/// coordinator list it is applied to — so a writer that landed between the
+/// read and the write is answered by re-applying the flip to their document
+/// instead of erasing it.
 async fn flip_registry(plan: &MigrationPlan) -> Result<String, String> {
-    let mut document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    let entries = document
-        .get_mut("coordinators")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry document has no coordinators array".to_string())?;
-    for entry in entries.iter_mut() {
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        entry["active"] = Value::Bool(name == plan.to_name);
-    }
-    let generation = push_document(&document)
-        .await
-        .map_err(|exc| exc.to_string())?;
+    let generation = commit_document(|current| {
+        let mut document = current.clone();
+        let entries = document
+            .get_mut("coordinators")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| {
+                stado::cli::CmdError::click("registry document has no coordinators array")
+            })?;
+        for entry in entries.iter_mut() {
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            entry["active"] = Value::Bool(name == plan.to_name);
+        }
+        Ok(document)
+    })
+    .await
+    .map_err(|exc| exc.to_string())?;
     println!(
         "[registry] active moved '{}' -> '{}' (generation {generation})",
         plan.from_name, plan.to_name

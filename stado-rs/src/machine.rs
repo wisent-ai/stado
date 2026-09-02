@@ -28,8 +28,10 @@
 //! than guess.
 
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
@@ -38,18 +40,20 @@ use sha2::{Digest, Sha256};
 use crate::config;
 use crate::models::{job_state, Job, JobSecretRef};
 use crate::queue::leases::{LeaseError, ProviderLeaseStore};
-use crate::queue::submit::{submit_job, SubmitOptions};
+use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
 pub const SCHEMA_VERSION: i64 = 1;
-/// Prefixes probed by [`MachineFacade::lookup_job`], in probe order.
+/// Prefixes probed by [`MachineFacade::lookup_job`]. Terminal and running
+/// destinations precede queue so a crash-retained source fence cannot mask the
+/// newer lifecycle state.
 pub const JOB_PREFIXES: [&str; 6] = [
-    "queue",
-    "running",
-    "completed",
-    "uploaded",
-    "failed",
     "cancelled",
+    "failed",
+    "uploaded",
+    "completed",
+    "running",
+    "queue",
 ];
 
 pub const MAX_SOURCE_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
@@ -361,55 +365,108 @@ fn unsafe_archive_name(name: &str) -> bool {
             .any(|part| part.is_empty() || part == "." || part == "..")
 }
 
-/// Python `_validate_source_archive`: local-file safety checks + a full
-/// streaming pass over the tar.gz enforcing member-count, extracted-size and
-/// path-safety limits. Returns the path and the SHA-256 of the compressed
-/// file, or `None` when no archive was requested.
-fn validate_source_archive(
-    value: Option<&Value>,
-) -> Result<Option<(PathBuf, String)>, MachineError> {
-    fn invalid(msg: impl Into<String>) -> MachineError {
-        MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
+struct OwnedMachineFile {
+    path: Option<PathBuf>,
+}
+
+impl OwnedMachineFile {
+    fn path(&self) -> &Path {
+        self.path.as_deref().expect("owned machine file is live")
     }
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_null() || value.as_str() == Some("") {
-        return Ok(None);
+
+    fn cleanup(mut self) -> Result<(), std::io::Error> {
+        if let Some(path) = self.path.take() {
+            std::fs::remove_file(&path)?;
+            if let Some(parent) = path.parent() {
+                std::fs::File::open(parent)?.sync_all()?;
+            }
+        }
+        Ok(())
     }
-    let Some(raw) = value.as_str() else {
-        return Err(invalid("source_archive_path must be a string"));
-    };
-    let path = crate::config_file::expand_tilde(raw);
-    let info = std::fs::symlink_metadata(&path)
-        .map_err(|exc| invalid(format!("source archive is not readable: {exc}")))?;
-    if info.file_type().is_symlink() || !info.file_type().is_file() {
-        return Err(invalid("source archive must be a regular non-symlink file"));
+}
+
+impl Drop for OwnedMachineFile {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
-    if info.len() == 0 || info.len() > MAX_SOURCE_ARCHIVE_BYTES {
-        return Err(invalid(format!(
-            "source archive must be between 1 and {MAX_SOURCE_ARCHIVE_BYTES} bytes"
-        )));
+}
+
+fn machine_source_work_root() -> Result<PathBuf, std::io::Error> {
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
+    let root = PathBuf::from(home)
+        .join(".stado")
+        .join("work")
+        .join("stado")
+        .join("machine-sources");
+    std::fs::create_dir_all(&root)?;
+    let metadata = std::fs::symlink_metadata(&root)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(std::io::Error::other(
+            "machine source work root must be a real directory",
+        ));
     }
-    let mut file = std::fs::File::open(&path)
-        .map_err(|exc| invalid(format!("source archive is not readable: {exc}")))?;
+    Ok(root)
+}
+
+fn create_owned_machine_file(
+    purpose: &str,
+) -> Result<(OwnedMachineFile, std::fs::File), std::io::Error> {
+    let root = machine_source_work_root()?;
+    for _ in 0..16 {
+        let path = root.join(format!(
+            "{purpose}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&path) {
+            Ok(file) => {
+                std::fs::File::open(&root)?.sync_all()?;
+                return Ok((
+                    OwnedMachineFile { path: Some(path) },
+                    file,
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not reserve a unique machine source work file",
+    ))
+}
+
+fn sha256_path(path: &Path) -> Result<String, std::io::Error> {
+    let mut file = std::fs::File::open(path)?;
     let mut digest = Sha256::new();
     let mut chunk = [0u8; 1024 * 1024];
     loop {
-        let n = file
-            .read(&mut chunk)
-            .map_err(|exc| invalid(format!("source archive is not readable: {exc}")))?;
+        let n = file.read(&mut chunk)?;
         if n == 0 {
             break;
         }
         digest.update(&chunk[..n]);
     }
-    let source_sha = hex::encode(digest.finalize());
+    Ok(hex::encode(digest.finalize()))
+}
 
-    let tar_invalid = |exc: std::io::Error| invalid(format!("invalid tar.gz archive: {exc}"));
-    let file = std::fs::File::open(&path)
-        .map_err(|exc| invalid(format!("source archive is not readable: {exc}")))?;
-    let decoder = flate2::read::GzDecoder::new(file);
+fn validate_staged_source_archive(path: &Path) -> Result<(), MachineError> {
+    fn invalid(msg: impl Into<String>) -> MachineError {
+        MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
+    }
+    let tar_invalid = |error: std::io::Error| {
+        invalid(format!("invalid tar.gz archive: {error}"))
+    };
+    let file = std::fs::File::open(path)
+        .map_err(|error| invalid(format!("staged source archive is not readable: {error}")))?;
+    let decoder = flate2::bufread::GzDecoder::new(BufReader::new(file));
     let mut archive = tar::Archive::new(decoder);
     let mut total_size: u64 = 0;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -419,7 +476,10 @@ fn validate_source_archive(
             return Err(invalid("source archive has too many entries"));
         }
         let entry = entry.map_err(tar_invalid)?;
-        let name = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+        let path_bytes = entry.path_bytes();
+        let name = std::str::from_utf8(path_bytes.as_ref())
+            .map_err(|_| invalid("source archive entry name is not UTF-8"))?
+            .to_string();
         if unsafe_archive_name(&name) {
             return Err(invalid(format!("unsafe archive entry: {}", py_repr(&name))));
         }
@@ -439,14 +499,221 @@ fn validate_source_archive(
             )));
         }
         if is_reg {
-            total_size += entry.header().size().map_err(tar_invalid)?;
+            let entry_size = entry.header().size().map_err(tar_invalid)?;
+            total_size = total_size
+                .checked_add(entry_size)
+                .ok_or_else(|| invalid("source archive extracted size overflows"))?;
             if total_size > MAX_SOURCE_EXTRACTED_BYTES {
                 return Err(invalid("source archive expands beyond the safety limit"));
             }
         }
     }
-    Ok(Some((path, source_sha)))
+    let mut decoder = archive.into_inner();
+    let mut trailing = [0u8; 8192];
+    let mut trailing_bytes = 0u64;
+    loop {
+        let read = decoder.read(&mut trailing).map_err(tar_invalid)?;
+        if read == 0 {
+            break;
+        }
+        trailing_bytes = trailing_bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| invalid("source archive trailing size overflows"))?;
+        if trailing_bytes > 1024 * 1024 || trailing[..read].iter().any(|byte| *byte != 0) {
+            return Err(invalid(
+                "source archive contains a trailing or second tar payload",
+            ));
+        }
+    }
+    let mut compressed = decoder.into_inner();
+    let mut extra = [0u8; 1];
+    if compressed.read(&mut extra).map_err(tar_invalid)? != 0 {
+        return Err(invalid(
+            "source archive contains trailing or multiple gzip payloads",
+        ));
+    }
+    Ok(())
 }
+
+fn stage_source_archive(
+    value: Option<&Value>,
+) -> Result<Option<(OwnedMachineFile, String, u64)>, MachineError> {
+    fn invalid(msg: impl Into<String>) -> MachineError {
+        MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
+    }
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() || value.as_str() == Some("") {
+        return Ok(None);
+    }
+    let Some(raw) = value.as_str() else {
+        return Err(invalid("source_archive_path must be a string"));
+    };
+    let path = crate::config_file::expand_tilde(raw);
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| invalid(format!("source archive is not readable: {error}")))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(invalid("source archive must be a regular non-symlink file"));
+    }
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(target_os = "macos")]
+    open.custom_flags(0x0000_0100);
+    #[cfg(target_os = "linux")]
+    open.custom_flags(0x0002_0000);
+    let mut source = open
+        .open(&path)
+        .map_err(|error| invalid(format!("source archive is not readable: {error}")))?;
+    let opened_metadata = source
+        .metadata()
+        .map_err(|error| invalid(format!("source archive is not readable: {error}")))?;
+    if !opened_metadata.is_file() {
+        return Err(invalid("source archive must be a regular non-symlink file"));
+    }
+    let (staged, mut output) = create_owned_machine_file("source")
+        .map_err(|error| invalid(format!("cannot stage source archive: {error}")))?;
+    let mut digest = Sha256::new();
+    let mut total = 0u64;
+    let mut chunk = [0u8; 1024 * 1024];
+    loop {
+        let read = source
+            .read(&mut chunk)
+            .map_err(|error| invalid(format!("source archive is not readable: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(read as u64)
+            .ok_or_else(|| invalid("source archive size overflows"))?;
+        if total > MAX_SOURCE_ARCHIVE_BYTES {
+            return Err(invalid(format!(
+                "source archive must be between 1 and {MAX_SOURCE_ARCHIVE_BYTES} bytes"
+            )));
+        }
+        output
+            .write_all(&chunk[..read])
+            .map_err(|error| invalid(format!("cannot stage source archive: {error}")))?;
+        digest.update(&chunk[..read]);
+    }
+    if total == 0 {
+        return Err(invalid(format!(
+            "source archive must be between 1 and {MAX_SOURCE_ARCHIVE_BYTES} bytes"
+        )));
+    }
+    output
+        .sync_all()
+        .map_err(|error| invalid(format!("cannot sync staged source archive: {error}")))?;
+    if let Some(parent) = staged.path().parent() {
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| invalid(format!("cannot sync source work root: {error}")))?;
+    }
+    drop(output);
+    validate_staged_source_archive(staged.path())?;
+    Ok(Some((staged, hex::encode(digest.finalize()), total)))
+}
+async fn readback_machine_source(
+    store: &JobStorage,
+    blob_path: &str,
+) -> Result<Option<OwnedMachineFile>, MachineError> {
+    let (readback, file) = create_owned_machine_file("readback").map_err(|error| {
+        MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+    })?;
+    drop(file);
+    if !store
+        .download_blob(blob_path, readback.path())
+        .await
+        .map_err(|error| {
+            MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+        })?
+    {
+        readback.cleanup().map_err(|error| {
+            MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+        })?;
+        return Ok(None);
+    }
+    std::fs::File::open(readback.path())
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+        })?;
+    Ok(Some(readback))
+}
+
+async fn renew_machine_request_lease(
+    store: &JobStorage,
+    record_path: &str,
+    owner: &str,
+    expected_state: &str,
+    phase: &str,
+) -> Result<(), MachineError> {
+    for _ in 0..16 {
+        let versioned = store
+            .read_text_versioned(record_path)
+            .await?
+            .ok_or_else(|| {
+                MachineError::retryable("REQUEST_IN_PROGRESS", "reservation disappeared")
+            })?;
+        let mut reservation: Map<String, Value> =
+            serde_json::from_str::<Value>(&versioned.content)?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| {
+                    MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                })?;
+        if reservation.get("owner").and_then(Value::as_str) != Some(owner)
+            || reservation.get("state").and_then(Value::as_str) != Some(expected_state)
+        {
+            return Err(MachineError::retryable(
+                "REQUEST_IN_PROGRESS",
+                "matching request ownership changed during submission",
+            ));
+        }
+        reservation.insert(
+            "lease_expires_at".into(),
+            Value::from(
+                (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+            ),
+        );
+        reservation.insert("phase".into(), Value::from(phase));
+        match store
+            .compare_and_swap_text(
+                record_path,
+                &versioned.version,
+                &canonical_json(&Value::Object(reservation)),
+            )
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(MachineError::retryable(
+        "REQUEST_IN_PROGRESS",
+        "request lease renewal remained contended",
+    ))
+}
+
+async fn renew_machine_request_claim(
+    store: &JobStorage,
+    record_path: &str,
+    owner: &str,
+    phase: &str,
+) -> Result<(), MachineError> {
+    renew_machine_request_lease(store, record_path, owner, "claimed", phase).await
+}
+
+async fn renew_machine_request_enqueue(
+    store: &JobStorage,
+    record_path: &str,
+    owner: &str,
+    phase: &str,
+) -> Result<(), MachineError> {
+    renew_machine_request_lease(store, record_path, owner, "enqueuing", phase).await
+}
+
 
 /// Python `_validate_request`: strict field whitelist, required fields,
 /// per-field types and value rules. Returns the normalized request (defaults
@@ -657,10 +924,8 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     Ok(normalized)
 }
 
-/// The automation facade. Python `MachineFacade(store, submitter)`; the
-/// submitter is always [`submit_job`] here and the Skarbiec-backed compute
-/// API key guard covers the one case Python special-cased on submitter
-/// identity.
+/// The automation facade. Machine request submission is reserved with a
+/// recoverable lease and delegated to the durable run manifest protocol.
 pub struct MachineFacade {
     store: JobStorage,
     bucket: String,
@@ -721,100 +986,411 @@ impl MachineFacade {
             .as_str()
             .unwrap_or_default()
             .to_string();
-        let archive = validate_source_archive(request.get("source_archive_path"))?;
+        let source_requested = request["source_archive_path"]
+            .as_str()
+            .is_some_and(|path| !path.is_empty());
+        let record_path = format!("machine_requests/{request_id}.json");
+        let run_id = stable_run_id("machine", &request_id);
+        let owner = uuid::Uuid::new_v4().simple().to_string();
+        let lease_expires_at =
+            (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
         let mut source_uri = String::new();
         let mut source_sha = String::new();
-        let mut digest_request = request.clone();
-        if let Some((archive_path, sha)) = archive {
-            source_sha = sha;
+        let mut source_bytes = 0u64;
+        let mut staged_source: Option<OwnedMachineFile> = None;
+        let mut replayed_reservation = false;
+        let mut claimed = false;
+
+        for _ in 0..16 {
+            if let Some(staged) = staged_source.take() {
+                staged.cleanup().map_err(|error| {
+                    MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+                })?;
+            }
+            if let Some(versioned) = self.store.read_text_versioned(&record_path).await? {
+                let mut existing: Map<String, Value> =
+                    serde_json::from_str::<Value>(&versioned.content)
+                        .map_err(|_| {
+                            MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                        })?
+                        .as_object()
+                        .cloned()
+                        .ok_or_else(|| {
+                            MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                        })?;
+                let retained_sha = existing
+                    .get("source_sha256")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let retained_uri = existing
+                    .get("source_archive_uri")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let retained_bytes = existing
+                    .get("source_size_bytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                if source_requested != !retained_sha.is_empty()
+                    || retained_sha.is_empty() != retained_uri.is_empty()
+                    || source_requested != (retained_bytes != 0)
+                {
+                    return Err(MachineError::new(
+                        "IDEMPOTENCY_CONFLICT",
+                        "client_request_id was already used with a different request",
+                    ));
+                }
+                if source_requested {
+                    if retained_sha.len() != 64
+                        || !retained_sha
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    {
+                        return Err(MachineError::new(
+                            "INTERNAL",
+                            "stored source digest is invalid",
+                        ));
+                    }
+                    if retained_bytes > MAX_SOURCE_ARCHIVE_BYTES {
+                        return Err(MachineError::new(
+                            "INTERNAL",
+                            "stored source byte count is invalid",
+                        ));
+                    }
+                    let expected_source = crate::object_store::ObjectRef::new(
+                        "machine-inputs",
+                        &format!("{request_id}/{retained_sha}.tar.gz"),
+                    )?;
+                    if retained_uri != expected_source.to_string() {
+                        return Err(MachineError::new(
+                            "INTERNAL",
+                            "stored source object identity is invalid",
+                        ));
+                    }
+                }
+                if source_requested {
+                    let (staged, current_sha, current_bytes) =
+                        stage_source_archive(request.get("source_archive_path"))?
+                            .ok_or_else(|| {
+                                MachineError::new(
+                                    "INVALID_SOURCE_ARCHIVE",
+                                    "source archive path is required",
+                                )
+                            })?;
+                    if current_sha != retained_sha || current_bytes != retained_bytes {
+                        return Err(MachineError::new(
+                            "IDEMPOTENCY_CONFLICT",
+                            "client_request_id was already used with a different source archive",
+                        ));
+                    }
+                    staged_source = Some(staged);
+                }
+                let mut digest_request = request.clone();
+                if source_requested {
+                    digest_request.insert(
+                        "source_archive_path".into(),
+                        Value::from(retained_sha),
+                    );
+                }
+                let digest = request_digest(&digest_request);
+                if existing.get("request_digest").and_then(Value::as_str)
+                    != Some(digest.as_str())
+                    || existing.get("run_id").and_then(Value::as_str)
+                        != Some(run_id.as_str())
+                {
+                    return Err(MachineError::new(
+                        "IDEMPOTENCY_CONFLICT",
+                        "client_request_id was already used with a different request",
+                    ));
+                }
+                if let Some(stored_result) =
+                    existing.get("result").filter(|result| result.is_object())
+                {
+                    if stored_result.get("job").is_some_and(Value::is_object) {
+                        return Ok(stored_result.clone());
+                    }
+                }
+                let live_lease = existing
+                    .get("lease_expires_at")
+                    .and_then(Value::as_str)
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .is_some_and(|expires| expires > chrono::Utc::now());
+                if live_lease {
+                    return Err(MachineError::retryable(
+                        "REQUEST_IN_PROGRESS",
+                        "matching request is still being submitted",
+                    ));
+                }
+                source_sha = retained_sha.to_string();
+                source_uri = retained_uri.to_string();
+                source_bytes = retained_bytes;
+                existing.insert("state".into(), Value::from("claimed"));
+                existing.insert("owner".into(), Value::from(owner.as_str()));
+                existing.insert(
+                    "lease_expires_at".into(),
+                    Value::from(lease_expires_at.as_str()),
+                );
+                match self
+                    .store
+                    .compare_and_swap_text(
+                        &record_path,
+                        &versioned.version,
+                        &canonical_json(&Value::Object(existing)),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        claimed = true;
+                        replayed_reservation = true;
+                        break;
+                    }
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+
+            let mut digest_request = request.clone();
+            if source_requested {
+                let (staged, sha, bytes) =
+                    stage_source_archive(request.get("source_archive_path"))?
+                        .ok_or_else(|| {
+                            MachineError::new(
+                                "INVALID_SOURCE_ARCHIVE",
+                                "source archive path is required",
+                            )
+                        })?;
+                staged_source = Some(staged);
+                source_sha = sha;
+                source_bytes = bytes;
+                let source_object = crate::object_store::ObjectRef::new(
+                    "machine-inputs",
+                    &format!("{request_id}/{source_sha}.tar.gz"),
+                )?;
+                source_uri = source_object.to_string();
+                digest_request.insert(
+                    "source_archive_path".into(),
+                    Value::from(source_sha.as_str()),
+                );
+            }
+            let digest = request_digest(&digest_request);
+            let mut reservation = Map::new();
+            reservation.insert("schema_version".into(), Value::from(SCHEMA_VERSION));
+            reservation.insert("client_request_id".into(), Value::from(request_id.as_str()));
+            reservation.insert("request_digest".into(), Value::from(digest));
+            reservation.insert("run_id".into(), Value::from(run_id.as_str()));
+            reservation.insert("state".into(), Value::from("claimed"));
+            reservation.insert("owner".into(), Value::from(owner.as_str()));
+            reservation.insert(
+                "lease_expires_at".into(),
+                Value::from(lease_expires_at.as_str()),
+            );
+            reservation.insert("created_at".into(), Value::from(utcnow()));
+            if source_requested {
+                reservation.insert(
+                    "source_archive_uri".into(),
+                    Value::from(source_uri.as_str()),
+                );
+                reservation.insert(
+                    "source_sha256".into(),
+                    Value::from(source_sha.as_str()),
+                );
+                reservation.insert(
+                    "source_size_bytes".into(),
+                    Value::from(source_bytes),
+                );
+            }
+            if self
+                .store
+                .create_text_if_absent(
+                    &record_path,
+                    &canonical_json(&Value::Object(reservation)),
+                )
+                .await?
+            {
+                claimed = true;
+                break;
+            }
+        }
+        if !claimed {
+            return Err(MachineError::retryable(
+                "REQUEST_IN_PROGRESS",
+                "request reservation remained contended",
+            ));
+        }
+
+        if source_requested {
             let source_object = crate::object_store::ObjectRef::new(
                 "machine-inputs",
                 &format!("{request_id}/{source_sha}.tar.gz"),
             )?;
             let source_blob = source_object.storage_path();
-            source_uri = source_object.to_string();
-            self.store
-                .upload_file_if_absent(&source_blob, &archive_path)
-                .await
-                .map_err(|exc| MachineError::retryable("SOURCE_UPLOAD_FAILED", exc.to_string()))?;
-            digest_request.insert(
-                "source_archive_path".into(),
-                Value::from(source_sha.as_str()),
-            );
-        }
+            let mut authoritative_readback = None;
 
-        let record_path = format!("machine_requests/{request_id}.json");
-        let digest = request_digest(&digest_request);
-        let mut reservation = Map::new();
-        reservation.insert("schema_version".into(), Value::from(SCHEMA_VERSION));
-        reservation.insert("client_request_id".into(), Value::from(request_id.as_str()));
-        reservation.insert("request_digest".into(), Value::from(digest.as_str()));
-        reservation.insert("state".into(), Value::from("submitting"));
-        reservation.insert("created_at".into(), Value::from(utcnow()));
-        if !source_uri.is_empty() {
-            reservation.insert(
-                "source_archive_uri".into(),
-                Value::from(source_uri.as_str()),
-            );
-            reservation.insert("source_sha256".into(), Value::from(source_sha.as_str()));
-        }
-        let created = self
-            .store
-            .create_text_if_absent(
+            if replayed_reservation {
+                renew_machine_request_claim(
+                    &self.store,
+                    &record_path,
+                    &owner,
+                    "retained-source-readback",
+                )
+                .await?;
+                authoritative_readback =
+                    readback_machine_source(&self.store, &source_blob).await?;
+                renew_machine_request_claim(
+                    &self.store,
+                    &record_path,
+                    &owner,
+                    "retained-source-readback-complete",
+                )
+                .await?;
+
+            }
+
+            if authoritative_readback.is_none() {
+                let staged = staged_source.as_ref().ok_or_else(|| {
+                    MachineError::new("INTERNAL", "staged source archive is unavailable")
+                })?;
+                renew_machine_request_claim(
+                    &self.store,
+                    &record_path,
+                    &owner,
+                    "source-upload",
+                )
+                .await?;
+                self.store
+                    .upload_file_if_absent(&source_blob, staged.path())
+                    .await
+                    .map_err(|error| {
+                        MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+                    })?;
+                renew_machine_request_claim(
+                    &self.store,
+                    &record_path,
+                    &owner,
+                    "source-upload-complete",
+                )
+                .await?;
+                renew_machine_request_claim(
+                    &self.store,
+                    &record_path,
+                    &owner,
+                    "source-readback",
+                )
+                .await?;
+                authoritative_readback =
+                    readback_machine_source(&self.store, &source_blob).await?;
+                renew_machine_request_claim(
+                    &self.store,
+                    &record_path,
+                    &owner,
+                    "source-readback-complete",
+                )
+                .await?;
+            }
+
+            let readback = authoritative_readback.ok_or_else(|| {
+                MachineError::retryable(
+                    "SOURCE_UPLOAD_FAILED",
+                    "retained source archive is missing",
+                )
+            })?;
+            let readback_bytes = std::fs::metadata(readback.path())
+                .map_err(|error| {
+                    MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+                })?
+                .len();
+            if readback_bytes != source_bytes {
+                return Err(MachineError::retryable(
+                    "SOURCE_UPLOAD_FAILED",
+                    "retained source archive byte count differs from its reservation",
+                ));
+            }
+            renew_machine_request_claim(
+                &self.store,
                 &record_path,
-                &canonical_json(&Value::Object(reservation.clone())),
+                &owner,
+                "source-validation",
             )
             .await?;
-        if !created {
-            let raw = self.store.download_text(&record_path).await?;
-            let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+            validate_staged_source_archive(readback.path()).map_err(|error| {
+                MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+            })?;
+            let readback_sha = sha256_path(readback.path()).map_err(|error| {
+                MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+            })?;
+            renew_machine_request_claim(
+                &self.store,
+                &record_path,
+                &owner,
+                "source-validation-complete",
+            )
+            .await?;
+            if readback_sha != source_sha {
                 return Err(MachineError::retryable(
-                    "REQUEST_IN_PROGRESS",
-                    "request reservation is not readable",
+                    "SOURCE_UPLOAD_FAILED",
+                    "retained source archive digest differs from its reservation",
                 ));
-            };
-            let existing: Value = serde_json::from_str(&raw).map_err(|_| {
+            }
+            readback.cleanup().map_err(|error| {
+                MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+            })?;
+            if let Some(staged) = staged_source.take() {
+                staged.cleanup().map_err(|error| {
+                    MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+                })?;
+            }
+        }
+
+        renew_machine_request_claim(
+            &self.store,
+            &record_path,
+            &owner,
+            "ready-to-enqueue",
+        )
+        .await?;
+
+        let versioned = self
+            .store
+            .read_text_versioned(&record_path)
+            .await?
+            .ok_or_else(|| {
+                MachineError::retryable("REQUEST_IN_PROGRESS", "reservation disappeared")
+            })?;
+        let mut active: Map<String, Value> = serde_json::from_str::<Value>(&versioned.content)?
+            .as_object()
+            .cloned()
+            .ok_or_else(|| {
                 MachineError::new("INTERNAL", "stored idempotency record is invalid")
             })?;
-            if existing.get("request_digest").and_then(Value::as_str) != Some(digest.as_str()) {
-                return Err(MachineError::new(
-                    "IDEMPOTENCY_CONFLICT",
-                    "client_request_id was already used with a different request",
-                ));
-            }
-            if let Some(stored_result) = existing.get("result").filter(|r| r.is_object()) {
-                if stored_result.get("job").is_some_and(Value::is_object) {
-                    return Ok(stored_result.clone());
-                }
-            }
-            if let Some(stored_job) = existing.get("job").filter(|j| j.is_object()) {
-                let mut result = Map::new();
-                result.insert("job".into(), stored_job.clone());
-                if let Some(uri) = existing.get("source_archive_uri").and_then(Value::as_str) {
-                    if !uri.is_empty() {
-                        result.insert("source_archive_uri".into(), Value::from(uri));
-                        result.insert(
-                            "source_sha256".into(),
-                            existing
-                                .get("source_sha256")
-                                .cloned()
-                                .unwrap_or_else(|| Value::from("")),
-                        );
-                    }
-                }
-                return Ok(Value::Object(result));
-            }
+        if active.get("owner").and_then(Value::as_str) != Some(owner.as_str())
+            || active.get("state").and_then(Value::as_str) != Some("claimed")
+        {
             return Err(MachineError::retryable(
                 "REQUEST_IN_PROGRESS",
-                "matching request is still being submitted",
+                "matching request ownership changed before enqueue",
             ));
         }
+        active.insert("state".into(), Value::from("enqueuing"));
+        active.insert("phase".into(), Value::from("enqueue"));
+        self.store
+            .compare_and_swap_text(
+                &record_path,
+                &versioned.version,
+                &canonical_json(&Value::Object(active.clone())),
+            )
+            .await
+            .map_err(|error| {
+                MachineError::retryable(
+                    "REQUEST_IN_PROGRESS",
+                    format!("matching request ownership changed before enqueue: {error}"),
+                )
+            })?;
 
         // kwargs = normalized request minus client_request_id / command /
         // source_archive_path (Python dict comprehension).
         let str_field = |name: &str| request[name].as_str().unwrap_or_default().to_string();
         let mut options = SubmitOptions {
             bucket: self.bucket.clone(),
+            run_id: run_id.clone(),
             provider: str_field("provider"),
             gpu_type: str_field("gpu_type"),
             pinned_host: str_field("pinned_host"),
@@ -882,16 +1458,17 @@ impl MachineFacade {
                     "sha256": source_sha,
                 }),
             );
-            let workdir = format!("/tmp/stado-machine-source/{request_id}-{source_sha}");
+            let work_component = format!("{request_id}-{source_sha}");
             let bootstrap = [
                 "set -e".to_string(),
-                "mkdir -p /tmp/stado-machine-source".to_string(),
-                format!("rm -rf {workdir}"),
-                format!("mkdir -p {workdir}"),
                 format!(
-                    "tar --extract --gzip --file=\"$PWD/machine-input.tar.gz\" --directory={workdir} --no-same-owner --no-same-permissions"
+                    "stado_machine_work=\"$HOME/.stado/work/machine/{work_component}\""
                 ),
-                format!("cd {workdir}"),
+                "mkdir -p -- \"$HOME/.stado/work/machine\"".to_string(),
+                "rm -rf -- \"$stado_machine_work\"".to_string(),
+                "mkdir -p -- \"$stado_machine_work\"".to_string(),
+                "tar --extract --gzip --file=\"$PWD/machine-input.tar.gz\" --directory=\"$stado_machine_work\" --no-same-owner --no-same-permissions".to_string(),
+                "cd -- \"$stado_machine_work\"".to_string(),
             ]
             .join("\n");
             let caller_pre_command = &options.pre_command;
@@ -905,12 +1482,57 @@ impl MachineFacade {
             options.repo_workdir = String::new();
             options.repo_extras = String::new();
         }
-        let command = request["command"].as_str().unwrap_or_default();
-        let job = match submit_job(command, &options).await {
-            Ok(job) => job,
+        let command = request["command"].as_str().unwrap_or_default().to_string();
+        let submission = submit_batch(std::slice::from_ref(&command), &options);
+        tokio::pin!(submission);
+        let submitted = loop {
+            tokio::select! {
+                result = &mut submission => break result,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5 * 60)) => {
+                    renew_machine_request_enqueue(
+                        &self.store,
+                        &record_path,
+                        &owner,
+                        "enqueue",
+                    )
+                    .await?;
+                }
+            }
+        };
+        renew_machine_request_enqueue(
+            &self.store,
+            &record_path,
+            &owner,
+            "enqueue-complete",
+        )
+        .await?;
+        let job = match submitted {
+            Ok(mut jobs) => jobs.pop().ok_or_else(|| {
+                MachineError::retryable("SUBMIT_FAILED", "durable submission returned no job")
+            })?,
             Err(exc) => {
-                // Roll the reservation back so a retry can re-attempt.
-                let _ = self.store.delete_blob(&record_path).await;
+                if let Ok(Some(versioned)) = self.store.read_text_versioned(&record_path).await {
+                    if let Ok(Value::Object(mut released)) =
+                        serde_json::from_str::<Value>(&versioned.content)
+                    {
+                        if released.get("owner").and_then(Value::as_str) == Some(owner.as_str()) {
+                            released.insert("state".into(), Value::from("claimed"));
+                            released.insert(
+                                "lease_expires_at".into(),
+                                Value::from(chrono::Utc::now().to_rfc3339()),
+                            );
+                            released.insert("last_error".into(), Value::from(exc.to_string()));
+                            let _ = self
+                                .store
+                                .compare_and_swap_text(
+                                    &record_path,
+                                    &versioned.version,
+                                    &canonical_json(&Value::Object(released)),
+                                )
+                                .await;
+                        }
+                    }
+                }
                 return Err(MachineError::retryable("SUBMIT_FAILED", exc.to_string()));
             }
         };
@@ -924,24 +1546,74 @@ impl MachineFacade {
             );
             result.insert("source_sha256".into(), Value::from(source_sha.as_str()));
         }
-        let mut completed = reservation;
-        completed.insert("state".into(), Value::from("submitted"));
-        completed.insert("job".into(), normalized);
-        completed.insert("result".into(), Value::Object(result.clone()));
-        completed.insert("completed_at".into(), Value::from(utcnow()));
-        self.store
-            .upload_text(&record_path, &canonical_json(&Value::Object(completed)))
-            .await
-            .map_err(|exc| {
-                MachineError::retryable(
+        for _ in 0..16 {
+            let versioned = self
+                .store
+                .read_text_versioned(&record_path)
+                .await?
+                .ok_or_else(|| {
+                    MachineError::retryable(
+                        "INTERNAL",
+                        "submitted job reservation disappeared before acceptance",
+                    )
+                })?;
+            let mut completed: Map<String, Value> =
+                serde_json::from_str::<Value>(&versioned.content)?
+                    .as_object()
+                    .cloned()
+                    .ok_or_else(|| {
+                        MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                    })?;
+            if let Some(stored) = completed.get("result").filter(|value| value.is_object()) {
+                return Ok(stored.clone());
+            }
+            if completed.get("owner").and_then(Value::as_str) != Some(owner.as_str())
+                || completed.get("state").and_then(Value::as_str) != Some("enqueuing")
+                || completed.get("run_id").and_then(Value::as_str) != Some(run_id.as_str())
+            {
+                return Err(MachineError::retryable(
                     "INTERNAL",
                     format!(
-                        "job {} was submitted but its idempotency record could not be finalized: {exc}",
+                        "job {} was submitted but reservation ownership changed before acceptance",
                         job.job_id
                     ),
+                ));
+            }
+            completed.insert("state".into(), Value::from("accepted"));
+            completed.insert("job".into(), normalized.clone());
+            completed.insert("result".into(), Value::Object(result.clone()));
+            completed.insert("completed_at".into(), Value::from(utcnow()));
+            completed.remove("owner");
+            completed.remove("lease_expires_at");
+            match self
+                .store
+                .compare_and_swap_text(
+                    &record_path,
+                    &versioned.version,
+                    &canonical_json(&Value::Object(completed)),
                 )
-            })?;
-        Ok(Value::Object(result))
+                .await
+            {
+                Ok(_) => return Ok(Value::Object(result)),
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => {
+                    return Err(MachineError::retryable(
+                        "INTERNAL",
+                        format!(
+                            "job {} was submitted but its idempotency record could not be finalized: {error}",
+                            job.job_id
+                        ),
+                    ))
+                }
+            }
+        }
+        Err(MachineError::retryable(
+            "INTERNAL",
+            format!(
+                "job {} was submitted but its idempotency record remained contended",
+                job.job_id
+            ),
+        ))
     }
 
     /// Python `status`.
@@ -1028,15 +1700,24 @@ impl MachineFacade {
             job.state = job_state::CANCELLED.into();
             job.completed_at = Some(utcnow());
             job.error = Some("cancelled".into());
-            self.store.write_job("cancelled", &job).await?;
-            self.store.delete_job("queue", job_id).await?;
-            match self.store.read_job("running", job_id).await? {
-                None => {
+            match self.store.move_job(&job, "queue", "cancelled").await {
+                Ok(()) => {
                     let mut out = Map::new();
                     out.insert("job".into(), normalize_job(&job));
                     return Ok(Value::Object(out));
                 }
-                Some(raced) => job = raced,
+                Err(StorageError::StorageConflict(_)) => {
+                    match self.store.read_job("running", job_id).await? {
+                        Some(raced) => job = raced,
+                        None => {
+                            return Err(MachineError::retryable(
+                                "CANCEL_FAILED",
+                                "job moved while cancellation was being fenced",
+                            ))
+                        }
+                    }
+                }
+                Err(error) => return Err(error.into()),
             }
         }
 
@@ -1066,9 +1747,15 @@ impl MachineFacade {
             job.completed_at = Some(utcnow());
             job.error = Some("cancelled".into());
             job.instance_ref = None;
-            self.store.write_job("cancelled", &job).await?;
-            self.store.delete_job("running", job_id).await?;
-            self.store.delete_job("failed", job_id).await?;
+            self.store
+                .move_job(&job, "running", "cancelled")
+                .await
+                .map_err(|error| {
+                    MachineError::retryable(
+                        "CANCEL_FAILED",
+                        format!("job moved while cancellation was being fenced: {error}"),
+                    )
+                })?;
             let mut out = Map::new();
             out.insert("job".into(), normalize_job(&job));
             return Ok(Value::Object(out));

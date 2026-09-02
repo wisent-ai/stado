@@ -12,6 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::capabilities::{RuntimeAdapter, RuntimeFacet, StorageAdapter};
 use crate::config;
@@ -30,6 +32,136 @@ pub struct JobStorage {
     backend: Arc<dyn BlobBackend>,
     backend_name: String,
     bucket_name: String,
+    /// Where the last bounded claimable-scan stopped in the priority index.
+    ///
+    /// Reachability, and nothing else. A budgeted scan that always restarted
+    /// at the head of the index re-read the same head every poll and could
+    /// never see a job sitting past the budget, which is the starvation the
+    /// budget was supposed to bound rather than cause. Resuming from the last
+    /// visited marker and wrapping at the end of the prefix means every queued
+    /// job is reached within a bounded number of polls.
+    ///
+    /// In memory on purpose: it is a fairness hint, not a fact about the
+    /// queue. Persisting it would add a document that has to be written on
+    /// every poll and reconciled after every crash, to protect a value whose
+    /// only failure mode is starting a scan one page early. Shared across
+    /// clones because the clones are one worker's handle on one store.
+    scan_cursor: Arc<std::sync::Mutex<String>>,
+}
+
+const TRANSITION_PREFIX: &str = "job-transitions";
+const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobTransition {
+    schema: String,
+    transition_id: String,
+    owner: String,
+    job_id: String,
+    from_prefix: String,
+    to_prefix: String,
+    source_version: String,
+    source_digest: String,
+    destination_version: Option<String>,
+    state: String,
+    created_at: String,
+    destination_job: Job,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn transition_path(job_id: &str) -> String {
+    format!("{TRANSITION_PREFIX}/{}.json", sha256_hex(job_id.as_bytes()))
+}
+
+fn prefix_state(prefix: &str) -> &str {
+    if prefix == "queue" {
+        crate::models::job_state::QUEUED
+    } else {
+        prefix
+    }
+}
+
+const TRANSITION_FENCE_PREFIX: &str = "transitioning:";
+const TRANSITION_CLEANED_PREFIX: &str = "transition-cleaned:";
+
+fn transition_fence_state(transition_id: &str) -> String {
+    format!("{TRANSITION_FENCE_PREFIX}{transition_id}")
+}
+fn transition_cleaned_state(transition_id: &str) -> String {
+    format!("{TRANSITION_CLEANED_PREFIX}{transition_id}")
+}
+
+pub(crate) fn is_transition_sentinel_state(state: &str) -> bool {
+    state.starts_with(TRANSITION_FENCE_PREFIX)
+        || state.starts_with(TRANSITION_CLEANED_PREFIX)
+}
+
+
+fn merge_transition_destination(
+    current: &Job,
+    requested: &Job,
+    from_prefix: &str,
+    to_prefix: &str,
+) -> Result<Job, StorageError> {
+    if crate::queue::submit::immutable_job_projection(current)
+        != crate::queue::submit::immutable_job_projection(requested)
+    {
+        return Err(StorageError::StorageConflict(format!(
+            "{} immutable submission identity changed",
+            current.job_id
+        )));
+    }
+    let mut destination = current.clone();
+    destination.state = prefix_state(to_prefix).to_string();
+    // The worker lease belongs to `running/` and to nothing else: a queued or
+    // terminal document carrying an expiry would either fence a reaper that
+    // has no worker to lose to, or leave a dead owner's stamp on a finished
+    // job.
+    destination.lease_expires_at = None;
+    match to_prefix {
+        "running" => {
+            destination.started_at = requested.started_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.lease_expires_at = requested.lease_expires_at.clone();
+        }
+        "queue" if from_prefix == "running" => {
+            destination.started_at = requested.started_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.restarts = destination.restarts.max(requested.restarts);
+            destination.last_restart = requested.last_restart.clone();
+            destination.error = requested.error.clone();
+            destination.preempt_count =
+                destination.preempt_count.max(requested.preempt_count);
+            destination.yield_count = destination.yield_count.max(requested.yield_count);
+            destination.assigned_to = requested.assigned_to.clone();
+        }
+        "completed" | "uploaded" | "cancelled" => {
+            destination.completed_at = requested.completed_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.error = requested.error.clone();
+        }
+        "failed" => {
+            destination.failed_at = requested.failed_at.clone();
+            destination.instance_ref = requested.instance_ref.clone();
+            destination.error = requested.error.clone();
+        }
+        _ => {}
+    }
+    if crate::queue::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
+        destination.peak_vram_gb =
+            destination.peak_vram_gb.max(requested.peak_vram_gb);
+        destination.peak_vram_per_gpu |= requested.peak_vram_per_gpu;
+        for artifact in &requested.artifact_paths {
+            if !destination.artifact_paths.contains(artifact) {
+                destination.artifact_paths.push(artifact.clone());
+            }
+        }
+    }
+    Ok(destination)
 }
 
 fn validate_layout_document(raw: &str) -> Result<(), StorageError> {
@@ -239,6 +371,25 @@ impl JobStorage {
             backend,
             backend_name: backend_name.into(),
             bucket_name: bucket_name.into(),
+            scan_cursor: Arc::new(std::sync::Mutex::new(String::new())),
+        }
+    }
+
+    /// Where the last bounded claimable-scan stopped in the priority index.
+    ///
+    /// A poisoned lock is not worth failing a queue poll over: the cursor is a
+    /// fairness hint, so losing it costs one scan that starts at the head.
+    pub(crate) fn scan_cursor(&self) -> String {
+        self.scan_cursor
+            .lock()
+            .map(|cursor| cursor.clone())
+            .unwrap_or_default()
+    }
+
+    /// Record where the next bounded claimable-scan should resume.
+    pub(crate) fn set_scan_cursor(&self, cursor: String) {
+        if let Ok(mut slot) = self.scan_cursor.lock() {
+            *slot = cursor;
         }
     }
 
@@ -360,6 +511,21 @@ impl JobStorage {
         self.backend.list_paths(prefix, oldest_first).await
     }
 
+    /// One name-ascending page of `prefix`, strictly after `start_after`, at
+    /// most `limit` names. See [`BlobBackend::list_page`] for the contract.
+    ///
+    /// The ordered walk of the priority index is built on this rather than on
+    /// [`Self::list_paths`], which cannot answer "the next few names" without
+    /// first materializing every name there is.
+    pub(crate) async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        self.backend.list_page(prefix, start_after, limit).await
+    }
+
     /// (name, updated, metadata) for every blob under prefix, so callers
     /// can filter on metadata before downloading the full body.
     pub async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
@@ -368,60 +534,593 @@ impl JobStorage {
 
     // ---- job operations ----
 
-    /// Write the job JSON to `{prefix}/{job_id}.json`, stamp filter metadata
-    /// (`gpu_mem_gb`, `priority`, `gpu_type`, provider routing), and — for
-    /// priority>0 jobs in `queue/` — write the `queue_priority/` index marker.
-    pub async fn write_job(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
-        let blob_path = format!("{}/{}.json", prefix, job.job_id);
-        self.backend.upload_text(&blob_path, &job.to_json()).await?;
-        let meta = Self::job_metadata(job);
-        self.backend.set_metadata(&blob_path, &meta).await?;
-        if prefix == "queue" && job.priority > 0 {
-            self.write_priority_marker(job).await?;
+
+    /// Create a queued job exactly once. Existing content is never overwritten;
+    /// callers must read it back and verify its submission identity.
+    pub async fn create_queued_job_if_absent(&self, job: &Job) -> Result<bool, StorageError> {
+        let blob_path = format!("queue/{}.json", job.job_id);
+        // Index ordering rule (see `queue::listing` module docs): the marker
+        // is written BEFORE the job blob is settled. Blob-then-marker leaves
+        // an admitted job with no index entry if anything interrupts the
+        // window — and since the index is the whole listing strategy for
+        // `queue/`, that job is invisible to every scheduler while still
+        // reporting `queued`. It used to self-heal only if the very same
+        // caller retried admission under the same run id, which no other
+        // participant can do on its behalf.
+        //
+        // Every queued job is indexed, not just the prioritized ones.
+        // `priority_key` already sorts priority 0 correctly — it is the
+        // largest inverted key, so those jobs land after all prioritized
+        // work and FIFO among themselves — so this widens the index's
+        // coverage without changing one byte of its name shape. The
+        // listing walk can only be the ordered index if the index names
+        // everything; while it named a subset, the unindexed remainder
+        // needed a second, whole-prefix pass to be reachable at all.
+        self.write_priority_marker(job).await?;
+        let created = self
+            .backend
+            .upload_text_if_absent(&blob_path, &job.to_json())
+            .await?;
+        if created {
+            let meta = Self::job_metadata(job);
+            self.backend.set_metadata(&blob_path, &meta).await?;
+        } else if !self.backend.exists(&blob_path).await? {
+            // Lost the create to a generation that has since left `queue/`,
+            // so the marker names nothing. Dropping it is an optimization,
+            // not a correctness step: an orphan is skipped by the walk and
+            // only costs scan budget.
+            self.delete_priority_marker_for(job).await?;
+        }
+        Ok(created)
+    }
+
+    /// Repair admission metadata only after a losing create has been read and
+    /// validated against the durable planned job. A concurrent move turns this
+    /// into a no-op and any marker written in that window is removed.
+    pub async fn repair_queued_admission_metadata(
+        &self,
+        planned: &Job,
+    ) -> Result<(), StorageError> {
+        let path = format!("queue/{}.json", planned.job_id);
+        let Some(versioned) = self.read_text_versioned(&path).await? else {
+            return Ok(());
+        };
+        let current = Job::from_json(&versioned.content)?;
+        if current.state != crate::models::job_state::QUEUED {
+            return Ok(());
+        }
+        if crate::queue::submit::immutable_job_projection(&current)
+            != crate::queue::submit::immutable_job_projection(planned)
+        {
+            return Err(StorageError::StorageConflict(format!(
+                "{path} does not match validated durable admission"
+            )));
+        }
+        match self
+            .backend
+            .set_metadata(&path, &Self::job_metadata(&current))
+            .await
+        {
+            Ok(()) => {}
+            Err(StorageError::NotFound(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        self.write_priority_marker(&current).await?;
+        if !self.backend.exists(&path).await? {
+            self.delete_priority_marker_for(&current).await?;
         }
         Ok(())
     }
 
-    /// Atomically claim a queued job by creating its `running/` record.
-    /// Exactly one agent can win the create-if-absent race. A concurrent
-    /// cancellation marker fences the winner before workload execution.
-    pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
-        let queue_path = format!("queue/{}.json", job.job_id);
-        if !self.backend.exists(&queue_path).await? {
+    async fn read_job_transition(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<(JobTransition, String)>, StorageError> {
+        let Some(versioned) = self.read_text_versioned(&transition_path(job_id)).await? else {
+            return Ok(None);
+        };
+        let transition: JobTransition = serde_json::from_str(&versioned.content)?;
+        if transition.schema != TRANSITION_SCHEMA || transition.job_id != job_id {
+            return Err(StorageError::Other(format!(
+                "invalid durable transition record for {job_id}"
+            )));
+        }
+        Ok(Some((transition, versioned.version)))
+    }
+
+    async fn set_transition_state(
+        &self,
+        transition_id: &str,
+        job_id: &str,
+        state: &str,
+    ) -> Result<(), StorageError> {
+        for _ in 0..16 {
+            let Some((mut transition, version)) = self.read_job_transition(job_id).await? else {
+                return Err(StorageError::Other(format!(
+                    "durable transition {transition_id} disappeared"
+                )));
+            };
+            if transition.transition_id != transition_id {
+                return Err(StorageError::StorageConflict(format!(
+                    "durable transition ownership changed for {job_id}"
+                )));
+            }
+            if transition.state == state {
+                return Ok(());
+            }
+            transition.state = state.to_string();
+            match self
+                .compare_and_swap_text(
+                    &transition_path(job_id),
+                    &version,
+                    &serde_json::to_string_pretty(&transition)?,
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "durable transition {transition_id} remained contended"
+        )))
+    }
+
+    async fn retire_transition_source(
+        &self,
+        transition: &JobTransition,
+    ) -> Result<(), StorageError> {
+        let source_path = format!(
+            "{}/{}.json",
+            transition.from_prefix, transition.job_id
+        );
+        let fence_state = transition_fence_state(&transition.transition_id);
+        let cleaned_state = transition_cleaned_state(&transition.transition_id);
+        for _ in 0..16 {
+            let Some(versioned) = self.read_text_versioned(&source_path).await? else {
+                return Ok(());
+            };
+            let mut source = Job::from_json(&versioned.content)?;
+            if source.state == cleaned_state {
+                return Ok(());
+            }
+            if source.state != fence_state {
+                return Ok(());
+            }
+            if transition.from_prefix == "queue" {
+                // The hot path: every job that leaves the queue passes here.
+                // The fenced source still carries the `priority` and
+                // `created_at` the marker name was built from, so the name is
+                // computable and this is one delete. Walking the index for a
+                // matching suffix instead would cost a full listing of the
+                // queue per completed job now that every job is indexed.
+                self.delete_priority_marker_for(&source).await?;
+            }
+            source.state = cleaned_state.clone();
+            match self
+                .compare_and_swap_text(&source_path, &versioned.version, &source.to_json())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "source fence for transition {} remained contended",
+            transition.transition_id
+        )))
+    }
+
+    async fn finish_completed_transition(
+        &self,
+        transition: &JobTransition,
+    ) -> Result<bool, StorageError> {
+        let destination_path = format!(
+            "{}/{}.json",
+            transition.to_prefix, transition.job_id
+        );
+        let destination = self
+            .read_job(&transition.to_prefix, &transition.job_id)
+            .await?
+            .ok_or_else(|| {
+                StorageError::StorageConflict(format!(
+                    "completed transition {} has no destination",
+                    transition.transition_id
+                ))
+            })?;
+        if crate::queue::submit::immutable_job_projection(&destination)
+            != crate::queue::submit::immutable_job_projection(&transition.destination_job)
+            || destination.state != prefix_state(&transition.to_prefix)
+        {
+            return Err(StorageError::StorageConflict(format!(
+                "{destination_path} does not match completed transition {}",
+                transition.transition_id
+            )));
+        }
+        if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
+            crate::queue::runs::record_terminal_outcome(
+                self,
+                &destination,
+                &transition.to_prefix,
+            )
+            .await?;
+        }
+        self.retire_transition_source(transition).await?;
+        tombstone::on_transition(self, &destination, &transition.to_prefix).await;
+        Ok(true)
+    }
+
+    /// Recover or finish the single durable lifecycle transition for a job.
+    /// Recovery is ownership-independent: the persisted intent and source
+    /// version are the fence, so any caller can complete an abandoned owner.
+    pub async fn recover_job_transition(&self, job_id: &str) -> Result<bool, StorageError> {
+        let Some((transition, _)) = self.read_job_transition(job_id).await? else {
+            return Ok(false);
+        };
+        if transition.state == "aborted" {
             return Ok(false);
         }
-        let running_path = format!("running/{}.json", job.job_id);
-        if !self
-            .backend
-            .upload_text_if_absent(&running_path, &job.to_json())
-            .await?
+        let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
+        let destination_path = format!("{}/{}.json", transition.to_prefix, job_id);
+        let fence_state = transition_fence_state(&transition.transition_id);
+
+        if transition.state == "completed" {
+            return self.finish_completed_transition(&transition).await;
+        }
+        if transition.state != "prepared" {
+            return Err(StorageError::Other(format!(
+                "durable transition {} has invalid state {}",
+                transition.transition_id, transition.state
+            )));
+        }
+
+        match self.read_text_versioned(&source_path).await? {
+            Some(versioned)
+                if versioned.version == transition.source_version
+                    && sha256_hex(versioned.content.as_bytes()) == transition.source_digest =>
+            {
+                let mut source = Job::from_json(&versioned.content)?;
+                source.state = fence_state.clone();
+                match self
+                    .compare_and_swap_text(&source_path, &versioned.version, &source.to_json())
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
+                        return Ok(false)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Some(versioned) => {
+                let source = Job::from_json(&versioned.content)?;
+                if source.state != fence_state {
+                    self.set_transition_state(
+                        &transition.transition_id,
+                        job_id,
+                        "aborted",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+            }
+            None => {
+                let Some(destination) = self.read_job(&transition.to_prefix, job_id).await? else {
+                    return Err(StorageError::StorageConflict(format!(
+                        "transition {} lost both source and destination",
+                        transition.transition_id
+                    )));
+                };
+                if crate::queue::submit::immutable_job_projection(&destination)
+                    != crate::queue::submit::immutable_job_projection(
+                        &transition.destination_job,
+                    )
+                    || destination.state != prefix_state(&transition.to_prefix)
+                {
+                    return Err(StorageError::StorageConflict(format!(
+                        "{destination_path} does not match transition {}",
+                        transition.transition_id
+                    )));
+                }
+                self.set_transition_state(&transition.transition_id, job_id, "completed")
+                    .await?;
+                return self.finish_completed_transition(&transition).await;
+            }
+        }
+
+        let mut installed_destination = None;
+        for _ in 0..16 {
+            let existing_versioned = self.read_text_versioned(&destination_path).await?;
+            let Some(existing_versioned) = existing_versioned else {
+                if self
+                    .backend
+                    .upload_text_if_absent(
+                        &destination_path,
+                        &transition.destination_job.to_json(),
+                    )
+                    .await?
+                {
+                    installed_destination = Some(transition.destination_job.clone());
+                    break;
+                }
+                continue;
+            };
+            let existing = Job::from_json(&existing_versioned.content)?;
+            if existing.state.starts_with(TRANSITION_CLEANED_PREFIX) {
+                match self
+                    .compare_and_swap_text(
+                        &destination_path,
+                        &existing_versioned.version,
+                        &transition.destination_job.to_json(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        installed_destination = Some(transition.destination_job.clone());
+                        break;
+                    }
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            if crate::queue::submit::immutable_job_projection(&existing)
+                != crate::queue::submit::immutable_job_projection(
+                    &transition.destination_job,
+                )
+                || existing.state != prefix_state(&transition.to_prefix)
+            {
+                return Err(StorageError::StorageConflict(format!(
+                    "{destination_path} conflicts with transition {}",
+                    transition.transition_id
+                )));
+            }
+            if transition.destination_version.as_deref()
+                == Some(existing_versioned.version.as_str())
+                && existing.to_json() != transition.destination_job.to_json()
+            {
+                match self
+                    .compare_and_swap_text(
+                        &destination_path,
+                        &existing_versioned.version,
+                        &transition.destination_job.to_json(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        installed_destination = Some(transition.destination_job.clone());
+                        break;
+                    }
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                    Err(error) => return Err(error),
+                }
+            } else {
+                installed_destination = Some(existing);
+                break;
+            }
+        }
+        let destination = installed_destination.ok_or_else(|| {
+            StorageError::StorageConflict(format!(
+                "{destination_path} remained contended during transition {}",
+                transition.transition_id
+            ))
+        })?;
+        self.backend
+            .set_metadata(&destination_path, &Self::job_metadata(&destination))
+            .await?;
+        if transition.to_prefix == "queue" {
+            // Anything re-entering the queue is indexed, whatever its
+            // priority: a requeued job with priority 0 that carried no marker
+            // would be invisible to a listing that walks only the index.
+            self.write_priority_marker(&destination).await?;
+        }
+        self.set_transition_state(&transition.transition_id, job_id, "completed")
+            .await?;
+        self.finish_completed_transition(&transition).await
+    }
+
+    async fn transition_job_if_version(
+        &self,
+        requested: &Job,
+        from_prefix: &str,
+        to_prefix: &str,
+        expected_version: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        for _ in 0..16 {
+            self.recover_job_transition(&requested.job_id).await?;
+            let source_path = format!("{from_prefix}/{}.json", requested.job_id);
+            let Some(source_versioned) = self.read_text_versioned(&source_path).await? else {
+                if let Some(existing) = self.read_job(to_prefix, &requested.job_id).await? {
+                    if crate::queue::submit::immutable_job_projection(&existing)
+                        == crate::queue::submit::immutable_job_projection(requested)
+                    {
+                        return Ok(true);
+                    }
+                }
+                return Ok(false);
+            };
+            if expected_version.is_some_and(|expected| expected != source_versioned.version) {
+                return Ok(false);
+            }
+            let current = Job::from_json(&source_versioned.content)?;
+            if current.state != prefix_state(from_prefix) {
+                self.recover_job_transition(&requested.job_id).await?;
+                return Ok(false);
+            }
+            let destination_versioned =
+                self.read_text_versioned(&format!("{to_prefix}/{}.json", requested.job_id)).await?;
+            let (destination_basis, destination_version) = match destination_versioned {
+                Some(existing_versioned) => {
+                    let existing = Job::from_json(&existing_versioned.content)?;
+                    if crate::queue::submit::immutable_job_projection(&existing)
+                        != crate::queue::submit::immutable_job_projection(&current)
+                    {
+                        return Err(StorageError::StorageConflict(format!(
+                            "{to_prefix}/{}.json belongs to different lifecycle data",
+                            requested.job_id
+                        )));
+                    }
+                    if existing.state.starts_with(TRANSITION_CLEANED_PREFIX) {
+                        (requested.clone(), Some(existing_versioned.version))
+                    } else if existing.state == prefix_state(to_prefix) {
+                        (existing, Some(existing_versioned.version))
+                    } else {
+                        return Err(StorageError::StorageConflict(format!(
+                            "{to_prefix}/{}.json is not reusable for lifecycle transition",
+                            requested.job_id
+                        )));
+                    }
+                }
+                None => (requested.clone(), None),
+            };
+            let destination = merge_transition_destination(
+                &current,
+                &destination_basis,
+                from_prefix,
+                to_prefix,
+            )?;
+            let transition_id = sha256_hex(
+                format!(
+                    "{}\0{}\0{}\0{}\0{}",
+                    requested.job_id,
+                    from_prefix,
+                    to_prefix,
+                    source_versioned.version,
+                    destination.to_json()
+                )
+                .as_bytes(),
+            );
+            let candidate = JobTransition {
+                schema: TRANSITION_SCHEMA.to_string(),
+                transition_id,
+                owner: uuid::Uuid::new_v4().simple().to_string(),
+                job_id: requested.job_id.clone(),
+                from_prefix: from_prefix.to_string(),
+                to_prefix: to_prefix.to_string(),
+                source_version: source_versioned.version.clone(),
+                source_digest: sha256_hex(source_versioned.content.as_bytes()),
+                destination_version,
+                state: "prepared".into(),
+                created_at: Utc::now().to_rfc3339(),
+                destination_job: destination,
+            };
+            let path = transition_path(&requested.job_id);
+            let body = serde_json::to_string_pretty(&candidate)?;
+            let installed = match self.read_text_versioned(&path).await? {
+                None => self.create_text_if_absent(&path, &body).await?,
+                Some(active) => {
+                    let existing: JobTransition = serde_json::from_str(&active.content)?;
+                    if existing.state == "prepared" {
+                        self.recover_job_transition(&requested.job_id).await?;
+                        continue;
+                    }
+                    match self
+                        .compare_and_swap_text(&path, &active.version, &body)
+                        .await
+                    {
+                        Ok(_) => true,
+                        Err(StorageError::StorageConflict(_)) => false,
+                        Err(error) => return Err(error),
+                    }
+                }
+            };
+            if !installed {
+                continue;
+            }
+            if self.recover_job_transition(&requested.job_id).await? {
+                return Ok(true);
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "job {} remained contended during lifecycle transition",
+            requested.job_id
+        )))
+    }
+
+    /// Claim through a durable transition record. The running job is derived
+    /// from the fresh versioned queue body; stale caller priority/assignment
+    /// cannot overwrite a concurrent queued rewrite.
+    ///
+    /// The claimed running document carries a worker lease from the first
+    /// instant it exists, so a claim that dies before its first heartbeat is
+    /// still reaped on a stated expiry rather than on a guess about
+    /// `started_at`.
+    pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
+        self.recover_job_transition(&job.job_id).await?;
+        let queue_path = format!("queue/{}.json", job.job_id);
+        let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
+            return Ok(false);
+        };
+        let current = Job::from_json(&versioned.content)?;
+        if current.state != crate::models::job_state::QUEUED
+            || current.assigned_to != job.assigned_to
+            || crate::queue::submit::immutable_job_projection(&current)
+                != crate::queue::submit::immutable_job_projection(job)
         {
             return Ok(false);
         }
-        // A competing agent may have completed and removed the queued record
-        // after this agent listed it but before the running claim landed.
-        // Never resurrect that stale in-memory copy after the winner removes
-        // its running record.
-        if !self.backend.exists(&queue_path).await? {
-            self.backend.delete(&running_path).await?;
-            return Ok(false);
-        }
-        self.backend
-            .set_metadata(&running_path, &Self::job_metadata(job))
-            .await?;
-
         let cancellation = format!("cancellations/{}.json", job.job_id);
         let cancelled = format!("cancelled/{}.json", job.job_id);
-        if self.backend.download_text(&cancellation).await?.is_some()
-            || self.backend.download_text(&cancelled).await?.is_some()
-        {
-            self.backend.delete(&running_path).await?;
+        if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
             return Ok(false);
         }
-
-        self.backend.delete(&queue_path).await?;
-        self.delete_priority_marker(&job.job_id).await?;
+        let mut claimed = job.clone();
+        claimed.lease_expires_at = Some(Self::lease_deadline());
+        let moved = self
+            .transition_job_if_version(&claimed, "queue", "running", Some(&versioned.version))
+            .await?;
+        if !moved {
+            return Ok(false);
+        }
+        if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
+            return Ok(false);
+        }
         Ok(true)
+    }
+
+    /// One worker-lease deadline from now, in the window the fleet already
+    /// calls a dead heartbeat.
+    fn lease_deadline() -> String {
+        (Utc::now() + chrono::Duration::minutes(config::HEARTBEAT_STALE_MINUTES)).to_rfc3339()
+    }
+
+    /// Renew the running job's own lease by compare-and-swap on the running
+    /// document.
+    ///
+    /// This is the fence, and it only works because it writes the SAME object
+    /// the reaper pins: a renewal that lands while a reaper is mid-reap
+    /// changes that object's version, so the reaper's version-pinned move
+    /// fails and the live execution keeps its slot. A pulse written beside the
+    /// job cannot do that, however recently it was read.
+    ///
+    /// `false` when the job is no longer a live running document (moved,
+    /// deleted, or fenced mid-transition) — the caller has lost the job, not
+    /// the write.
+    pub async fn renew_running_lease(&self, job_id: &str) -> Result<bool, StorageError> {
+        let path = format!("running/{job_id}.json");
+        for _ in 0..3 {
+            let Some(versioned) = self.read_text_versioned(&path).await? else {
+                return Ok(false);
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            if job.state != crate::models::job_state::RUNNING {
+                return Ok(false);
+            }
+            job.lease_expires_at = Some(Self::lease_deadline());
+            match self
+                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(StorageError::NotFound(_)) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "running/{job_id}.json remained contended during lease renewal"
+        )))
     }
     pub async fn refresh_job_metadata(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
         let blob_path = format!("{}/{}.json", prefix, job.job_id);
@@ -453,11 +1152,63 @@ impl JobStorage {
         else {
             return Ok(None);
         };
-        Ok(Some(Job::from_json(&data)?))
+        let job = Job::from_json(&data)?;
+        if is_transition_sentinel_state(&job.state) {
+            return Ok(None);
+        }
+        Ok(Some(job))
     }
 
-    /// Atomically rewrite one queued job's priority and rebuild its marker.
-    /// `None` means the job left `queue/` before the update could finish.
+    async fn rewrite_queued_job<F>(
+        &self,
+        job_id: &str,
+        mutate: F,
+    ) -> Result<Option<Job>, StorageError>
+    where
+        F: Fn(&mut Job),
+    {
+        let path = format!("queue/{job_id}.json");
+        for _ in 0..3 {
+            let Some(versioned) = self.read_text_versioned(&path).await? else {
+                return Ok(None);
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            if job.state != crate::models::job_state::QUEUED {
+                return Ok(None);
+            }
+            mutate(&mut job);
+            match self
+                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
+                .await
+            {
+                Ok(_) => {}
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => return Err(error),
+            }
+            if !self.backend.exists(&path).await? {
+                return Ok(None);
+            }
+            if let Err(error) = self
+                .backend
+                .set_metadata(&path, &Self::job_metadata(&job))
+                .await
+            {
+                if matches!(&error, StorageError::NotFound(_)) {
+                    return Ok(None);
+                }
+                return Err(error);
+            }
+            if !self.backend.exists(&path).await? {
+                return Ok(None);
+            }
+            return Ok(Some(job));
+        }
+        Err(StorageError::StorageConflict(format!(
+            "queue/{job_id}.json remained contended during rewrite"
+        )))
+    }
+
+    /// CAS-update one current queued generation's priority and marker.
     pub async fn update_queued_priority(
         &self,
         job_id: &str,
@@ -468,94 +1219,138 @@ impl JobStorage {
                 "job priority must be between 0 and 99999999".into(),
             ));
         }
-        let path = format!("queue/{job_id}.json");
-        for _ in 0..3 {
-            let Some(versioned) = self.read_text_versioned(&path).await? else {
-                return Ok(None);
-            };
-            let mut job = Job::from_json(&versioned.content)?;
-            job.priority = new_priority;
-            match self
-                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
-                .await
-            {
-                Ok(_) => {}
-                Err(StorageError::StorageConflict(_)) => continue,
-                Err(error) => return Err(error),
-            }
-
-            if !self.backend.exists(&path).await? {
-                self.delete_priority_marker(job_id).await?;
-                return Ok(None);
-            }
-            if let Err(error) = self
-                .backend
-                .set_metadata(&path, &Self::job_metadata(&job))
-                .await
-            {
-                if matches!(&error, StorageError::NotFound(_)) {
-                    self.delete_priority_marker(job_id).await?;
-                    return Ok(None);
-                }
-                return Err(error);
-            }
-            self.delete_priority_marker(job_id).await?;
-            if new_priority > 0 {
-                self.write_priority_marker(&job).await?;
-            }
-            if !self.backend.exists(&path).await? {
-                self.delete_priority_marker(job_id).await?;
+        let updated = self
+            .rewrite_queued_job(job_id, |job| job.priority = new_priority)
+            .await?;
+        // Per the index ordering rule (see `queue::listing` module docs), the
+        // new key is written BEFORE the superseded one is dropped. A priority
+        // change re-keys the marker, and clean-then-write leaves the job with
+        // NO marker if anything interrupts between the two steps — a
+        // transient 5xx, or an operator's Ctrl-C on `job priority` — which
+        // strands a queued job outside the index permanently. Write-then-
+        // clean fails into a harmless duplicate under the old key instead.
+        // `keep` stops the cleanup scan, which matches on job_id, from
+        // deleting the marker just written.
+        if let Some(job) = &updated {
+            self.write_priority_marker(job).await?;
+            let current = listing::marker_path(job);
+            self.repair_priority_markers(job_id, Some(&current)).await?;
+            if !self.backend.exists(&format!("queue/{job_id}.json")).await? {
+                self.delete_priority_marker_for(job).await?;
                 return Ok(None);
             }
-            return Ok(Some(job));
+        } else {
+            // No current queued generation to index; anything still bearing
+            // this id is an orphan.
+            self.repair_priority_markers(job_id, None).await?;
         }
-        Err(StorageError::StorageConflict(format!(
-            "queue/{job_id}.json changed while its priority was being updated"
-        )))
+        Ok(updated)
+    }
+
+    /// CAS-update the measured queue sizing without recreating moved work.
+    pub async fn update_queued_gpu_mem(
+        &self,
+        job_id: &str,
+        gpu_mem_gb: i64,
+    ) -> Result<Option<Job>, StorageError> {
+        self.rewrite_queued_job(job_id, |job| job.gpu_mem_gb = gpu_mem_gb)
+            .await
+    }
+
+    /// CAS-update the makespan assignment without recreating moved work.
+    pub async fn update_queued_assignment(
+        &self,
+        job_id: &str,
+        assigned_to: &str,
+    ) -> Result<Option<Job>, StorageError> {
+        self.rewrite_queued_job(job_id, |job| {
+            job.assigned_to = assigned_to.to_string()
+        })
+        .await
     }
 
     /// Delete the job blob; also drops the priority marker in `queue/`.
+    ///
+    /// The job is read before it is deleted so the marker can be removed by
+    /// its exact name. A job already gone leaves a marker whose key cannot be
+    /// computed, which is the orphan case the index walk repairs.
     pub async fn delete_job(&self, prefix: &str, job_id: &str) -> Result<(), StorageError> {
+        let indexed = if prefix == "queue" {
+            self.read_job(prefix, job_id).await?
+        } else {
+            None
+        };
         self.delete_blob(&format!("{prefix}/{job_id}.json")).await?;
         if prefix == "queue" {
-            self.delete_priority_marker(job_id).await?;
+            match &indexed {
+                Some(job) => self.delete_priority_marker_for(job).await?,
+                None => self.repair_priority_markers(job_id, None).await?,
+            }
         }
         Ok(())
     }
 
-    /// Move a job between prefixes: write-then-delete. NOT atomic — a crash
-    /// between the two can leave the job in both prefixes (readers tolerate
-    /// duplicates) or neither; kept from Python, where the same window
-    /// exists.
-    ///
-    /// After the move, [`tombstone::on_transition`] writes a
-    /// fixed/failed_again marker when this terminates a re-submitted job.
+    /// Move through the recoverable transition record. No destination is
+    /// created until the exact source generation has been fenced.
     pub async fn move_job(
         &self,
         job: &Job,
         from_prefix: &str,
         to_prefix: &str,
     ) -> Result<(), StorageError> {
-        self.write_job(to_prefix, job).await?;
-        self.delete_blob(&format!("{from_prefix}/{}.json", job.job_id))
-            .await?;
-        if from_prefix == "queue" {
-            self.delete_priority_marker(&job.job_id).await?;
+        if self
+            .transition_job_if_version(job, from_prefix, to_prefix, None)
+            .await?
+        {
+            Ok(())
+        } else {
+            Err(StorageError::StorageConflict(format!(
+                "{from_prefix}/{}.json changed before transition to {to_prefix}",
+                job.job_id
+            )))
         }
-        tombstone::on_transition(self, job, to_prefix).await;
-        Ok(())
+    }
+
+    /// Version-pinned lifecycle move for decisions (lease expiry, liveness)
+    /// made from a specific source read.
+    pub async fn move_job_if_version(
+        &self,
+        job: &Job,
+        from_prefix: &str,
+        to_prefix: &str,
+        expected_version: &str,
+    ) -> Result<bool, StorageError> {
+        self.transition_job_if_version(
+            job,
+            from_prefix,
+            to_prefix,
+            Some(expected_version),
+        )
+        .await
     }
 
     // ---- delegates to queue/listing/ (priority markers + bulk fetch) ----
 
-    /// Index entry for priority>0 jobs (`queue_priority/` marker).
+    /// Index entry for a queued job (`queue_priority/` marker).
     pub async fn write_priority_marker(&self, job: &Job) -> Result<(), StorageError> {
         listing::write_marker(self, job).await
     }
 
-    /// Remove any priority marker(s) for this job_id.
-    pub async fn delete_priority_marker(&self, job_id: &str) -> Result<(), StorageError> {
-        listing::delete_marker(self, job_id).await
+    /// Drop the marker this job names, in one delete.
+    pub async fn delete_priority_marker_for(&self, job: &Job) -> Result<(), StorageError> {
+        listing::delete_marker_for(self, job).await
+    }
+
+    /// Repair path: drop every marker naming `job_id` by walking the index,
+    /// except `keep` when the caller has already written the current one.
+    /// Only for the cases where the marker's key is not derivable from the
+    /// job — an orphan, or a key superseded by a priority change.
+    pub async fn repair_priority_markers(
+        &self,
+        job_id: &str,
+        keep: Option<&str>,
+    ) -> Result<(), StorageError> {
+        listing::delete_markers_scanning(self, job_id, keep).await
     }
 
     /// Parallel-fetch job JSONs under `{prefix}/`. Python
@@ -568,35 +1363,15 @@ impl JobStorage {
         listing::list_jobs(self, prefix, oldest_first).await
     }
 
-    /// Top-N highest-priority jobs via the `queue_priority/` index. Python
-    /// `JobStorage.list_priority_jobs`.
-    pub async fn list_priority_jobs(
+    /// Priority markers first, then oldest-first, counting only jobs the
+    /// caller's own admission rule accepts. See [`listing::JobScan`] for why
+    /// the window and the scanning cost are separate quantities.
+    pub async fn list_claimable_jobs(
         &self,
         prefix: &str,
-        top_n: usize,
+        scan: &listing::JobScan<'_>,
     ) -> Result<Vec<Job>, StorageError> {
-        listing::list_top_n(self, prefix, top_n).await
-    }
-
-    /// Priority markers first, then FIFO oldest_first, deduped by job_id.
-    /// Python `JobStorage.list_jobs_priority_first`.
-    pub async fn list_jobs_priority_first(
-        &self,
-        prefix: &str,
-        cap: usize,
-    ) -> Result<Vec<Job>, StorageError> {
-        listing::list_priority_first(self, prefix, cap).await
-    }
-
-    /// Priority-aware fitting jobs with metadata pre-filtering. Python
-    /// `JobStorage.list_jobs_fitting` (`cap` defaults to 4000 in Python).
-    pub async fn list_jobs_fitting(
-        &self,
-        prefix: &str,
-        max_gpu_mem_gb: i64,
-        cap: usize,
-    ) -> Result<Vec<Job>, StorageError> {
-        listing::list_fitting(self, prefix, max_gpu_mem_gb, cap).await
+        listing::list_claimable(self, prefix, scan).await
     }
 
     /// All jobs grouped by prefix. Python `JobStorage.list_all_jobs`.

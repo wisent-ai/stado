@@ -453,15 +453,13 @@ impl Sizing {
             if job.gpu_mem_gb == desired {
                 continue;
             }
-            let Some(mut fresh) = store.read_job("queue", &job.job_id).await? else {
-                continue; // claimed/moved since tick start
-            };
-            if fresh.gpu_mem_gb == desired {
-                continue;
+            if store
+                .update_queued_gpu_mem(&job.job_id, desired)
+                .await?
+                .is_some()
+            {
+                corrected += 1;
             }
-            fresh.gpu_mem_gb = desired;
-            store.write_job("queue", &fresh).await?;
-            corrected += 1;
         }
         if corrected > 0 {
             log_fn(&format!(

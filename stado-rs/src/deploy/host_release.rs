@@ -610,13 +610,27 @@ say step probe
 pub const FETCH_PRELUDE: &str = r##"
 fetch_chunk_bytes=8388608
 
+# `release_resolve` is empty unless the origin is a tailnet name this fleet can
+# place, in which case the route is pinned to the tailnet address while the URL,
+# the SNI name and the certificate check stay exactly as they were. Every
+# request this file makes goes through here, so the pin cannot be applied to the
+# body read and forgotten for the size read.
+release_object_curl() {
+  if [ -n "${release_resolve:-}" ]; then
+    /usr/bin/curl -fsS --get --resolve "$release_resolve" "$@" \
+      "$release_api/api/release/object"
+  else
+    /usr/bin/curl -fsS --get "$@" \
+      "$release_api/api/release/object"
+  fi
+}
+
 release_object_total() {
-  /usr/bin/curl -fsS --get \
+  release_object_curl \
     --data-urlencode "uri=$1" \
     --range 0-0 \
     --dump-header "$2" \
-    --output /dev/null \
-    "$release_api/api/release/object" || return 1
+    --output /dev/null || return 1
   /usr/bin/tr -d '\r' < "$2" |
     /usr/bin/awk 'tolower($1) == "content-range:" {
       if (split($2, part, "/") == 2) { total = part[2] }
@@ -652,12 +666,11 @@ fetch_release_object() {
     fi
     fetch_want=$((fetch_end - fetch_have + 1))
     /bin/rm -f "$fetch_head" "$fetch_part"
-    /usr/bin/curl -fsS --get \
+    release_object_curl \
       --data-urlencode "uri=$fetch_uri" \
       --range "$fetch_have-$fetch_end" \
       --dump-header "$fetch_head" \
-      --output "$fetch_part" \
-      "$release_api/api/release/object" || {
+      --output "$fetch_part" || {
         /bin/rm -f "$fetch_head" "$fetch_part"
         say fetch "failed_at_$fetch_have"
         return 1
@@ -1206,6 +1219,26 @@ fi
 say step activate
 "##;
 
+/// One `curl --resolve` word for a tailnet release origin, or an empty string.
+///
+/// Empty for every origin that is not a tailnet name, and for a tailnet name
+/// this node's own tailnet map does not carry — both are cases where the
+/// target's resolver is the only witness available, and a wrong pin would be
+/// worse than none.
+fn release_resolve(release_api: &str) -> String {
+    let Ok(url) = url::Url::parse(release_api) else {
+        return String::new();
+    };
+    let Some(host) = url.host_str() else {
+        return String::new();
+    };
+    let Some(address) = crate::tailnet::address_of(host) else {
+        return String::new();
+    };
+    let port = url.port_or_known_default().unwrap_or(443);
+    format!("{host}:{port}:{address}")
+}
+
 /// The checked coordinates one remote program is bound to.
 ///
 /// Every operator-facing value arrives as a quoted assignment, so no word of
@@ -1235,6 +1268,21 @@ fn bindings(plan: &ReleasePlan) -> String {
         shlex_quote(&crate::watchdog::hostname()),
         plan.product.root(),
     );
+    // Where the origin's name lives, for the target's own `curl`.
+    //
+    // The caller reads the manifest through a client that pins tailnet names
+    // (`cli::storage::fleet_https_client`); the target fetches the archive with
+    // `curl`, which asks its system resolver. On 2026-09-02 that split cost a
+    // delivery: 0.13.46's archive matched its manifest byte for byte here, and
+    // `charless-mac-mini` reported `verify mismatch` for bytes fetched from the
+    // same URL, because a MagicDNS name resolved to the public `ts.net` front
+    // end there. The tailnet address is tailnet-global, so the address this
+    // machine reads is the address the target must use, and `--resolve` decides
+    // the route while leaving SNI, the certificate check and the URL untouched.
+    bound.push_str(&format!(
+        "release_resolve={}\n",
+        shlex_quote(&release_resolve(&plan.release_api))
+    ));
     match &plan.product.readback {
         Readback::Program { argument, shape } => bound.push_str(&format!(
             "version_argument={}\nversion_shape={}\n",

@@ -133,8 +133,10 @@ struct BuildRun: Decodable, Hashable, Sendable {
     }
 }
 
-/// What `stado builds run <name> --json` answers with: the job it enqueued for
-/// each platform, and the recipe as the registry now records it.
+/// What `stado builds run <name> --run-id <id> --json` answers with: the job it
+/// enqueued for each platform, and the recipe as the registry now records it.
+/// `--run-id` is required by the command, and reusing the same token recovers
+/// the same durable run instead of enqueuing a second one.
 struct BuildRunReceipt: Decodable, Sendable {
     let name: String
     /// Platform to queue job id. One entry per platform the recipe declares.
@@ -396,6 +398,8 @@ final class BuildsStore: ObservableObject {
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
+    /// Caller-retained `stado builds run` run ids, keyed by recipe name.
+    private var runIDs: [String: String] = [:]
 
     init(cli: StadoCLI = StadoCLI()) {
         self.cli = cli
@@ -409,8 +413,21 @@ final class BuildsStore: ObservableObject {
         ["builds", enabled ? "enable" : "disable", name, "--json"]
     }
 
-    nonisolated static func runArguments(name: String) -> [String] {
-        ["builds", "run", name, "--json"]
+    nonisolated static func runArguments(name: String, runID: String) -> [String] {
+        ["builds", "run", name, "--run-id", runID, "--json"]
+    }
+
+    /// The caller-retained `--run-id` for one operator enqueue of `recipe`.
+    /// It is generated once and kept until that enqueue succeeds, so a retry
+    /// after a failure recovers the same per-platform durable runs instead of
+    /// enqueueing a second set of build jobs.
+    func retainedRunID(for recipe: String) -> String {
+        if let existing = runIDs[recipe] {
+            return existing
+        }
+        let generated = "desktop-\(UUID().uuidString.lowercased())"
+        runIDs[recipe] = generated
+        return generated
     }
 
     /// `stado builds add --name … --json`. Every field is given because add
@@ -525,16 +542,17 @@ final class BuildsStore: ObservableObject {
         await refresh()
     }
 
-    /// `stado builds run <name> --json`: one build job per platform the recipe
-    /// declares, enqueued now, without waiting for the poller to notice a
-    /// commit.
-    func run(_ recipe: BuildRecipe) async {
+    /// `stado builds run <name> --run-id <id> --json`: one build job per
+    /// platform the recipe declares, enqueued now, without waiting for the
+    /// poller to notice a commit.
+    func run(_ recipe: BuildRecipe, runID: String) async {
         mutation = .working("Enqueuing a build of \(recipe.name) on \(Self.platformList(recipe))")
         do {
             let receipt = try await cli.json(
                 BuildRunReceipt.self,
-                arguments: Self.runArguments(name: recipe.name)
+                arguments: Self.runArguments(name: recipe.name, runID: runID)
             )
+            runIDs.removeValue(forKey: recipe.name)
             replace(receipt.recipe)
             let enqueued = receipt.enqueued
             mutation = .succeeded(

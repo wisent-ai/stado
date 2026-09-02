@@ -283,7 +283,8 @@ impl Provider for BoxProvider {
             };
             let candidate =
                 crate::models::Job::from_json(&text).map_err(crate::queue::StorageError::Json)?;
-            if crate::capabilities::ProviderId::Box.matches(&candidate.provider)
+            if candidate.state == crate::models::job_state::RUNNING
+                && crate::capabilities::ProviderId::Box.matches(&candidate.provider)
                 && candidate.instance_ref.as_deref() == Some(instance_ref)
             {
                 found = Some(candidate);

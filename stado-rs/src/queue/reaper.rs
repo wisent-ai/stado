@@ -11,14 +11,26 @@
 //! - [`crate::monitor::reap`] deletes per-job blobs of fully-terminal runs
 //!   and never touches live records.
 //!
-//! This reaper keys on the job's worker lease: the
-//! `status/<job_id>/heartbeat` blob every executor refreshes on
-//! [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`]
-//! (`write_heartbeat`), falling back to `started_at` for a worker that died
-//! before its first heartbeat. The TTL is the codebase's own
+//! This reaper keys on the job's worker lease, and the lease lives IN the
+//! running job document (`Job::lease_expires_at`), renewed by
+//! [`crate::queue::storage::JobStorage::renew_running_lease`] every
+//! [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`] from
+//! `write_heartbeat`. The TTL is the codebase's own
 //! [`crate::config::HEARTBEAT_STALE_MINUTES`] — the window
 //! [`super::control::default_drain_timeout_s`] documents as "the window
 //! after which the monitor declares a running job's heartbeat dead".
+//!
+//! Why in the document: while the lease was only the `status/<job_id>/heartbeat`
+//! blob, no amount of re-reading could fence this reaper. It read the running
+//! job at version V, read the pulse, and moved the job at V; a live worker
+//! that refreshed its pulse in that window changed nothing the reaper held,
+//! so the move succeeded, the job was requeued and a second worker started it
+//! while the first was still executing and about to publish its result. A
+//! renewal that is a compare-and-swap on the running document invalidates V,
+//! so the reaper's version-pinned move fails and it loses the race instead of
+//! silently winning it. Jobs claimed before the lease existed carry none, and
+//! for exactly those the heartbeat blob and `started_at` still decide, with a
+//! re-read immediately before the move.
 //!
 //! Retry semantics: the first lease expiry moves the job back to `queue/`
 //! exactly once, incrementing the existing `restarts` retry field (still
@@ -26,13 +38,10 @@
 //! `job.error` — both the diagnosis readers surface and the marker that a
 //! second expiry turns the job `failed/` with that same stored reason.
 //!
-//! Write discipline: every transition is fenced per job record — versioned
-//! read, create-if-absent at the destination (the `claim_queued_job`
-//! transition claim), then compare-and-swap on the source record against
-//! the version read. A lost race compensates by deleting the destination
-//! claim and defers to the winner; a fresh heartbeat is re-checked from
-//! storage metadata immediately before the transition so a job whose
-//! worker heartbeat is fresh is never touched.
+//! Write discipline: every transition uses
+//! [`JobStorage::move_job_if_version`], which persists explicit ownership and
+//! source-generation intent, CAS-fences the source, then creates or validates
+//! the destination. Any caller can finish an abandoned transition.
 
 use chrono::Utc;
 
@@ -63,6 +72,10 @@ pub struct ReaperSummary {
     /// Queued jobs whose `assigned_to` named a silent worker, cleared so
     /// another worker can claim them.
     pub assignments_cleared: usize,
+    /// Whether the marker-index sweep has covered `queue/` end-to-end at
+    /// least once, which is what lets the listing walk drop its
+    /// whole-prefix fallback. Reported, not acted on, here.
+    pub index_swept: bool,
 }
 
 /// Seconds since `status/<job_id>/heartbeat` was last written, or `None`
@@ -87,50 +100,7 @@ fn started_age_seconds(job: &Job, now: chrono::DateTime<Utc>) -> Option<i64> {
     Some((now - started).num_seconds())
 }
 
-/// Fenced prefix move of one job record.
-///
-/// The create-if-absent at the destination is the transition claim (the
-/// `claim_queued_job` discipline): exactly one mover wins it. The
-/// compare-and-swap on the source record against `expected_version` proves
-/// no concurrent writer touched (or terminally moved) the record since the
-/// caller's read; on a lost race the destination claim is deleted again so
-/// the store is left exactly as found. Returns `true` when this caller
-/// performed the move.
-async fn fenced_move(
-    store: &JobStorage,
-    job: &Job,
-    from_prefix: &str,
-    to_prefix: &str,
-    expected_version: &str,
-) -> Result<bool, StorageError> {
-    let from = format!("{from_prefix}/{}.json", job.job_id);
-    let to = format!("{to_prefix}/{}.json", job.job_id);
-    let body = job.to_json();
-    if !store.create_text_if_absent(&to, &body).await? {
-        return Ok(false);
-    }
-    match store
-        .compare_and_swap_text(&from, expected_version, &body)
-        .await
-    {
-        Ok(_) => {
-            store.delete_blob(&from).await?;
-            if from_prefix == "queue" {
-                store.delete_priority_marker(&job.job_id).await?;
-            }
-            super::tombstone::on_transition(store, job, to_prefix).await;
-            Ok(true)
-        }
-        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
-            store.delete_blob(&to).await?;
-            Ok(false)
-        }
-        Err(error) => {
-            store.delete_blob(&to).await?;
-            Err(error)
-        }
-    }
-}
+
 
 /// Reap one running job whose lease is expired: requeue on the first
 /// expiry, fail on the second. Leaves the job alone (fresh, guarded, or
@@ -143,34 +113,65 @@ async fn reap_one(
     log: &dyn Fn(&str),
     summary: &mut ReaperSummary,
 ) -> Result<(), StorageError> {
+    store.recover_job_transition(job_id).await?;
     let path = format!("running/{job_id}.json");
     let Some(versioned) = store.read_text_versioned(&path).await? else {
         return Ok(()); // already moved by a concurrent writer
     };
     let mut job = Job::from_json(&versioned.content)?;
     if job.state != job_state::RUNNING {
+        store.recover_job_transition(job_id).await?;
         return Ok(());
     }
-
-    // Expired iff EVERY liveness signal is older than the lease TTL: the
-    // heartbeat blob when one exists, and started_at (boot grace — a
-    // freshly claimed job has not written its first heartbeat yet). An
-    // undateable job is skipped rather than reaped on an invented fact.
+    // The lease the worker renews INSIDE this document is the authority when
+    // the document carries one. It is also the fence: the renewal is a
+    // compare-and-swap on this very object, so a pulse that lands between
+    // this read and the move below changes `versioned.version` and the
+    // version-pinned move fails. That is the only construction that closes
+    // the race — re-reading a heartbeat blob written beside the job cannot,
+    // because nothing the reaper pins changes when it is written.
+    //
+    // A job claimed before the lease existed carries none. For those the old
+    // signals still decide: the heartbeat blob when one exists, and
+    // `started_at` as boot grace. An undateable job is skipped rather than
+    // reaped on an invented fact.
+    let lease_expiry = job
+        .lease_expires_at
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .and_then(hg::parse_iso_lenient);
     let heartbeat_age = heartbeat_age_seconds(store, job_id, now).await?;
     let started_age = started_age_seconds(&job, now);
-    if heartbeat_age.is_none() && started_age.is_none() {
-        return Ok(());
-    }
     let fresh = |age: Option<i64>| age.is_some_and(|age| age <= lease_ttl_seconds);
-    if fresh(heartbeat_age) || fresh(started_age) {
-        return Ok(());
-    }
-    // The freshest (smallest) stale age, named in the log line.
-    let age = [heartbeat_age, started_age]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or_default();
+    let age = match lease_expiry {
+        Some(expires) => {
+            if expires > now {
+                return Ok(());
+            }
+            // An expired lease beside a FRESH pulse means the renewal write
+            // is failing, not that the worker died: both come from the same
+            // `write_heartbeat`, so a live executor whose compare-and-swap
+            // keeps losing must not be reaped for the storage layer's fault.
+            if fresh(heartbeat_age) {
+                return Ok(());
+            }
+            (now - expires).num_seconds() + lease_ttl_seconds
+        }
+        None => {
+            if heartbeat_age.is_none() && started_age.is_none() {
+                return Ok(());
+            }
+            if fresh(heartbeat_age) || fresh(started_age) {
+                return Ok(());
+            }
+            // The freshest (smallest) stale age, named in the log line.
+            [heartbeat_age, started_age]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or_default()
+        }
+    };
 
     // A command that kills `wc agent` itself is done, not orphaned: the
     // agent's disappearance is the success condition.
@@ -183,12 +184,28 @@ async fn reap_one(
         return Ok(());
     }
 
+    // A job with no in-document lease has no fence at all, so every external
+    // signal it does have is re-read immediately before the move: a worker
+    // that refreshed its heartbeat or checkpoint while the finalizer and
+    // first checkpoint inspection above were running must not be reaped from
+    // the stale observation. A lease-bearing job needs none of this — its
+    // renewal invalidates the version the move below is pinned to.
+    if lease_expiry.is_none()
+        && (fresh(heartbeat_age_seconds(store, job_id, now).await?)
+            || hg::any_job_checkpoint_fresh(store, &job, CHECKPOINT_FRESH_SECONDS).await)
+    {
+        return Ok(());
+    }
+
     let second_expiry = job.error.as_deref() == Some(LEASE_EXPIRED_REASON);
     if second_expiry || job.restarts + 1 > job.max_restarts {
         job.state = job_state::FAILED.to_string();
         job.failed_at = Some(isoformat_utc(now));
         job.error = Some(LEASE_EXPIRED_REASON.to_string());
-        if fenced_move(store, &job, "running", "failed", &versioned.version).await? {
+        if store
+            .move_job_if_version(&job, "running", "failed", &versioned.version)
+            .await?
+        {
             summary.failed += 1;
             let why = if second_expiry {
                 "second lease expiry".to_string()
@@ -217,12 +234,11 @@ async fn reap_one(
     if job.pinned_host.is_empty() {
         job.assigned_to = String::new();
     }
-    if fenced_move(store, &job, "running", "queue", &versioned.version).await? {
+    if store
+        .move_job_if_version(&job, "running", "queue", &versioned.version)
+        .await?
+    {
         summary.requeued += 1;
-        store.refresh_job_metadata("queue", &job).await?;
-        if job.priority > 0 {
-            store.write_priority_marker(&job).await?;
-        }
         store.cleanup_status(&job.job_id).await?;
         log(&format!(
             "{job_id}: requeued ({LEASE_EXPIRED_REASON}; lease silent for {age}s; restart {}/{})",
@@ -247,22 +263,29 @@ async fn clear_silent_assignments(
 ) -> Result<(), StorageError> {
     let live = capacity::read_consumer_capacity(store).await?;
     for candidate in store.list_jobs("queue", 0).await? {
-        if candidate.assigned_to.is_empty() || !candidate.pinned_host.is_empty() {
+        store.recover_job_transition(&candidate.job_id).await?;
+        let Some(current) = store.read_job("queue", &candidate.job_id).await? else {
+            continue;
+        };
+        if current.state != job_state::QUEUED {
+            continue;
+        }
+        if current.assigned_to.is_empty() || !current.pinned_host.is_empty() {
             continue;
         }
         let worker_live = live
             .keys()
-            .any(|consumer| consumer.eq_ignore_ascii_case(&candidate.assigned_to));
+            .any(|consumer| consumer.eq_ignore_ascii_case(&current.assigned_to));
         if worker_live {
             continue;
         }
-        let job_id = candidate.job_id.clone();
+        let job_id = current.job_id.clone();
         let path = format!("queue/{job_id}.json");
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             continue;
         };
         let mut job = Job::from_json(&versioned.content)?;
-        if job.state != job_state::QUEUED || job.assigned_to != candidate.assigned_to {
+        if job.state != job_state::QUEUED || job.assigned_to != current.assigned_to {
             continue; // changed under the listing; the next tick reconciles
         }
         let worker = std::mem::take(&mut job.assigned_to);
@@ -293,10 +316,10 @@ async fn clear_silent_assignments(
     Ok(())
 }
 
-/// One reaper pass over the queue: recover phantom running jobs, then
-/// release queued jobs pinned to silent workers. Called from the
-/// coordinator tick before assignment so recovered work is dispatchable in
-/// the same tick.
+/// One reaper pass over the queue: repair the marker index, recover phantom
+/// running jobs, then release queued jobs pinned to silent workers. Called
+/// from the coordinator tick before assignment so recovered work is
+/// dispatchable in the same tick.
 pub async fn reap_expired_leases(
     store: &JobStorage,
     log: &dyn Fn(&str),
@@ -304,6 +327,17 @@ pub async fn reap_expired_leases(
     let now = Utc::now();
     let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
     let mut summary = ReaperSummary::default();
+    // The index repair belongs on this tick, and it never retires. A queued
+    // job whose marker write did not land is invisible to every scheduler
+    // while still reporting `queued` — the same class of stranding this
+    // reaper exists to undo, just on the listing index instead of the lease.
+    // The sweep is bounded per call and its cursor wraps, so this is a fixed
+    // cost per tick that eventually re-examines every queued job rather than
+    // a one-shot migration that stops looking. It runs before the passes
+    // below so a recovered marker is claimable in this same tick.
+    summary.index_swept =
+        crate::queue::migrations::backfill_priority_markers(store, config::MARKER_REPAIR_PER_TICK)
+            .await?;
     for candidate in store.list_jobs("running", 0).await? {
         if candidate.job_id.is_empty() {
             continue;

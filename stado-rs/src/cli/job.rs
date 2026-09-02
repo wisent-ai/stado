@@ -12,9 +12,9 @@
 //! through [`submit_batch`] — the same entry point `stado submit` uses — so
 //! the startup script, the `runs/<run_id>.json` manifest and the
 //! `gpu_mem_gb` / `priority` / `gpu_type` blob metadata that
-//! [`crate::queue::listing::list_fitting`] prefilters on are all stamped by
-//! exactly the code that stamps them for a fresh submit. `rerun_options`
-//! documents the one place the resolved spec cannot simply be pinned back.
+//! [`crate::queue::listing::list_claimable`] prefilters on are all stamped
+//! by exactly the code that stamps them for a fresh submit. Resolved
+//! hardware is carried explicitly.
 //!
 //! `watch --follow` carries the byte cursor forward across polls, so every
 //! poll prints only the bytes that appeared since the last one and the
@@ -32,7 +32,9 @@ use serde_json::json;
 use crate::constants::POLL_INTERVAL_S;
 use crate::machine::{normalize_job, MachineError, MachineFacade};
 use crate::models::{job_state, Job};
-use crate::queue::submit::{submit_batch, SubmitOptions, CPU_MACHINE_TYPE};
+use crate::queue::submit::{
+    stable_run_id, submit_batch, ResolvedHardwareProjection, SubmitOptions,
+};
 use crate::queue::JobStorage;
 
 use super::{table, CmdError};
@@ -60,6 +62,9 @@ pub enum JobCommands {
     Rerun {
         /// Job id to copy the spec from, in any lifecycle prefix.
         job_id: String,
+        /// Caller-retained token; reuse it after a crash to recover one rerun.
+        #[arg(long)]
+        retry_token: String,
         /// Emit the original and the rerun as JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -86,7 +91,11 @@ pub enum JobCommands {
 
 pub async fn dispatch(command: JobCommands) -> Result<(), CmdError> {
     match command {
-        JobCommands::Rerun { job_id, json } => rerun(&job_id, json).await,
+        JobCommands::Rerun {
+            job_id,
+            retry_token,
+            json,
+        } => rerun(&job_id, &retry_token, json).await,
         JobCommands::SetPriority {
             job_id,
             priority,
@@ -141,9 +150,12 @@ async fn set_priority(job_id: &str, priority: i64, as_json: bool) -> Result<(), 
     Ok(())
 }
 
-/// `stado job rerun JOB_ID [--json]` — resubmit an identical spec as a new
-/// job id and print `old -> new`.
-async fn rerun(job_id: &str, json: bool) -> Result<(), CmdError> {
+/// `stado job rerun JOB_ID --retry-token TOKEN [--json]` — resubmit an
+/// identical spec under a deterministic durable run and print `old -> new`.
+async fn rerun(job_id: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
+    if retry_token.trim().is_empty() {
+        return Err(CmdError::click("--retry-token must not be empty"));
+    }
     let facade = MachineFacade::new().await.map_err(cmd_error)?;
     // lookup_job probes machine::JOB_PREFIXES, which is the same six
     // prefixes as queue::runs::ALL_PREFIXES — including `cancelled/`, the
@@ -152,7 +164,7 @@ async fn rerun(job_id: &str, json: bool) -> Result<(), CmdError> {
     // here.
     let original = facade.lookup_job(job_id).await.map_err(cmd_error)?;
 
-    let options = rerun_options(&original);
+    let options = rerun_options(&original, retry_token);
     let submitted = submit_batch(std::slice::from_ref(&original.command), &options).await?;
     let Some(fresh) = submitted.into_iter().next() else {
         return Err(CmdError::click(format!(
@@ -185,16 +197,9 @@ async fn rerun(job_id: &str, json: bool) -> Result<(), CmdError> {
 /// and never the latter — so the rerun lands on the same hardware. That is
 /// the whole content of "resubmit with identical spec".
 ///
-/// The one exception is a job that came out of the CPU branch of
-/// `queue::submit::submit_via_gcs`, recognizable by [`CPU_MACHINE_TYPE`]
-/// with no accelerator and no sized VRAM. That branch runs only when the
-/// caller pinned nothing, so pinning its machine_type back would flip
-/// submit's `caller_asked_for_gpu` gate and stamp an accelerator onto a CPU
-/// job. Leaving all three empty re-enters the same branch: a command that
-/// still sizes to nothing comes out byte-identical, and one the fleet has
-/// since measured gets today's real size — which is precisely what
-/// resubmitting the same spec should do, since the original's zero recorded
-/// "not sized yet", not "needs no GPU".
+/// Resolved hardware is carried through the explicit replay projection. This
+/// bypasses current sizing catalogs, including for the CPU-default marker,
+/// rather than inferring hardware again during the rerun.
 ///
 /// `re_submission_of` is set to the id being rerun. That is what makes
 /// [`crate::queue::tombstone::on_transition`] write `fixed/<id>.json` or
@@ -202,24 +207,28 @@ async fn rerun(job_id: &str, json: bool) -> Result<(), CmdError> {
 /// fixed?" stays a list diff instead of a rescan. `schedule_id` is
 /// deliberately NOT carried: a manual rerun is not a scheduled submission,
 /// and claiming otherwise would corrupt the schedule's own accounting.
-fn rerun_options(original: &Job) -> SubmitOptions {
-    let cpu_default = !original.gpu_mem_gb.is_positive()
-        && original.gpu_type.is_empty()
-        && original.machine_type == CPU_MACHINE_TYPE;
-    let mut options = SubmitOptions {
+fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions {
+    SubmitOptions {
         provider: original.provider.clone(),
-        // A fresh `stado submit` opens a new batch; so does a rerun. The
-        // original's batch belongs to the invocation that created it.
-        batch_id: format!("batch-{}", chrono::Utc::now().timestamp()),
+        // The caller retains retry_token, so a crash retries this manifest
+        // rather than opening a second batch.
+        batch_id: stable_run_id("rerun-batch", &format!("{}\0{retry_token}", original.job_id)),
+        run_id: stable_run_id("rerun", &format!("{}\0{retry_token}", original.job_id)),
         bucket: crate::config::bucket().to_string(),
         preemptible: original.preemptible,
         max_cost_per_hour_usd: original.max_cost_per_hour_usd,
         pin_to_provider: original.pin_to_provider,
         priority: original.priority,
+        deadline_at: original.deadline_at.clone(),
         repo: original.repo.clone(),
         repo_ref: original.repo_ref.clone(),
         repo_workdir: original.repo_workdir.clone(),
         repo_extras: original.repo_extras.clone(),
+        resolved_hardware: Some(ResolvedHardwareProjection {
+            gpu_mem_gb: original.gpu_mem_gb,
+            gpu_type: original.gpu_type.clone(),
+            machine_type: original.machine_type.clone(),
+        }),
         pre_command: original.pre_command.clone(),
         apt_packages: original.apt_packages.clone(),
         output_uri: original.output_uri.clone(),
@@ -230,6 +239,8 @@ fn rerun_options(original: &Job) -> SubmitOptions {
         yield_command: original.yield_command.clone(),
         yield_grace_seconds: original.yield_grace_seconds,
         pinned_host: original.pinned_host.clone(),
+        platform_os: original.platform_os.clone(),
+        architecture: original.architecture.clone(),
         secret_env: original.secret_env.clone(),
         // The resolved map is the reproducible half: aliases were already
         // pinned to immutable versions at the original submit, and a rerun
@@ -237,13 +248,7 @@ fn rerun_options(original: &Job) -> SubmitOptions {
         input_artifacts: original.input_artifacts.clone(),
         resolved_input_artifacts: original.resolved_input_artifacts.clone(),
         ..SubmitOptions::default()
-    };
-    if !cpu_default {
-        options.gpu_type = original.gpu_type.clone();
-        options.vram_gb = original.gpu_mem_gb;
-        options.machine_type = original.machine_type.clone();
     }
-    options
 }
 
 /// The fields a rerun has to reproduce, side by side, so "identical spec"
@@ -293,6 +298,21 @@ fn spec_rows(original: &Job, fresh: &Job) -> Vec<Vec<String>> {
             "pinned_host",
             original.pinned_host.clone(),
             fresh.pinned_host.clone(),
+        ),
+        row(
+            "deadline_at",
+            original.deadline_at.clone().unwrap_or_default(),
+            fresh.deadline_at.clone().unwrap_or_default(),
+        ),
+        row(
+            "platform_os",
+            original.platform_os.clone(),
+            fresh.platform_os.clone(),
+        ),
+        row(
+            "architecture",
+            original.architecture.clone(),
+            fresh.architecture.clone(),
         ),
         row("run_id", original.run_id.clone(), fresh.run_id.clone()),
         row(

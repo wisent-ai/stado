@@ -403,6 +403,12 @@ pub const FAILURE_FIXER_COMMAND_PATTERN: &str = "raw.extract_and_upload";
 /// Bounds per-tick GCS work so a large backlog drains over several ticks
 /// instead of one multi-thousand-blob delete stalling the tick.
 pub const RUN_REAP_PER_TICK: i64 = 50;
+/// Queue blobs the priority-marker index repair examines per coordinator
+/// tick. The sweep is the standing repair for a queued job whose marker
+/// write did not land — an unindexed job is invisible to every scheduler —
+/// so it runs forever with a wrapping cursor rather than latching complete.
+/// Bounds per-tick work to a names-only listing plus this many bodies.
+pub const MARKER_REPAIR_PER_TICK: usize = 500;
 
 // --- Coverage verifier + retry orchestrator defaults ---
 /// After this many submit attempts on the same group_key the orchestrator

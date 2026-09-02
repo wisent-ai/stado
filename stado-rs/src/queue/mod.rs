@@ -257,6 +257,37 @@ pub trait BlobBackend: Send + Sync {
         oldest_first: usize,
     ) -> Result<Vec<String>, StorageError>;
 
+    /// One ordered page of blob names under `prefix`: name-ascending,
+    /// strictly after `start_after`, at most `limit` names (`0` = no cap).
+    ///
+    /// This is the primitive an ordered-index walk needs and [`Self::list_paths`]
+    /// cannot give it. `list_paths` materializes the whole prefix before
+    /// anything can be cut, so a scheduler that wants the first few names of a
+    /// 14k-blob index pays for all 14k on every poll. Lexicographic order is
+    /// the contract rather than an accident, because the priority index encodes
+    /// its ordering IN the name; `start_after` is exclusive so a caller can
+    /// hand back the last name it saw to resume, and wrap to the head of the
+    /// prefix by passing `""`.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        // Correct for every backend and cheap for none: the whole prefix is
+        // listed and then cut. Backends whose listing API can express "after
+        // this name, at most this many" override this with the server-side
+        // form; the ones that cannot at least keep the semantics honest.
+        let mut names = self.list_paths(prefix, 0).await?;
+        names.sort_unstable();
+        let cut = names.partition_point(|name| name.as_str() <= start_after);
+        names.drain(..cut);
+        if limit > 0 {
+            names.truncate(limit);
+        }
+        Ok(names)
+    }
+
     /// Last-modified time of a blob, or `None` when absent.
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError>;
 

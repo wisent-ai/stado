@@ -122,6 +122,23 @@ pub struct Job {
     pub failed_at: Option<String>,
     #[serde(default)]
     pub instance_ref: Option<String>,
+    /// When the worker that holds this running job stops being trusted to own
+    /// it, renewed in the job document ITSELF.
+    ///
+    /// A heartbeat written beside the job (`status/<job_id>/heartbeat`) could
+    /// never fence a reaper: the reaper reads the running blob, reads the
+    /// heartbeat, and moves the blob at the version it read — a worker that
+    /// refreshes its pulse in between changes nothing the reaper is holding, so
+    /// a live execution is requeued and runs twice. Renewing the lease is a
+    /// compare-and-swap on this document, so a renewal during a reap changes
+    /// the version the reaper pinned and the reaper loses the race instead of
+    /// silently winning it.
+    ///
+    /// Absent on jobs written before the lease existed, and on every job
+    /// outside `running/`; the reaper falls back to the heartbeat blob and
+    /// `started_at` for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<String>,
     #[serde(default)]
     pub restarts: i64,
     #[serde(default = "default_max_restarts")]
@@ -175,6 +192,12 @@ pub struct Job {
     /// Orchestrator name from $WC_SUBMITTER_APP.
     #[serde(default)]
     pub submitter_app: String,
+    /// Stable digest of the complete semantic submission request.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_request_digest: String,
+    /// Stable command position inside the immutable run request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_command_index: Option<usize>,
     // Optional source repo to git clone before running command.
     #[serde(default)]
     pub repo: String,

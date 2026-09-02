@@ -30,7 +30,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config;
 use crate::models::{json_dumps_pretty_sorted, py_str_repr};
-use crate::queue::submit::{submit_job, SubmitOptions};
+use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
 /// Python `PRESENT` — verifier outcome: the expected output exists.
@@ -414,11 +414,9 @@ pub async fn verify(
     })
 }
 
-/// Python `retry_gaps`: submit each gap entry via `submit_job` so the
-/// per-entry `verify_command` (from `entry.extra`) reaches the agent —
-/// `submit_batch` flattens kwargs across all jobs and cannot carry it.
-/// Without it the agent marks the job COMPLETED on exit=0 even if no
-/// expected output was produced. Returns the number of submitted jobs.
+/// Retry every gap through its own durable one-entry run because verify_command
+/// is entry-specific. The universe/group/attempt tuple is retained in coverage
+/// state, so a crash before the attempt checkpoint retries the same manifest.
 pub async fn retry_gaps(
     universe: &dyn Universe,
     report: &CoverageReport,
@@ -430,12 +428,20 @@ pub async fn retry_gaps(
     if report.gaps.is_empty() {
         return Ok(0);
     }
+    let generation = report
+        .gaps
+        .iter()
+        .map(|gap| {
+            let attempts = state_slot(state, &gap.group_key)
+                .get("attempts")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            format!("{}:{attempts}", gap.group_key)
+        })
+        .collect::<Vec<_>>()
+        .join("\0");
     let batch_id = if batch_label.is_empty() {
-        format!(
-            "coverage-retry-{}-{}",
-            universe.id(),
-            chrono::Utc::now().timestamp()
-        )
+        stable_run_id("coverage-batch", &format!("{}\0{generation}", universe.id()))
     } else {
         batch_label.to_string()
     };
@@ -448,13 +454,26 @@ pub async fn retry_gaps(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+        let attempts = state_slot(state, &gap.group_key)
+            .get("attempts")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let token = format!(
+            "{}\0{}\0{}\0{}",
+            universe.id(),
+            gap.group_key,
+            attempts,
+            gap.command
+        );
+        let run_id = stable_run_id("coverage", &token);
         let options = SubmitOptions {
             batch_id: batch_id.clone(),
+            run_id,
             bucket: config::bucket().to_string(),
             verify_command,
             ..base.clone()
         };
-        submit_job(&gap.command, &options).await?;
+        submit_batch(std::slice::from_ref(&gap.command), &options).await?;
         submitted += 1;
     }
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();

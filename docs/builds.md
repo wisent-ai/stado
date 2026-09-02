@@ -41,10 +41,10 @@ stado builds enable weles-native
 To enqueue all platform jobs immediately instead of waiting for the next branch change:
 
 ```console
-stado builds run weles-native --json
+stado builds run weles-native --run-id operator-ticket-1234 --json
 ```
 
-The command returns one job ID per platform. The worker clones the repository at the recorded ref, runs the recipe command inside that checkout, and uploads only the declared artifact paths to the normal Stado results store.
+The caller retains `--run-id`: retrying the same token after a crash recovers the same per-platform durable manifests instead of creating more jobs. A distinct intentional run needs a distinct token. The command returns one job ID per platform. The worker clones the repository at the recorded ref, runs the recipe command inside that checkout, and uploads only the declared artifact paths to the normal Stado results store.
 
 ## Inspect and change recipes
 

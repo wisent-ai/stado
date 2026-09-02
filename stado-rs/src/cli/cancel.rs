@@ -133,11 +133,13 @@ pub(super) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<
         job.state = job_state::CANCELLED.into();
         job.completed_at = Some(utcnow());
         job.error = Some("cancelled".into());
-        store.write_job("cancelled", &job).await?;
-        store.delete_job("queue", job_id).await?;
-        if store.read_job("running", job_id).await?.is_none() {
-            println!("Cancelled {job_id}");
-            return Ok(());
+        match store.move_job(&job, "queue", "cancelled").await {
+            Ok(()) => {
+                println!("Cancelled {job_id}");
+                return Ok(());
+            }
+            Err(crate::queue::StorageError::StorageConflict(_)) => {}
+            Err(error) => return Err(error.into()),
         }
     }
 
@@ -146,9 +148,7 @@ pub(super) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<
         job.completed_at = Some(utcnow());
         job.error = Some("cancelled".into());
         job.instance_ref = None;
-        store.write_job("cancelled", &job).await?;
-        store.delete_job("running", job_id).await?;
-        store.delete_job("failed", job_id).await?;
+        store.move_job(&job, "running", "cancelled").await?;
         println!("Cancelled {job_id}");
         return Ok(());
     }

@@ -20,9 +20,12 @@
 //!   the designated backup after a fully clean copy; it never deletes source.
 //! - **Metadata travels with the body.** `JobStorage::write_job` stamps
 //!   `gpu_mem_gb` / `priority` / `gpu_type` on every queue blob in a
-//!   separate `set_metadata` round trip, and
-//!   `queue::listing::list_fitting` prefilters scheduling on those keys
-//!   before downloading anything. A body-only copy would silently degrade
+//!   separate `set_metadata` round trip, and the oldest-first pass inside
+//!   `queue::listing::list_claimable` prefilters on the stamped `gpu_mem_gb`
+//!   before it downloads a job document at all — the pass that runs whenever
+//!   the destination's marker index has not yet been swept end-to-end, which
+//!   is precisely the state a fresh copy leaves it in.
+//!   A body-only copy would silently degrade
 //!   every scheduler tick into downloading the whole queue, so each object
 //!   gets its source metadata re-applied at the destination — and the
 //!   result is verified, because

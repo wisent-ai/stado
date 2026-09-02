@@ -109,8 +109,22 @@ pub async fn plan_queued(
     let wall_times = crate::scheduler::cost::wall_time_table(&history_rows);
     let feedback = super::storage::list_feedback(store).await?;
     let planning_now = Utc::now();
+    // The planner considers the whole queue: it is placing capacity, not
+    // claiming a slot, so nothing here narrows the window and nothing bounds
+    // the scan.
     let mut queued = store
-        .list_jobs_priority_first("queue", usize::default())
+        .list_claimable_jobs(
+            "queue",
+            &crate::queue::listing::JobScan {
+                want: usize::default(),
+                scan_budget: usize::default(),
+                max_gpu_mem_gb: i64::MAX,
+                eligible: &|_| true,
+                // Unbounded: this walk covers the whole index from the head
+                // regardless, and touches no cursor.
+                from_head: false,
+            },
+        )
         .await?;
     queued.sort_by(job_order);
     for job in queued {
@@ -666,6 +680,9 @@ async fn update_job_placement(
     let mut current = Job::from_json(&versioned.content).map_err(|error| {
         StorageError::Other(format!("invalid queued job {}: {error}", original.job_id))
     })?;
+    if current.state != crate::models::job_state::QUEUED {
+        return Ok(false);
+    }
     let assignment_matches = if selected.existing_capacity {
         current.assigned_to == selected.target_id
     } else {

@@ -127,30 +127,108 @@ async fn safe_delete_vm_by_hostname(
     }
 }
 
+/// The running document as it stands right now, together with the version a
+/// lifecycle move must pin.
+///
+/// Every requeue below is a liveness verdict reached from a tick-start
+/// listing, and the worker's own lease renewal rewrites this document every
+/// [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`]. Deciding from
+/// the stale copy and moving unconditionally is what let a live execution be
+/// requeued and started a second time; pinning the fresh version makes the
+/// renewal win the race.
+async fn current_running(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<Option<(Job, String)>, MonitorError> {
+    let Some(versioned) = store
+        .read_text_versioned(&format!("running/{job_id}.json"))
+        .await?
+    else {
+        return Ok(None);
+    };
+    let current = Job::from_json(&versioned.content).map_err(StorageError::from)?;
+    if current.state != job_state::RUNNING {
+        return Ok(None);
+    }
+    Ok(Some((current, versioned.version)))
+}
+/// Whether the worker lease in a freshly-read running document still owns the
+/// job. Legacy jobs have no lease and therefore continue through the external
+/// heartbeat/checkpoint checks that selected the requeue path.
+fn running_lease_live(job: &Job) -> bool {
+    job.lease_expires_at
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .and_then(hg::parse_iso_lenient)
+        .is_some_and(|expires| expires > Utc::now())
+}
+
+
 /// Move job back to queue or fail if max restarts exceeded.
-async fn requeue(store: &JobStorage, job: &mut Job, reason: &str) -> Result<(), MonitorError> {
-    job.restarts += 1;
-    if job.restarts > job.max_restarts {
-        job.state = job_state::FAILED.to_string();
-        job.failed_at = Some(isoformat_utc(Utc::now()));
-        job.error = Some(format!("Exceeded {} restarts ({reason})", job.max_restarts));
+///
+/// Returns true only when this call won the version fence and changed
+/// lifecycle state. Callers that must kill the old worker do so only after
+/// this returns true: killing first would destroy a worker whose concurrent
+/// lease renewal correctly made the lifecycle move lose.
+async fn requeue(
+    store: &JobStorage,
+    job: &mut Job,
+    reason: &str,
+) -> Result<bool, MonitorError> {
+    let Some((current, version)) = current_running(store, &job.job_id).await? else {
+        return Ok(false); // moved or finished under the tick's listing
+    };
+    if running_lease_live(&current) {
+        log(&format!(
+            "{}: live in-document lease; not requeued ({reason})",
+            current.job_id
+        ));
+        *job = current;
+        return Ok(false);
+    }
+    let mut next = current;
+    next.restarts += 1;
+    if next.restarts > next.max_restarts {
+        next.state = job_state::FAILED.to_string();
+        next.failed_at = Some(isoformat_utc(Utc::now()));
+        next.error = Some(format!("Exceeded {} restarts ({reason})", next.max_restarts));
         // Python parity: NO cleanup_status on the restart-cap path.
-        store.move_job(job, "running", "failed").await?;
-        log(&format!("{}: FAILED (restart cap, {reason})", job.job_id));
-        return Ok(());
+        let moved = store
+            .move_job_if_version(&next, "running", "failed", &version)
+            .await?;
+        if moved {
+            log(&format!("{}: FAILED (restart cap, {reason})", next.job_id));
+        } else {
+            log(&format!(
+                "{}: still holds its lease; not failed ({reason})",
+                next.job_id
+            ));
+        }
+        *job = next;
+        return Ok(moved);
     }
 
-    job.state = job_state::QUEUED.to_string();
-    job.instance_ref = None;
-    job.started_at = None;
-    job.last_restart = Some(isoformat_utc(Utc::now()));
-    store.move_job(job, "running", "queue").await?;
-    store.cleanup_status(&job.job_id).await?;
-    log(&format!(
-        "{}: requeued ({reason}, restart {})",
-        job.job_id, job.restarts
-    ));
-    Ok(())
+    next.state = job_state::QUEUED.to_string();
+    next.instance_ref = None;
+    next.started_at = None;
+    next.last_restart = Some(isoformat_utc(Utc::now()));
+    let moved = store
+        .move_job_if_version(&next, "running", "queue", &version)
+        .await?;
+    if moved {
+        store.cleanup_status(&next.job_id).await?;
+        log(&format!(
+            "{}: requeued ({reason}, restart {})",
+            next.job_id, next.restarts
+        ));
+    } else {
+        log(&format!(
+            "{}: still holds its lease; not requeued ({reason})",
+            next.job_id
+        ));
+    }
+    *job = next;
+    Ok(moved)
 }
 
 /// Return set of instance_ref strings appearing in completed/.
@@ -264,28 +342,50 @@ async fn requeue_jids_after_reap(
     Ok(())
 }
 
-/// Move job back to queue, counting preemption separately from restarts.
-///
-/// Preemptions are an expected part of Spot lifecycle, not a fault. They
-/// accumulate in preempt_count; once that exceeds max_preempts_before_ondemand
-/// the scheduler dispatches the next attempt on-demand instead.
+/// Move a Spot job back to queue, counting preemption separately from
+/// restarts. A merely missing fleet-list entry still respects a live worker
+/// lease; a provider-confirmed TERMINATED instance does not, because it cannot
+/// renew and its lifecycle is already authoritative.
 async fn requeue_preempted(
     store: &JobStorage,
     job: &mut Job,
     reason: &str,
-) -> Result<(), MonitorError> {
-    job.preempt_count += 1;
-    job.state = job_state::QUEUED.to_string();
-    job.instance_ref = None;
-    job.started_at = None;
-    job.last_restart = Some(isoformat_utc(Utc::now()));
-    store.move_job(job, "running", "queue").await?;
-    store.cleanup_status(&job.job_id).await?;
-    log(&format!(
-        "{}: requeued ({reason}, preempts={})",
-        job.job_id, job.preempt_count
-    ));
-    Ok(())
+    respect_live_lease: bool,
+) -> Result<bool, MonitorError> {
+    let Some((current, version)) = current_running(store, &job.job_id).await? else {
+        return Ok(false);
+    };
+    if respect_live_lease && running_lease_live(&current) {
+        log(&format!(
+            "{}: live in-document lease; not requeued ({reason})",
+            current.job_id
+        ));
+        *job = current;
+        return Ok(false);
+    }
+    let mut next = current;
+    next.preempt_count += 1;
+    next.state = job_state::QUEUED.to_string();
+    next.instance_ref = None;
+    next.started_at = None;
+    next.last_restart = Some(isoformat_utc(Utc::now()));
+    let moved = store
+        .move_job_if_version(&next, "running", "queue", &version)
+        .await?;
+    if moved {
+        store.cleanup_status(&next.job_id).await?;
+        log(&format!(
+            "{}: requeued ({reason}, preempts={})",
+            next.job_id, next.preempt_count
+        ));
+    } else {
+        log(&format!(
+            "{}: still holds its lease; not requeued ({reason})",
+            next.job_id
+        ));
+    }
+    *job = next;
+    Ok(moved)
 }
 
 /// Requeue a job orphaned on a stale non-cloud local@ agent.
@@ -323,6 +423,7 @@ async fn requeue_dead_local_host_orphan(
         "local agent capacity stale & job heartbeat stale (dead local host orphan)",
     )
     .await
+    .map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -412,14 +513,16 @@ pub async fn check_running_jobs(
                         continue;
                     }
                     if !hg::any_job_checkpoint_fresh(store, &job, 5400.0).await {
-                        let cache = running_vm_names_cache.clone().unwrap_or_default();
-                        safe_delete_vm_by_hostname(provider, hostname, &cache).await;
-                        requeue(
+                        if requeue(
                             store,
                             &mut job,
                             "local agent live but job heartbeat stale (orphan)",
                         )
-                        .await?;
+                        .await?
+                        {
+                            let cache = running_vm_names_cache.clone().unwrap_or_default();
+                            safe_delete_vm_by_hostname(provider, hostname, &cache).await;
+                        }
                     }
                     continue;
                 }
@@ -444,13 +547,20 @@ pub async fn check_running_jobs(
                         {
                             continue;
                         }
-                        safe_delete_vm_by_hostname(provider, hostname, cache).await;
-                        if job.preemptible {
-                            requeue_preempted(store, &mut job, "Spot preempted (cloud agent gone)")
-                                .await?;
+                        let moved = if job.preemptible {
+                            requeue_preempted(
+                                store,
+                                &mut job,
+                                "Spot preempted (cloud agent gone)",
+                                true,
+                            )
+                            .await?
                         } else {
                             requeue(store, &mut job, "VM gone (cloud agent missing from fleet)")
-                                .await?;
+                                .await?
+                        };
+                        if moved {
+                            safe_delete_vm_by_hostname(provider, hostname, cache).await;
                         }
                         continue;
                     }
@@ -463,18 +573,21 @@ pub async fn check_running_jobs(
             let lifecycle = provider.instance_lifecycle_state(&instance_ref).await?;
 
             if !alive && lifecycle.as_deref() == Some("TERMINATED") && job.preemptible {
-                requeue_preempted(store, &mut job, "Spot preempted").await?;
-                provider.delete_instance(&instance_ref).await?;
+                if requeue_preempted(store, &mut job, "Spot preempted", false).await? {
+                    provider.delete_instance(&instance_ref).await?;
+                }
             } else if !alive {
                 // Python f-string renders a None lifecycle as "None".
                 let lifecycle_str = lifecycle.as_deref().unwrap_or("None");
-                requeue(
+                if requeue(
                     store,
                     &mut job,
                     &format!("instance gone (lifecycle={lifecycle_str})"),
                 )
-                .await?;
-                provider.delete_instance(&instance_ref).await?;
+                .await?
+                {
+                    provider.delete_instance(&instance_ref).await?;
+                }
             }
         }
     }

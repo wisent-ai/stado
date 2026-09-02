@@ -9,7 +9,7 @@
 //! cloud backend rather than network exposure of this directory.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
@@ -118,7 +118,10 @@ impl LocalBackend {
         tmp.write_all(data)?;
         tmp.as_file().sync_all()?;
         match tmp.persist_noclobber(&target) {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                File::open(parent)?.sync_all()?;
+                Ok(true)
+            }
             Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
             Err(err) => Err(err.error.into()),
         }
@@ -137,6 +140,7 @@ impl LocalBackend {
         tmp.write_all(data)?;
         tmp.as_file().sync_all()?;
         tmp.persist(target).map_err(|err| err.error)?;
+        File::open(parent)?.sync_all()?;
         Ok(())
     }
 
@@ -162,6 +166,41 @@ impl LocalBackend {
         // unlock failure; flock release failure is not actionable here.
         let _ = file.unlock();
         result
+    }
+
+    /// Root-relative `/`-joined names of every non-internal blob under
+    /// `prefix`, unordered.
+    ///
+    /// Walk only the subtree the prefix names. Walking the whole root and
+    /// filtering afterwards made every prefix listing cost the size of the
+    /// store: `stado doctor` spent fifty seconds stat-ing 27k queue blobs
+    /// to look at one diagnostics directory. Any relative path that starts
+    /// with the prefix lives under its directory part, so the result set is
+    /// unchanged.
+    fn relative_names(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        let (directory, _) = prefix.rsplit_once('/').unwrap_or(("", prefix));
+        let scan_root = if directory.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(directory)
+        };
+        let mut files = Vec::new();
+        if scan_root.is_dir() {
+            walk(&scan_root, &mut files)?;
+        }
+        Ok(files
+            .into_iter()
+            .filter(|item| !self.is_internal(item))
+            .filter_map(|item| {
+                item.strip_prefix(&self.root).ok().map(|rel| {
+                    rel.components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                })
+            })
+            .filter(|rel| rel.starts_with(prefix))
+            .collect())
     }
 }
 
@@ -307,35 +346,7 @@ impl BlobBackend for LocalBackend {
         prefix: &str,
         oldest_first: usize,
     ) -> Result<Vec<String>, StorageError> {
-        // Walk only the subtree the prefix names. Walking the whole root and
-        // filtering afterwards made every prefix listing cost the size of the
-        // store: `stado doctor` spent fifty seconds stat-ing 27k queue blobs
-        // to look at one diagnostics directory. Any relative path that starts
-        // with the prefix lives under its directory part, so the result set is
-        // unchanged.
-        let (directory, _) = prefix.rsplit_once('/').unwrap_or(("", prefix));
-        let scan_root = if directory.is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(directory)
-        };
-        let mut files = Vec::new();
-        if scan_root.is_dir() {
-            walk(&scan_root, &mut files)?;
-        }
-        let mut paths: Vec<String> = files
-            .into_iter()
-            .filter(|item| !self.is_internal(item))
-            .filter_map(|item| {
-                item.strip_prefix(&self.root).ok().map(|rel| {
-                    rel.components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("/")
-                })
-            })
-            .filter(|rel| rel.starts_with(prefix))
-            .collect();
+        let mut paths = self.relative_names(prefix)?;
         if oldest_first > 0 {
             // Python sorts by st_ctime (inode change time) ascending.
             let ctime = |value: &String| -> (i64, i64) {
@@ -353,6 +364,32 @@ impl BlobBackend for LocalBackend {
             paths.sort();
             Ok(paths)
         }
+    }
+
+    /// A filesystem has no server-side cursor, so the win here is narrower
+    /// than for a bucket backend and worth stating plainly: the page is
+    /// produced by one prefix-scoped directory walk and one sort, with no
+    /// per-name metadata lookup at all. The trait default would route through
+    /// `list_paths`, which sorts the prefix and then hands it back to be
+    /// sorted and scanned a second time; and the ordering it would inherit is
+    /// only incidentally lexicographic, because `list_paths`' other branch
+    /// orders by ctime and pays a `stat` per candidate to do it — the cost
+    /// that made one diagnostics listing walk 27k queue blobs. Name order is
+    /// this method's contract, so it is derived from the names alone.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        let mut names = self.relative_names(prefix)?;
+        names.sort_unstable();
+        let cut = names.partition_point(|name| name.as_str() <= start_after);
+        names.drain(..cut);
+        if limit > 0 {
+            names.truncate(limit);
+        }
+        Ok(names)
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {

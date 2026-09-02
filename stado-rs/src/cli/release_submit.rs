@@ -15,7 +15,7 @@ use serde_json::{json, Map, Value};
 use super::CmdError;
 use crate::models::{job_state, Job, JobSecretRef};
 use crate::queue::storage::JobStorage;
-use crate::queue::submit::{submit_job, SubmitOptions};
+use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions};
 use crate::release_control::{
     self, QualificationStatus, ReleaseArtifactRef, ReleaseQualification, StrategyKind,
 };
@@ -770,18 +770,19 @@ async fn enqueue(
     let options = SubmitOptions {
         pinned_host: consumer,
         priority: crate::constants::RELEASE_JOB_PRIORITY,
-        run_id: id.into(),
+        run_id: stable_run_id("release-platform", &format!("{id}\0{platform}")),
         output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
         input_artifacts: resolved.clone(),
         resolved_input_artifacts: resolved,
         secret_env: secret_refs(&recipe.secret_env),
         ..Default::default()
     };
-    let job = submit_job(
-        "$HOME/.stado/bin/stado release worker --request release-request.json",
-        &options,
-    )
-    .await?;
+    let command = "$HOME/.stado/bin/stado release worker --request release-request.json"
+        .to_string();
+    let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
+    let job = jobs
+        .pop()
+        .ok_or_else(|| CmdError::click("durable release submission returned no job"))?;
     Ok(PlatformRun {
         platform: platform.into(),
         builder: host.name,
@@ -1348,7 +1349,10 @@ async fn run_deliveries(
             let options = SubmitOptions {
                 pinned_host: consumer,
                 priority: crate::constants::RELEASE_JOB_PRIORITY,
-                run_id: run.run_id.clone(),
+                run_id: stable_run_id(
+                    "release-delivery",
+                    &format!("{}\0{}", run.run_id, d.name),
+                ),
                 output_uri: run_uri(
                     &run.product,
                     &run.run_id,
@@ -1359,7 +1363,11 @@ async fn run_deliveries(
                 secret_env: secret_refs(&d.secret_env),
                 ..Default::default()
             };
-            let job = submit_job(crate::constants::RELEASE_DELIVERY_JOB_COMMAND, &options).await?;
+            let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
+            let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
+            let job = jobs
+                .pop()
+                .ok_or_else(|| CmdError::click("durable delivery submission returned no job"))?;
             run.deliveries.insert(
                 d.name.clone(),
                 DeliveryRun {

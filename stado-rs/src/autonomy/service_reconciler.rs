@@ -203,13 +203,19 @@ async fn replace_declaration(
     if corrected == *existing {
         return Ok(false);
     }
-    let mut document = crate::cli::registry::fetch_document()
-        .await
-        .map_err(|error| error.to_string())?;
-    service::replace_service(&mut document, &corrected).map_err(|error| error.to_string())?;
-    crate::cli::registry::push_document(&document)
-        .await
-        .map_err(|error| error.to_string())?;
+    // Pure: the corrected record is already decided, so replacing the entry
+    // is a function of whatever document is current. A lost race is answered
+    // by replacing it in the newer one, and `commit_document` does that
+    // rather than overwriting the writer that got there first — this runs on
+    // a loop, so it is the caller most likely to meet one.
+    crate::cli::registry::commit_document(|current| {
+        let mut document = current.clone();
+        service::replace_service(&mut document, &corrected)
+            .map_err(|error| crate::cli::CmdError::click(error.to_string()))?;
+        Ok(document)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(true)
 }
 

@@ -1,7 +1,7 @@
 //! Priority-marker index (`queue_priority/<inv_prio>-<ts>-<jid>.json`
 //! markers so name-ascending sort = priority-desc + FIFO), the `list_jobs`
-//! bulk fetch, the top-N priority listing, the priority-first listing, and
-//! the metadata-prefiltered fitting-jobs listing.
+//! bulk fetch, and [`list_claimable`] — the ordered index walk every
+//! scheduler poll goes through.
 //!
 //! Port of `stado/queue/listing/__init__.py`.
 //!
@@ -9,8 +9,32 @@
 //! `capacity.py:121` and `leases/__init__.py:143` reference
 //! `store._azure_backend`, an attribute that never exists (the backend
 //! handle is `_blob_backend`). The intended behavior is a single backend
-//! handle — exactly what `JobStorage` carries here — so `list_fitting`
-//! always takes the metadata-prefiltering path.
+//! handle — exactly what `JobStorage` carries here — so the metadata
+//! prefilter Python's `list_fitting` chose between backends for is simply
+//! always in force in the oldest-first pass of [`list_claimable`], which has
+//! one path.
+//!
+//! # Index ordering rule
+//!
+//! **A queued job may never be observable without a marker. Whenever a write
+//! and a delete both touch one job's index entries, the write goes first.**
+//!
+//! The two failure modes are not symmetric, and this asymmetry is what fixes
+//! the order of every operation in this module:
+//!
+//! - A *duplicate* or *stale* marker is harmless. It resolves its job from
+//!   its body, is deduplicated by job_id, and costs only scan budget — never
+//!   a slot in the returned window.
+//! - A *missing* marker is fatal. This index is the whole listing strategy
+//!   for `queue/`, so an unindexed queued job is invisible to every
+//!   scheduler forever while still reporting state `queued`: it is never
+//!   claimed, and `queue drain --wait` never terminates.
+//!
+//! So: create writes the marker before settling the job blob; a re-key
+//! writes the new marker before cleaning the superseded one (see
+//! [`delete_markers_scanning`]'s `keep`); and the repair sweep in
+//! [`migrations::backfill_priority_markers`] is bounded and repeating rather
+//! than latched, so an interrupted window is always eventually re-swept.
 
 use std::collections::HashSet;
 
@@ -18,7 +42,7 @@ use futures::StreamExt;
 
 use crate::models::Job;
 
-use super::storage::JobStorage;
+use super::storage::{is_transition_sentinel_state, JobStorage};
 use super::{json_str, migrations, StorageError};
 
 /// Sortable name component: lower = higher real priority + older.
@@ -31,9 +55,46 @@ pub fn priority_key(job: &Job) -> String {
     format!("{inv:08}-{}", job.created_at)
 }
 
-/// Index entry for priority>0 jobs.
+/// The index prefix. Ordered by name, and the name is the ordering.
+pub const MARKER_PREFIX: &str = "queue_priority/";
+
+/// How many marker names one page of the ordered walk pulls.
+///
+/// Large enough that a full window is normally one listing round trip, small
+/// enough that a scan which stops early has not paid for a page it will
+/// never look at.
+const MARKER_PAGE: usize = 256;
+
+/// The marker name for `job`.
+///
+/// Deriving it from the job is what makes marker removal a single delete.
+/// While it was only ever recovered by walking the index for a matching
+/// suffix, every removal cost a listing of the whole index — tolerable while
+/// the index held just the priority>0 jobs, a per-completion scan of the
+/// entire queue now that it holds all of them.
+pub fn marker_path(job: &Job) -> String {
+    format!("{MARKER_PREFIX}{}-{}.json", priority_key(job), job.job_id)
+}
+
+/// Whether this path is a marker rather than the migration sentinel (or any
+/// other bookkeeping object that shares the prefix).
+///
+/// Deliberately NOT a job_id parse. The name is
+/// `<inv_priority>-<created_at>-<job_id>.json` and BOTH of the trailing
+/// fields contain `-` of their own: `created_at` carries the date separators
+/// (and a negative UTC offset would carry another), and a job_id looks like
+/// `job-906b84bcaf55e7935aa9ba2d`. So there is no split position derivable
+/// from the name alone — taking the segment after the last `-` yields
+/// `906b84bcaf55e7935aa9ba2d`, an id that resolves to nothing. The marker
+/// body states the job_id, and that is what readers use.
+pub fn is_marker(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|name| !name.starts_with('.') && name.ends_with(".json"))
+}
+
+/// Index entry for a queued job.
 pub async fn write_marker(store: &JobStorage, job: &Job) -> Result<(), StorageError> {
-    let name = format!("queue_priority/{}-{}.json", priority_key(job), job.job_id);
     // Python `json.dumps({"job_id": ..., "priority": int(...)})` with
     // default separators.
     let body = format!(
@@ -41,14 +102,45 @@ pub async fn write_marker(store: &JobStorage, job: &Job) -> Result<(), StorageEr
         json_str(&job.job_id),
         job.priority
     );
-    store.upload_text(&name, &body).await
+    store.upload_text(&marker_path(job), &body).await
 }
 
-/// Remove any priority marker(s) for this job_id.
-pub async fn delete_marker(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
+/// Drop the marker this job names.
+///
+/// Exact, so it costs one delete. Correct because the name is a function of
+/// `priority` and `created_at`, and a queued job's marker is rewritten
+/// whenever its priority changes.
+pub async fn delete_marker_for(store: &JobStorage, job: &Job) -> Result<(), StorageError> {
+    store.delete_blob(&marker_path(job)).await
+}
+
+/// Repair path: drop every marker naming `job_id`, whatever key it was
+/// written under, by walking the index — except `keep`, when the caller has
+/// already written the marker the job needs.
+///
+/// This is the only remaining reason to traverse, and it exists for the two
+/// cases where the name is genuinely not computable: a marker orphaned from a
+/// job that no longer exists, and a marker left under a superseded key after
+/// a priority change (the pre-change key cannot be derived from the
+/// post-change job). Everything on a hot path uses [`delete_marker_for`]
+/// instead.
+///
+/// `keep` exists because the safe order for a re-key is write-then-clean, and
+/// this scan matches on job_id: without an exception it would delete the very
+/// marker the caller just wrote and leave the job unindexed, which is the
+/// failure this ordering is meant to avoid.
+///
+/// Matched on the `-<job_id>.json` suffix, which is exact here because job
+/// ids are fixed-shape (`job-` + hex) and so no id can be a dash-delimited
+/// suffix of another.
+pub async fn delete_markers_scanning(
+    store: &JobStorage,
+    job_id: &str,
+    keep: Option<&str>,
+) -> Result<(), StorageError> {
     let suffix = format!("-{job_id}.json");
-    for path in store.list_paths("queue_priority/", 0).await? {
-        if path.ends_with(&suffix) {
+    for path in store.list_paths(MARKER_PREFIX, 0).await? {
+        if is_marker(&path) && path.ends_with(&suffix) && Some(path.as_str()) != keep {
             store.delete_blob(&path).await?;
         }
     }
@@ -57,37 +149,48 @@ pub async fn delete_marker(store: &JobStorage, job_id: &str) -> Result<(), Stora
 
 /// Parallel-fetch job JSONs under `{prefix}/`.
 ///
-/// Python `list_jobs`: `oldest_first > 0` caps to that many blobs picked by
-/// creation time — required for queue/ where 14k+ blobs would otherwise
-/// force the scheduler to download every JSON before slicing per_tick_cap
-/// and blow the 60s function timeout. Fetches fan out 10 ways (Python
-/// `ThreadPoolExecutor(max_workers=min(10, len(paths)))` →
-/// `buffer_unordered(10)`); result order follows the path listing, as in
-/// Python's `pool.map`.
+/// `oldest_first > 0` caps the answer to that many jobs picked by creation
+/// time — required for queue/ where 14k+ blobs would otherwise force the
+/// scheduler to download every JSON before slicing per_tick_cap and blow the
+/// 60s function timeout. Fetches fan out 10 ways.
+///
+/// The window is oldest-first, and the ordered path listing is taken EXACTLY
+/// ONCE: the scheduler's FIFO fairness is "the N oldest queued blobs", and a
+/// re-listing loop that widens a budget pays for the whole prefix again on
+/// every round. Transitional sentinels are skipped without being counted, so
+/// the walk simply continues down the already-ordered list until the window
+/// holds N live jobs or the prefix is exhausted.
 pub async fn list_jobs(
     store: &JobStorage,
     prefix: &str,
     oldest_first: usize,
 ) -> Result<Vec<Job>, StorageError> {
+    let ordered = if oldest_first > 0 { usize::MAX } else { 0 };
     let paths: Vec<String> = store
-        .list_paths(&format!("{prefix}/"), oldest_first)
+        .list_paths(&format!("{prefix}/"), ordered)
         .await?
         .into_iter()
-        .filter(|p| p.ends_with(".json"))
+        .filter(|path| path.ends_with(".json"))
         .collect();
-    if paths.is_empty() {
-        return Ok(vec![]);
-    }
-    let texts: Vec<Option<String>> = futures::stream::iter(&paths)
-        .map(|path| store.download_text(path))
-        .buffered(10)
-        .collect::<Vec<Result<Option<String>, StorageError>>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
     let mut jobs = Vec::new();
-    for data in texts.into_iter().flatten() {
-        jobs.push(Job::from_json(&data)?);
+    for paths in paths.chunks(100) {
+        let texts: Vec<Option<String>> = futures::stream::iter(paths)
+            .map(|path| store.download_text(path))
+            .buffered(10)
+            .collect::<Vec<Result<Option<String>, StorageError>>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        for data in texts.into_iter().flatten() {
+            let job = Job::from_json(&data)?;
+            if is_transition_sentinel_state(&job.state) {
+                continue;
+            }
+            jobs.push(job);
+            if oldest_first > 0 && jobs.len() >= oldest_first {
+                return Ok(jobs);
+            }
+        }
     }
     Ok(jobs)
 }
@@ -108,163 +211,352 @@ async fn download_many_or_none(
         .await
 }
 
-/// Fetch the top_n highest-priority jobs from `prefix/` via the
-/// `queue_priority/` index. Markers sort ascending by name =
-/// (inv_priority, created_at), so the first `top_n` give priority-desc +
-/// FIFO.
+/// What a caller can actually run, and how much scanning it will pay to find
+/// it.
 ///
-/// Stale priority markers are expected: a job can move out of queue/ after
-/// its marker was written, and older versions only deleted markers on the
-/// queue -> running path. Do not let stale top markers consume the whole
-/// top_n budget, or high-priority fresh jobs disappear behind dead markers.
-/// Keep the scan bounded because agents call this in their polling loop.
-pub async fn list_top_n(
+/// The window used to be counted in jobs that merely FIT the caller's VRAM,
+/// while the caller then refused most of them on accelerator, platform,
+/// architecture, provider, assignment, exclusivity and slot state. With a
+/// centrally assigned queue that is a permanent starvation, not a hiccup: if
+/// the first `want` fitting blobs all name another worker, this worker gets a
+/// page of jobs it must refuse, refuses every one of them, and idles on every
+/// poll while its own job sits one place past the window. So the caller's own
+/// full admission predicate decides what consumes a window slot, and the
+/// scanning cost is bounded separately by [`JobScan::scan_budget`] — the two
+/// are different quantities and conflating them is what produced both faults.
+pub struct JobScan<'a> {
+    /// Jobs to return. 0 means "every eligible job in the prefix".
+    pub want: usize,
+    /// Job documents this scan may download while looking for them. 0 means
+    /// "as many as the prefix holds". A scan that exhausts its budget returns
+    /// what it found; the next poll starts from the same ordered head, so
+    /// nothing is permanently unreachable.
+    pub scan_budget: usize,
+    /// Cheap pre-download filter off the blob's stamped `gpu_mem_gb`, so a job
+    /// that cannot fit is never fetched. `i64::MAX` disables it.
+    pub max_gpu_mem_gb: i64,
+    /// The caller's full admission rule, applied before a job takes a window
+    /// slot. It sees the listed generation of the document; a caller that
+    /// re-reads the job before claiming still has to re-apply it.
+    pub eligible: &'a (dyn Fn(&Job) -> bool + Sync),
+    /// Anchor this scan at the index head instead of the resumable cursor,
+    /// and leave the cursor where it was.
+    ///
+    /// The cursor rotates so that a bounded poll eventually reaches work
+    /// past its window — reachability. But a caller that is not asking "what
+    /// can I run" and instead asking "is there anything more important than
+    /// what I am running" needs the actual head of the index: a rotated
+    /// window answers with the most important job in an arbitrary slice,
+    /// which is not the same question. Those callers pay strict priority
+    /// order for their decision and hand the rotation back untouched, so the
+    /// claim loops that depend on it are unaffected.
+    pub from_head: bool,
+}
+
+impl JobScan<'_> {
+    fn window_full(&self, found: usize) -> bool {
+        self.want > 0 && found >= self.want
+    }
+
+    fn budget_spent(&self, scanned: usize) -> bool {
+        self.scan_budget > 0 && scanned >= self.scan_budget
+    }
+
+    fn accepts(&self, job: &Job) -> bool {
+        !is_transition_sentinel_state(&job.state)
+            && job.gpu_mem_gb <= self.max_gpu_mem_gb
+            && (self.eligible)(job)
+    }
+}
+
+/// The ordered index first, deduped by job_id, counting only jobs the caller
+/// can actually claim.
+///
+/// The index is the whole listing strategy for `queue/` now, not a fast path
+/// in front of one. `queue_priority/<inv_priority>-<created_at>-<job_id>.json`
+/// sorts, by name, into exactly the order the scheduler wants — priority
+/// descending, then oldest first — so walking the name-ordered prefix a page
+/// at a time and stopping when the window is full reads a handful of names
+/// instead of materializing 14k of them and cutting afterwards. The cap used
+/// to bound only what was RETURNED, which is why a cloud backend still paid
+/// for the entire prefix on every poll.
+///
+/// Stale markers are expected and harmless. A job leaves `queue/` after its
+/// marker was written, and older versions dropped markers only on the
+/// queue -> running path. A marker whose job is gone, or whose job is no
+/// longer claimable, costs scan budget and is skipped; it never consumes a
+/// window slot, so dead markers cannot hide live priority jobs behind them.
+///
+/// The `queue/` blob stays the source of truth: the marker only says which
+/// job to look at, and every decision is made on the job document itself.
+/// Which is why an unindexed job must still be reachable — see the fallback
+/// below.
+pub async fn list_claimable(
     store: &JobStorage,
     prefix: &str,
-    top_n: usize,
+    scan: &JobScan<'_>,
 ) -> Result<Vec<Job>, StorageError> {
-    if top_n == 0 {
-        return Ok(vec![]);
-    }
-    let marker_paths: Vec<String> = store
-        .list_paths("queue_priority/", 0)
-        .await?
-        .into_iter()
-        .filter(|p| p.ends_with(".json"))
-        .collect();
-    if marker_paths.is_empty() {
-        return Ok(vec![]);
-    }
-
     let mut out: Vec<Job> = Vec::new();
-    let chunk = 50.max(top_n);
-    let max_scan = marker_paths.len().min((top_n * 20).max(top_n));
-    let mut i = 0;
-    while i < max_scan {
-        let paths = &marker_paths[i..(i + chunk).min(max_scan)];
-        let bodies = download_many_or_none(store, paths, 10.min(paths.len())).await;
-        let mut job_ids: Vec<(&str, String)> = Vec::new();
-        for (path, body) in paths.iter().zip(&bodies) {
-            let Some(body) = body else { continue };
-            // Strict-raise on corrupt marker JSON (post-extraction Python
-            // parity); a missing/non-string job_id just skips the marker.
-            let value: serde_json::Value = serde_json::from_str(body)?;
-            if let Some(jid) = value.get("job_id").and_then(serde_json::Value::as_str) {
-                job_ids.push((path, jid.to_string()));
-            }
-        }
-        if job_ids.is_empty() {
-            i += chunk;
-            continue;
-        }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut scanned = 0usize;
+    // The index names queued jobs and nothing else; resolving it against
+    // another prefix would read whatever job happens to share the id.
+    if prefix != "queue" {
+        collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
+        return Ok(out);
+    }
+    // Coverage is a one-object read; the sweep that establishes it is not.
+    // Asking [`migrations::has_swept`] first is what keeps a poll down to a
+    // page of names: driving the sweep from here unconditionally would make
+    // every poll list all of `queue/` AND all of `queue_priority/` and fetch
+    // up to a batch of job documents — the whole-prefix per-poll cost this
+    // walk exists to remove, and the documented way to blow a 60s tick. The
+    // standing bounded repair runs per coordinator tick in
+    // `queue::reaper::reap_expired_leases`, which is where that cost belongs.
+    let indexed = migrations::has_swept(store).await?;
+    if !indexed {
+        // Only while the fallback is still live: the sweep runs before the
+        // index is read so a marker it writes is claimable on this poll, and
+        // it is what eventually retires the fallback below.
+        migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
+    }
+    collect_from_index(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
+    if !indexed {
+        // No sweep has covered the whole prefix yet, so the index cannot be
+        // the only way in without stranding the jobs it has not reached. This
+        // pass is the expensive one the index exists to retire, and what
+        // retires it is coverage: the sweep just above advances on every poll
+        // that lands here, and once one reaches the tail both this branch and
+        // that sweep stop running from polls — the bounded repair keeps going
+        // on the coordinator tick instead.
+        collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
+    }
+    Ok(out)
+}
 
-        let job_paths: Vec<String> = job_ids
-            .iter()
-            .map(|(_, jid)| format!("{prefix}/{jid}.json"))
-            .collect();
-        let blobs = download_many_or_none(store, &job_paths, 10.min(job_paths.len())).await;
-        for ((_marker_path, _jid), data) in job_ids.iter().zip(blobs) {
-            if let Some(data) = data {
-                out.push(Job::from_json(&data)?);
-                if out.len() >= top_n {
-                    return Ok(out);
+/// The ordered `queue_priority/` walk: pages of names, resolved against
+/// `queue/`, stopping on a full window or a spent budget.
+///
+/// Resumable. A bounded scan starts where the last one stopped and wraps at
+/// the end of the prefix, so a job past the budget is reached on a later poll
+/// instead of never: a budget anchored at a fixed head bounds the cost but
+/// re-reads the same head forever, which is the starvation it was added to
+/// prevent. An unbounded scan ignores the cursor and walks the whole index
+/// from the head — it starves nothing, and it has no next poll to hand off to.
+///
+/// The cursor only moves when a scan was actually cut short. A scan that
+/// reached the end of the index records an empty cursor and so starts again
+/// at the head, which means an index that fits inside one poll's window and
+/// budget is always read in strict priority order and the rotation never
+/// engages. It engages exactly when the index is bigger than one poll can
+/// hold — the case where something past the window would otherwise never be
+/// looked at.
+///
+/// The cursor is shared by every bounded scan against `queue/`, which is
+/// what makes the rotation a fleet-wide guarantee of reachability rather
+/// than a per-caller one — and also why a caller whose decision depends on
+/// the index's actual head must say so with [`JobScan::from_head`] instead
+/// of inheriting whatever slice the last poll left behind.
+async fn collect_from_index(
+    store: &JobStorage,
+    prefix: &str,
+    scan: &JobScan<'_>,
+    out: &mut Vec<Job>,
+    seen: &mut HashSet<String>,
+    scanned: &mut usize,
+) -> Result<(), StorageError> {
+    if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
+        return Ok(());
+    }
+    // `from_head` opts out of the rotation in both directions: the walk
+    // starts at the head and the cursor is not moved, so a priority-fidelity
+    // read neither observes nor perturbs the claim loops sharing it.
+    let rotates = (scan.want > 0 || scan.scan_budget > 0) && !scan.from_head;
+    let origin = if rotates {
+        store.scan_cursor()
+    } else {
+        String::new()
+    };
+    let mut at = origin.clone();
+    let mut wrapped = false;
+    // Every exit records where it stopped, including the exits that found
+    // nothing: a scan whose whole page was stale markers has to leave that
+    // page behind or the next poll repeats it. An empty cursor means "the
+    // index was walked to the end" and sends the next scan back to the head.
+    let stopped_at: String;
+    'walk: loop {
+        let page = store.list_page(MARKER_PREFIX, &at, MARKER_PAGE).await?;
+        let Some(page_end) = page.last().cloned() else {
+            // End of the prefix. A bounded scan that started past the head
+            // wraps once to cover what it skipped; anything else is done.
+            if wrapped || origin.is_empty() {
+                stopped_at = String::new();
+                break 'walk;
+            }
+            at = String::new();
+            wrapped = true;
+            continue 'walk;
+        };
+        // Resolve this page: marker bodies first, then the jobs they name.
+        // The body is the only place the job_id is stated unambiguously — see
+        // [`is_marker`] for why the name cannot be parsed for it — so this is
+        // two fan-outs per page. It still reads far less than the pass it
+        // replaces, which listed the whole prefix and fetched every body in
+        // it before anything could be cut.
+        let markers: Vec<&String> = page.iter().filter(|path| is_marker(path)).collect();
+        let marker_paths: Vec<String> = markers.iter().map(|path| (*path).clone()).collect();
+        let marker_bodies =
+            download_many_or_none(store, &marker_paths, 10.min(marker_paths.len())).await;
+        let mut entries: Vec<(&str, String)> = Vec::new();
+        for (marker, body) in markers.iter().zip(marker_bodies) {
+            // A marker body that vanished (its job left the queue between the
+            // listing and this read), one whose job_id is missing, and one
+            // naming a job already in `seen` all end the same way: no window
+            // slot. They are still charged, because each one cost a fetch.
+            // Leaving them free is what would let a page of them scan without
+            // bound — the very input the budget exists for — and the charge is
+            // what makes the claim below true for every dead marker, not just
+            // the ones whose job blob is gone.
+            let resolved = match &body {
+                // Strict-raise on corrupt marker JSON; a missing/non-string
+                // job_id just skips the marker.
+                Some(body) => serde_json::from_str::<serde_json::Value>(body)?
+                    .get("job_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                None => None,
+            };
+            match resolved {
+                Some(job_id) if !seen.contains(&job_id) => {
+                    entries.push((marker.as_str(), job_id));
+                }
+                _ => {
+                    *scanned += 1;
+                    if scan.budget_spent(*scanned) {
+                        stopped_at = (*marker).to_string();
+                        break 'walk;
+                    }
                 }
             }
         }
-        i += chunk;
-    }
-    Ok(out)
-}
-
-/// Priority markers first, then FIFO oldest_first. Deduped by job_id.
-/// Calls [`migrations::backfill_priority_markers`] up-front so any
-/// pre-0.4.26 queued jobs get retroactive markers.
-pub async fn list_priority_first(
-    store: &JobStorage,
-    prefix: &str,
-    cap: usize,
-) -> Result<Vec<Job>, StorageError> {
-    migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
-    let pri = list_top_n(store, prefix, cap).await?;
-    let fifo = list_jobs(store, prefix, cap).await?;
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out = Vec::new();
-    for job in pri.into_iter().chain(fifo) {
-        if seen.insert(job.job_id.clone()) {
-            out.push(job);
-        }
-    }
-    Ok(out)
-}
-
-/// Priority-aware fitting jobs: `queue_priority/` markers first, then FIFO
-/// from `queue/`. Metadata stamping filters non-fitting blobs before
-/// download.
-///
-/// Python has a gsutil-only fallback (`store._azure_backend is None and
-/// store._sdk_bucket is None` — the first half of which is the never-true
-/// `_azure_backend` bug) that downloads everything. The intended behavior
-/// is the metadata-prefiltering path, and every Rust `BlobBackend`
-/// implements `list_blobs_with_meta`, so only that path is ported.
-pub async fn list_fitting(
-    store: &JobStorage,
-    prefix: &str,
-    max_gpu_mem_gb: i64,
-    cap: usize,
-) -> Result<Vec<Job>, StorageError> {
-    let mut out: Vec<Job> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    if prefix == "queue" {
-        for job in list_top_n(store, prefix, cap).await? {
-            if job.gpu_mem_gb <= max_gpu_mem_gb && !seen.contains(&job.job_id) {
-                seen.insert(job.job_id.clone());
-                out.push(job);
+        let job_paths: Vec<String> = entries
+            .iter()
+            .map(|(_, job_id)| format!("{prefix}/{job_id}.json"))
+            .collect();
+        let bodies = download_many_or_none(store, &job_paths, 10.min(job_paths.len())).await;
+        for ((marker, _), body) in entries.iter().zip(bodies) {
+            // Once the wrapped leg reaches past the name the walk began at,
+            // the whole index has been seen exactly once.
+            if wrapped && !origin.is_empty() && *marker > origin.as_str() {
+                stopped_at = String::new();
+                break 'walk;
+            }
+            // Every marker the walk reads costs exactly one unit of budget,
+            // here or in the resolve loop above, whether or not a job comes
+            // back. A marker with no job behind it is the expected stale
+            // case: skip it, charge it, keep going — it never costs a window
+            // slot. That uniformity is what lets a page of nothing but dead
+            // markers exhaust the budget, which is the input the bound exists
+            // for; charging only the ones that resolve would leave it no
+            // bound at all there.
+            *scanned += 1;
+            if let Some(data) = body {
+                let job = Job::from_json(&data)?;
+                if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
+                    out.push(job);
+                    if scan.window_full(out.len()) {
+                        stopped_at = (*marker).to_string();
+                        break 'walk;
+                    }
+                }
+            }
+            if scan.budget_spent(*scanned) {
+                stopped_at = (*marker).to_string();
+                break 'walk;
             }
         }
+        // The walk must advance. `list_page` is contracted to return names
+        // strictly after `at`, so `page_end` is always past it; a backend that
+        // got that wrong would spin here forever, and a scheduler poll that
+        // never returns is worse than one that returns short.
+        if page_end <= at && !at.is_empty() {
+            stopped_at = String::new();
+            break 'walk;
+        }
+        at = page_end;
     }
-    let mut eligible_paths: Vec<String> = Vec::new();
+    if rotates {
+        store.set_scan_cursor(stopped_at);
+    }
+    Ok(())
+}
+
+/// The oldest-first pass over the prefix itself.
+///
+/// The prefix is listed once, with metadata, and ordered by write time before
+/// anything is downloaded. Ordering after a cap is what starved a late-sorting
+/// job; re-listing to widen a budget is what made a poll cost the whole prefix
+/// repeatedly. One listing, one order, early exit.
+async fn collect_oldest_first(
+    store: &JobStorage,
+    prefix: &str,
+    scan: &JobScan<'_>,
+    out: &mut Vec<Job>,
+    seen: &mut HashSet<String>,
+    scanned: &mut usize,
+) -> Result<(), StorageError> {
+    if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
+        return Ok(());
+    }
+    let mut ordered: Vec<(chrono::DateTime<chrono::Utc>, String)> = Vec::new();
     for blob in store.list_blobs_with_meta(&format!("{prefix}/")).await? {
         let name = blob.name.rsplit('/').next().unwrap_or("");
-        let jid = name.strip_suffix(".json").unwrap_or(name);
-        if !blob.name.ends_with(".json") || seen.contains(jid) {
+        let job_id = name.strip_suffix(".json").unwrap_or(name);
+        if !blob.name.ends_with(".json") || seen.contains(job_id) {
             continue;
         }
-        // mem_str is None on blobs that predate the metadata stamp -> treat
-        // as eligible. A corrupt int now raises so the operator sees that
-        // the metadata is misbehaving (Python `int(mem_str)` ValueError).
-        match blob.metadata.get("gpu_mem_gb") {
-            None => eligible_paths.push(blob.name.clone()),
-            Some(mem_str) => {
-                let mem: i64 = mem_str.parse().map_err(|_| {
-                    StorageError::Other(format!(
-                        "corrupt gpu_mem_gb metadata on {}: {mem_str:?}",
-                        blob.name
-                    ))
-                })?;
-                if mem <= max_gpu_mem_gb {
-                    eligible_paths.push(blob.name.clone());
-                }
+        // A blob that predates the metadata stamp carries no gpu_mem_gb and
+        // is downloaded rather than assumed unfit. A corrupt integer raises,
+        // so misbehaving metadata is reported instead of silently filtering.
+        if let Some(mem_str) = blob.metadata.get("gpu_mem_gb") {
+            let mem: i64 = mem_str.parse().map_err(|_| {
+                StorageError::Other(format!(
+                    "corrupt gpu_mem_gb metadata on {}: {mem_str:?}",
+                    blob.name
+                ))
+            })?;
+            if mem > scan.max_gpu_mem_gb {
+                continue;
             }
         }
-        if eligible_paths.len() + out.len() >= cap {
-            break;
+        ordered.push((
+            blob.updated.unwrap_or_else(chrono::Utc::now),
+            blob.name.clone(),
+        ));
+    }
+    ordered.sort();
+    let paths: Vec<String> = ordered.into_iter().map(|(_, name)| name).collect();
+    for paths in paths.chunks(32) {
+        let texts: Vec<Option<String>> = futures::stream::iter(paths)
+            .map(|path| store.download_text(path))
+            .buffered(32)
+            .collect::<Vec<Result<Option<String>, StorageError>>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        for data in texts.into_iter().flatten() {
+            let job = Job::from_json(&data)?;
+            *scanned += 1;
+            if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
+                out.push(job);
+                if scan.window_full(out.len()) {
+                    return Ok(());
+                }
+            }
+            if scan.budget_spent(*scanned) {
+                return Ok(());
+            }
         }
     }
-
-    // Python `_read`: download errors propagate; only a missing blob (None)
-    // is skipped.
-    let texts: Vec<Option<String>> = futures::stream::iter(&eligible_paths)
-        .map(|path| store.download_text(path))
-        .buffered(32)
-        .collect::<Vec<Result<Option<String>, StorageError>>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-    for data in texts.into_iter().flatten() {
-        let job = Job::from_json(&data)?;
-        if job.gpu_mem_gb <= max_gpu_mem_gb {
-            out.push(job);
-        }
-    }
-    Ok(out)
+    Ok(())
 }
