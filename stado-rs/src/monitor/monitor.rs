@@ -163,18 +163,13 @@ fn running_lease_live(job: &Job) -> bool {
         .is_some_and(|expires| expires > Utc::now())
 }
 
-
 /// Move job back to queue or fail if max restarts exceeded.
 ///
 /// Returns true only when this call won the version fence and changed
 /// lifecycle state. Callers that must kill the old worker do so only after
 /// this returns true: killing first would destroy a worker whose concurrent
 /// lease renewal correctly made the lifecycle move lose.
-async fn requeue(
-    store: &JobStorage,
-    job: &mut Job,
-    reason: &str,
-) -> Result<bool, MonitorError> {
+async fn requeue(store: &JobStorage, job: &mut Job, reason: &str) -> Result<bool, MonitorError> {
     let Some((current, version)) = current_running(store, &job.job_id).await? else {
         return Ok(false); // moved or finished under the tick's listing
     };
@@ -191,7 +186,10 @@ async fn requeue(
     if next.restarts > next.max_restarts {
         next.state = job_state::FAILED.to_string();
         next.failed_at = Some(isoformat_utc(Utc::now()));
-        next.error = Some(format!("Exceeded {} restarts ({reason})", next.max_restarts));
+        next.error = Some(format!(
+            "Exceeded {} restarts ({reason})",
+            next.max_restarts
+        ));
         // Python parity: NO cleanup_status on the restart-cap path.
         let moved = store
             .move_job_if_version(&next, "running", "failed", &version)

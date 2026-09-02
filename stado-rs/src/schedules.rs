@@ -674,8 +674,7 @@ async fn takeover_pending_occurrence(
     }
     pending.state = "claimed".into();
     pending.owner = owner.to_string();
-    pending.lease_expires_at =
-        (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+    pending.lease_expires_at = (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     match store
         .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
         .await
@@ -856,13 +855,8 @@ async fn enqueue_pending_occurrence(
             sched.schedule_id
         ))
     })?;
-    let Some(sched) = begin_pending_occurrence(
-        store,
-        &sched.schedule_id,
-        &pending.occurrence_key,
-        owner,
-    )
-    .await?
+    let Some(sched) =
+        begin_pending_occurrence(store, &sched.schedule_id, &pending.occurrence_key, owner).await?
     else {
         return Ok(None);
     };
@@ -884,10 +878,7 @@ async fn enqueue_pending_occurrence(
             // retrying it forever would pin the reservation and silently
             // retire the schedule. Drop the occurrence and let the cadence
             // continue; only transient failures stay recoverable.
-            let rejected = matches!(
-                error,
-                crate::queue::submit::SubmitError::Validation(_)
-            );
+            let rejected = matches!(error, crate::queue::submit::SubmitError::Validation(_));
             if rejected {
                 abandon_pending_occurrence(
                     store,
@@ -915,9 +906,9 @@ async fn enqueue_pending_occurrence(
             )));
         }
     };
-    let job = jobs.pop().ok_or_else(|| {
-        StorageError::Other("durable schedule enqueue returned no job".into())
-    })?;
+    let job = jobs
+        .pop()
+        .ok_or_else(|| StorageError::Other("durable schedule enqueue returned no job".into()))?;
     if !accept_pending_occurrence(
         store,
         &sched.schedule_id,
@@ -961,7 +952,6 @@ async fn advance_due_without_work(
     }
 }
 
-
 /// Fire every due+enabled schedule once. Returns the number fired.
 pub async fn fire_due_schedules(
     store: &JobStorage,
@@ -975,8 +965,7 @@ pub async fn fire_due_schedules(
         };
         let owner = uuid::Uuid::new_v4().simple().to_string();
         if sched.pending_occurrence.is_some() {
-            let Some(claimed) =
-                takeover_pending_occurrence(store, &schedule_id, &owner).await?
+            let Some(claimed) = takeover_pending_occurrence(store, &schedule_id, &owner).await?
             else {
                 log(&format!(
                     "schedule {schedule_id}: pending occurrence is leased by another coordinator"
@@ -1026,14 +1015,8 @@ pub async fn fire_due_schedules(
             }
             continue;
         }
-        let Some(claimed) = reserve_due_occurrence(
-            store,
-            &schedule_id,
-            &occurrence_at,
-            &next_due,
-            &owner,
-        )
-        .await?
+        let Some(claimed) =
+            reserve_due_occurrence(store, &schedule_id, &occurrence_at, &next_due, &owner).await?
         else {
             log(&format!(
                 "schedule {schedule_id}: lost occurrence reservation race"
@@ -1095,7 +1078,9 @@ pub async fn fire_schedule_now(
                 .or_else(|| entry.get("planned_job"))
                 .cloned();
             if let (true, Some(job)) = (admitted, retained) {
-                return serde_json::from_value(job).map(Some).map_err(StorageError::Json);
+                return serde_json::from_value(job)
+                    .map(Some)
+                    .map_err(StorageError::Json);
             }
         }
     }
@@ -1114,8 +1099,7 @@ pub async fn fire_schedule_now(
         let owner = uuid::Uuid::new_v4().simple().to_string();
         match sched.pending_occurrence.as_ref() {
             Some(pending) if pending.run_id != run_id => {
-                let Some(claimed) =
-                    takeover_pending_occurrence(store, schedule_id, &owner).await?
+                let Some(claimed) = takeover_pending_occurrence(store, schedule_id, &owner).await?
                 else {
                     return Ok(None);
                 };
@@ -1123,8 +1107,7 @@ pub async fn fire_schedule_now(
                 continue;
             }
             Some(_) => {
-                let Some(claimed) =
-                    takeover_pending_occurrence(store, schedule_id, &owner).await?
+                let Some(claimed) = takeover_pending_occurrence(store, schedule_id, &owner).await?
                 else {
                     return Ok(None);
                 };

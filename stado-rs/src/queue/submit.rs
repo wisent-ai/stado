@@ -144,7 +144,6 @@ impl Default for SubmitOptions {
 /// this marker cannot reach Azure as `hardwareProfile.vmSize`.
 pub const CPU_MACHINE_TYPE: &str = "e2-standard-8";
 
-
 /// Python `json.dumps(value, sort_keys=True, separators=(",", ":"))`:
 /// compact separators, keys sorted recursively, non-ASCII escaped as
 /// \uXXXX (Python's default `ensure_ascii=True`).
@@ -225,9 +224,9 @@ pub fn validate_run_id(run_id: &str) -> Result<(), SubmitError> {
     if run_id.is_empty()
         || run_id.len() > 160
         || matches!(run_id, "." | "..")
-        || !run_id.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-        })
+        || !run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(SubmitError::Validation(
             "run id must be 1-160 ASCII letters, digits, '.', '_' or '-'".into(),
@@ -246,8 +245,9 @@ fn submission_request(
     options: &SubmitOptions,
     resolved_hardware: &[ResolvedHardwareProjection],
 ) -> Result<Value, SubmitError> {
-    let options_value = serde_json::to_value(options)
-        .map_err(|error| SubmitError::Validation(format!("serialize submission options: {error}")))?;
+    let options_value = serde_json::to_value(options).map_err(|error| {
+        SubmitError::Validation(format!("serialize submission options: {error}"))
+    })?;
     Ok(serde_json::json!({
         "schema": "stado.submission-request.v3",
         "commands": commands,
@@ -327,11 +327,7 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
     value
 }
 
-fn validate_recovered_job(
-    job: &Job,
-    planned: &Job,
-    index: usize,
-) -> Result<(), SubmitError> {
+fn validate_recovered_job(job: &Job, planned: &Job, index: usize) -> Result<(), SubmitError> {
     if job.job_id != planned.job_id
         || job.submission_request_digest != planned.submission_request_digest
         || job.submission_command_index != Some(index)
@@ -384,24 +380,18 @@ fn validate_run_manifest(
                 .ok_or_else(|| SubmitError::Validation("submission command is not a string".into()))
         })
         .collect::<Result<_, _>>()?;
-    let options: SubmitOptions = serde_json::from_value(
-        request
-            .get("options")
-            .cloned()
-            .ok_or_else(|| SubmitError::Validation("submission request options are missing".into()))?,
-    )
-    .map_err(|error| SubmitError::Validation(format!("invalid submission options: {error}")))?;
-    let resolved_hardware: Vec<ResolvedHardwareProjection> = serde_json::from_value(
-        request
-            .get("resolved_hardware")
-            .cloned()
-            .ok_or_else(|| {
-                SubmitError::Validation("submission request hardware plan is missing".into())
-            })?,
-    )
-    .map_err(|error| {
-        SubmitError::Validation(format!("invalid submission hardware plan: {error}"))
-    })?;
+    let options: SubmitOptions =
+        serde_json::from_value(request.get("options").cloned().ok_or_else(|| {
+            SubmitError::Validation("submission request options are missing".into())
+        })?)
+        .map_err(|error| SubmitError::Validation(format!("invalid submission options: {error}")))?;
+    let resolved_hardware: Vec<ResolvedHardwareProjection> =
+        serde_json::from_value(request.get("resolved_hardware").cloned().ok_or_else(|| {
+            SubmitError::Validation("submission request hardware plan is missing".into())
+        })?)
+        .map_err(|error| {
+            SubmitError::Validation(format!("invalid submission hardware plan: {error}"))
+        })?;
     if resolved_hardware.len() != commands.len() {
         return Err(SubmitError::Validation(format!(
             "run id {run_id} has an incomplete submission hardware plan"
@@ -424,9 +414,7 @@ fn validate_run_manifest(
     };
     let manifest_created_at = DateTime::parse_from_rfc3339(&provenance.created_at)
         .map_err(|_| {
-            SubmitError::Validation(format!(
-                "run manifest {run_id} has invalid created_at"
-            ))
+            SubmitError::Validation(format!("run manifest {run_id} has invalid created_at"))
         })?
         .with_timezone(&Utc);
     if manifest.get("source_digest").and_then(Value::as_str)
@@ -485,8 +473,7 @@ fn validate_run_manifest(
         let job: Job = serde_json::from_value(planned_value.clone())
             .map_err(|error| SubmitError::Validation(format!("invalid planned job: {error}")))?;
         let mut effective = options.clone();
-        effective.exclusive =
-            effective.exclusive && !activation_extraction_must_share_gpu(command);
+        effective.exclusive = effective.exclusive && !activation_extraction_must_share_gpu(command);
         let legacy_provenance;
         let expected_provenance = if legacy_request_digest.is_some() {
             legacy_provenance = SubmissionProvenance {
@@ -552,7 +539,10 @@ fn validate_run_manifest(
                     "terminal entry outcome has invalid fields".into(),
                 ));
             }
-            let prefix = outcome.get("prefix").and_then(Value::as_str).unwrap_or_default();
+            let prefix = outcome
+                .get("prefix")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let terminal_job = outcome_job.as_ref().ok_or_else(|| {
                 SubmitError::Validation("terminal entry has no retained job".into())
             })?;
@@ -582,9 +572,7 @@ fn validate_run_manifest(
                 "failed" if terminal_job.completed_at.is_none() => {
                     terminal_job.failed_at.as_deref()
                 }
-                "completed" | "uploaded" | "cancelled"
-                    if terminal_job.failed_at.is_none() =>
-                {
+                "completed" | "uploaded" | "cancelled" if terminal_job.failed_at.is_none() => {
                     terminal_job.completed_at.as_deref()
                 }
                 _ => None,
@@ -656,8 +644,7 @@ pub(crate) async fn migrate_v2_run_manifest(
             .get("request")
             .cloned()
             .ok_or_else(|| SubmitError::Validation("v2 run manifest has no request".into()))?;
-        if old_request.get("schema").and_then(Value::as_str)
-            != Some("stado.submission-request.v2")
+        if old_request.get("schema").and_then(Value::as_str) != Some("stado.submission-request.v2")
         {
             return Err(SubmitError::Validation(format!(
                 "run id {run_id} has an invalid v2 request schema"
@@ -680,17 +667,13 @@ pub(crate) async fn migrate_v2_run_manifest(
                 })
             })
             .collect::<Result<_, _>>()?;
-        let options: SubmitOptions = serde_json::from_value(
-            old_request
-                .get("options")
-                .cloned()
-                .ok_or_else(|| {
-                    SubmitError::Validation("v2 submission options are missing".into())
-                })?,
-        )
-        .map_err(|error| {
-            SubmitError::Validation(format!("invalid v2 submission options: {error}"))
-        })?;
+        let options: SubmitOptions =
+            serde_json::from_value(old_request.get("options").cloned().ok_or_else(|| {
+                SubmitError::Validation("v2 submission options are missing".into())
+            })?)
+            .map_err(|error| {
+                SubmitError::Validation(format!("invalid v2 submission options: {error}"))
+            })?;
         let entries = manifest
             .get("entries")
             .and_then(Value::as_array)
@@ -702,22 +685,17 @@ pub(crate) async fn migrate_v2_run_manifest(
         }
         let mut resolved_hardware = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
-            let planned: Job = serde_json::from_value(
-                entry
-                    .get("planned_job")
-                    .cloned()
-                    .ok_or_else(|| {
-                        SubmitError::Validation("v2 run entry has no planned job".into())
-                    })?,
-            )
-            .map_err(|error| {
-                SubmitError::Validation(format!("invalid v2 planned job: {error}"))
-            })?;
+            let planned: Job =
+                serde_json::from_value(entry.get("planned_job").cloned().ok_or_else(|| {
+                    SubmitError::Validation("v2 run entry has no planned job".into())
+                })?)
+                .map_err(|error| {
+                    SubmitError::Validation(format!("invalid v2 planned job: {error}"))
+                })?;
             let old_key = submission_job_key(&old_digest, index, &commands[index]);
             let old_job_id = format!("job-{}", &old_key[..24]);
             if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
-                || entry.get("command").and_then(Value::as_str)
-                    != Some(commands[index].as_str())
+                || entry.get("command").and_then(Value::as_str) != Some(commands[index].as_str())
                 || entry.get("job_key").and_then(Value::as_str) != Some(old_key.as_str())
                 || entry.get("job_id").and_then(Value::as_str) != Some(old_job_id.as_str())
                 || planned.job_id != old_job_id
@@ -757,7 +735,10 @@ pub(crate) async fn migrate_v2_run_manifest(
             .ok_or_else(|| SubmitError::Validation("v2 run manifest is not an object".into()))?;
         object.insert("schema".into(), Value::from("stado.run-submission.v3"));
         object.insert("request".into(), request.clone());
-        object.insert("request_digest".into(), Value::from(request_digest.as_str()));
+        object.insert(
+            "request_digest".into(),
+            Value::from(request_digest.as_str()),
+        );
         object.insert(
             "migrated_from_v2_request_digest".into(),
             Value::from(old_digest.as_str()),
@@ -783,11 +764,7 @@ pub(crate) async fn migrate_v2_run_manifest(
                 .ok_or_else(|| SubmitError::Validation("v2 run entry is not an object".into()))?;
             entry.insert(
                 "job_key".into(),
-                Value::from(submission_job_key(
-                    &request_digest,
-                    index,
-                    &commands[index],
-                )),
+                Value::from(submission_job_key(&request_digest, index, &commands[index])),
             );
         }
         validate_run_manifest(&manifest, run_id, &request, &request_digest)?;
@@ -806,8 +783,6 @@ pub(crate) async fn migrate_v2_run_manifest(
         "run manifest {run_id} remained contended during v2 migration"
     )))
 }
-
-
 
 enum EntryClaim {
     Owned(Job),
@@ -858,7 +833,10 @@ async fn claim_entry(
             .and_then(|entries| entries.get_mut(index))
             .and_then(Value::as_object_mut)
             .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
-        let held_by = entry.get("owner").and_then(Value::as_str).unwrap_or_default();
+        let held_by = entry
+            .get("owner")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if matches!(
             entry.get("state").and_then(Value::as_str),
             Some("claimed" | "enqueuing")
@@ -951,7 +929,10 @@ async fn checkpoint_accepted(
             ));
         }
         entry.insert("state".into(), Value::from("accepted"));
-        entry.insert("accepted_at".into(), Value::from(chrono::Utc::now().to_rfc3339()));
+        entry.insert(
+            "accepted_at".into(),
+            Value::from(chrono::Utc::now().to_rfc3339()),
+        );
         entry.remove("owner");
         entry.remove("lease_expires_at");
         match store
@@ -974,7 +955,14 @@ async fn checkpoint_accepted(
 }
 
 async fn find_job(store: &JobStorage, job_id: &str) -> Result<Option<Job>, SubmitError> {
-    for prefix in ["cancelled", "failed", "uploaded", "completed", "running", "queue"] {
+    for prefix in [
+        "cancelled",
+        "failed",
+        "uploaded",
+        "completed",
+        "running",
+        "queue",
+    ] {
         if let Some(job) = store.read_job(prefix, job_id).await? {
             return Ok(Some(job));
         }
@@ -989,7 +977,9 @@ pub async fn submit_batch(
     options: &SubmitOptions,
 ) -> Result<Vec<Job>, SubmitError> {
     if commands.is_empty() {
-        return Err(SubmitError::Validation("at least one command is required".into()));
+        return Err(SubmitError::Validation(
+            "at least one command is required".into(),
+        ));
     }
     let options = options.clone();
     validate_run_id(&options.run_id)?;
@@ -1012,58 +1002,58 @@ pub async fn submit_batch(
     } else {
         None
     };
-    let resolved_hardware: Vec<ResolvedHardwareProjection> =
-        if let Some(raw) = existing_raw.as_ref() {
-            let existing: Value = serde_json::from_str(raw).map_err(|error| {
-                SubmitError::Validation(format!("invalid run manifest: {error}"))
+    let resolved_hardware: Vec<ResolvedHardwareProjection> = if let Some(raw) =
+        existing_raw.as_ref()
+    {
+        let existing: Value = serde_json::from_str(raw)
+            .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
+        if existing.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v3") {
+            let stored_request = existing
+                .get("request")
+                .ok_or_else(|| SubmitError::Validation("stored run request is missing".into()))?;
+            let expected_options = serde_json::to_value(&options).map_err(|error| {
+                SubmitError::Validation(format!("serialize submission options: {error}"))
             })?;
-            if existing.get("schema").and_then(Value::as_str)
-                == Some("stado.run-submission.v3")
+            if stored_request.get("schema").and_then(Value::as_str)
+                != Some("stado.submission-request.v3")
+                || stored_request.get("commands") != Some(&serde_json::json!(commands))
+                || stored_request.get("options") != Some(&expected_options)
+                || stored_request
+                    .get("effective_bucket")
+                    .and_then(Value::as_str)
+                    != Some(bucket)
             {
-                let stored_request = existing.get("request").ok_or_else(|| {
-                    SubmitError::Validation("stored run request is missing".into())
-                })?;
-                let expected_options = serde_json::to_value(&options).map_err(|error| {
-                    SubmitError::Validation(format!("serialize submission options: {error}"))
-                })?;
-                if stored_request.get("schema").and_then(Value::as_str)
-                    != Some("stado.submission-request.v3")
-                    || stored_request.get("commands") != Some(&serde_json::json!(commands))
-                    || stored_request.get("options") != Some(&expected_options)
-                    || stored_request.get("effective_bucket").and_then(Value::as_str)
-                        != Some(bucket)
-                {
-                    return Err(SubmitError::Validation(format!(
-                        "run id {run_id} already belongs to a different submission request"
-                    )));
-                }
-                serde_json::from_value(
-                    stored_request
-                        .get("resolved_hardware")
-                        .cloned()
-                        .ok_or_else(|| {
-                            SubmitError::Validation(
-                                "stored run request has no resolved hardware plan".into(),
-                            )
-                        })?,
-                )
-                .map_err(|error| {
-                    SubmitError::Validation(format!(
-                        "stored run request has invalid resolved hardware: {error}"
-                    ))
-                })?
-            } else {
                 return Err(SubmitError::Validation(format!(
-                    "run id {run_id} has an unsupported manifest schema"
+                    "run id {run_id} already belongs to a different submission request"
                 )));
             }
+            serde_json::from_value(
+                stored_request
+                    .get("resolved_hardware")
+                    .cloned()
+                    .ok_or_else(|| {
+                        SubmitError::Validation(
+                            "stored run request has no resolved hardware plan".into(),
+                        )
+                    })?,
+            )
+            .map_err(|error| {
+                SubmitError::Validation(format!(
+                    "stored run request has invalid resolved hardware: {error}"
+                ))
+            })?
         } else {
-            let mut resolved = Vec::with_capacity(commands.len());
-            for command in commands {
-                resolved.push(resolve_hardware(command, &options).await?);
-            }
-            resolved
-        };
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} has an unsupported manifest schema"
+            )));
+        }
+    } else {
+        let mut resolved = Vec::with_capacity(commands.len());
+        for command in commands {
+            resolved.push(resolve_hardware(command, &options).await?);
+        }
+        resolved
+    };
     if resolved_hardware.len() != commands.len() {
         return Err(SubmitError::Validation(format!(
             "run id {run_id} has an invalid resolved hardware plan"
@@ -1175,33 +1165,28 @@ pub async fn submit_batch(
                         ))
                     })?;
                 validate_recovered_job(&existing, &planned_job, index)?;
-                store
-                    .repair_queued_admission_metadata(&planned_job)
-                    .await?;
+                store.repair_queued_admission_metadata(&planned_job).await?;
                 accepted.push(existing);
             }
             EntryClaim::Owned(planned_job) => {
                 let job = if let Some(existing) = find_job(&store, &planned_job.job_id).await? {
                     validate_recovered_job(&existing, &planned_job, index)?;
-                    store
-                        .repair_queued_admission_metadata(&planned_job)
-                        .await?;
+                    store.repair_queued_admission_metadata(&planned_job).await?;
                     existing
                 } else if store.create_queued_job_if_absent(&planned_job).await? {
                     planned_job.clone()
                 } else {
-                    let existing = find_job(&store, &planned_job.job_id)
-                        .await?
-                        .ok_or_else(|| {
-                            SubmitError::Validation(format!(
-                                "stable job {} was concurrently created but is unreadable",
-                                planned_job.job_id
-                            ))
-                        })?;
+                    let existing =
+                        find_job(&store, &planned_job.job_id)
+                            .await?
+                            .ok_or_else(|| {
+                                SubmitError::Validation(format!(
+                                    "stable job {} was concurrently created but is unreadable",
+                                    planned_job.job_id
+                                ))
+                            })?;
                     validate_recovered_job(&existing, &planned_job, index)?;
-                    store
-                        .repair_queued_admission_metadata(&planned_job)
-                        .await?;
+                    store.repair_queued_admission_metadata(&planned_job).await?;
                     existing
                 };
                 checkpoint_accepted(
@@ -1273,7 +1258,6 @@ fn validate_submission(command: &str, options: &SubmitOptions) -> Result<(), Sub
     }
     Ok(())
 }
-
 
 /// config::estimate_gpu_memory against the configured queue bucket
 /// (Python's sizing scan always targets the global BUCKET, not the
