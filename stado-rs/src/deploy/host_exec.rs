@@ -171,15 +171,20 @@ const TAILSCALE_PROGRAM: &str = "/usr/bin/tailscale";
 ///
 /// A program absent from this table has exactly one path — its `argv[0]` — and
 /// keeps the plain [`host_channel::run_program`] transport.
-const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[(
-    TAILSCALE_PROGRAM,
-    &[
-        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-        "/usr/local/bin/tailscale",
-        "/opt/homebrew/bin/tailscale",
+const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
+    (
         TAILSCALE_PROGRAM,
-    ],
-)];
+        &[
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/usr/local/bin/tailscale",
+            "/opt/homebrew/bin/tailscale",
+            TAILSCALE_PROGRAM,
+        ],
+    ),
+    // The order Weles's kimi login trajectory probes, so this read and that
+    // install cannot disagree about whether the host has uv.
+    (UV_INSTALLER, &[UV_INSTALLER, "/usr/local/bin/uv"]),
+];
 
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
@@ -194,6 +199,22 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[(
 /// here carries a secret — the launcher fetches it on the host and it never
 /// reaches an argument vector.
 const BRAMA_LAUNCHER: &str = "~/.stado/bin/start-with-skarbiec";
+
+/// The Kimi Code CLI, as the fleet's macOS hosts install it.
+///
+/// A Weles trajectory drives this program, and a trajectory that passes it a
+/// flag it does not accept fails with the CLI's own one-line refusal and
+/// nothing else — which is how `kimi login --json` cost the fleet its kimi
+/// subscription renewals without anybody being able to say what the CLI does
+/// accept. Its own help is the answer, and reading it from here is how that
+/// question gets settled against the installed version rather than against a
+/// pinned one in a script.
+const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
+
+/// The uv package installer, at the two absolute paths every reader in this
+/// fleet probes for it — including Weles's kimi login trajectory, whose pinned
+/// CLI install depends on one of them existing.
+const UV_INSTALLER: &str = "/opt/homebrew/bin/uv";
 
 /// The prefix that marks a program, or one of its environment values, as
 /// living under the login user's home rather than at a system path.
@@ -225,39 +246,52 @@ struct AccountProgram {
 }
 
 /// Every program in the table that the managed account owns.
-const ACCOUNT_PROGRAMS: &[AccountProgram] = &[AccountProgram {
-    program: BRAMA_LAUNCHER,
-    // The launcher is part of the release bundle, and the live bundle is the
-    // `current` link the service unit itself runs through -- never a pinned
-    // version, which would go stale at the next release and send a repair into
-    // a launcher older than the vault it talks to. Both platform directory
-    // spellings the fleet has shipped are probed, newest layout first, and the
-    // standalone copy some accounts keep in `~/.stado/bin` is last.
-    candidates: &[
-        "~/.stado/services/brama/current/darwin-arm64/bin/start-with-skarbiec",
-        "~/.stado/services/brama/current/darwin-arm/bin/start-with-skarbiec",
-        BRAMA_LAUNCHER,
-    ],
-    // Two paths this run must not share with the gateway it is repairing.
-    //
-    // The launcher ends whatever holds its capability-broker socket and then
-    // rebinds it. On its stable default path that is the live gateway's own
-    // broker, so a CLI run beside a serving Brama would take the service's
-    // credential redemption down with it. And the runtime directory is named
-    // after the installation, which for a CLI run out of the live bundle is
-    // the live one: the launcher rebuilds the subscription manifest and the
-    // capability catalog in it at every start, so sharing it would rewrite the
-    // serving gateway's own runtime state. Both get a copy of their own under
-    // the fleet's scratch area, and the service is untouched.
-    environment: &[
-        (
-            "BRAMA_CAP_SOCKET",
-            "~/.stado/work/brama-sign-in/capability.sock",
-        ),
-        ("BRAMA_RUNTIME_DIR", "~/.stado/work/brama-sign-in/runtime"),
-    ],
-    timeout_seconds: 1500,
-}];
+const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
+    AccountProgram {
+        program: BRAMA_LAUNCHER,
+        // The launcher is part of the release bundle, and the live bundle is the
+        // `current` link the service unit itself runs through -- never a pinned
+        // version, which would go stale at the next release and send a repair into
+        // a launcher older than the vault it talks to. Both platform directory
+        // spellings the fleet has shipped are probed, newest layout first, and the
+        // standalone copy some accounts keep in `~/.stado/bin` is last.
+        candidates: &[
+            "~/.stado/services/brama/current/darwin-arm64/bin/start-with-skarbiec",
+            "~/.stado/services/brama/current/darwin-arm/bin/start-with-skarbiec",
+            BRAMA_LAUNCHER,
+        ],
+        // Two paths this run must not share with the gateway it is repairing.
+        //
+        // The launcher ends whatever holds its capability-broker socket and then
+        // rebinds it. On its stable default path that is the live gateway's own
+        // broker, so a CLI run beside a serving Brama would take the service's
+        // credential redemption down with it. And the runtime directory is named
+        // after the installation, which for a CLI run out of the live bundle is
+        // the live one: the launcher rebuilds the subscription manifest and the
+        // capability catalog in it at every start, so sharing it would rewrite the
+        // serving gateway's own runtime state. Both get a copy of their own under
+        // the fleet's scratch area, and the service is untouched.
+        environment: &[
+            (
+                "BRAMA_CAP_SOCKET",
+                "~/.stado/work/brama-sign-in/capability.sock",
+            ),
+            ("BRAMA_RUNTIME_DIR", "~/.stado/work/brama-sign-in/runtime"),
+        ],
+        timeout_seconds: 1500,
+    },
+    AccountProgram {
+        program: KIMI_CLI,
+        // The three places this fleet's hosts have it, in the order the Weles
+        // trajectory's own resolver probes them, so `host exec` and the
+        // trajectory cannot disagree about which binary is the Kimi CLI.
+        candidates: &["~/.local/bin/kimi", KIMI_CLI, "/opt/homebrew/bin/kimi"],
+        // Nothing. Its help is a read; giving it an environment would be
+        // giving it a home and a session it has no business reading here.
+        environment: &[],
+        timeout_seconds: 60,
+    },
+];
 
 /// The account-owned program behind an entry, if this is one.
 fn account_program(program: &str) -> Option<&'static AccountProgram> {
@@ -466,6 +500,17 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               a fixed executable name, reads no application state, and writes nothing",
     },
     ApprovedCommand {
+        argv: &[UV_INSTALLER, "--version"],
+        why: "prints the uv package installer's version, probing the two absolute paths Weles's \
+              kimi login trajectory itself probes rather than the login shell's PATH -- which \
+              is a different question and answers `not found` on a host that has the binary. \
+              Added 2026-09-02: that trajectory now resolves a pinned Kimi CLI version and \
+              installs it through uv when the host carries a different one, and \
+              charless-mac-mini carries a different one, so whether that repair can complete \
+              there is entirely this one fact. `--version` takes no argument and installs \
+              nothing",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/sbin/sysctl",
             "-n",
@@ -640,6 +685,33 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               with no credential material and a pool that contributes no model. The row is \
               Weles's only kimi account and its declared primary, mapped to \
               `brama-sub-wisent-app-kimi-primary`. Same guarantees as the codex entry",
+    },
+    // What the installed Kimi CLI actually accepts, added 2026-09-02. Weles's
+    // kimi login trajectory spawns `kimi login --json` and the CLI on
+    // charless-mac-mini answers `error: unknown option '--json'`, so the run
+    // never reaches an authorize URL and kimi has renewed nothing. Fixing a
+    // trajectory against a flag list guessed from a pinned version is how that
+    // mismatch happened; these three reads are how it gets fixed against the
+    // binary that is really there.
+    ApprovedCommand {
+        argv: &[KIMI_CLI, "--version"],
+        why: "prints the installed Kimi CLI version. It takes no argument, reads no session \
+              and writes nothing; the version is the first thing a trajectory-versus-CLI \
+              mismatch has to be judged against",
+    },
+    ApprovedCommand {
+        argv: &[KIMI_CLI, "--help"],
+        why: "prints the CLI's own subcommand list. `--help` short-circuits before any \
+              subcommand runs, so nothing logs in, nothing is written, and no account state \
+              is read",
+    },
+    ApprovedCommand {
+        argv: &[KIMI_CLI, "login", "--help"],
+        why: "prints the flags the `login` subcommand accepts. This is the exact question the \
+              broken trajectory needs answered -- whether a machine-readable output flag \
+              exists and what it is spelled -- and `--help` is answered by the argument \
+              parser before the subcommand body, so no login is started and no browser \
+              opens",
     },
     // The proof the sign-in entries above are judged by, added 2026-09-02. A
     // repaired credential that redeems is not a repaired gateway: the vault can
