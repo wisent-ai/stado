@@ -1419,7 +1419,20 @@ fn replace_service(
 }
 
 async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
-    const MAX_ATTEMPTS: usize = 24;
+    // Every poll runs the target's own release agent once, and that run is
+    // what advances the rollout state machine. The wait therefore has to
+    // cover the phases the agent must pass through, and the last of them is
+    // the product's own declared rollback window: the agent leaves
+    // Monitoring for Committed only once `rollback_window_seconds` have
+    // elapsed since cutover. A fixed ceiling cannot express that. Twenty-four
+    // polls five seconds apart gave 120s, while brama, image-video-router and
+    // weles-worker each declare a 300s window in the same document read
+    // below, so a healthy rollout of any of them reported "did not converge"
+    // every single time.
+    const POLL_INTERVAL: Duration = Duration::from_secs(5);
+    // Headroom for the agent runs themselves and for the poll that observes
+    // the commit, which can only be the first one after the window closes.
+    const CONVERGENCE_SLACK: Duration = Duration::from_secs(60);
 
     let (document, _) = super::registry::fetch_versioned_document().await?;
     let control = release_control::control(&document)?
@@ -1528,7 +1541,15 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
         );
         let mut last_observation = "product state was not returned".to_string();
         let mut converged = false;
-        for attempt in 1..=MAX_ATTEMPTS {
+        let budget = Duration::from_secs(
+            policy
+                .strategy
+                .readiness_timeout_seconds
+                .saturating_add(policy.strategy.drain_timeout_seconds)
+                .saturating_add(policy.strategy.rollback_window_seconds),
+        ) + CONVERGENCE_SLACK;
+        let deadline = std::time::Instant::now() + budget;
+        loop {
             let output = crate::deploy::host_channel::run_script(target, &script, &runner)
                 .await
                 .map_err(|e| CmdError::click(e.to_string()))?;
@@ -1596,14 +1617,22 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
                     state.detail
                 );
             }
-            if attempt < MAX_ATTEMPTS {
-                tokio::time::sleep(Duration::from_secs(5)).await;
+            if std::time::Instant::now() + POLL_INTERVAL >= deadline {
+                break;
             }
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
         if !converged {
             return Err(CmdError::click(format!(
-                "target {name} did not converge to {} generation {} after {MAX_ATTEMPTS} attempts: {last_observation}",
-                run.version, desired.rollout_generation
+                "target {name} did not converge to {} generation {} within {}s \
+                 (readiness {}s + drain {}s + declared rollback window {}s): \
+                 {last_observation}",
+                run.version,
+                desired.rollout_generation,
+                budget.as_secs(),
+                policy.strategy.readiness_timeout_seconds,
+                policy.strategy.drain_timeout_seconds,
+                policy.strategy.rollback_window_seconds
             )));
         }
     }
