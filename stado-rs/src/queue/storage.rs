@@ -1207,17 +1207,27 @@ impl JobStorage {
         let updated = self
             .rewrite_queued_job(job_id, |job| job.priority = new_priority)
             .await?;
-        // The pre-change key is not derivable from the post-change job — the
-        // priority it was built from is exactly what just changed — so this is
-        // one of the two cases the index walk still exists for. It is an
-        // operator action on a single job, not a per-job lifecycle step.
-        self.repair_priority_markers(job_id).await?;
+        // Per the index ordering rule (see `queue::listing` module docs), the
+        // new key is written BEFORE the superseded one is dropped. A priority
+        // change re-keys the marker, and clean-then-write leaves the job with
+        // NO marker if anything interrupts between the two steps — a
+        // transient 5xx, or an operator's Ctrl-C on `job priority` — which
+        // strands a queued job outside the index permanently. Write-then-
+        // clean fails into a harmless duplicate under the old key instead.
+        // `keep` stops the cleanup scan, which matches on job_id, from
+        // deleting the marker just written.
         if let Some(job) = &updated {
             self.write_priority_marker(job).await?;
+            let current = listing::marker_path(job);
+            self.repair_priority_markers(job_id, Some(&current)).await?;
             if !self.backend.exists(&format!("queue/{job_id}.json")).await? {
                 self.delete_priority_marker_for(job).await?;
                 return Ok(None);
             }
+        } else {
+            // No current queued generation to index; anything still bearing
+            // this id is an orphan.
+            self.repair_priority_markers(job_id, None).await?;
         }
         Ok(updated)
     }
@@ -1259,7 +1269,7 @@ impl JobStorage {
         if prefix == "queue" {
             match &indexed {
                 Some(job) => self.delete_priority_marker_for(job).await?,
-                None => self.repair_priority_markers(job_id).await?,
+                None => self.repair_priority_markers(job_id, None).await?,
             }
         }
         Ok(())
@@ -1316,11 +1326,16 @@ impl JobStorage {
         listing::delete_marker_for(self, job).await
     }
 
-    /// Repair path: drop every marker naming `job_id` by walking the index.
+    /// Repair path: drop every marker naming `job_id` by walking the index,
+    /// except `keep` when the caller has already written the current one.
     /// Only for the cases where the marker's key is not derivable from the
     /// job — an orphan, or a key superseded by a priority change.
-    pub async fn repair_priority_markers(&self, job_id: &str) -> Result<(), StorageError> {
-        listing::delete_markers_scanning(self, job_id).await
+    pub async fn repair_priority_markers(
+        &self,
+        job_id: &str,
+        keep: Option<&str>,
+    ) -> Result<(), StorageError> {
+        listing::delete_markers_scanning(self, job_id, keep).await
     }
 
     /// Parallel-fetch job JSONs under `{prefix}/`. Python

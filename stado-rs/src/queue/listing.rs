@@ -11,6 +11,28 @@
 //! handle is `_blob_backend`). The intended behavior is a single backend
 //! handle — exactly what `JobStorage` carries here — so `list_fitting`
 //! always takes the metadata-prefiltering path.
+//!
+//! # Index ordering rule
+//!
+//! **A queued job may never be observable without a marker. Whenever a write
+//! and a delete both touch one job's index entries, the write goes first.**
+//!
+//! The two failure modes are not symmetric, and this asymmetry is what fixes
+//! the order of every operation in this module:
+//!
+//! - A *duplicate* or *stale* marker is harmless. It resolves its job from
+//!   its body, is deduplicated by job_id, and costs only scan budget — never
+//!   a slot in the returned window.
+//! - A *missing* marker is fatal. This index is the whole listing strategy
+//!   for `queue/`, so an unindexed queued job is invisible to every
+//!   scheduler forever while still reporting state `queued`: it is never
+//!   claimed, and `queue drain --wait` never terminates.
+//!
+//! So: create writes the marker before settling the job blob; a re-key
+//! writes the new marker before cleaning the superseded one (see
+//! [`delete_markers_scanning`]'s `keep`); and the repair sweep in
+//! [`migrations::backfill_priority_markers`] is bounded and repeating rather
+//! than latched, so an interrupted window is always eventually re-swept.
 
 use std::collections::HashSet;
 
@@ -91,7 +113,8 @@ pub async fn delete_marker_for(store: &JobStorage, job: &Job) -> Result<(), Stor
 }
 
 /// Repair path: drop every marker naming `job_id`, whatever key it was
-/// written under, by walking the index.
+/// written under, by walking the index — except `keep`, when the caller has
+/// already written the marker the job needs.
 ///
 /// This is the only remaining reason to traverse, and it exists for the two
 /// cases where the name is genuinely not computable: a marker orphaned from a
@@ -100,16 +123,22 @@ pub async fn delete_marker_for(store: &JobStorage, job: &Job) -> Result<(), Stor
 /// post-change job). Everything on a hot path uses [`delete_marker_for`]
 /// instead.
 ///
+/// `keep` exists because the safe order for a re-key is write-then-clean, and
+/// this scan matches on job_id: without an exception it would delete the very
+/// marker the caller just wrote and leave the job unindexed, which is the
+/// failure this ordering is meant to avoid.
+///
 /// Matched on the `-<job_id>.json` suffix, which is exact here because job
 /// ids are fixed-shape (`job-` + hex) and so no id can be a dash-delimited
 /// suffix of another.
 pub async fn delete_markers_scanning(
     store: &JobStorage,
     job_id: &str,
+    keep: Option<&str>,
 ) -> Result<(), StorageError> {
     let suffix = format!("-{job_id}.json");
     for path in store.list_paths(MARKER_PREFIX, 0).await? {
-        if is_marker(&path) && path.ends_with(&suffix) {
+        if is_marker(&path) && path.ends_with(&suffix) && Some(path.as_str()) != keep {
             store.delete_blob(&path).await?;
         }
     }
