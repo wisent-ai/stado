@@ -287,7 +287,22 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.check_interval_seconds);
-    let output = host_channel::run_script(&target, &host_disk::remote_script(), runner).await?;
+    // Only the sections this command reads. `assemble` below consumes
+    // `usage`, `state` and `snapshots` and nothing else, while the full
+    // script also walks `$HOME` with `du` for an `inventory` only
+    // `host disk` prints. Measured on `lukasz-macbook` on 2026-09-02, the
+    // three fields take 0.8s and the full script had not finished in 180s,
+    // so this command died on `remote_timeout` on the machine it was
+    // running on and published no verdict at all — a gate condition nobody
+    // can read is a gate condition that does not exist. The kept fields are
+    // produced by the same section constants under either scope, so the
+    // cheap read cannot answer differently from the expensive one.
+    let output = host_channel::run_script(
+        &target,
+        &host_disk::remote_script_for(host_disk::DiskScope::GateInputs),
+        runner,
+    )
+    .await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
