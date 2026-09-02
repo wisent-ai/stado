@@ -765,6 +765,43 @@ fn start_proxy(
     Ok(child.id() as i32)
 }
 
+async fn ensure_active_proxy(
+    target: &ReleaseTargetPolicy,
+    serving: &BlueGreenServing,
+    product: &str,
+    generation: u64,
+    active: &ProcessRecord,
+    state: &mut HostReleaseState,
+) -> Result<(), String> {
+    if !ready(active, &serving.readiness_path).await {
+        return Err("active release lost readiness".to_string());
+    }
+    if proxy_alive(state) {
+        return write_proxy_target(target, product, generation, active.port);
+    }
+
+    stop_legacy(target)?;
+    state.proxy_pid = Some(start_proxy(
+        target,
+        serving,
+        product,
+        generation,
+        active.port,
+    )?);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    if proxy_alive(state) {
+        return Ok(());
+    }
+
+    match stable_bind_answer(serving, &active.version).await {
+        Ok(()) => {
+            state.proxy_pid = None;
+            Ok(())
+        }
+        Err(why) => Err(format!("stable release proxy failed to start: {why}")),
+    }
+}
+
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
     // The release channel is served publicly over the object API.
     // Without STADO_API_URL, JobStorage::read_bytes on the canonical root
@@ -1502,6 +1539,27 @@ async fn reconcile_product(
     }
 
     if state.quarantined.contains_key(&artifact.artifact_sha256) {
+        if let Some(active) = state.active.clone() {
+            if let Err(reason) = ensure_active_proxy(
+                target,
+                &serving,
+                product,
+                desired.rollout_generation,
+                &active,
+                &mut state,
+            )
+            .await
+            {
+                if policy.strategy.automatic_rollback {
+                    rollback(target, &mut state, reason).await?;
+                } else {
+                    state.phase = RolloutPhase::Failed;
+                    state.detail = reason;
+                    save_state(target, &mut state)?;
+                }
+                return Ok(state);
+            }
+        }
         state.phase = RolloutPhase::Quarantined;
         state.detail = "desired release digest is quarantined on this host".to_string();
         save_state(target, &mut state)?;
@@ -1514,48 +1572,15 @@ async fn reconcile_product(
         .is_some_and(|active| active.artifact_sha256 == artifact.artifact_sha256)
     {
         let active = state.active.clone().expect("checked above");
-        if !ready(&active, &serving.readiness_path).await {
-            if policy.strategy.automatic_rollback {
-                rollback(
-                    target,
-                    &mut state,
-                    "active release lost readiness".to_string(),
-                )
-                .await?;
-            } else {
-                state.phase = RolloutPhase::Failed;
-                state.detail =
-                    "active release lost readiness; automatic rollback is disabled".to_string();
-                save_state(target, &mut state)?;
-            }
-            return Ok(state);
-        }
-        let proxy_result = if proxy_alive(&state) {
-            write_proxy_target(target, product, desired.rollout_generation, active.port)
-        } else {
-            stop_legacy(target)?;
-            state.proxy_pid = Some(start_proxy(
-                target,
-                &serving,
-                product,
-                desired.rollout_generation,
-                active.port,
-            )?);
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            if proxy_alive(&state) {
-                Ok(())
-            } else {
-                match stable_bind_answer(&serving, &active.version).await {
-                    Ok(()) => {
-                        state.proxy_pid = None;
-                        state.detail =
-                            format!("adopted the proxy already serving {}", serving.stable_bind);
-                        Ok(())
-                    }
-                    Err(why) => Err(format!("stable release proxy failed to start: {why}")),
-                }
-            }
-        };
+        let proxy_result = ensure_active_proxy(
+            target,
+            &serving,
+            product,
+            desired.rollout_generation,
+            &active,
+            &mut state,
+        )
+        .await;
         if let Err(reason) = proxy_result {
             if policy.strategy.automatic_rollback {
                 rollback(target, &mut state, reason).await?;
