@@ -209,6 +209,9 @@ pub async fn resume(schedule_id: &str) -> Result<(), CmdError> {
 /// `schedule run ID --retry-token TOKEN`: fire a schedule exactly once for
 /// the caller-retained token, regardless of its next run time.
 pub async fn run(schedule_id: &str, retry_token: &str) -> Result<(), CmdError> {
+    if retry_token.trim().is_empty() {
+        return Err(CmdError::click("--retry-token must not be empty"));
+    }
     let store = JobStorage::new().await?;
     if read_schedule(&store, schedule_id).await?.is_none() {
         return Err(CmdError::click(format!("schedule {schedule_id} not found")));

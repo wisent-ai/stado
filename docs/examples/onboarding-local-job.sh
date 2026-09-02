@@ -8,7 +8,8 @@ stado config validate
 stado doctor --fix-hints
 
 # submit a trivial local workload and watch it finish
-JOB_ID=$(stado submit --run-id onboarding-local-job --profile local -- echo hello-from-stado | awk -F'"' '/"id"/ {print $4; exit}')
+SUBMISSION=$(stado submit --run-id onboarding-local-job --profile local -- echo hello-from-stado)
+JOB_ID=$(printf '%s\n' "$SUBMISSION" | python3 -c 'import json, sys; receipts = [json.loads(line) for line in sys.stdin if line.lstrip().startswith("{")]; print(receipts[-1]["jobs"][0]["job_id"])')
 echo "submitted: $JOB_ID"
 stado job watch "$JOB_ID"
 

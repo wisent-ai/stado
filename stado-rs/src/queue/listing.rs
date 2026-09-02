@@ -70,24 +70,30 @@ pub async fn list_jobs(
     oldest_first: usize,
 ) -> Result<Vec<Job>, StorageError> {
     let paths: Vec<String> = store
-        .list_paths(&format!("{prefix}/"), oldest_first)
+        .list_paths(&format!("{prefix}/"), 0)
         .await?
         .into_iter()
-        .filter(|p| p.ends_with(".json"))
+        .filter(|path| path.ends_with(".json"))
         .collect();
-    if paths.is_empty() {
-        return Ok(vec![]);
-    }
-    let texts: Vec<Option<String>> = futures::stream::iter(&paths)
-        .map(|path| store.download_text(path))
-        .buffered(10)
-        .collect::<Vec<Result<Option<String>, StorageError>>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
     let mut jobs = Vec::new();
-    for data in texts.into_iter().flatten() {
-        jobs.push(Job::from_json(&data)?);
+    let chunk_size = oldest_first.max(100);
+    for paths in paths.chunks(chunk_size) {
+        let texts: Vec<Option<String>> = futures::stream::iter(paths)
+            .map(|path| store.download_text(path))
+            .buffered(10)
+            .collect::<Vec<Result<Option<String>, StorageError>>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        for data in texts.into_iter().flatten() {
+            let job = Job::from_json(&data)?;
+            if !job.state.starts_with("transition-cleaned:") {
+                jobs.push(job);
+                if oldest_first > 0 && jobs.len() >= oldest_first {
+                    return Ok(jobs);
+                }
+            }
+        }
     }
     Ok(jobs)
 }
@@ -165,7 +171,11 @@ pub async fn list_top_n(
         let blobs = download_many_or_none(store, &job_paths, 10.min(job_paths.len())).await;
         for ((_marker_path, _jid), data) in job_ids.iter().zip(blobs) {
             if let Some(data) = data {
-                out.push(Job::from_json(&data)?);
+                let job = Job::from_json(&data)?;
+                if job.state.starts_with("transition-cleaned:") {
+                    continue;
+                }
+                out.push(job);
                 if out.len() >= top_n {
                     return Ok(out);
                 }
@@ -246,9 +256,6 @@ pub async fn list_fitting(
                 }
             }
         }
-        if eligible_paths.len() + out.len() >= cap {
-            break;
-        }
     }
 
     // Python `_read`: download errors propagate; only a missing blob (None)
@@ -262,8 +269,13 @@ pub async fn list_fitting(
         .collect::<Result<Vec<_>, _>>()?;
     for data in texts.into_iter().flatten() {
         let job = Job::from_json(&data)?;
-        if job.gpu_mem_gb <= max_gpu_mem_gb {
+        if !job.state.starts_with("transition-cleaned:")
+            && job.gpu_mem_gb <= max_gpu_mem_gb
+        {
             out.push(job);
+            if cap > 0 && out.len() >= cap {
+                return Ok(out);
+            }
         }
     }
     Ok(out)

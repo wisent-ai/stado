@@ -73,6 +73,10 @@ fn prefix_state(prefix: &str) -> &str {
 fn transition_fence_state(transition_id: &str) -> String {
     format!("transitioning:{transition_id}")
 }
+fn transition_cleaned_state(transition_id: &str) -> String {
+    format!("transition-cleaned:{transition_id}")
+}
+
 
 fn merge_transition_destination(
     current: &Job,
@@ -578,6 +582,46 @@ impl JobStorage {
         )))
     }
 
+    async fn retire_transition_source(
+        &self,
+        transition: &JobTransition,
+    ) -> Result<(), StorageError> {
+        let source_path = format!(
+            "{}/{}.json",
+            transition.from_prefix, transition.job_id
+        );
+        let fence_state = transition_fence_state(&transition.transition_id);
+        let cleaned_state = transition_cleaned_state(&transition.transition_id);
+        for _ in 0..16 {
+            let Some(versioned) = self.read_text_versioned(&source_path).await? else {
+                return Ok(());
+            };
+            let mut source = Job::from_json(&versioned.content)?;
+            if source.state == cleaned_state {
+                return Ok(());
+            }
+            if source.state != fence_state {
+                return Ok(());
+            }
+            if transition.from_prefix == "queue" {
+                self.delete_priority_marker(&transition.job_id).await?;
+            }
+            source.state = cleaned_state.clone();
+            match self
+                .compare_and_swap_text(&source_path, &versioned.version, &source.to_json())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "source fence for transition {} remained contended",
+            transition.transition_id
+        )))
+    }
+
     /// Recover or finish the single durable lifecycle transition for a job.
     /// Recovery is ownership-independent: the persisted intent and source
     /// version are the fence, so any caller can complete an abandoned owner.
@@ -593,14 +637,7 @@ impl JobStorage {
         let fence_state = transition_fence_state(&transition.transition_id);
 
         if transition.state == "completed" {
-            if let Some(source) = self.read_job(&transition.from_prefix, job_id).await? {
-                if source.state == fence_state {
-                    self.delete_blob(&source_path).await?;
-                    if transition.from_prefix == "queue" {
-                        self.delete_priority_marker(job_id).await?;
-                    }
-                }
-            }
+            self.retire_transition_source(&transition).await?;
             return Ok(true);
         }
         if transition.state != "prepared" {
@@ -651,6 +688,7 @@ impl JobStorage {
                     != crate::queue::submit::immutable_job_projection(
                         &transition.destination_job,
                     )
+                    || destination.state != prefix_state(&transition.to_prefix)
                 {
                     return Err(StorageError::StorageConflict(format!(
                         "{destination_path} does not match transition {}",
@@ -663,17 +701,41 @@ impl JobStorage {
             }
         }
 
-        let destination = if self
-            .backend
-            .upload_text_if_absent(&destination_path, &transition.destination_job.to_json())
-            .await?
-        {
-            transition.destination_job.clone()
-        } else {
-            let Some(existing_versioned) = self.read_text_versioned(&destination_path).await? else {
-                return Ok(false);
+        let mut installed_destination = None;
+        for _ in 0..16 {
+            let existing_versioned = self.read_text_versioned(&destination_path).await?;
+            let Some(existing_versioned) = existing_versioned else {
+                if self
+                    .backend
+                    .upload_text_if_absent(
+                        &destination_path,
+                        &transition.destination_job.to_json(),
+                    )
+                    .await?
+                {
+                    installed_destination = Some(transition.destination_job.clone());
+                    break;
+                }
+                continue;
             };
             let existing = Job::from_json(&existing_versioned.content)?;
+            if existing.state.starts_with("transition-cleaned:") {
+                match self
+                    .compare_and_swap_text(
+                        &destination_path,
+                        &existing_versioned.version,
+                        &transition.destination_job.to_json(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        installed_destination = Some(transition.destination_job.clone());
+                        break;
+                    }
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
             if crate::queue::submit::immutable_job_projection(&existing)
                 != crate::queue::submit::immutable_job_projection(
                     &transition.destination_job,
@@ -697,16 +759,24 @@ impl JobStorage {
                     )
                     .await
                 {
-                    Ok(_) => transition.destination_job.clone(),
-                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
-                        return Ok(false)
+                    Ok(_) => {
+                        installed_destination = Some(transition.destination_job.clone());
+                        break;
                     }
+                    Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
                     Err(error) => return Err(error),
                 }
             } else {
-                existing
+                installed_destination = Some(existing);
+                break;
             }
-        };
+        }
+        let destination = installed_destination.ok_or_else(|| {
+            StorageError::StorageConflict(format!(
+                "{destination_path} remained contended during transition {}",
+                transition.transition_id
+            ))
+        })?;
         self.backend
             .set_metadata(&destination_path, &Self::job_metadata(&destination))
             .await?;
@@ -723,14 +793,7 @@ impl JobStorage {
         }
         self.set_transition_state(&transition.transition_id, job_id, "completed")
             .await?;
-        if let Some(source) = self.read_job(&transition.from_prefix, job_id).await? {
-            if source.state == fence_state {
-                self.delete_blob(&source_path).await?;
-                if transition.from_prefix == "queue" {
-                    self.delete_priority_marker(job_id).await?;
-                }
-            }
-        }
+        self.retire_transition_source(&transition).await?;
         tombstone::on_transition(self, &destination, &transition.to_prefix).await;
         Ok(true)
     }
@@ -770,14 +833,22 @@ impl JobStorage {
                     let existing = Job::from_json(&existing_versioned.content)?;
                     if crate::queue::submit::immutable_job_projection(&existing)
                         != crate::queue::submit::immutable_job_projection(&current)
-                        || existing.state != prefix_state(to_prefix)
                     {
                         return Err(StorageError::StorageConflict(format!(
                             "{to_prefix}/{}.json belongs to different lifecycle data",
                             requested.job_id
                         )));
                     }
-                    (existing, Some(existing_versioned.version))
+                    if existing.state.starts_with("transition-cleaned:") {
+                        (requested.clone(), Some(existing_versioned.version))
+                    } else if existing.state == prefix_state(to_prefix) {
+                        (existing, Some(existing_versioned.version))
+                    } else {
+                        return Err(StorageError::StorageConflict(format!(
+                            "{to_prefix}/{}.json is not reusable for lifecycle transition",
+                            requested.job_id
+                        )));
+                    }
                 }
                 None => (requested.clone(), None),
             };
@@ -908,7 +979,11 @@ impl JobStorage {
         else {
             return Ok(None);
         };
-        Ok(Some(Job::from_json(&data)?))
+        let job = Job::from_json(&data)?;
+        if job.state.starts_with("transition-cleaned:") {
+            return Ok(None);
+        }
+        Ok(Some(job))
     }
 
     async fn rewrite_queued_job<F>(

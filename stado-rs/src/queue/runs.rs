@@ -99,11 +99,11 @@ pub async fn read_run(
     else {
         return Ok(None);
     };
-    let mut value: Value = serde_json::from_str(&versioned.content)?;
+    let value: Value = serde_json::from_str(&versioned.content)?;
     if value.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v2") {
-        value = crate::queue::submit::migrate_v2_run_manifest(store, run_id)
-            .await
-            .map_err(|error| StorageError::Other(error.to_string()))?;
+        return Err(StorageError::Other(format!(
+            "run manifest {run_id} requires explicit external migration from v2"
+        )));
     }
     match value {
         Value::Object(map) => Ok(Some(map)),
@@ -145,9 +145,6 @@ pub async fn record_terminal_outcome(
         return Ok(());
     }
     crate::queue::submit::validate_run_id(&job.run_id)
-        .map_err(|error| StorageError::Other(error.to_string()))?;
-    crate::queue::submit::migrate_v2_run_manifest(store, &job.run_id)
-        .await
         .map_err(|error| StorageError::Other(error.to_string()))?;
     let path = format!("{RUN_PREFIX}/{}.json", job.run_id);
     for _ in 0..16 {

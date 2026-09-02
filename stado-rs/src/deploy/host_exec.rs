@@ -470,6 +470,10 @@ pub async fn exec_host(
     };
 
     let mut report = host_channel::base_report(&target);
+    report.insert(
+        "schema".to_string(),
+        json!("stado.host-exec-receipt.v1"),
+    );
     report.insert("command".to_string(), json!(approved.display()));
     report.insert("argv".to_string(), json!(approved.argv));
     // Where this program may live, for an entry that has more than one install

@@ -153,6 +153,9 @@ async fn set_priority(job_id: &str, priority: i64, as_json: bool) -> Result<(), 
 /// `stado job rerun JOB_ID --retry-token TOKEN [--json]` — resubmit an
 /// identical spec under a deterministic durable run and print `old -> new`.
 async fn rerun(job_id: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
+    if retry_token.trim().is_empty() {
+        return Err(CmdError::click("--retry-token must not be empty"));
+    }
     let facade = MachineFacade::new().await.map_err(cmd_error)?;
     // lookup_job probes machine::JOB_PREFIXES, which is the same six
     // prefixes as queue::runs::ALL_PREFIXES — including `cancelled/`, the

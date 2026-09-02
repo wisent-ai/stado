@@ -310,6 +310,9 @@ stado submit --run-id quickstart-hello "printf 'hello from Stado\n'"
 ```
 `--run-id` is a required caller-retained retry identity. Reusing it with the
 same request recovers the original job; use a new value for intentional new work.
+The final output line is a `stado.submission-receipt.v3` JSON object. Each job
+binds its exact command SHA-256, durable job key, output URI, pinned host, and
+resolved executor projection to the request/source/input digests.
 
 The command prints a `Job ID`. Use it below:
 

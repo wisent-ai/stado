@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use clap::Args;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::profiles;
 use crate::queue::submit::{
@@ -540,7 +541,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         .map(|job| job.submission_request_digest.clone())
         .ok_or_else(|| CmdError::click("durable submission returned no jobs"))?;
     let receipt = serde_json::json!({
-        "schema": "stado.submission-receipt.v2",
+        "schema": "stado.submission-receipt.v3",
         "run_id": jobs.first().map(|job| job.run_id.as_str()).unwrap_or(options.run_id.as_str()),
         "request_digest": request_digest,
         "source_digest": submission_source_digest(&receipt_options),
@@ -551,9 +552,18 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         "jobs": jobs.iter().enumerate().map(|(index, job)| serde_json::json!({
             "command_index": index,
             "command": job.command,
+            "command_digest": hex::encode(Sha256::digest(job.command.as_bytes())),
             "job_key": submission_job_key(&request_digest, index, &job.command),
             "job_id": job.job_id,
             "output_uri": job.output_uri,
+            "pinned_host": job.pinned_host,
+            "resolved_executor": {
+                "provider": job.provider,
+                "machine_type": job.machine_type,
+                "gpu_type": job.gpu_type,
+                "platform_os": job.platform_os,
+                "architecture": job.architecture,
+            },
             "repo_ref": job.repo_ref,
             "submission_request_digest": job.submission_request_digest,
         })).collect::<Vec<_>>(),

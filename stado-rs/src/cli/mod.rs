@@ -215,8 +215,8 @@ The worker host must already have the shell, runtime, and GPU driver required by
 3. Start the local control plane:
    stado local-control-plane
 
-Submit your first job:
-   stado submit \"printf 'hello from Stado\\n'\"
+Submit your first job (retain --run-id to recover the same job after a retry):
+   stado submit --run-id onboarding-hello \"printf 'hello from Stado\\n'\"
 
 Already configured? Run:
    stado overview

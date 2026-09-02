@@ -892,6 +892,9 @@ async fn set_enabled(name: &str, enabled: bool, json: bool) -> Result<(), CmdErr
 /// platform as `platform_os`/`architecture` so only a worker of that
 /// platform can claim it. A submit that fails leaves the recipe untouched.
 async fn run_now(name: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
+    if retry_token.trim().is_empty() {
+        return Err(CmdError::click("--run-id must not be empty"));
+    }
     let (mut document, generation) = fetch_mutation_document().await?;
     let recipe: BuildRecipe = {
         let entry = find_entry(builds_array(&mut document)?, name)?;

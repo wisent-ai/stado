@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -421,6 +422,13 @@ fn validate_run_manifest(
         submitted_from: required_manifest_string("submitted_from")?,
         submitter_app: required_manifest_string("submitter_app")?,
     };
+    let manifest_created_at = DateTime::parse_from_rfc3339(&provenance.created_at)
+        .map_err(|_| {
+            SubmitError::Validation(format!(
+                "run manifest {run_id} has invalid created_at"
+            ))
+        })?
+        .with_timezone(&Utc);
     if manifest.get("source_digest").and_then(Value::as_str)
         != Some(submission_source_digest(&options).as_str())
         || manifest.get("input_digest").and_then(Value::as_str)
@@ -493,29 +501,81 @@ fn validate_run_manifest(
                 "run id {run_id} has invalid entry state {state}"
             )));
         }
-        let outcome_job = entry
+        let outcome_job: Option<Job> = entry
             .get("outcome")
             .and_then(Value::as_object)
             .and_then(|outcome| outcome.get("job"))
             .cloned()
             .map(serde_json::from_value)
             .transpose()
-            .map_err(|error| SubmitError::Validation(format!("invalid terminal outcome: {error}")))?;
+            .map_err(|error| {
+                SubmitError::Validation(format!("invalid terminal outcome: {error}"))
+            })?;
         if matches!(state, "terminal" | "reaped") {
             let outcome = entry
                 .get("outcome")
                 .and_then(Value::as_object)
                 .ok_or_else(|| SubmitError::Validation("terminal entry has no outcome".into()))?;
-            let prefix = outcome.get("prefix").and_then(Value::as_str).unwrap_or_default();
-            if !crate::queue::runs::TERMINAL_PREFIXES.contains(&prefix)
-                || outcome_job.is_none()
+            if outcome.len() != 3
+                || !["prefix", "recorded_at", "job"]
+                    .into_iter()
+                    .all(|field| outcome.contains_key(field))
             {
                 return Err(SubmitError::Validation(
-                    "terminal entry has an invalid outcome".into(),
+                    "terminal entry outcome has invalid fields".into(),
+                ));
+            }
+            let prefix = outcome.get("prefix").and_then(Value::as_str).unwrap_or_default();
+            let terminal_job = outcome_job.as_ref().ok_or_else(|| {
+                SubmitError::Validation("terminal entry has no retained job".into())
+            })?;
+            if !crate::queue::runs::TERMINAL_PREFIXES.contains(&prefix)
+                || terminal_job.state != prefix
+            {
+                return Err(SubmitError::Validation(
+                    "terminal entry prefix and retained job state disagree".into(),
+                ));
+            }
+            let recorded_at = outcome
+                .get("recorded_at")
+                .and_then(Value::as_str)
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+                .ok_or_else(|| {
+                    SubmitError::Validation("terminal outcome recorded_at is invalid".into())
+                })?;
+            if recorded_at < manifest_created_at
+                || recorded_at > Utc::now() + chrono::Duration::minutes(5)
+            {
+                return Err(SubmitError::Validation(
+                    "terminal outcome recorded_at is outside the run lifetime".into(),
+                ));
+            }
+            let terminal_at = match prefix {
+                "failed" if terminal_job.completed_at.is_none() => {
+                    terminal_job.failed_at.as_deref()
+                }
+                "completed" | "uploaded" | "cancelled"
+                    if terminal_job.failed_at.is_none() =>
+                {
+                    terminal_job.completed_at.as_deref()
+                }
+                _ => None,
+            }
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .ok_or_else(|| {
+                SubmitError::Validation(
+                    "terminal retained job has contradictory terminal timestamps".into(),
+                )
+            })?;
+            if terminal_at < manifest_created_at || terminal_at > recorded_at {
+                return Err(SubmitError::Validation(
+                    "terminal retained job timestamp is outside the outcome lifetime".into(),
                 ));
             }
             validate_recovered_job(
-                outcome_job.as_ref().expect("checked"),
+                terminal_job,
                 &job,
                 request_digest,
                 index,
@@ -545,88 +605,6 @@ pub(crate) fn validate_stored_run_manifest(
 }
 
 
-async fn migrate_v2_manifest(
-    store: &JobStorage,
-    path: &str,
-    run_id: &str,
-    request: &Value,
-    request_digest: &str,
-) -> Result<Value, SubmitError> {
-    for _ in 0..16 {
-        let versioned = store
-            .read_text_versioned(path)
-            .await?
-            .ok_or_else(|| SubmitError::Validation(format!("run manifest {run_id} disappeared")))?;
-        let mut manifest: Value = serde_json::from_str(&versioned.content)
-            .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
-        if manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v2") {
-            return Ok(manifest);
-        }
-        if manifest.get("run_id").and_then(Value::as_str) != Some(run_id)
-            || manifest.get("request_digest").and_then(Value::as_str) != Some(request_digest)
-            || manifest.get("request") != Some(request)
-            || !manifest.get("entries").is_some_and(Value::is_array)
-        {
-            return Err(SubmitError::Validation(format!(
-                "run id {run_id} has an invalid v2 manifest and cannot be migrated"
-            )));
-        }
-        let object = manifest
-            .as_object_mut()
-            .expect("validated manifest object");
-        object.insert("schema".into(), Value::from("stado.run-submission.v3"));
-        for obsolete in ["n_jobs", "job_ids", "commands"] {
-            object.remove(obsolete);
-        }
-        validate_run_manifest(&manifest, run_id, request, request_digest)?;
-        match store
-            .compare_and_swap_text(
-                path,
-                &versioned.version,
-                &serde_json::to_string_pretty(&manifest)
-                    .map_err(|error| SubmitError::Validation(error.to_string()))?,
-            )
-            .await
-        {
-            Ok(_) => return Ok(manifest),
-            Err(StorageError::StorageConflict(_)) => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err(SubmitError::Validation(format!(
-        "run manifest {run_id} remained contended during v2 migration"
-    )))
-}
-
-/// Explicitly migrate a v2 durable manifest before status/reaping reads it.
-/// Legacy static manifests without a complete request remain untouched and
-/// require an external data migration; they are never interpreted as v3.
-pub(crate) async fn migrate_v2_run_manifest(
-    store: &JobStorage,
-    run_id: &str,
-) -> Result<Value, SubmitError> {
-    let path = format!("{RUN_PREFIX}/{run_id}.json");
-    let versioned = store
-        .read_text_versioned(&path)
-        .await?
-        .ok_or_else(|| SubmitError::Validation(format!("run manifest {run_id} disappeared")))?;
-    let manifest: Value = serde_json::from_str(&versioned.content)
-        .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
-    if manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v2") {
-        return Ok(manifest);
-    }
-    let request = manifest
-        .get("request")
-        .cloned()
-        .ok_or_else(|| SubmitError::Validation("v2 run manifest has no request".into()))?;
-    let request_digest = digest_value(&request);
-    if manifest.get("request_digest").and_then(Value::as_str) != Some(request_digest.as_str()) {
-        return Err(SubmitError::Validation(format!(
-            "run id {run_id} has a corrupt request digest"
-        )));
-    }
-    migrate_v2_manifest(store, &path, run_id, &request, &request_digest).await
-}
 
 enum EntryClaim {
     Owned(Job),
@@ -864,6 +842,12 @@ pub async fn submit_batch(
                         "stored run request has invalid resolved hardware: {error}"
                     ))
                 })?
+            } else if existing.get("schema").and_then(Value::as_str)
+                == Some("stado.run-submission.v2")
+            {
+                return Err(SubmitError::Validation(format!(
+                    "run id {run_id} requires explicit external migration from v2"
+                )));
             } else {
                 let mut resolved = Vec::with_capacity(commands.len());
                 for command in commands {
@@ -893,17 +877,11 @@ pub async fn submit_batch(
             if existing.get("schema").and_then(Value::as_str)
                 == Some("stado.run-submission.v2")
             {
-                migrate_v2_manifest(
-                    &store,
-                    &path,
-                    &run_id,
-                    &request,
-                    &request_digest,
-                )
-                .await?
-            } else {
-                existing
+                return Err(SubmitError::Validation(format!(
+                    "run id {run_id} requires explicit external migration from v2"
+                )));
             }
+            existing
         }
         None => {
             let provenance = SubmissionProvenance {
@@ -983,17 +961,11 @@ pub async fn submit_batch(
                 if existing.get("schema").and_then(Value::as_str)
                     == Some("stado.run-submission.v2")
                 {
-                    migrate_v2_manifest(
-                        &store,
-                        &path,
-                        &run_id,
-                        &request,
-                        &request_digest,
-                    )
-                    .await?
-                } else {
-                    existing
+                    return Err(SubmitError::Validation(format!(
+                        "run id {run_id} requires explicit external migration from v2"
+                    )));
                 }
+                existing
             }
         }
     };

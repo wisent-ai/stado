@@ -74,7 +74,7 @@
   ],
   "requiredProof": [
     "A real terminal transcript of the minimal local configuration: `stado config init` then `stado config validate`, printing `~/.stado/config.json` and `config ok (~/.stado/config.json)`.",
-    "A real terminal transcript of the local job path: `stado local-control-plane`, then `stado submit \"printf 'hello from Stado\\n'\"`, `stado status JOB_ID`, and `stado results JOB_ID ./results` reaching `completed` with result evidence on disk.",
+    "A real terminal transcript of the local job path: `stado local-control-plane`, then `stado submit --run-id onboarding-hello \"printf 'hello from Stado\\n'\"`, `stado status JOB_ID`, and `stado results JOB_ID ./results` reaching `completed` with result evidence on disk.",
     "The documented human CLI command families printed as real command text: `stado submit|status|results|cancel`, `stado queue pause|status|drain|resume`, `stado storage ls|stat|copy|verify`, `stado doctor`, and `stado capabilities --json`.",
     "The capability status vocabulary as `stado capabilities --json` reports it — `implemented`, `partial`, `external`, `planned`, `unsupported` — with the statement that implementation status does not mean stable support.",
     "The supported environments matrix: macOS arm64 and Linux amd64 as supported candidates with a stable local scope, Linux arm64 not yet supported, and cloud adapters preview."

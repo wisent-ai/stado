@@ -98,7 +98,7 @@
           "coordinator, local agent and dashboard running",
           "dashboard http://127.0.0.1:8765",
           "",
-          "$ stado submit \"printf 'hello from Stado\\n'\"",
+          "$ stado submit --run-id onboarding-hello \"printf 'hello from Stado\\n'\"",
           "Job ID: 01JD7QF6ZK4M2V8B0S3XN9TCEA",
           "",
           "$ stado status 01JD7QF6ZK4M2V8B0S3XN9TCEA",
