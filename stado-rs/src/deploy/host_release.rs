@@ -1810,6 +1810,49 @@ pub(crate) async fn missing_release_objects(
         "stado://releases/{}/{version}/{platform}",
         product.source.product
     );
+    // Which contract this coordinate is held to is decided by which publisher
+    // wrote it, and that is readable from the coordinate itself.
+    //
+    // Two publishers write here. The tag's release train writes the nine
+    // platform objects -- six binaries, `SHA256SUMS`, the platform manifest
+    // and `stado-v<version>-<platform>.tar.gz`. `stado release worker` writes
+    // an archive-based signed release: `release.json`, `release.sig`,
+    // `release.tar.gz` and `qualification.json`, and no binaries beside them
+    // on purpose, because the archive IS the payload.
+    //
+    // [`catalog_identity`] already knows this and prefers the signed leg for
+    // exactly the stated reason: validating the legacy surface "incorrectly
+    // demands the legacy sidecar binaries from an archive-based pipeline
+    // release". This function did not know it, so it judged every coordinate
+    // by the nine-object contract -- and on its first working run in `doctor`
+    // it called `0.13.48/darwin-arm64` and `0.13.48/linux-amd64` PARTIAL for
+    // want of `SHA256SUMS`, when both hold a complete signed release and no
+    // tag train has ever run for that version. An audit whose first act is to
+    // condemn a healthy coordinate teaches people to close it.
+    let signed_uri = format!("{base}/{}", crate::release_control::RELEASE_MANIFEST_NAME);
+    if crate::cli::storage::release_object_present(&signed_uri)
+        .await
+        .map_err(|error| DeployError(error.to_string()))?
+    {
+        let required = [
+            crate::release_control::RELEASE_MANIFEST_NAME,
+            crate::release_control::RELEASE_SIGNATURE_NAME,
+            crate::release_control::RELEASE_ARCHIVE_NAME,
+            crate::release_control::RELEASE_QUALIFICATION_NAME,
+        ];
+        let probes = required.iter().map(|name| {
+            let uri = format!("{base}/{name}");
+            async move { crate::cli::storage::release_object_present(&uri).await }
+        });
+        let present = futures::future::join_all(probes).await;
+        let mut missing = Vec::new();
+        for (name, answer) in required.iter().zip(present) {
+            if !answer.map_err(|error| DeployError(error.to_string()))? {
+                missing.push((*name).to_string());
+            }
+        }
+        return Ok(missing);
+    }
     let sums_name = crate::self_update::SHA256SUMS_NAME;
     let sums_uri = format!("{base}/{sums_name}");
     let declares_binary_set = product.source.product == "stado";
@@ -1817,11 +1860,10 @@ pub(crate) async fn missing_release_objects(
         .await
         .map_err(|error| DeployError(error.to_string()))?;
     if !sums_present {
-        // Every published stado version carries one, so its absence is a
-        // missing object rather than a product that never had the file. A
-        // product that genuinely publishes no checksum manifest has no
-        // declared set here to check, and its archive digest is verified by
-        // the manifest identity above.
+        // No signed leg and no checksum declaration: a train-shaped coordinate
+        // that lost the file naming its own contents. Every published stado
+        // version from that publisher carries one, so its absence is a missing
+        // object rather than a product that never had the file.
         return Ok(if declares_binary_set {
             vec![sums_name.to_string()]
         } else {
