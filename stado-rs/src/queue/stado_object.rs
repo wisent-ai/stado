@@ -280,6 +280,49 @@ impl StadoObjectBackend {
         StorageError::Stado { status, body }
     }
 
+    /// The whole body of one successful object response.
+    ///
+    /// `bytes()` yields what arrived, which is not the same claim as what the
+    /// object is. The route answers every read with a `Content-Length` — 41,041
+    /// bytes for the canonical registry — and `Accept-Ranges: bytes`, and
+    /// nothing here compared the two. That matters because of where the body
+    /// goes next: `providers::local::disk_cleanup::fetch_canonical_registry`
+    /// hands it to `serde_json::from_str`, so a body that is not the whole
+    /// object is journalled as a document that does not parse — `ValueError`,
+    /// a finding about the registry's content — when what happened was a
+    /// transfer. #317 is open on exactly that shape for the sibling
+    /// `/api/release/object` route.
+    ///
+    /// What this reader owns is narrower than "truncation", and saying so is
+    /// the point. An HTTP/1.1 body that stops early under a declared length is
+    /// already refused by the client's own framing check and arrives as
+    /// [`StorageError::Http`]. What reaches here instead is framing that ends
+    /// cleanly at a size the response's own declaration contradicts — a body
+    /// chunked to its end, or re-framed by something between the gateway and
+    /// this process, while the declared length still says how long the object
+    /// was. `tests/truncation` pins both halves.
+    ///
+    /// A declared length is the only thing that can be checked, so it is the
+    /// only thing that is: a chunked or otherwise unlengthed response has
+    /// nothing to disagree with and passes through exactly as before.
+    async fn whole_body(response: Response, path: &str) -> Result<Vec<u8>, StorageError> {
+        let declared = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<usize>().ok());
+        let bytes = response.bytes().await?.to_vec();
+        if let Some(declared) = declared {
+            if bytes.len() != declared {
+                return Err(StorageError::Other(format!(
+                    "Stado object API returned {} of {declared} declared bytes for {path}",
+                    bytes.len()
+                )));
+            }
+        }
+        Ok(bytes)
+    }
+
     async fn upload(
         &self,
         path: &str,
@@ -418,7 +461,7 @@ impl BlobBackend for StadoObjectBackend {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        Ok(Some(response.bytes().await?.to_vec()))
+        Ok(Some(Self::whole_body(response, path).await?))
     }
 
     /// One `stado://releases/...` object off the fleet's public release
@@ -490,7 +533,7 @@ impl BlobBackend for StadoObjectBackend {
                 ))
             })?
             .to_string();
-        let bytes = response.bytes().await?.to_vec();
+        let bytes = Self::whole_body(response, path).await?;
         let content = String::from_utf8(bytes)
             .map_err(|error| StorageError::Other(format!("invalid UTF-8 in {path}: {error}")))?;
         Ok(Some(VersionedText { content, version }))
