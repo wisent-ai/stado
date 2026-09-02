@@ -462,6 +462,13 @@ jobs:
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           export STADO_API_URL="$STADO_WRITER_API_URL"
           test -x "$stado_bin"
+          # A second attempt at a version whose archive is already published
+          # adopts those bytes instead of refusing its own rebuild against
+          # them. Release objects are create-only and a rebuilt archive is
+          # never byte-identical, so without this the same tag can never be
+          # retried.
+          bash "$GITHUB_WORKSPACE/scripts/adopt_published_release.sh" \
+            "$stado_bin" "$RUNNER_TEMP/stado-release" stado "$STADO_VERSION" linux-amd64
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
@@ -656,7 +663,16 @@ jobs:
           # cannot poison a version: it either lands, and the small objects
           # follow, or nothing for that version exists and the same tag can be
           # retried clean.
+          #
+          # And when it DID land, the retry adopts it. That is what 0.13.47
+          # needed: attempt 1 published all thirteen objects of its darwin
+          # coordinate, attempt 2 rebuilt the archive and was refused twelve
+          # times with "immutable object already differs on the writer", the job
+          # failed, and `deploy-fleet` was skipped — a complete, public release
+          # that reached no host, on a tag no later attempt could have saved.
           archive_name="stado-v$version-$platform.tar.gz"
+          bash "$STADO_SOURCE_DIR/scripts/adopt_published_release.sh" \
+            "$stado_bin" "$release_dir" stado "$version" "$platform"
           # The same bounded retry the Linux publisher above has had all along.
           # `storage put --if-absent` is idempotent for identical immutable
           # bytes and verifies them through the authenticated writer before
