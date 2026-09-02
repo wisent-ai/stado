@@ -9,20 +9,69 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="${STADO_INSTALL_DIR:-$HOME/.stado/bin}"
+# One managed path, and it is the product's, not this script's. `release
+# install-local` installs into `$HOME/.stado/bin` by construction, every
+# rendered unit runs from there, and `service converge` attests against it, so a
+# `STADO_INSTALL_DIR` override could only have pointed this script somewhere the
+# rest of the fleet does not look. Nothing in this repository set it.
+INSTALL_DIR="$HOME/.stado/bin"
 RELEASE_DIR="${STADO_RELEASE_DIR:-}"
 
+# The platform is resolved before anything is installed, because the delivery
+# below names the archive and the manifest by it. Same mapping the bootstrap
+# installer and every host helper use, so all of them name one release the same
+# way.
+if [ -z "${STADO_RELEASE_PLATFORM:-}" ]; then
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64) STADO_RELEASE_PLATFORM=darwin-arm64 ;;
+        Linux-x86_64) STADO_RELEASE_PLATFORM=linux-amd64 ;;
+        *)
+            echo "FATAL: unsupported release platform: $(uname -s) $(uname -m)"
+            false
+            ;;
+    esac
+fi
+export STADO_RELEASE_PLATFORM
+
+# Installed through the product's own delivery endpoint, not by copying files
+# into place.
+#
+# `stado release install-local` verifies the archive against the digest the
+# platform manifest declares, installs by rename, and leaves the attestation
+# copy under `$HOME/.stado/releases/<binary>/<version>/<platform>/` that
+# `cli::service_converge::attest_installed` byte-compares against the installed
+# file. A plain `cp` leaves no such copy, so on 2026-09-02 the 0.13.46 train
+# deployed this host correctly and then `deploy-fleet` refused it: `stado
+# service converge lukasz-macbook stado` reported the binary `unattested` —
+# "the host runs 0.13.46 and no delivered copy of 0.13.46 is staged" — and
+# refused rather than downgrade a host that was already right. The bytes were
+# fine; nothing had recorded where they came from.
 if [ -n "$RELEASE_DIR" ]; then
     if [ ! -x "$RELEASE_DIR/stado" ]; then
         echo "FATAL: STADO_RELEASE_DIR=$RELEASE_DIR has no executable Rust stado binary"
         false
     fi
+    RELEASE_MANIFEST="$RELEASE_DIR/release-manifest-$STADO_RELEASE_PLATFORM.json"
+    if [ ! -r "$RELEASE_MANIFEST" ]; then
+        echo "FATAL: $RELEASE_DIR carries no readable $RELEASE_MANIFEST"
+        false
+    fi
+    DELIVERED_VERSION="$(jq -er '.version' "$RELEASE_MANIFEST")"
+    DELIVERED_SHA256="$(jq -er '.sha256' "$RELEASE_MANIFEST")"
+    DELIVERED_ARCHIVE="$RELEASE_DIR/stado-v$DELIVERED_VERSION-$STADO_RELEASE_PLATFORM.tar.gz"
+    if [ ! -r "$DELIVERED_ARCHIVE" ]; then
+        echo "FATAL: $DELIVERED_ARCHIVE is the archive the manifest names and it is not readable"
+        false
+    fi
     mkdir -p "$INSTALL_DIR"
     for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
         [ -f "$RELEASE_DIR/$name" ] || continue
-        cp "$RELEASE_DIR/$name" "$INSTALL_DIR/$name.new"
-        chmod u=rwx,go= "$INSTALL_DIR/$name.new"
-        mv "$INSTALL_DIR/$name.new" "$INSTALL_DIR/$name"
+        WISENT_PRODUCT=stado \
+        WISENT_VERSION="$DELIVERED_VERSION" \
+        WISENT_RELEASE_ARCHIVE="$DELIVERED_ARCHIVE" \
+        WISENT_RELEASE_SHA256="$DELIVERED_SHA256" \
+            env -u STADO_API_TOKEN "$RELEASE_DIR/stado" release install-local \
+                --member "$name" --name "$name"
     done
 fi
 
@@ -51,21 +100,6 @@ if [ -z "${STADO_RELEASE_VERSION:-}" ]; then
     STADO_RELEASE_VERSION="$INSTALLED_VERSION"
 fi
 export STADO_RELEASE_VERSION
-
-# The gate needs a platform as well, and the host is the only thing that knows
-# which one it is. Same mapping the bootstrap installer and every host helper
-# use, so all of them name one release the same way.
-if [ -z "${STADO_RELEASE_PLATFORM:-}" ]; then
-    case "$(uname -s)-$(uname -m)" in
-        Darwin-arm64) STADO_RELEASE_PLATFORM=darwin-arm64 ;;
-        Linux-x86_64) STADO_RELEASE_PLATFORM=linux-amd64 ;;
-        *)
-            echo "FATAL: unsupported release platform: $(uname -s) $(uname -m)"
-            false
-            ;;
-    esac
-fi
-export STADO_RELEASE_PLATFORM
 
 # A deploy that installs a release and leaves the profile declaring an older one
 # is the drift this whole section exists for: `release.version` is what
