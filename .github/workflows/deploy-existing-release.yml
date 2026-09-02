@@ -128,8 +128,16 @@ jobs:
       - name: Verify public immutable bytes
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
-          WC_SKARBIEC_CONSUMER: stado-release-api-verifier
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+          # The publisher's acquisition grant, because this step is a CLIENT of
+          # the release channel. `stado-release-api-verifier` is the grant the
+          # object API server presents to verify incoming release bearers, and
+          # Stado refuses it here by design: "release verifier token file must
+          # be distinct from coordinator and product-object verifier grants".
+          # So the 0.13.47 delivery died in this step, on a coordinate whose
+          # bytes were already complete and public, with a message about vault
+          # configuration rather than about the release.
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -289,8 +297,11 @@ jobs:
       - name: Verify public native immutable bytes
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
-          WC_SKARBIEC_CONSUMER: stado-release-api-verifier
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+          # A client of the release channel, so the publisher's acquisition
+          # grant — see the linux leg above for why the server's verifier grant
+          # is refused here.
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
