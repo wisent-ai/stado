@@ -1024,9 +1024,8 @@ where
                 .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
             edit(entry)?;
         }
-        next_generation.set(
-            crate::service_resolution::advance_generation(&mut document).map_err(click)?,
-        );
+        next_generation
+            .set(crate::service_resolution::advance_generation(&mut document).map_err(click)?);
         Ok(document)
     })
     .await?;

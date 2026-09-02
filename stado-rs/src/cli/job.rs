@@ -212,7 +212,10 @@ fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions {
         provider: original.provider.clone(),
         // The caller retains retry_token, so a crash retries this manifest
         // rather than opening a second batch.
-        batch_id: stable_run_id("rerun-batch", &format!("{}\0{retry_token}", original.job_id)),
+        batch_id: stable_run_id(
+            "rerun-batch",
+            &format!("{}\0{retry_token}", original.job_id),
+        ),
         run_id: stable_run_id("rerun", &format!("{}\0{retry_token}", original.job_id)),
         bucket: crate::config::bucket().to_string(),
         preemptible: original.preemptible,

@@ -285,8 +285,9 @@ pub async fn enroll(
     // the key install and identity probe that follow them, were decided
     // against THIS document. If it has moved by the time the entry is
     // written, the decisions no longer hold and the operator has to see that.
-    let (document, expected_generation) =
-        fetch_versioned_document().await.map_err(|exc| exc.to_string())?;
+    let (document, expected_generation) = fetch_versioned_document()
+        .await
+        .map_err(|exc| exc.to_string())?;
     crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
     if install_key {
         crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)?;

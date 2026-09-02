@@ -181,14 +181,9 @@ async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdEr
     } else {
         None
     };
-    schedules::set_schedule_enabled(
-        &store,
-        schedule_id,
-        enabled,
-        next_due.as_deref(),
-    )
-    .await?
-    .ok_or_else(|| CmdError::click(format!("schedule {schedule_id} not found")))
+    schedules::set_schedule_enabled(&store, schedule_id, enabled, next_due.as_deref())
+        .await?
+        .ok_or_else(|| CmdError::click(format!("schedule {schedule_id} not found")))
 }
 
 /// `schedule pause ID`: disable a schedule without deleting it.
