@@ -283,15 +283,24 @@ impl StadoObjectBackend {
     /// The whole body of one successful object response.
     ///
     /// `bytes()` yields what arrived, which is not the same claim as what the
-    /// object is: the route answers every read with a `Content-Length` and
-    /// `Accept-Ranges: bytes`, so a body that stops short of that number is a
-    /// transfer that did not finish and the response itself says so. Nothing
-    /// here used to look. A short registry document then reached
-    /// `serde_json::from_str` and was reported as a document that does not
-    /// parse — `providers::local::disk_cleanup` journals that class as
-    /// `ValueError` — so a transport failure was recorded as the registry
-    /// being malformed, about bytes that were never the registry. The same
-    /// shape on the sibling release route is what #317 is open for.
+    /// object is. The route answers every read with a `Content-Length` — 41,041
+    /// bytes for the canonical registry — and `Accept-Ranges: bytes`, and
+    /// nothing here compared the two. That matters because of where the body
+    /// goes next: `providers::local::disk_cleanup::fetch_canonical_registry`
+    /// hands it to `serde_json::from_str`, so a body that is not the whole
+    /// object is journalled as a document that does not parse — `ValueError`,
+    /// a finding about the registry's content — when what happened was a
+    /// transfer. #317 is open on exactly that shape for the sibling
+    /// `/api/release/object` route.
+    ///
+    /// What this reader owns is narrower than "truncation", and saying so is
+    /// the point. An HTTP/1.1 body that stops early under a declared length is
+    /// already refused by the client's own framing check and arrives as
+    /// [`StorageError::Http`]. What reaches here instead is framing that ends
+    /// cleanly at a size the response's own declaration contradicts — a body
+    /// chunked to its end, or re-framed by something between the gateway and
+    /// this process, while the declared length still says how long the object
+    /// was. `tests/truncation` pins both halves.
     ///
     /// A declared length is the only thing that can be checked, so it is the
     /// only thing that is: a chunked or otherwise unlengthed response has
