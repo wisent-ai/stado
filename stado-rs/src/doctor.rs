@@ -559,8 +559,9 @@ pub async fn run(scope: RunScope) -> Report {
             RELEASE_REMEDY,
             check_release_channel(),
         ),
-        selected(
+        selected_within(
             scope,
+            INTEGRITY_DEADLINE,
             INTEGRITY_ID,
             INTEGRITY_TITLE,
             INTEGRITY_REMEDY,
@@ -677,8 +678,22 @@ async fn check_fleet_shape() -> Check {
         sweep.findings.push(finding);
     }
     let mut findings = Findings::default();
+    // A host nobody could measure is a FAIL, not a WARN. It used to be a
+    // warning beside a PASS summary, and the summary counted the hosts that
+    // DID answer -- so `fleet-shape` could report `4 subject(s) measured` and
+    // a green line while one host in the fleet had been asked nothing at all.
+    // Every check in this module exists because something reported clean
+    // without looking, and a warning that renders under a pass is that same
+    // shape wearing the instrument's own badge.
     for (host, reason) in &sweep.unreachable {
-        findings.note(Status::Warn, format!("{host}: not measured — {reason}"));
+        findings.note(
+            Status::Fail,
+            format!(
+                "every-host-is-measured: {host} — declared every host with slots is swept — \
+                 observed not measured: {reason}"
+            ),
+        );
+        findings.remedy(format!("stado host link {host}"));
     }
     for finding in &sweep.findings {
         findings.note(Status::Fail, finding.line());
@@ -1300,6 +1315,26 @@ const INTEGRITY_REMEDY: &str = "a PARTIAL coordinate can never be completed: rel
 /// version ever released, and an audit that re-reads all of them on every
 /// `doctor` would be slow enough that someone turns it off.
 const INTEGRITY_VERSIONS: usize = 6;
+
+/// This row's own wall clock, for the same reason [`FLEET_SHAPE_DEADLINE`] has
+/// one: its work grows with the channel, so it cannot share the flat
+/// [`PROBE_TIMEOUT`].
+///
+/// The arithmetic, not a guess. [`INTEGRITY_VERSIONS`] versions times two
+/// platforms is twelve coordinates; each one reads its `SHA256SUMS` and then
+/// probes the nine names that file declares. That is about 120 network reads,
+/// and one `storage stat` against the release channel measured 1.5 to 5
+/// seconds during the 0.13.46 publication. Under the 8-second flat budget the
+/// row could not finish its first coordinate, so the standing audit of the
+/// release channel -- the check whose entire purpose is to notice
+/// `stado/0.10.0/darwin-arm64` sitting half-published for four months -- has
+/// been answering `probe did not answer within 8s` instead of auditing
+/// anything.
+///
+/// The nine probes per coordinate now run concurrently, which is what makes
+/// this bound sufficient rather than merely generous: twelve coordinates at
+/// one round trip each, not 120 in series.
+const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Walk what the channel actually holds and say, per version and platform,
 /// whether the coordinate is whole, empty, or partial.

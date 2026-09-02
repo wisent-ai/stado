@@ -244,11 +244,30 @@ async fn host_findings(
         &mut path_measured,
     );
     // A check that cannot say what it looked at cannot be trusted when it is
-    // quiet, which is the rule this module holds itself to.
-    notes.push(format!(
-        "{}: {labels_measured} label(s) read for a doubled prefix, {orphan_measured} loaded with no unit file, {runs_measured} for a restart loop, {env_measured} for a declared environment, {path_measured} PATH binary",
-        target.name
-    ));
+    // quiet, which is the rule this module holds itself to. One note per
+    // check, each naming the check's own id, because the single prose sentence
+    // this replaced named none of them: "983 label(s) read for a doubled
+    // prefix" cannot be matched to `label-carries-its-prefix-once` by anything
+    // but a human who already knows the code, so "how many subjects did this
+    // check interrogate" was unanswerable from `doctor --json` even though the
+    // number was right there.
+    for (check, measured) in [
+        (PREFIX_CHECK, labels_measured),
+        (ORPHAN_CHECK, orphan_measured),
+        (RESTART_CHECK, runs_measured),
+        (UNIT_ENV_CHECK, env_measured),
+        (SHADOW_CHECK, path_measured),
+    ] {
+        notes.push(format!(
+            "measured {check} on {}: {measured} subject(s){}",
+            target.name,
+            if measured == 0 {
+                " — ZERO, so this check proved nothing here"
+            } else {
+                ""
+            }
+        ));
+    }
     // One inventory read, two questions: which processes hold which declared
     // ports, and whether the artefacts behind the service units are the ones
     // the fleet has installed.

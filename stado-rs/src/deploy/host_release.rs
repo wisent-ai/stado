@@ -1848,13 +1848,23 @@ pub(crate) async fn missing_release_objects(
         }
         names.sort();
     }
-    let mut missing = Vec::new();
-    for name in names {
+    // One round trip for the coordinate, not one per name. The names are known
+    // before any of them is probed and the probes do not depend on each other,
+    // so serialising them only multiplied the wall clock by nine: the standing
+    // channel audit in `doctor` has twelve coordinates to read and was timing
+    // out before it finished the first.
+    //
+    // Order is preserved by collecting the answers positionally rather than by
+    // whichever reply lands first, because the absent list is read by a person
+    // and `SHA256SUMS` order is the order they will look for.
+    let probes = names.iter().map(|name| {
         let uri = format!("{base}/{name}");
-        if !crate::cli::storage::release_object_present(&uri)
-            .await
-            .map_err(|error| DeployError(error.to_string()))?
-        {
+        async move { crate::cli::storage::release_object_present(&uri).await }
+    });
+    let present = futures::future::join_all(probes).await;
+    let mut missing = Vec::new();
+    for (name, answer) in names.into_iter().zip(present) {
+        if !answer.map_err(|error| DeployError(error.to_string()))? {
             missing.push(name);
         }
     }
