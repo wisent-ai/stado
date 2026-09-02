@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "products": [
     {
       "name": "stado",
-      "why": "the fleet's own control binary; the per-host agent LaunchAgent runs it",
+      "why": "the fleet's control binary shared by its resolver, coordinator, queue agent and release agent",
       "source": {
         "product": "stado",
         "member": "stado"
@@ -21,9 +21,26 @@
         "argument": "--version",
         "shape": "plain"
       },
-      "unit": {
-        "label": "com.wisent.compute.agent.{target}"
-      }
+      "units": [
+        {
+          "label": "com.wisent.stado.release-agent"
+        },
+        {
+          "label": "com.wisent.compute.service.stado-local-control-plane"
+        },
+        {
+          "label": "com.wisent.stado-resolver"
+        },
+        {
+          "label": "com.wisent.compute.service.stado-agent-mini"
+        },
+        {
+          "label": "com.wisent.compute.agent.{target}"
+        },
+        {
+          "label": "stado-agent.service"
+        }
+      ]
     },
     {
       "name": "skarbiec",
@@ -45,11 +62,13 @@
         "argument": "version",
         "shape": "json"
       },
-      "unit": {
-        "label": "com.wisent.always-on.skarbiec",
-        "kind": "launchd",
-        "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist"
-      }
+      "units": [
+        {
+          "label": "com.wisent.always-on.skarbiec",
+          "kind": "launchd",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist"
+        }
+      ]
     },
     {
       "name": "weles-worker",
@@ -78,11 +97,13 @@
         "path": "package.json",
         "pointer": "/version"
       },
-      "unit": {
-        "label": "com.wisent.weles-worker",
-        "kind": "launchd",
-        "path": "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist"
-      }
+      "units": [
+        {
+          "label": "com.wisent.weles-worker",
+          "kind": "launchd",
+          "path": "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist"
+        }
+      ]
     }
   ]
 }
