@@ -4752,6 +4752,28 @@ pub struct UndeclaredUnit {
     /// was; this is the list, because more than one entry means one label is
     /// declared in more than one domain and launchd will happily run both.
     pub declaring_paths: Vec<String>,
+    /// Every launchd domain that actually HOLDS this label, from that domain's
+    /// own service table rather than from `launchctl list`.
+    ///
+    /// Empty means launchd holds no job under the label anywhere this login
+    /// can print. Non-empty with no `declaring_paths` is the state that hid
+    /// the respawner of #286: loaded, restarting, and in no directory.
+    pub loaded_domains: Vec<String>,
+    /// How many times launchd has started this job.
+    ///
+    /// A one-shot with `KeepAlive` does not read as broken anywhere else: it
+    /// reads `active`, exits, and is restarted forever. The count is the only
+    /// number that says so.
+    pub runs: Option<u64>,
+    /// The job's last exit code as `launchctl print` states it, which is a
+    /// different field from [`Self::status`] and available in every domain.
+    pub last_exit: Option<i64>,
+    /// The variable names the unit file hands the program.
+    pub env_keys: Vec<String>,
+    /// Uppercase variables the program's own script reads.
+    pub script_reads: Vec<String>,
+    /// Uppercase variables that script sets or defaults for itself.
+    pub script_assigns: Vec<String>,
     /// The argument vector the pid launchd holds is ACTUALLY executing, as the
     /// process table reports it, or empty when the label holds no pid.
     ///
@@ -4960,30 +4982,50 @@ if [ \"$(/usr/bin/uname -s)\" != Darwin ]; then
   printf 'STADO_LOADED_UNSUPPORTED\\t%s\\n' \"$(/usr/bin/uname -s)\"
   exit 0
 fi
-# A label alone cannot be acted on: the fleet has three naming conventions for
-# the same job, so `com.wisent.compute.agent.<host>` and
-# `com.wisent.compute.service.stado-queue-agent` read as unrelated entries
-# until you know both run `stado agent`. The unit file says what it runs, and
-# it is world-readable in both domains, so the program travels with the label.
-# The union of what launchd lists and what the unit directories hold.
-# `launchctl list` shows only the domain this login can print, so a system
-# LaunchDaemon can be loaded and running and still be absent from it -- which is
-# how a stale queue agent stayed unnameable while three separate reports called
-# the host healthy. A label whose file exists is a label that can be acted on,
-# listed or not.
-#
-# EVERY label, with no prefix in either half of the union. Both halves used to
-# carry `com.wisent.`, so a job outside that prefix was not merely unreported,
-# it was never read: on 2026-09-01 `com.stado.agent.charless-mac-mini` was the
-# one label on the always-on mac outside the prefix, it held the pid rewriting
-# the janitor's state file every interval, and `service list --undeclared`
-# answered that the host had nothing undeclared. Classification belongs to the
-# reader; enumeration answers to the host.
+uid=$(/usr/bin/id -u)
 listing=$(/bin/launchctl list)
+# Every job launchd actually HOLDS, in every domain this login can print.
+#
+# `launchctl list` prints one domain, and this script used to enumerate from it
+# plus the three unit directories. A job loaded in the SYSTEM domain whose
+# plist has been deleted is in neither half, so it was never a candidate and
+# the `launchctl print` fallback below was never even reached for it. That is
+# not a corner: on 2026-09-01 the label
+# `com.wisent.compute.service.com.wisent.compute.service.stado-agent-mini` was
+# loaded in the system domain with KeepAlive and no file on disk, and it
+# recreated an undeclared `stado agent` on charless-mac-mini for days while
+# `list --undeclared`, `list --unowned` and the reap keep-set each answered,
+# for three different reasons, that no label held it.
+#
+# `launchctl print <domain>` states the whole service table of that domain, so
+# three reads replace an enumeration that could not see two thirds of the
+# world. Only the pid, last-exit and label columns are taken; a domain print
+# carries no environment.
+holds=''
+for domain in system \"user/$uid\" \"gui/$uid\"; do
+  block=$(/bin/launchctl print \"$domain\" 2>/dev/null) || continue
+  [ -n \"$block\" ] || continue
+  rows=$(printf '%s\\n' \"$block\" | /usr/bin/awk -v d=\"$domain\" '
+    /^[ \\t]*services = \\{/ { inside = 1; next }
+    inside && /^[ \\t]*\\}/ { inside = 0 }
+    inside {
+      n = split($0, f, /[ \\t]+/)
+      while (n > 0 && f[n] == \"\") { n-- }
+      if (n < 1) next
+      lbl = f[n]
+      if (lbl == \"label\" || lbl == \"Label\" || lbl == \"PID\") next
+      p = (n >= 3 ? f[n - 2] : \"\")
+      s = (n >= 2 ? f[n - 1] : \"\")
+      printf \"%s\\t%s\\t%s\\t%s\\n\", lbl, d, p, s
+    }')
+  holds=\"$holds
+$rows\"
+done
 labels=$(
   {
     printf '%s\\n' \"$listing\" |
       /usr/bin/awk -F'\\t' 'NF == 3 && $3 != \"Label\" { print $3 }'
+    printf '%s\\n' \"$holds\" | /usr/bin/awk -F'\\t' 'NF >= 2 { print $1 }'
     for directory in /Library/LaunchDaemons \"$HOME/Library/LaunchAgents\" /Library/LaunchAgents; do
       for file in \"$directory\"/*.plist; do
         [ -f \"$file\" ] || continue
@@ -4993,10 +5035,6 @@ labels=$(
     done
   } | /usr/bin/sort -u
 )
-uid=$(/usr/bin/id -u)
-# One `launchctl list`, read once. It used to be re-run twice per label, which
-# cost nothing while the prefix held the set to a handful and would cost two
-# subprocesses per label on a host that has hundreds.
 for label in $labels; do
   # launchd prints the pid and the last exit status as `-` or as an integer,
   # so one space is a safe separator between them and neither can contain one.
@@ -5004,14 +5042,18 @@ for label in $labels; do
   pid=${row%% *}
   status=${row#* }
   if [ -z \"$row\" ]; then pid=''; status=''; fi
+  # The domain table wins over the single-domain listing: it is the only one of
+  # the two that can speak for the system domain.
+  held=$(printf '%s\\n' \"$holds\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$1 == l { print $2; exit }')
+  if [ -n \"$held\" ]; then
+    hp=$(printf '%s\\n' \"$holds\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$1 == l { print $3; exit }')
+    hs=$(printf '%s\\n' \"$holds\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$1 == l { print $4; exit }')
+    case \"$hp\" in ''|*[!0-9]*) ;; *) pid=\"$hp\" ;; esac
+    case \"$hs\" in ''|*[!0-9-]*) ;; *) if [ -z \"$status\" ]; then status=\"$hs\"; fi ;; esac
+  fi
+  loaded_domains=$(printf '%s\\n' \"$holds\" | /usr/bin/awk -F'\\t' -v l=\"$label\" '$1 == l { printf \"%s \", $2 }')
   plist=''
   source=''
-  # EVERY domain the label has a unit file in, not the first one. The `break`
-  # this replaces is why a label declared as a system LaunchDaemon AND as a
-  # user LaunchAgent looked like one unit from here: the first candidate won,
-  # the second was never mentioned, and `--undeclared` could not see it either
-  # because the label itself IS declared. Three processes served one declared
-  # port on the always-on mac for days behind exactly that blindness.
   domains=''
   for candidate in \"/Library/LaunchDaemons/$label.plist\" \"$HOME/Library/LaunchAgents/$label.plist\" \"/Library/LaunchAgents/$label.plist\"; do
     if [ -f \"$candidate\" ]; then
@@ -5030,30 +5072,79 @@ for label in $labels; do
   # -- every `application.com.apple.*` row on a mac -- `launchctl print`
   # answers `path = (submitted by runningboardd.190)`, and reporting that in a
   # UNIT_FILE column is a sentence that reads like a location and is not one.
-  if [ -z \"$plist\" ] && [ -n \"$pid\" ]; then
-    for domain in system \"user/$uid\" \"gui/$uid\"; do
-      resolved=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null |
-        /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*path$/ { print $2; exit }')
-      case \"$resolved\" in
-        /*)
-          plist=\"$resolved\"
-          source='launchd'
-          break
-          ;;
-      esac
+  runs=''
+  exited=''
+  probe_domains=\"$loaded_domains\"
+  [ -n \"$probe_domains\" ] || probe_domains=\"system user/$uid gui/$uid\"
+  if [ -z \"$plist\" ] || [ \"$source\" = 'fleet-directory' ]; then
+    for domain in $probe_domains; do
+      state=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null) || continue
+      [ -n \"$state\" ] || continue
+      if [ -z \"$plist\" ]; then
+        resolved=$(printf '%s\\n' \"$state\" |
+          /usr/bin/awk -F' = ' '{ k=$1; sub(/^[ \\t]+/, \"\", k); sub(/[ \\t]+$/, \"\", k) } k == \"path\" { print $2; exit }')
+        case \"$resolved\" in
+          /*) plist=\"$resolved\"; source='launchd' ;;
+        esac
+      fi
+      # How many times launchd has started this job, and how it last ended.
+      # A one-shot with KeepAlive reads `active` and `0 runs` nowhere: it
+      # reads tens of thousands of runs, and nothing was looking. On
+      # charless-mac-mini `com.wisent.compute.service.com.wisent.claude-reauth-once`
+      # -- a job whose own name says `once` -- had run 45,177 times, exiting 1
+      # every time, into a log nobody read.
+      runs=$(printf '%s\\n' \"$state\" |
+        /usr/bin/awk -F' = ' '{ k=$1; sub(/^[ \\t]+/, \"\", k); sub(/[ \\t]+$/, \"\", k) } k == \"runs\" { print $2; exit }' |
+        /usr/bin/tr -d ' ')
+      exited=$(printf '%s\\n' \"$state\" |
+        /usr/bin/awk -F' = ' '{ k=$1; sub(/^[ \\t]+/, \"\", k); sub(/[ \\t]+$/, \"\", k) } k == \"last exit code\" { print $2; exit }' |
+        /usr/bin/tr -d ' ')
+      break
     done
   fi
   program=''
+  env_keys=''
   if [ -n \"$plist\" ] && [ -r \"$plist\" ]; then
-    program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \
+    program=$(/usr/bin/plutil -extract ProgramArguments json -o - \"$plist\" 2>/dev/null \\
       | /usr/bin/tr -d '[]\"' | /usr/bin/tr ',' ' ' | /usr/bin/tr '\\t\\r\\n' ' ')
+    # The variables the unit file hands its program. A launchd job inherits
+    # almost nothing, so a plist that names none of what its program requires
+    # is a unit that cannot work -- and it fails on its interval, quietly,
+    # forever. The beacon relay on lukasz-macbook carried HOME and PATH while
+    # its program required STADO_HOST_HEALTH_API_URL, and it failed every five
+    # minutes for three weeks.
+    env_keys=$(/usr/bin/plutil -extract EnvironmentVariables json -o - \"$plist\" 2>/dev/null \\
+      | /usr/bin/tr -d '{}\"' | /usr/bin/tr ',' '\\n' \\
+      | /usr/bin/awk -F':' 'NF > 1 { print $1 }' | /usr/bin/tr '\\n' ' ')
   fi
-  # What the label's process is ACTUALLY executing, beside what its file
-  # declares. Reading only the declaration is how a deleted command kept
-  # running for five days under a label that declares a different one: every
-  # reader agreed with the plist, and the plist was not the process. `comm` is
-  # not enough here, because every stado unit executes the same binary and the
-  # subcommand is the whole difference between the agent and a dashboard.
+  # Which uppercase variables the program's own script reads, and which it sets
+  # or defaults for itself. The subtraction happens in the reader, against the
+  # set launchd does provide, because a shell is the wrong place to hold that
+  # policy. Only a readable regular file under this account's home is opened:
+  # a fleet script, never a system binary.
+  needs=''
+  assigns=''
+  # `plutil -extract ... json` renders every path separator escaped
+  # (`\\/Users\\/charles\\/...`), which every earlier reader undid in Rust. This
+  # one has to OPEN the file, so it unescapes here or it opens nothing -- and
+  # opening nothing is how this check measured zero subjects on its first run
+  # while looking, from the outside, exactly like a host with no problem.
+  unescaped=$(printf '%s' \"$program\" | /usr/bin/tr -d '\\\\')
+  script=$(printf '%s' \"$unescaped\" | /usr/bin/awk '{ print $1 }')
+  case \"$script\" in
+    */bash|*/sh|*/zsh|*/env) script=$(printf '%s' \"$unescaped\" | /usr/bin/awk '{ print $2 }') ;;
+  esac
+  case \"$script\" in
+    \"$HOME\"/*)
+      if [ -f \"$script\" ] && [ -r \"$script\" ]; then
+        needs=$(/usr/bin/grep -o -E '[$][{]?[A-Z][A-Z0-9_]{2,}' \"$script\" 2>/dev/null \\
+          | /usr/bin/tr -d '${' | /usr/bin/sort -u | /usr/bin/tr '\\n' ' ')
+        assigns=$(/usr/bin/grep -o -E '(^|[ \\t;])(export[ ]+)?[A-Z][A-Z0-9_]{2,}=|[$][{][A-Z][A-Z0-9_]{2,}:[-=?]' \"$script\" 2>/dev/null \\
+          | /usr/bin/tr -d '${}:-=?' | /usr/bin/sed 's/^[ \\t;]*//; s/^export[ ]*//' \\
+          | /usr/bin/sort -u | /usr/bin/tr '\\n' ' ')
+      fi
+      ;;
+  esac
   running=''
   started=''
   written=''
@@ -5067,7 +5158,46 @@ for label in $labels; do
       if [ -f \"$binary\" ]; then written=$(/usr/bin/stat -f %m \"$binary\" 2>/dev/null); fi
       ;;
   esac
-  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\" \"${running:--}\" \"${started:--}\" \"${written:--}\" \"${source:--}\"
+  printf 'STADO_LOADED\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$status\" \"$label\" \"${plist:--}\" \"${program:--}\" \"${domains:--}\" \"${running:--}\" \"${started:--}\" \"${written:--}\" \"${source:--}\" \"${loaded_domains:--}\" \"${runs:--}\" \"${exited:--}\" \"${env_keys:--}\" \"${needs:--}\" \"${assigns:--}\"
+done
+# Every place a shell on this host could find a `stado`, and which one the
+# release channel delivered.
+#
+# `~/.cargo/bin/stado` at 0.7.34 shadowed a delivered 0.13.40 for a week, and
+# 0.7.34 has no `--undeclared`, no `bootout` and no `reap`: every answer it
+# gave was \"this host is clean\", not because the host was, but because that
+# binary could not look.
+#
+# `command -v` alone is not the question. This program runs on the channel's
+# non-interactive shell, whose PATH is not the login shell's -- on
+# charless-mac-mini it resolved NOTHING, and the reader called that agreement
+# with the delivered binary. So the concrete locations are probed by name, a
+# stale copy in any of them is a finding, and a location that could not be read
+# is reported as unread rather than as clean.
+delivered=\"$HOME/.stado/bin/stado\"
+delivered_version=''
+delivered_real=''
+if [ -x \"$delivered\" ]; then
+  delivered_version=$(\"$delivered\" --version 2>/dev/null | /usr/bin/awk '{ print $2; exit }')
+  delivered_real=$(/usr/bin/readlink -f \"$delivered\" 2>/dev/null || printf '%s' \"$delivered\")
+fi
+printf 'STADO_PATH_DELIVERED\\t%s\\t%s\\t%s\\n' \"$delivered\" \"${delivered_version:--}\" \"${delivered_real:--}\"
+# The delivered path is itself a candidate. Without it a host that carries
+# exactly one correct binary measured ZERO locations and the reader had nothing
+# to compare -- honest, but useless, and indistinguishable from a host nobody
+# looked at.
+#
+# `-L` as well as `-e`: a DANGLING symlink on a PATH directory is not nothing,
+# it is a `stado` that a shell finds and cannot execute.
+for candidate in \"$delivered\" \"$(command -v stado 2>/dev/null || true)\" \"$HOME/.cargo/bin/stado\" \"$HOME/.local/bin/stado\" /usr/local/bin/stado /opt/homebrew/bin/stado; do
+  [ -n \"$candidate\" ] || continue
+  if [ ! -e \"$candidate\" ] && [ ! -L \"$candidate\" ]; then continue; fi
+  version=''
+  real=$(/usr/bin/readlink -f \"$candidate\" 2>/dev/null || printf '%s' \"$candidate\")
+  if [ -x \"$candidate\" ]; then
+    version=$(\"$candidate\" --version 2>/dev/null | /usr/bin/awk '{ print $2; exit }')
+  fi
+  printf 'STADO_PATH_CANDIDATE\\t%s\\t%s\\t%s\\n' \"$candidate\" \"${version:--}\" \"${real:--}\"
 done
 ";
 
@@ -5670,6 +5800,68 @@ pub async fn loaded_units(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<Vec<UndeclaredUnit>, DeployError> {
+    Ok(loaded_units_with_posture(target, runner).await?.0)
+}
+
+/// One `stado` a shell on the host could find.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StadoCopy {
+    /// The location probed.
+    pub path: String,
+    /// The version it reports, empty when it could not be run.
+    pub version: String,
+    /// `path` with every symlink followed.
+    pub real: String,
+}
+
+/// Which `stado` binaries one host carries, and which one was delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathBinary {
+    /// The path the release channel delivers to.
+    pub delivered: String,
+    pub delivered_version: String,
+    /// `delivered` with every symlink followed, empty when it is not there.
+    pub delivered_real: String,
+    /// Every location probed that exists.
+    pub candidates: Vec<StadoCopy>,
+}
+
+impl PathBinary {
+    /// The copies that are NOT the delivered binary.
+    ///
+    /// Compared by resolved real path, so a symlink from `~/.local/bin/stado`
+    /// to the delivered file is the same binary and not a finding. A version
+    /// match alone would not do: two builds of one version are not one file.
+    pub fn shadows(&self) -> Vec<&StadoCopy> {
+        if self.delivered_real.is_empty() {
+            return Vec::new();
+        }
+        self.candidates
+            .iter()
+            .filter(|copy| !copy.real.is_empty() && copy.real != self.delivered_real)
+            .collect()
+    }
+
+    /// Could this be judged at all?
+    ///
+    /// A host whose delivered binary could not be read, or where no location
+    /// answered, is UNMEASURED and must not be reported as agreeing. The first
+    /// version of this check called an empty answer clean, which is the
+    /// false-negative shape this whole module exists to refuse.
+    pub fn measurable(&self) -> bool {
+        !self.delivered_real.is_empty() && !self.candidates.is_empty()
+    }
+}
+
+/// [`LOADED_LABELS_SCRIPT`] once, for both of the things it answers: the
+/// loaded units, and which `stado` the host's own PATH resolves.
+///
+/// One read, because both facts come out of one script and a sweep that asked
+/// twice would pay two SSH round trips for one question.
+pub async fn loaded_units_with_posture(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<(Vec<UndeclaredUnit>, Option<PathBinary>), DeployError> {
     let output = host_channel::run_script(target, LOADED_LABELS_SCRIPT, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
@@ -5681,7 +5873,7 @@ pub async fn loaded_units(
         .iter()
         .map(|service| service.unit_id().to_string())
         .collect();
-    Ok(output
+    let units: Vec<UndeclaredUnit> = output
         .stdout
         .lines()
         .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
@@ -5697,6 +5889,12 @@ pub async fn loaded_units(
                 started,
                 written,
                 path_source,
+                loaded_domains,
+                runs,
+                last_exit,
+                env_keys,
+                script_reads,
+                script_assigns,
             ] => {
                 let label = (*label).trim().to_string();
                 Some(UndeclaredUnit {
@@ -5713,6 +5911,12 @@ pub async fn loaded_units(
                         .filter(|path| *path != "-")
                         .map(str::to_string)
                         .collect(),
+                    loaded_domains: split_marker_list(loaded_domains),
+                    runs: (*runs).trim().trim_matches('-').parse().ok(),
+                    last_exit: (*last_exit).trim().trim_matches('-').parse().ok(),
+                    env_keys: split_marker_list(env_keys),
+                    script_reads: split_marker_list(script_reads),
+                    script_assigns: split_marker_list(script_assigns),
                     running_program: (*running).trim().trim_matches('-').trim().to_string(),
                     started_epoch: started.trim().parse().ok(),
                     binary_written_epoch: written.trim().parse().ok(),
@@ -5720,7 +5924,64 @@ pub async fn loaded_units(
             }
             _ => None,
         })
-        .collect())
+        .collect();
+    let mut posture: Option<PathBinary> = None;
+    for line in output.stdout.lines() {
+        match host_channel::marker_fields(line).as_slice() {
+            ["STADO_PATH_DELIVERED", delivered, version, real] => {
+                posture = Some(PathBinary {
+                    delivered: undash(delivered),
+                    delivered_version: undash(version),
+                    delivered_real: undash(real),
+                    candidates: Vec::new(),
+                });
+            }
+            ["STADO_PATH_CANDIDATE", path, version, real] => {
+                if let Some(posture) = posture.as_mut() {
+                    let copy = StadoCopy {
+                        path: undash(path),
+                        version: undash(version),
+                        real: undash(real),
+                    };
+                    // `command -v` and an explicit location can name the same
+                    // file; one copy is one finding, not two.
+                    if !posture
+                        .candidates
+                        .iter()
+                        .any(|seen| seen.real == copy.real && !copy.real.is_empty())
+                    {
+                        posture.candidates.push(copy);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok((units, posture))
+}
+
+/// One marker field, with the `-` a shell writes for "empty" removed.
+fn undash(field: &str) -> String {
+    let trimmed = field.trim();
+    if trimmed == "-" {
+        return String::new();
+    }
+    trimmed.to_string()
+}
+
+/// Split one whitespace-delimited marker field into its entries, dropping the
+/// `-` a shell writes for "empty".
+///
+/// The remote programs in this module cannot emit an empty field — a bare
+/// empty string between two tabs is indistinguishable from a lost column — so
+/// they write `-` and every reader has to undo it. Doing that in one place
+/// keeps six call sites from each getting it slightly wrong.
+fn split_marker_list(field: &str) -> Vec<String> {
+    field
+        .split_whitespace()
+        .filter(|entry| *entry != "-")
+        .map(str::to_string)
+        .collect()
 }
 
 /// The managed-service record a completed deploy or adopt should be
