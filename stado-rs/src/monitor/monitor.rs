@@ -510,17 +510,16 @@ pub async fn check_running_jobs(
                     if hg::finalize_if_self_terminating(store, &mut job, &log).await? {
                         continue;
                     }
-                    if !hg::any_job_checkpoint_fresh(store, &job, 5400.0).await {
-                        if requeue(
+                    if !hg::any_job_checkpoint_fresh(store, &job, 5400.0).await
+                        && requeue(
                             store,
                             &mut job,
                             "local agent live but job heartbeat stale (orphan)",
                         )
                         .await?
-                        {
-                            let cache = running_vm_names_cache.clone().unwrap_or_default();
-                            safe_delete_vm_by_hostname(provider, hostname, &cache).await;
-                        }
+                    {
+                        let cache = running_vm_names_cache.clone().unwrap_or_default();
+                        safe_delete_vm_by_hostname(provider, hostname, &cache).await;
                     }
                     continue;
                 }

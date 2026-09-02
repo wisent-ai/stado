@@ -892,6 +892,12 @@ async fn claim_entry(
     )))
 }
 
+// Every argument is a distinct coordinate of the checkpoint this writes: the
+// store, the manifest path, the run, the request and its digest, which command
+// index inside the run, the job that was accepted for it, and the owner that
+// claimed it. Bundling them into a struct would only move the same eight names
+// one level out, so the count is declared instead of hidden.
+#[allow(clippy::too_many_arguments)]
 async fn checkpoint_accepted(
     store: &JobStorage,
     path: &str,
