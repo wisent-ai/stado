@@ -137,10 +137,23 @@ pub async fn write_status(
 /// the slot being live; jobs 4724ae6d/3f16d8b4/24dee60d were yanked from
 /// running/ for 'stale heartbeat (local consumer)' in a single 4-second
 /// monitor window).
-///
 /// Writes go through the storage backend directly (no fork, no swallowed
 /// error).
+///
+/// The pulse is TWO facts now. The blob under `status/` is the operator- and
+/// monitor-facing timestamp it always was; the lease renewed on the running
+/// job document is what actually fences the reaper, because it is a
+/// compare-and-swap on the very object a reap moves. A reaper that read the
+/// job a moment ago is holding a version this renewal invalidates, so its
+/// move fails instead of requeueing a job that is still executing.
 pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
+    // Renew the authoritative fence FIRST. A slow or failed operator-facing
+    // status upload must not postpone the CAS that keeps a live execution from
+    // being reaped. `false` means the job already left running/, so publishing
+    // another pulse beside it would only create a stale liveness signal.
+    if !store.renew_running_lease(job_id).await? {
+        return Ok(());
+    }
     let ts = isoformat_utc(Utc::now());
     store
         .upload_text(

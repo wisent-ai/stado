@@ -3,12 +3,56 @@
 use std::collections::BTreeMap;
 
 use clap::Args;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::profiles;
-use crate::queue::submit::{submit_batch, SubmitOptions};
+use crate::queue::submit::{
+    submission_input_digest, submission_job_key, submission_source_digest, submit_batch,
+    SubmitOptions,
+};
 
 use super::CmdError;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolvedExecutorReceipt {
+    provider: String,
+    machine_type: String,
+    gpu_type: String,
+    platform_os: String,
+    architecture: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmissionJobReceipt {
+    command_index: usize,
+    command: String,
+    command_digest: String,
+    job_key: String,
+    job_id: String,
+    output_uri: String,
+    pinned_host: String,
+    resolved_executor: ResolvedExecutorReceipt,
+    repo_ref: String,
+    submission_request_digest: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmissionReceipt {
+    schema: String,
+    run_id: String,
+    request_digest: String,
+    source_digest: String,
+    input_digest: String,
+    repo: String,
+    repo_ref: String,
+    source_revision: String,
+    jobs: Vec<SubmissionJobReceipt>,
+}
 
 #[derive(Args, Debug)]
 pub struct SubmitArgs {
@@ -124,6 +168,10 @@ pub struct SubmitArgs {
     /// matcher never reassigns it.
     #[arg(long, default_value = "")]
     pinned_host: String,
+    /// Stable caller-retained identity for exactly-once submission. Required:
+    /// repeating the same run id and request returns the original jobs.
+    #[arg(long)]
+    run_id: String,
 }
 
 /// Python `_resolve_input_artifacts`: validates the NAME=REF shape and
@@ -435,7 +483,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             .collect(),
         None => vec![args.command.clone()],
     };
-    let batch_id = format!("batch-{}", chrono::Utc::now().timestamp());
+    let batch_id = format!("run-{}", args.run_id);
 
     let options = SubmitOptions {
         provider,
@@ -462,6 +510,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         yield_command: args.on_yield.clone(),
         yield_grace_seconds: args.yield_grace,
         pinned_host,
+        run_id: args.run_id.clone(),
         secret_env,
         input_artifacts: requested_artifacts,
         resolved_input_artifacts: resolved_artifacts,
@@ -526,5 +575,46 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         "\nSubmitted {} job(s) via {mode}{flag_str}. Batch: {batch_id}",
         commands.len()
     );
+    let receipt_options = options.clone();
+    let request_digest = jobs
+        .first()
+        .map(|job| job.submission_request_digest.clone())
+        .ok_or_else(|| CmdError::click("durable submission returned no jobs"))?;
+    let receipt = SubmissionReceipt {
+        schema: "stado.submission-receipt.v3".into(),
+        run_id: jobs
+            .first()
+            .map(|job| job.run_id.clone())
+            .unwrap_or_else(|| options.run_id.clone()),
+        request_digest: request_digest.clone(),
+        source_digest: submission_source_digest(&receipt_options),
+        input_digest: submission_input_digest(&commands, &receipt_options),
+        repo: receipt_options.repo.clone(),
+        repo_ref: receipt_options.repo_ref.clone(),
+        source_revision: receipt_options.repo_ref.clone(),
+        jobs: jobs
+            .iter()
+            .enumerate()
+            .map(|(index, job)| SubmissionJobReceipt {
+                command_index: index,
+                command: job.command.clone(),
+                command_digest: hex::encode(Sha256::digest(job.command.as_bytes())),
+                job_key: submission_job_key(&request_digest, index, &job.command),
+                job_id: job.job_id.clone(),
+                output_uri: job.output_uri.clone(),
+                pinned_host: job.pinned_host.clone(),
+                resolved_executor: ResolvedExecutorReceipt {
+                    provider: job.provider.clone(),
+                    machine_type: job.machine_type.clone(),
+                    gpu_type: job.gpu_type.clone(),
+                    platform_os: job.platform_os.clone(),
+                    architecture: job.architecture.clone(),
+                },
+                repo_ref: job.repo_ref.clone(),
+                submission_request_digest: job.submission_request_digest.clone(),
+            })
+            .collect(),
+    };
+    println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
 }

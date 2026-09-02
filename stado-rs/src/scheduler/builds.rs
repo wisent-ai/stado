@@ -65,7 +65,7 @@ use crate::monitor::host_health;
 use crate::queue::capacity;
 use crate::queue::runs::TERMINAL_PREFIXES;
 use crate::queue::storage::JobStorage;
-use crate::queue::submit::{default_store, submit_job, SubmitOptions};
+use crate::queue::submit::{default_store, stable_run_id, submit_batch, SubmitOptions};
 use crate::targets::{
     fetch_registry_remote, fleet_namespace_mismatch, platform_accepts_job, platform_job_os_arch,
     queue_name, read_build_recipes, BuildRecipe, BuildRun, ComputeTarget, Registry, RegistryStore,
@@ -456,12 +456,20 @@ async fn poll_one(
             continue;
         }
         let options = SubmitOptions {
+            run_id: stable_run_id(
+                "build-scheduler",
+                &format!("{}\0{sha}\0{platform}", fresh.name),
+            ),
             platform_os: platform_os.to_string(),
             architecture: architecture.to_string(),
             ..SubmitOptions::default()
         };
-        match submit_job(&command, &options).await {
-            Ok(job) => {
+        match submit_batch(std::slice::from_ref(&command), &options).await {
+            Ok(mut jobs) => {
+                let Some(job) = jobs.pop() else {
+                    failures.push(format!("{platform}: durable submission returned no job"));
+                    continue;
+                };
                 submitted.push(format!("{platform} job {}", job.job_id));
                 runs.insert(
                     platform.clone(),

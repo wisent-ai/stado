@@ -37,7 +37,7 @@ use serde_json::{json, Map, Value};
 use crate::deploy::products;
 use crate::models::isoformat_utc;
 use crate::queue::runs::ALL_PREFIXES;
-use crate::queue::submit::{default_store, submit_job, SubmitOptions};
+use crate::queue::submit::{default_store, stable_run_id, submit_batch, SubmitOptions};
 use crate::targets::{
     fleet_namespace_mismatch, platform_job_os_arch, read_build_recipes, BuildRecipe, BuildRun,
     Registry, RegistryFetchError, BUILDS_KEY,
@@ -151,6 +151,9 @@ pub enum BuildsCommands {
     /// poll cadence.
     Run {
         name: String,
+        /// Caller-retained token; reuse it to recover the same durable run.
+        #[arg(long)]
+        run_id: String,
         /// Emit the submitted job ids and updated recipe as JSON.
         #[arg(long)]
         json: bool,
@@ -230,7 +233,7 @@ pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
         BuildsCommands::Remove { name, json } => remove(&name, json).await,
         BuildsCommands::Enable { name, json } => set_enabled(&name, true, json).await,
         BuildsCommands::Disable { name, json } => set_enabled(&name, false, json).await,
-        BuildsCommands::Run { name, json } => run_now(&name, json).await,
+        BuildsCommands::Run { name, run_id, json } => run_now(&name, &run_id, json).await,
         BuildsCommands::Status { name, json } => status(&name, json).await,
     }
 }
@@ -760,9 +763,16 @@ async fn edit(name: &str, fields: RecipeEdit, json: bool) -> Result<(), CmdError
         (true, None) => println!(
             "{name}: same source, nothing built yet — the next poll builds the current head"
         ),
+        // The printed command has to be one that runs. `builds run` requires
+        // --run-id, so naming the recipe alone produced a clap usage error for
+        // anyone who copied this line; the token is the caller's to choose and
+        // to keep, because reusing it is what recovers the same durable run
+        // instead of starting a second one.
         (true, Some(state)) => println!(
             "{name}: same source — kept {state}; the next poll builds only when the head moves, \
-             so build it now with `stado builds run {name}`"
+             so build it now with `stado builds run {name} --run-id <token>`, where <token> is \
+             yours to pick and to retain — reuse it to recover this run rather than start \
+             another"
         ),
         (false, None) => println!(
             "{name}: {} changed — there was no last_seen_ref and no recorded run to clear; the \
@@ -888,7 +898,10 @@ async fn set_enabled(name: &str, enabled: bool, json: bool) -> Result<(), CmdErr
 /// The jobs are submitted before the registry write, and each carries the
 /// platform as `platform_os`/`architecture` so only a worker of that
 /// platform can claim it. A submit that fails leaves the recipe untouched.
-async fn run_now(name: &str, json: bool) -> Result<(), CmdError> {
+async fn run_now(name: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
+    if retry_token.trim().is_empty() {
+        return Err(CmdError::click("--run-id must not be empty"));
+    }
     let (mut document, generation) = fetch_mutation_document().await?;
     let recipe: BuildRecipe = {
         let entry = find_entry(builds_array(&mut document)?, name)?;
@@ -909,15 +922,19 @@ async fn run_now(name: &str, json: bool) -> Result<(), CmdError> {
         let (platform_os, architecture) = platform_job_os_arch(platform).ok_or_else(|| {
             CmdError::click(format!("{platform:?} names no job platform/architecture"))
         })?;
-        let job = submit_job(
-            &command,
-            &SubmitOptions {
-                platform_os: platform_os.to_string(),
-                architecture: architecture.to_string(),
-                ..SubmitOptions::default()
-            },
-        )
-        .await?;
+        let options = SubmitOptions {
+            run_id: stable_run_id(
+                "build-manual",
+                &format!("{name}\0{retry_token}\0{platform}"),
+            ),
+            platform_os: platform_os.to_string(),
+            architecture: architecture.to_string(),
+            ..SubmitOptions::default()
+        };
+        let mut platform_jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
+        let job = platform_jobs
+            .pop()
+            .ok_or_else(|| CmdError::click("durable build submission returned no job"))?;
         jobs.insert(platform.clone(), Value::String(job.job_id.clone()));
         submitted.push((
             platform.clone(),

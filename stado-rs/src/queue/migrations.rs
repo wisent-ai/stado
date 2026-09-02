@@ -1,20 +1,29 @@
-//! Idempotent priority-marker backfill for pre-0.4.26 queued jobs.
+//! Standing priority-marker repair for queued jobs missing an index entry.
 //!
-//! Port of `stado/queue/migrations.py`.
+//! Port of `stado/queue/migrations.py`, widened past its original job.
 //!
-//! The priority-marker index introduced in 0.4.26 is auto-populated by
-//! JobStorage.write_job() at submit time. Jobs already sitting in queue/
-//! when 0.4.26 deployed have no marker and would remain stranded behind
-//! the FIFO listing window because the scheduler only loads the oldest N
-//! queue/ blobs by GCS time_created.
+//! The priority-marker index introduced in 0.4.26 is populated by durable
+//! queue admission. Jobs already sitting in queue/ when 0.4.26 deployed have
+//! no marker, and so does any job whose marker write failed to land after it.
+//! Either way the job is stranded: the listing walk IS the index, so an
+//! unindexed queued job is never claimed while it still reports `queued`.
 //!
-//! This module fixes that automatically: list_jobs_priority_first calls
-//! backfill_priority_markers() before doing its priority-listing pass.
-//! The backfill is resumable via a queue_priority/.migration.json sentinel
-//! that records (cursor, done). Each call processes BACKFILL_BATCH blobs
-//! to fit comfortably inside a Cloud Function 60s tick; subsequent calls
-//! resume past the recorded cursor. Once cursor reaches the end of queue/,
-//! sentinel.done=True and every future call returns immediately.
+//! This module fixes that continuously. The standing bounded repair,
+//! [`backfill_priority_markers`], is driven from the coordinator tick by
+//! [`crate::queue::reaper::reap_expired_leases`]. It is also driven from
+//! [`super::listing::list_claimable`], but ONLY while the whole-prefix
+//! fallback is still live: a poll asks the cheap [`has_swept`] first, so a
+//! store whose index is already covered pays one small read per poll rather
+//! than a sweep. It is resumable via a queue_priority/.migration.json
+//! sentinel recording (cursor, done, coverage). Each call processes at most
+//! `batch` blobs, to fit comfortably inside a Cloud Function 60s tick, and
+//! resumes past the recorded cursor.
+//!
+//! The cursor WRAPS: reaching the end of queue/ rewinds it to the head so
+//! the next call sweeps again. `done` no longer terminates the pass — it
+//! only records that one full sweep has happened, which retires the
+//! whole-prefix listing fallback. A repair that latched shut could not see a
+//! marker lost after it completed, and nothing else would ever look.
 
 use std::collections::HashSet;
 
@@ -37,27 +46,52 @@ const DOWNLOAD_WORKERS: usize = 10;
 /// second concurrency number.
 pub(crate) const BULK_WORKERS: usize = DOWNLOAD_WORKERS;
 
-/// Python sentinel dict `{"cursor": str, "done": bool}`.
+/// The coverage a completed sentinel attests to.
+///
+/// The backfill used to mean "every queued job with priority>0 has a marker",
+/// and a store that finished it recorded `done` forever. The index now has to
+/// name EVERY queued job, so that recorded `done` is an answer to a question
+/// nobody is asking any more: honouring it would leave every pre-existing
+/// priority-0 job unindexed and, since the listing walk is the index,
+/// invisible. Stamping the coverage into the sentinel makes a `done` from the
+/// narrower era simply not apply, so the pass runs again — once — and then
+/// reports complete under the new coverage.
+const COVERAGE: &str = "all-queued";
+
+/// Python sentinel dict `{"cursor": str, "done": bool}`, plus the coverage
+/// the `done` belongs to.
+///
+/// `done` no longer means "this migration is over and must never run again".
+/// It means "the sweep has covered the prefix end-to-end at least once", so
+/// the whole-prefix fallback in [`super::listing::list_claimable`] can be
+/// switched off. It is sticky across the cursor's rewind: the sweep keeps
+/// running forever, the fallback stays retired.
 struct Sentinel {
     cursor: String,
     done: bool,
 }
 
-/// Python `_read_sentinel`.
+/// Python `_read_sentinel`, with the coverage check folded in.
+///
+/// A sentinel written before the index covered every queued job carries no
+/// `coverage` key; its `done` and its `cursor` both describe the narrower
+/// pass, so neither is usable and the walk restarts from the head under the
+/// current coverage.
 async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
+    let fresh = Sentinel {
+        cursor: String::new(),
+        done: false,
+    };
     let Some(raw) = store.download_text(SENTINEL_PATH).await? else {
-        return Ok(Sentinel {
-            cursor: String::new(),
-            done: false,
-        });
+        return Ok(fresh);
     };
     if raw.is_empty() {
-        return Ok(Sentinel {
-            cursor: String::new(),
-            done: false,
-        });
+        return Ok(fresh);
     }
     let value: serde_json::Value = serde_json::from_str(&raw)?;
+    if value.get("coverage").and_then(serde_json::Value::as_str) != Some(COVERAGE) {
+        return Ok(fresh);
+    }
     Ok(Sentinel {
         cursor: value
             .get("cursor")
@@ -71,43 +105,77 @@ async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
     })
 }
 
+/// Whether some sweep has covered `queue/` end-to-end under the current
+/// coverage. One small download, and the only question
+/// [`super::listing::list_claimable`] needs answered per poll.
+///
+/// Deliberately separate from [`backfill_priority_markers`]: coverage is
+/// cheap to read, the repair that establishes it is not, and conflating them
+/// made every poll pay a sweep. A sentinel from the narrower priority>0 era
+/// reads as not-swept, exactly as the walk requires.
+pub async fn has_swept(store: &JobStorage) -> Result<bool, StorageError> {
+    Ok(read_sentinel(store).await?.done)
+}
+
 /// Python `_write_sentinel` (`json.dumps({"cursor": ..., "done": ...})`
-/// with default separators).
+/// with default separators), stamped with the coverage its `done` attests to.
 async fn write_sentinel(store: &JobStorage, cursor: &str, done: bool) -> Result<(), StorageError> {
-    let body = super::python_json_dumps(&serde_json::json!({"cursor": cursor, "done": done}))?;
+    let body = super::python_json_dumps(
+        &serde_json::json!({"cursor": cursor, "done": done, "coverage": COVERAGE}),
+    )?;
     store.upload_text(SENTINEL_PATH, &body).await
 }
 
-/// All job_ids that already have a priority marker. Each marker name ends
-/// in `-{job_id}.json`. Python `_existing_marker_job_ids`.
-async fn existing_marker_job_ids(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
+/// Every marker name that already exists, replacing Python
+/// `_existing_marker_job_ids`.
+///
+/// Names, not job_ids, because the name is what the backfill can compute: it
+/// holds the Job, so [`super::listing::marker_path`] tells it exactly which
+/// object should exist. Recovering a job_id from a name is not possible
+/// anyway (see [`super::listing::is_marker`]) — the old parse took the
+/// segment after the last `-` and so never matched a real id, which made
+/// every pass rewrite every marker it had just confirmed.
+///
+/// Comparing names also catches the case comparing ids could not: a marker
+/// sitting under a superseded key is not the marker this job needs, so the
+/// current one still gets written.
+async fn existing_marker_names(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
     let mut out = HashSet::new();
-    for path in store.list_paths("queue_priority/", 0).await? {
-        if !path.ends_with(".json") {
-            continue;
+    for path in store.list_paths(super::listing::MARKER_PREFIX, 0).await? {
+        if super::listing::is_marker(&path) {
+            out.insert(path);
         }
-        // path layout: queue_priority/{inv}-{ts}-{job_id}.json (skip sentinel)
-        let name = path.rsplit('/').next().unwrap_or("");
-        if name.starts_with('.') {
-            continue;
-        }
-        let tail = name.rsplit('-').next().unwrap_or("");
-        out.insert(tail.strip_suffix(".json").unwrap_or(tail).to_string());
     }
     Ok(out)
 }
 
-/// Scan queue/ and write missing markers for priority>0 jobs. Returns
-/// `true` iff migration is complete (sentinel.done set). Idempotent: safe
-/// to call repeatedly. Each call processes at most `batch` queue/ blobs.
+/// Scan queue/ in bounded batches and write any missing marker. Returns the
+/// same coverage answer [`has_swept`] reads, so a caller that already ran a
+/// sweep needs no second read.
+///
+/// NOT cheap: two whole-prefix name listings plus up to `batch` job
+/// documents. Callers that only need to know whether the index is covered
+/// MUST ask [`has_swept`]; this is the repair, and it belongs on a tick, not
+/// on a scheduler poll.
+///
+/// This is the bounded repair that keeps an unindexed job reachable, and it
+/// is the ONLY one: the widening from priority>0 to every queued job extends
+/// this pass rather than adding a second mechanism beside it.
+///
+/// It never stops. `done` used to latch terminally, which was right while the
+/// index was an optimization and wrong the moment it became the only way to
+/// see a queued job: a marker lost after the sweep completed — a failed write
+/// during plain admission, a process killed between the queue blob and its
+/// marker — left that job invisible to every scheduler forever, because
+/// nothing would ever look again. So `done` now records only "swept once, the
+/// fallback can be switched off", and the cursor REWINDS to the head instead
+/// of latching, so every later call keeps repairing a bounded batch. The
+/// per-call cost stays a names-only listing plus at most `batch` bodies.
 pub async fn backfill_priority_markers(
     store: &JobStorage,
     batch: usize,
 ) -> Result<bool, StorageError> {
     let state = read_sentinel(store).await?;
-    if state.done {
-        return Ok(true);
-    }
     let mut paths: Vec<String> = store
         .list_paths("queue/", 0)
         .await?
@@ -121,11 +189,13 @@ pub async fn backfill_priority_markers(
         paths.drain(..cut);
     }
     if paths.is_empty() {
+        // End of a sweep. Record that one completed and rewind to the head so
+        // the next call starts over rather than never running again.
         write_sentinel(store, "", true).await?;
         return Ok(true);
     }
     let chunk: Vec<String> = paths.into_iter().take(batch).collect();
-    let have = existing_marker_job_ids(store).await?;
+    let have = existing_marker_names(store).await?;
     let bodies: Vec<Option<String>> = futures::stream::iter(&chunk)
         .map(|path| store.download_text(path))
         .buffered(DOWNLOAD_WORKERS)
@@ -138,16 +208,27 @@ pub async fn backfill_priority_markers(
             continue;
         }
         let job = Job::from_json(&body)?;
-        if job.priority <= 0 {
+        // Queued-only, deliberately: a marker must never be resurrected for a
+        // job that has already left the queue, or the walk would resolve it
+        // against a `queue/` blob that no longer exists forever. The priority
+        // floor that used to sit beside this check is gone — the index covers
+        // every queued job now, and `priority_key` orders priority 0 as
+        // correctly as any other value.
+        if job.state != crate::models::job_state::QUEUED {
             continue;
         }
-        if have.contains(&job.job_id) {
+        if have.contains(&super::listing::marker_path(&job)) {
             continue;
         }
         store.write_priority_marker(&job).await?;
     }
+    // A chunk short of `batch` is the tail of the prefix: this sweep reached
+    // the end. `done` is sticky — once any sweep has covered the prefix, the
+    // fallback stays retired even while a later sweep is mid-flight — and the
+    // cursor keeps advancing so the repair itself never stops.
     let new_cursor = chunk.last().cloned().unwrap_or_default();
-    let is_done = chunk.len() < batch;
-    write_sentinel(store, &new_cursor, is_done).await?;
-    Ok(is_done)
+    let swept = state.done || chunk.len() < batch;
+    let next_cursor = if chunk.len() < batch { "" } else { &new_cursor };
+    write_sentinel(store, next_cursor, swept).await?;
+    Ok(swept)
 }

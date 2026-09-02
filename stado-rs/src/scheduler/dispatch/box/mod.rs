@@ -20,6 +20,10 @@ use runtime::{now_iso, parse_iso, BoxRuntime};
 
 const OWNER_TTL_SECONDS: i64 = 300;
 const QUEUE_SCAN_CAP: usize = 25;
+/// Job documents one admit pass will read to find [`QUEUE_SCAN_CAP`] Box
+/// jobs. The window counts Box work; this bounds what looking for it costs on
+/// a queue dominated by other providers.
+const QUEUE_SCAN_BUDGET: usize = 2_000;
 const START_RECOVERY_SECONDS: i64 = 120;
 
 /// Python `_READY_BOX_STATES`.
@@ -152,13 +156,26 @@ pub async fn dispatch_box_jobs(
     }
     let leases = ProviderLeaseStore::new(store.clone());
     let mut scheduled: i64 = 0;
+    // The window has to count BOX jobs, not queued jobs: a queue whose oldest
+    // twenty-five entries belong to other providers would otherwise hand this
+    // tick nothing it can dispatch, on every tick, while a Box job waits just
+    // past the window.
     for mut job in store
-        .list_jobs_priority_first("queue", QUEUE_SCAN_CAP)
+        .list_claimable_jobs(
+            "queue",
+            &crate::queue::listing::JobScan {
+                want: QUEUE_SCAN_CAP,
+                scan_budget: QUEUE_SCAN_BUDGET,
+                max_gpu_mem_gb: i64::MAX,
+                eligible: &|job| crate::capabilities::ProviderId::Box.matches(&job.provider),
+                // Dispatch wants reachability, so it takes the shared
+                // rotation: work past one tick's window is picked up by the
+                // next tick instead of never.
+                from_head: false,
+            },
+        )
         .await?
     {
-        if !crate::capabilities::ProviderId::Box.matches(&job.provider) {
-            continue;
-        }
         if !job.secret_env.is_empty() {
             fail_queued(
                 store,

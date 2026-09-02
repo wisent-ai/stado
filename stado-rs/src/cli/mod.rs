@@ -215,8 +215,8 @@ The worker host must already have the shell, runtime, and GPU driver required by
 3. Start the local control plane:
    stado local-control-plane
 
-Submit your first job:
-   stado submit \"printf 'hello from Stado\\n'\"
+Submit your first job (retain --run-id to recover the same job after a retry):
+   stado submit --run-id onboarding-hello \"printf 'hello from Stado\\n'\"
 
 Already configured? Run:
    stado overview
@@ -887,8 +887,12 @@ enum ScheduleCommands {
     Pause { schedule_id: String },
     /// Re-enable a paused schedule (next run recomputed from now).
     Resume { schedule_id: String },
-    /// Fire a schedule once right now, regardless of its next run time.
-    Run { schedule_id: String },
+    /// Fire a schedule once with a caller-retained retry identity.
+    Run {
+        schedule_id: String,
+        #[arg(long)]
+        retry_token: String,
+    },
 }
 
 /// `schedule create` options (boxed out of the enum to keep variant sizes
@@ -1007,12 +1011,24 @@ enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
     Validate { path: Option<String> },
     /// Upload local registry.json to the canonical registry object.
+    ///
+    /// With --if-generation the write is conditional on the generation the
+    /// document was read at: a registry that has moved since is refused with
+    /// exit 75 and, under --json, a `stado.registry-push-receipt.v1` object
+    /// whose state is "conflict" and which names both generations. Exit 75
+    /// means only that, so a reconcile loop can re-pull, re-apply and push
+    /// again; a storage or validation failure stays exit 1.
     Push {
         /// The document to upload, or `-` to read it from stdin. With neither,
         /// the repository's bundled registry is uploaded - which is what
         /// erased the canonical document on 2026-09-01 when a caller piped a
         /// body this command never reads.
         path: Option<String>,
+        /// Refuse the write unless the canonical registry is still at this
+        /// generation. Take the token from `registry pull --generation-only`
+        /// or `--with-generation`; a stale one exits 75.
+        #[arg(long = "if-generation")]
+        if_generation: Option<String>,
         /// Allow a write that deletes a top-level key the canonical document
         /// still carries. Without this the upload is refused and names them.
         /// It does NOT allow a write that erases every target.
@@ -1024,9 +1040,25 @@ enum RegistryCommands {
         /// fleet at all.
         #[arg(long)]
         allow_empty_fleet: bool,
+        /// Emit a `stado.registry-push-receipt.v1` object instead of the
+        /// sentence, for both the write and the refusal.
+        #[arg(long)]
+        json: bool,
     },
     /// Print the canonical registry to stdout.
-    Pull,
+    ///
+    /// Bare, this is the document alone. --with-generation prints one
+    /// `stado.registry-pull-receipt.v1` object carrying the document and the
+    /// token `push --if-generation` spends; --generation-only prints just the
+    /// token. Both come from a single versioned read.
+    Pull {
+        /// Print the document and its generation as one typed receipt.
+        #[arg(long, conflicts_with = "generation_only")]
+        with_generation: bool,
+        /// Print only the generation token, for a reconcile loop.
+        #[arg(long)]
+        generation_only: bool,
+    },
     /// Print which registry target is this machine.
     #[command(name = "self")]
     SelfTarget {
@@ -2497,7 +2529,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             ScheduleCommands::Rm { schedule_id } => schedule::rm(&schedule_id).await,
             ScheduleCommands::Pause { schedule_id } => schedule::pause(&schedule_id).await,
             ScheduleCommands::Resume { schedule_id } => schedule::resume(&schedule_id).await,
-            ScheduleCommands::Run { schedule_id } => schedule::run(&schedule_id).await,
+            ScheduleCommands::Run {
+                schedule_id,
+                retry_token,
+            } => schedule::run(&schedule_id, &retry_token).await,
         },
         Commands::DiskCleanup {
             once,
@@ -2530,10 +2565,15 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             RegistryCommands::Validate { path } => registry::validate(path),
             RegistryCommands::Push {
                 path,
+                if_generation,
                 force,
                 allow_empty_fleet,
-            } => registry::push(path, force, allow_empty_fleet).await,
-            RegistryCommands::Pull => registry::pull().await,
+                json,
+            } => registry::push(path, force, allow_empty_fleet, if_generation, json).await,
+            RegistryCommands::Pull {
+                with_generation,
+                generation_only,
+            } => registry::pull(with_generation, generation_only).await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
             RegistryCommands::Host(command) => match command {

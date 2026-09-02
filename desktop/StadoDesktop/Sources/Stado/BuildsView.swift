@@ -15,6 +15,15 @@ private struct BuildDecision: Identifiable {
 
     let kind: Kind
     let recipe: BuildRecipe
+    /// The caller-retained `--run-id` an enqueue confirmation carries, so the
+    /// command the operator is shown is the command that runs.
+    let runID: String
+
+    init(kind: Kind, recipe: BuildRecipe, runID: String = "") {
+        self.kind = kind
+        self.recipe = recipe
+        self.runID = runID
+    }
 
     var id: String { "\(kind.rawValue)/\(recipe.name)" }
 }
@@ -228,7 +237,11 @@ struct BuildsView: View {
                 Spacer(minLength: 0)
                 WisentActionButton(
                     action: WisentAction("Run now…", kind: .plain, isEnabled: !store.mutation.isWorking) {
-                        decision = BuildDecision(kind: .run, recipe: recipe)
+                        decision = BuildDecision(
+                            kind: .run,
+                            recipe: recipe,
+                            runID: store.retainedRunID(for: recipe.name)
+                        )
                     }
                 )
             }
@@ -530,7 +543,7 @@ struct BuildsView: View {
                 listing: ["command: \(recipe.command)"]
                     + recipe.platforms.map { "platform: \($0)" }
                     + recipe.artifacts.map { "artifact: \($0)" },
-                footnote: "Runs \(StadoCLI.commandLine(BuildsStore.runArguments(name: recipe.name))).",
+                footnote: "Runs \(StadoCLI.commandLine(BuildsStore.runArguments(name: recipe.name, runID: pending.runID))).",
                 actions: [
                     WisentAction("Not now", kind: .secondary) { decision = nil },
                     WisentAction(
@@ -539,7 +552,7 @@ struct BuildsView: View {
                         kind: .primary
                     ) {
                         decision = nil
-                        Task { await store.run(recipe) }
+                        Task { await store.run(recipe, runID: pending.runID) }
                     },
                 ]
             )

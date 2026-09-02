@@ -177,6 +177,26 @@ impl BlobBackend for ReadFailoverBackend {
         }
     }
 
+    /// Delegated rather than inherited, because inheriting the trait default
+    /// would erase the delegation: the default reaches for `list_paths` on
+    /// THIS backend, so a primary with a server-side paged listing would have
+    /// its page request degraded into a whole-prefix fetch plus a local cut,
+    /// purely because the read was routed through failover. Forwarding keeps
+    /// whatever paging the primary (or backup) natively has, and the failover
+    /// rule is the read rule used everywhere else here: a primary error may
+    /// consult the backup, a successful answer is authoritative.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        match self.primary.list_page(prefix, start_after, limit).await {
+            answer @ Ok(_) => answer,
+            Err(_) => self.backup.list_page(prefix, start_after, limit).await,
+        }
+    }
+
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
         let exact = |blobs: Vec<BlobInfo>| {
             blobs

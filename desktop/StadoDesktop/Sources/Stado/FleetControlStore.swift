@@ -17,6 +17,9 @@ final class FleetControlStore: ObservableObject {
     private var authorizationToken: String?
     private var requestGeneration = 0
 
+    /// Caller-retained `stado job rerun` retry identities, keyed by job id.
+    private var rerunRetryTokens: [String: String] = [:]
+
     init(client: FleetControlClient = FleetControlClient()) {
         self.client = client
     }
@@ -106,23 +109,32 @@ final class FleetControlStore: ObservableObject {
         }
     }
 
-    /// `stado job rerun <id>` through the dashboard's allowlisted command
-    /// bridge. The recorded specification is resubmitted as it was; nothing
-    /// here composes a new job.
+    /// `stado job rerun <id> --retry-token <token>` through the dashboard's
+    /// allowlisted command bridge. The recorded specification is resubmitted
+    /// as it was; nothing here composes a new job.
+    ///
+    /// The token is retained per job until a rerun of that job succeeds, so a
+    /// retry after a transport failure recovers the one rerun the operator
+    /// asked for instead of enqueueing a second one.
     func rerunJob(_ jobID: String) async {
         guard !mutation.isWorking else { return }
         guard let address else {
             mutation = .failed("No Stado endpoint is configured, so the rerun was not attempted.")
             return
         }
+        let retryToken = rerunRetryTokens[jobID] ?? UUID().uuidString
+        rerunRetryTokens[jobID] = retryToken
         mutation = .working("Resubmitting the recorded specification for job \(jobID).")
         do {
             let result = try await client.run(
-                arguments: ["job", "rerun", jobID],
+                arguments: ["job", "rerun", jobID, "--retry-token", retryToken],
                 confirmsMutation: true,
                 at: address,
                 authorizationToken: authorizationToken
             )
+            if result.ok {
+                rerunRetryTokens.removeValue(forKey: jobID)
+            }
             mutation = result.ok ? .succeeded(result.message) : .failed(result.message)
         } catch {
             mutation = .failed(Self.describe(error))
