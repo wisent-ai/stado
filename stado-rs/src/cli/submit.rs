@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use clap::Args;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -13,6 +14,45 @@ use crate::queue::submit::{
 };
 
 use super::CmdError;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolvedExecutorReceipt {
+    provider: String,
+    machine_type: String,
+    gpu_type: String,
+    platform_os: String,
+    architecture: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmissionJobReceipt {
+    command_index: usize,
+    command: String,
+    command_digest: String,
+    job_key: String,
+    job_id: String,
+    output_uri: String,
+    pinned_host: String,
+    resolved_executor: ResolvedExecutorReceipt,
+    repo_ref: String,
+    submission_request_digest: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmissionReceipt {
+    schema: String,
+    run_id: String,
+    request_digest: String,
+    source_digest: String,
+    input_digest: String,
+    repo: String,
+    repo_ref: String,
+    source_revision: String,
+    jobs: Vec<SubmissionJobReceipt>,
+}
 
 #[derive(Args, Debug)]
 pub struct SubmitArgs {
@@ -540,34 +580,41 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         .first()
         .map(|job| job.submission_request_digest.clone())
         .ok_or_else(|| CmdError::click("durable submission returned no jobs"))?;
-    let receipt = serde_json::json!({
-        "schema": "stado.submission-receipt.v3",
-        "run_id": jobs.first().map(|job| job.run_id.as_str()).unwrap_or(options.run_id.as_str()),
-        "request_digest": request_digest,
-        "source_digest": submission_source_digest(&receipt_options),
-        "input_digest": submission_input_digest(&commands, &receipt_options),
-        "repo": receipt_options.repo,
-        "repo_ref": receipt_options.repo_ref,
-        "source_revision": receipt_options.repo_ref,
-        "jobs": jobs.iter().enumerate().map(|(index, job)| serde_json::json!({
-            "command_index": index,
-            "command": job.command,
-            "command_digest": hex::encode(Sha256::digest(job.command.as_bytes())),
-            "job_key": submission_job_key(&request_digest, index, &job.command),
-            "job_id": job.job_id,
-            "output_uri": job.output_uri,
-            "pinned_host": job.pinned_host,
-            "resolved_executor": {
-                "provider": job.provider,
-                "machine_type": job.machine_type,
-                "gpu_type": job.gpu_type,
-                "platform_os": job.platform_os,
-                "architecture": job.architecture,
-            },
-            "repo_ref": job.repo_ref,
-            "submission_request_digest": job.submission_request_digest,
-        })).collect::<Vec<_>>(),
-    });
+    let receipt = SubmissionReceipt {
+        schema: "stado.submission-receipt.v3".into(),
+        run_id: jobs
+            .first()
+            .map(|job| job.run_id.clone())
+            .unwrap_or_else(|| options.run_id.clone()),
+        request_digest: request_digest.clone(),
+        source_digest: submission_source_digest(&receipt_options),
+        input_digest: submission_input_digest(&commands, &receipt_options),
+        repo: receipt_options.repo.clone(),
+        repo_ref: receipt_options.repo_ref.clone(),
+        source_revision: receipt_options.repo_ref.clone(),
+        jobs: jobs
+            .iter()
+            .enumerate()
+            .map(|(index, job)| SubmissionJobReceipt {
+                command_index: index,
+                command: job.command.clone(),
+                command_digest: hex::encode(Sha256::digest(job.command.as_bytes())),
+                job_key: submission_job_key(&request_digest, index, &job.command),
+                job_id: job.job_id.clone(),
+                output_uri: job.output_uri.clone(),
+                pinned_host: job.pinned_host.clone(),
+                resolved_executor: ResolvedExecutorReceipt {
+                    provider: job.provider.clone(),
+                    machine_type: job.machine_type.clone(),
+                    gpu_type: job.gpu_type.clone(),
+                    platform_os: job.platform_os.clone(),
+                    architecture: job.architecture.clone(),
+                },
+                repo_ref: job.repo_ref.clone(),
+                submission_request_digest: job.submission_request_digest.clone(),
+            })
+            .collect(),
+    };
     println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
 }

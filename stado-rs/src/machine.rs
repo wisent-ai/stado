@@ -998,14 +998,15 @@ impl MachineFacade {
         let mut source_sha = String::new();
         let mut source_bytes = 0u64;
         let mut staged_source: Option<OwnedMachineFile> = None;
+        let mut replayed_reservation = false;
         let mut claimed = false;
 
         for _ in 0..16 {
-                if let Some(staged) = staged_source.take() {
-                    staged.cleanup().map_err(|error| {
-                        MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
-                    })?;
-                }
+            if let Some(staged) = staged_source.take() {
+                staged.cleanup().map_err(|error| {
+                    MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
+                })?;
+            }
             if let Some(versioned) = self.store.read_text_versioned(&record_path).await? {
                 let mut existing: Map<String, Value> =
                     serde_json::from_str::<Value>(&versioned.content)
@@ -1066,6 +1067,23 @@ impl MachineFacade {
                         ));
                     }
                 }
+                if source_requested {
+                    let (staged, current_sha, current_bytes) =
+                        stage_source_archive(request.get("source_archive_path"))?
+                            .ok_or_else(|| {
+                                MachineError::new(
+                                    "INVALID_SOURCE_ARCHIVE",
+                                    "source archive path is required",
+                                )
+                            })?;
+                    if current_sha != retained_sha || current_bytes != retained_bytes {
+                        return Err(MachineError::new(
+                            "IDEMPOTENCY_CONFLICT",
+                            "client_request_id was already used with a different source archive",
+                        ));
+                    }
+                    staged_source = Some(staged);
+                }
                 let mut digest_request = request.clone();
                 if source_requested {
                     digest_request.insert(
@@ -1122,6 +1140,7 @@ impl MachineFacade {
                 {
                     Ok(_) => {
                         claimed = true;
+                        replayed_reservation = true;
                         break;
                     }
                     Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
@@ -1206,7 +1225,7 @@ impl MachineFacade {
             let source_blob = source_object.storage_path();
             let mut authoritative_readback = None;
 
-            if staged_source.is_none() {
+            if replayed_reservation {
                 renew_machine_request_claim(
                     &self.store,
                     &record_path,
@@ -1224,37 +1243,6 @@ impl MachineFacade {
                 )
                 .await?;
 
-                if authoritative_readback.is_none() {
-                    renew_machine_request_claim(
-                        &self.store,
-                        &record_path,
-                        &owner,
-                        "restaging-missing-source",
-                    )
-                    .await?;
-                    let (staged, current_sha, current_bytes) =
-                        stage_source_archive(request.get("source_archive_path"))?
-                            .ok_or_else(|| {
-                                MachineError::new(
-                                    "INVALID_SOURCE_ARCHIVE",
-                                    "source archive path is required",
-                                )
-                            })?;
-                    renew_machine_request_claim(
-                        &self.store,
-                        &record_path,
-                        &owner,
-                        "restaging-missing-source-complete",
-                    )
-                    .await?;
-                    if current_sha != source_sha || current_bytes != source_bytes {
-                        return Err(MachineError::new(
-                            "IDEMPOTENCY_CONFLICT",
-                            "retained source object is missing and the current source archive differs",
-                        ));
-                    }
-                    staged_source = Some(staged);
-                }
             }
 
             if authoritative_readback.is_none() {

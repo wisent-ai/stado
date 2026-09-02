@@ -36,10 +36,31 @@
 //! Every entry is read-only, takes no operator-supplied argument, and
 //! carries its own justification in [`ApprovedCommand::why`].
 
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::host_channel;
 use super::{py_str_repr, shlex_quote, DeployError, Runner};
+
+const RESOLVED_EXECUTABLE_MARKER: &str = "STADO_RESOLVED_EXECUTABLE\t";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostExecReceipt {
+    schema: String,
+    target: String,
+    ssh: Option<String>,
+    ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
+    command: String,
+    argv: Vec<String>,
+    program_candidates: Vec<String>,
+    resolved_executable: String,
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    status: String,
+    error: Option<String>,
+}
 
 /// `status` for a command that ran and exited clean.
 pub const OK_STATUS: &str = "ok";
@@ -433,7 +454,10 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
     let mut script = String::from("set -eu\n");
     for candidate in candidates {
         let path = shlex_quote(candidate);
-        script.push_str(&format!("if [ -x {path} ]; then exec {path} {fixed}; fi\n"));
+        let marker = shlex_quote(&format!("{RESOLVED_EXECUTABLE_MARKER}{candidate}"));
+        script.push_str(&format!(
+            "if [ -x {path} ]; then printf '%s\\n' {marker} >&2; exec {path} {fixed}; fi\n"
+        ));
     }
     script.push_str(&format!(
         "printf '%s\\n' {} >&2\nexit 127\n",
@@ -461,29 +485,50 @@ pub async fn exec_host(
     // would only replace the remote shell's own report of a missing program
     // with a worse one.
     let candidates = approved.candidates();
-    let output = match approved.argv.split_first() {
+    let mut output = match approved.argv.split_first() {
         Some((_, arguments)) if candidates.len() > usize::from(true) => {
             let script = candidate_script(candidates, arguments);
             host_channel::run_script(&target, &script, runner).await?
         }
         _ => host_channel::run_program(&target, approved.argv, runner).await?,
     };
-
-    let mut report = host_channel::base_report(&target);
-    report.insert(
-        "schema".to_string(),
-        json!("stado.host-exec-receipt.v1"),
-    );
-    report.insert("command".to_string(), json!(approved.display()));
-    report.insert("argv".to_string(), json!(approved.argv));
-    // Where this program may live, for an entry that has more than one install
-    // path: `argv[0]` is one candidate among several and is not evidence of
-    // where the host actually found it.
-    if candidates.len() > usize::from(true) {
-        report.insert("program_candidates".to_string(), json!(candidates));
-    }
-    report.insert("stdout".to_string(), json!(output.stdout));
-    report.insert("stderr".to_string(), json!(output.stderr));
-    host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
-    Ok(Value::Object(report))
+    let resolved_executable = if candidates.len() > usize::from(true) {
+        let (line, remainder) = output.stderr.split_once('\n').unwrap_or((&output.stderr, ""));
+        match line.strip_prefix(RESOLVED_EXECUTABLE_MARKER) {
+            Some(path) => {
+                let path = path.to_string();
+                output.stderr = remainder.to_string();
+                path
+            }
+            None => String::new(),
+        }
+    } else {
+        candidates.first().copied().unwrap_or_default().to_string()
+    };
+    let ok = output.ok();
+    let error = if ok {
+        None
+    } else {
+        Some(host_channel::last_error_line(&output, "ssh failed"))
+    };
+    let receipt = HostExecReceipt {
+        schema: "stado.host-exec-receipt.v1".into(),
+        target: target.name,
+        ssh: target.ssh,
+        ssh_fallbacks: target.ssh_fallbacks,
+        command: approved.display(),
+        argv: approved.argv.iter().map(|word| (*word).to_string()).collect(),
+        program_candidates: candidates.iter().map(|path| (*path).to_string()).collect(),
+        resolved_executable,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.code,
+        status: if ok {
+            OK_STATUS.into()
+        } else {
+            host_channel::FAILED_STATUS.into()
+        },
+        error,
+    };
+    serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()))
 }

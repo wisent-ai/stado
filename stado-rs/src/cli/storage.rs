@@ -39,6 +39,7 @@ use std::time::Duration;
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Args, Subcommand};
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -50,6 +51,34 @@ use crate::queue::{BlobBackend, BlobInfo, JobStorage};
 
 use super::table::print as print_table;
 use super::CmdError;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StorageStatReceipt {
+    schema: String,
+    backend: String,
+    bucket: String,
+    path: String,
+    state: String,
+    size: Option<usize>,
+    updated_at: Value,
+    version: Option<String>,
+    metadata: BTreeMap<String, String>,
+    detail: Option<String>,
+    metadata_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoragePutReceipt {
+    schema: String,
+    state: String,
+    created: bool,
+    uri: String,
+    sha256: String,
+    bytes: usize,
+    content_type: String,
+}
 
 #[derive(Subcommand)]
 pub enum StorageCommands {
@@ -344,8 +373,17 @@ fn sorted_archive_paths(
     });
     for path in entries {
         let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "archive source contains unsupported symlink: {}",
+                    path.display()
+                ),
+            ));
+        }
         paths.push(path.clone());
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        if metadata.is_dir() {
             sorted_archive_paths(root, &path, paths)?;
         }
     }
@@ -388,7 +426,7 @@ fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
             .write(file, flate2::Compression::default());
         let mut archive = tar::Builder::new(encoder);
         archive.mode(tar::HeaderMode::Deterministic);
-        archive.append_dir(".", &source)?;
+        archive.follow_symlinks(false);
         let mut paths = Vec::new();
         sorted_archive_paths(&source, &source, &mut paths)?;
         paths.sort_by(|left, right| {
@@ -1125,18 +1163,19 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     };
 
     if args.json {
-        echo_json(&json!({
-            "backend": store_backend,
-            "bucket": store_bucket,
-            "path": args.path,
-            "state": state,
-            "size": size,
-            "updated_at": render_optional_stamp(updated),
-            "version": version,
-            "metadata": metadata,
-            "detail": detail,
-            "metadata_error": metadata_error,
-        }))?;
+        echo_json(&serde_json::to_value(StorageStatReceipt {
+            schema: "stado.storage-stat-receipt.v1".into(),
+            backend: store_backend,
+            bucket: store_bucket,
+            path: args.path.clone(),
+            state: state.into(),
+            size,
+            updated_at: render_optional_stamp(updated),
+            version,
+            metadata,
+            detail,
+            metadata_error,
+        })?)?;
     } else {
         let mut rows = vec![
             vec!["path".to_string(), args.path.clone()],
@@ -2864,12 +2903,20 @@ async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
     )
     .await?;
     if args.json {
-        echo_json(&json!({
-            "state": if outcome.created { "stored" } else { "replayed" },
-            "created": outcome.created,
-            "uri": outcome.uri,
-            "content_type": args.content_type,
-        }))?;
+        let stored = fetch_object_from_writer(&outcome.uri).await?;
+        echo_json(&serde_json::to_value(StoragePutReceipt {
+            schema: "stado.storage-put-receipt.v1".into(),
+            state: if outcome.created {
+                "stored".into()
+            } else {
+                "replayed".into()
+            },
+            created: outcome.created,
+            uri: outcome.uri,
+            sha256: hex::encode(Sha256::digest(&stored)),
+            bytes: stored.len(),
+            content_type: args.content_type.clone(),
+        })?)?;
     } else if outcome.created {
         println!("stored {}", outcome.uri);
     } else {

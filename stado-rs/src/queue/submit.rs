@@ -329,11 +329,10 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
 fn validate_recovered_job(
     job: &Job,
     planned: &Job,
-    request_digest: &str,
     index: usize,
 ) -> Result<(), SubmitError> {
     if job.job_id != planned.job_id
-        || job.submission_request_digest != request_digest
+        || job.submission_request_digest != planned.submission_request_digest
         || job.submission_command_index != Some(index)
         || immutable_job_projection(job) != immutable_job_projection(planned)
     {
@@ -449,11 +448,26 @@ fn validate_run_manifest(
             commands.len()
         )));
     }
+    let legacy_request_digest = manifest
+        .get("migrated_from_v2_request_digest")
+        .and_then(Value::as_str);
+    if legacy_request_digest.is_some_and(|digest| {
+        digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(SubmitError::Validation(format!(
+            "run id {run_id} has an invalid v2 identity digest"
+        )));
+    }
     let mut validated = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let command = &commands[index];
         let key = submission_job_key(request_digest, index, command);
-        let job_id = format!("job-{}", &key[..24]);
+        let identity_digest = legacy_request_digest.unwrap_or(request_digest);
+        let identity_key = submission_job_key(identity_digest, index, command);
+        let job_id = format!("job-{}", &identity_key[..24]);
         if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
             || entry.get("command").and_then(Value::as_str) != Some(command.as_str())
             || entry.get("job_key").and_then(Value::as_str) != Some(key.as_str())
@@ -472,14 +486,26 @@ fn validate_run_manifest(
         let mut effective = options.clone();
         effective.exclusive =
             effective.exclusive && !activation_extraction_must_share_gpu(command);
+        let legacy_provenance;
+        let expected_provenance = if legacy_request_digest.is_some() {
+            legacy_provenance = SubmissionProvenance {
+                created_at: job.created_at.clone(),
+                submitted_by: provenance.submitted_by.clone(),
+                submitted_from: provenance.submitted_from.clone(),
+                submitter_app: provenance.submitter_app.clone(),
+            };
+            &legacy_provenance
+        } else {
+            &provenance
+        };
         let mut expected = build_planned_job(
             command,
             &effective,
             &job_id,
             &resolved_hardware[index],
-            &provenance,
+            expected_provenance,
         );
-        expected.submission_request_digest = request_digest.to_string();
+        expected.submission_request_digest = identity_digest.to_string();
         expected.submission_command_index = Some(index);
         if serde_json::to_value(&expected)
             .map_err(|error| SubmitError::Validation(error.to_string()))?
@@ -574,12 +600,7 @@ fn validate_run_manifest(
                     "terminal retained job timestamp is outside the outcome lifetime".into(),
                 ));
             }
-            validate_recovered_job(
-                terminal_job,
-                &job,
-                request_digest,
-                index,
-            )?;
+            validate_recovered_job(terminal_job, &job, index)?;
         } else if outcome_job.is_some() {
             return Err(SubmitError::Validation(
                 "non-terminal entry unexpectedly carries an outcome".into(),
@@ -602,6 +623,187 @@ pub(crate) fn validate_stored_run_manifest(
         .ok_or_else(|| SubmitError::Validation("run manifest request is missing".into()))?;
     let request_digest = digest_value(request);
     validate_run_manifest(manifest, run_id, request, &request_digest).map(|_| ())
+}
+
+/// Idempotently upgrade a durable v2 run in place. The v3 request digest
+/// includes the hardware plan, but admitted v2 job identities are immutable:
+/// entries retain their original job IDs and submission digest while their
+/// v3 job keys are remapped to the upgraded request.
+pub(crate) async fn migrate_v2_run_manifest(
+    store: &JobStorage,
+    run_id: &str,
+) -> Result<Value, SubmitError> {
+    validate_run_id(run_id)?;
+    let path = format!("{RUN_PREFIX}/{run_id}.json");
+    for _ in 0..16 {
+        let versioned = store
+            .read_text_versioned(&path)
+            .await?
+            .ok_or_else(|| SubmitError::Validation(format!("run manifest {run_id} disappeared")))?;
+        let mut manifest: Value = serde_json::from_str(&versioned.content)
+            .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
+        let schema = manifest.get("schema").and_then(Value::as_str);
+        if schema != Some("stado.run-submission.v2") {
+            return Ok(manifest);
+        }
+        if manifest.get("run_id").and_then(Value::as_str) != Some(run_id) {
+            return Err(SubmitError::Validation(format!(
+                "v2 run manifest does not match run id {run_id}"
+            )));
+        }
+        let old_request = manifest
+            .get("request")
+            .cloned()
+            .ok_or_else(|| SubmitError::Validation("v2 run manifest has no request".into()))?;
+        if old_request.get("schema").and_then(Value::as_str)
+            != Some("stado.submission-request.v2")
+        {
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} has an invalid v2 request schema"
+            )));
+        }
+        let old_digest = digest_value(&old_request);
+        if manifest.get("request_digest").and_then(Value::as_str) != Some(old_digest.as_str()) {
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} has a corrupt v2 request digest"
+            )));
+        }
+        let commands: Vec<String> = old_request
+            .get("commands")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SubmitError::Validation("v2 submission commands are missing".into()))?
+            .iter()
+            .map(|command| {
+                command.as_str().map(str::to_string).ok_or_else(|| {
+                    SubmitError::Validation("v2 submission command is not a string".into())
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let options: SubmitOptions = serde_json::from_value(
+            old_request
+                .get("options")
+                .cloned()
+                .ok_or_else(|| {
+                    SubmitError::Validation("v2 submission options are missing".into())
+                })?,
+        )
+        .map_err(|error| {
+            SubmitError::Validation(format!("invalid v2 submission options: {error}"))
+        })?;
+        let entries = manifest
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SubmitError::Validation("v2 run entries are missing".into()))?;
+        if entries.len() != commands.len() {
+            return Err(SubmitError::Validation(format!(
+                "run id {run_id} has an incomplete v2 command plan"
+            )));
+        }
+        let mut resolved_hardware = Vec::with_capacity(entries.len());
+        for (index, entry) in entries.iter().enumerate() {
+            let planned: Job = serde_json::from_value(
+                entry
+                    .get("planned_job")
+                    .cloned()
+                    .ok_or_else(|| {
+                        SubmitError::Validation("v2 run entry has no planned job".into())
+                    })?,
+            )
+            .map_err(|error| {
+                SubmitError::Validation(format!("invalid v2 planned job: {error}"))
+            })?;
+            let old_key = submission_job_key(&old_digest, index, &commands[index]);
+            let old_job_id = format!("job-{}", &old_key[..24]);
+            if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
+                || entry.get("command").and_then(Value::as_str)
+                    != Some(commands[index].as_str())
+                || entry.get("job_key").and_then(Value::as_str) != Some(old_key.as_str())
+                || entry.get("job_id").and_then(Value::as_str) != Some(old_job_id.as_str())
+                || planned.job_id != old_job_id
+                || planned.run_id != run_id
+                || planned.submission_request_digest != old_digest
+                || planned.submission_command_index != Some(index)
+            {
+                return Err(SubmitError::Validation(format!(
+                    "run id {run_id} has a corrupt v2 entry at index {index}"
+                )));
+            }
+            resolved_hardware.push(ResolvedHardwareProjection {
+                gpu_mem_gb: planned.gpu_mem_gb,
+                gpu_type: planned.gpu_type,
+                machine_type: planned.machine_type,
+            });
+        }
+        let normalized_options = serde_json::to_value(&options).map_err(|error| {
+            SubmitError::Validation(format!("serialize migrated submission options: {error}"))
+        })?;
+        let effective_bucket = old_request
+            .get("effective_bucket")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                SubmitError::Validation("v2 request effective bucket is missing".into())
+            })?;
+        let request = serde_json::json!({
+            "schema": "stado.submission-request.v3",
+            "commands": commands,
+            "effective_bucket": effective_bucket,
+            "options": normalized_options,
+            "resolved_hardware": resolved_hardware,
+        });
+        let request_digest = digest_value(&request);
+        let object = manifest
+            .as_object_mut()
+            .ok_or_else(|| SubmitError::Validation("v2 run manifest is not an object".into()))?;
+        object.insert("schema".into(), Value::from("stado.run-submission.v3"));
+        object.insert("request".into(), request.clone());
+        object.insert("request_digest".into(), Value::from(request_digest.as_str()));
+        object.insert(
+            "migrated_from_v2_request_digest".into(),
+            Value::from(old_digest.as_str()),
+        );
+        object.insert(
+            "source_digest".into(),
+            Value::from(submission_source_digest(&options)),
+        );
+        object.insert(
+            "input_digest".into(),
+            Value::from(submission_input_digest(&commands, &options)),
+        );
+        for obsolete in ["n_jobs", "job_ids", "commands"] {
+            object.remove(obsolete);
+        }
+        let migrated_entries = object
+            .get_mut("entries")
+            .and_then(Value::as_array_mut)
+            .expect("validated entries");
+        for (index, entry) in migrated_entries.iter_mut().enumerate() {
+            let entry = entry
+                .as_object_mut()
+                .ok_or_else(|| SubmitError::Validation("v2 run entry is not an object".into()))?;
+            entry.insert(
+                "job_key".into(),
+                Value::from(submission_job_key(
+                    &request_digest,
+                    index,
+                    &commands[index],
+                )),
+            );
+        }
+        validate_run_manifest(&manifest, run_id, &request, &request_digest)?;
+        let body = serde_json::to_string_pretty(&manifest)
+            .map_err(|error| SubmitError::Validation(error.to_string()))?;
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &body)
+            .await
+        {
+            Ok(_) => return Ok(manifest),
+            Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(SubmitError::Validation(format!(
+        "run manifest {run_id} remained contended during v2 migration"
+    )))
 }
 
 
@@ -801,7 +1003,14 @@ pub async fn submit_batch(
     };
     let store = JobStorage::with_bucket(bucket).await?;
     let path = format!("{RUN_PREFIX}/{run_id}.json");
-    let existing_raw = store.download_text(&path).await?;
+    let existing_raw = if store.download_text(&path).await?.is_some() {
+        Some(
+            serde_json::to_string(&migrate_v2_run_manifest(&store, &run_id).await?)
+                .map_err(|error| SubmitError::Validation(error.to_string()))?,
+        )
+    } else {
+        None
+    };
     let resolved_hardware: Vec<ResolvedHardwareProjection> =
         if let Some(raw) = existing_raw.as_ref() {
             let existing: Value = serde_json::from_str(raw).map_err(|error| {
@@ -842,18 +1051,10 @@ pub async fn submit_batch(
                         "stored run request has invalid resolved hardware: {error}"
                     ))
                 })?
-            } else if existing.get("schema").and_then(Value::as_str)
-                == Some("stado.run-submission.v2")
-            {
-                return Err(SubmitError::Validation(format!(
-                    "run id {run_id} requires explicit external migration from v2"
-                )));
             } else {
-                let mut resolved = Vec::with_capacity(commands.len());
-                for command in commands {
-                    resolved.push(resolve_hardware(command, &options).await?);
-                }
-                resolved
+                return Err(SubmitError::Validation(format!(
+                    "run id {run_id} has an unsupported manifest schema"
+                )));
             }
         } else {
             let mut resolved = Vec::with_capacity(commands.len());
@@ -871,18 +1072,8 @@ pub async fn submit_batch(
     let request_digest = digest_value(&request);
 
     let manifest = match existing_raw {
-        Some(raw) => {
-            let existing: Value = serde_json::from_str(&raw)
-                .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
-            if existing.get("schema").and_then(Value::as_str)
-                == Some("stado.run-submission.v2")
-            {
-                return Err(SubmitError::Validation(format!(
-                    "run id {run_id} requires explicit external migration from v2"
-                )));
-            }
-            existing
-        }
+        Some(raw) => serde_json::from_str(&raw)
+            .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?,
         None => {
             let provenance = SubmissionProvenance {
                 created_at: chrono::Utc::now().to_rfc3339(),
@@ -947,25 +1138,7 @@ pub async fn submit_batch(
             if created {
                 candidate
             } else {
-                let raced = store
-                    .download_text(&path)
-                    .await?
-                    .ok_or_else(|| {
-                        SubmitError::Validation(
-                            "run manifest creation raced and disappeared".into(),
-                        )
-                    })?;
-                let existing: Value = serde_json::from_str(&raced).map_err(|error| {
-                    SubmitError::Validation(format!("invalid run manifest: {error}"))
-                })?;
-                if existing.get("schema").and_then(Value::as_str)
-                    == Some("stado.run-submission.v2")
-                {
-                    return Err(SubmitError::Validation(format!(
-                        "run id {run_id} requires explicit external migration from v2"
-                    )));
-                }
-                existing
+                migrate_v2_run_manifest(&store, &run_id).await?
             }
         }
     };
@@ -994,12 +1167,7 @@ pub async fn submit_batch(
                             planned_job.job_id
                         ))
                     })?;
-                validate_recovered_job(
-                    &existing,
-                    &planned_job,
-                    &request_digest,
-                    index,
-                )?;
+                validate_recovered_job(&existing, &planned_job, index)?;
                 store
                     .repair_queued_admission_metadata(&planned_job)
                     .await?;
@@ -1007,12 +1175,7 @@ pub async fn submit_batch(
             }
             EntryClaim::Owned(planned_job) => {
                 let job = if let Some(existing) = find_job(&store, &planned_job.job_id).await? {
-                    validate_recovered_job(
-                        &existing,
-                        &planned_job,
-                        &request_digest,
-                        index,
-                    )?;
+                    validate_recovered_job(&existing, &planned_job, index)?;
                     store
                         .repair_queued_admission_metadata(&planned_job)
                         .await?;
@@ -1028,12 +1191,7 @@ pub async fn submit_batch(
                                 planned_job.job_id
                             ))
                         })?;
-                    validate_recovered_job(
-                        &existing,
-                        &planned_job,
-                        &request_digest,
-                        index,
-                    )?;
+                    validate_recovered_job(&existing, &planned_job, index)?;
                     store
                         .repair_queued_admission_metadata(&planned_job)
                         .await?;

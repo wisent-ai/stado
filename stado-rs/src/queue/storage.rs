@@ -502,6 +502,9 @@ impl JobStorage {
             return Ok(());
         };
         let current = Job::from_json(&versioned.content)?;
+        if current.state != crate::models::job_state::QUEUED {
+            return Ok(());
+        }
         if crate::queue::submit::immutable_job_projection(&current)
             != crate::queue::submit::immutable_job_projection(planned)
         {
@@ -622,6 +625,45 @@ impl JobStorage {
         )))
     }
 
+    async fn finish_completed_transition(
+        &self,
+        transition: &JobTransition,
+    ) -> Result<bool, StorageError> {
+        let destination_path = format!(
+            "{}/{}.json",
+            transition.to_prefix, transition.job_id
+        );
+        let destination = self
+            .read_job(&transition.to_prefix, &transition.job_id)
+            .await?
+            .ok_or_else(|| {
+                StorageError::StorageConflict(format!(
+                    "completed transition {} has no destination",
+                    transition.transition_id
+                ))
+            })?;
+        if crate::queue::submit::immutable_job_projection(&destination)
+            != crate::queue::submit::immutable_job_projection(&transition.destination_job)
+            || destination.state != prefix_state(&transition.to_prefix)
+        {
+            return Err(StorageError::StorageConflict(format!(
+                "{destination_path} does not match completed transition {}",
+                transition.transition_id
+            )));
+        }
+        if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
+            crate::queue::runs::record_terminal_outcome(
+                self,
+                &destination,
+                &transition.to_prefix,
+            )
+            .await?;
+        }
+        self.retire_transition_source(transition).await?;
+        tombstone::on_transition(self, &destination, &transition.to_prefix).await;
+        Ok(true)
+    }
+
     /// Recover or finish the single durable lifecycle transition for a job.
     /// Recovery is ownership-independent: the persisted intent and source
     /// version are the fence, so any caller can complete an abandoned owner.
@@ -637,8 +679,7 @@ impl JobStorage {
         let fence_state = transition_fence_state(&transition.transition_id);
 
         if transition.state == "completed" {
-            self.retire_transition_source(&transition).await?;
-            return Ok(true);
+            return self.finish_completed_transition(&transition).await;
         }
         if transition.state != "prepared" {
             return Err(StorageError::Other(format!(
@@ -697,7 +738,7 @@ impl JobStorage {
                 }
                 self.set_transition_state(&transition.transition_id, job_id, "completed")
                     .await?;
-                return Ok(true);
+                return self.finish_completed_transition(&transition).await;
             }
         }
 
@@ -783,19 +824,9 @@ impl JobStorage {
         if transition.to_prefix == "queue" && destination.priority > 0 {
             self.write_priority_marker(&destination).await?;
         }
-        if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
-            crate::queue::runs::record_terminal_outcome(
-                self,
-                &destination,
-                &transition.to_prefix,
-            )
-            .await?;
-        }
         self.set_transition_state(&transition.transition_id, job_id, "completed")
             .await?;
-        self.retire_transition_source(&transition).await?;
-        tombstone::on_transition(self, &destination, &transition.to_prefix).await;
-        Ok(true)
+        self.finish_completed_transition(&transition).await
     }
 
     async fn transition_job_if_version(
@@ -980,7 +1011,9 @@ impl JobStorage {
             return Ok(None);
         };
         let job = Job::from_json(&data)?;
-        if job.state.starts_with("transition-cleaned:") {
+        if job.state.starts_with("transition-cleaned:")
+            || job.state.starts_with("transition-fence:")
+        {
             return Ok(None);
         }
         Ok(Some(job))

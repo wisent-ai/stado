@@ -100,11 +100,15 @@ pub async fn read_run(
         return Ok(None);
     };
     let value: Value = serde_json::from_str(&versioned.content)?;
-    if value.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v2") {
-        return Err(StorageError::Other(format!(
-            "run manifest {run_id} requires explicit external migration from v2"
-        )));
-    }
+    let value = if value.get("schema").and_then(Value::as_str)
+        == Some("stado.run-submission.v2")
+    {
+        crate::queue::submit::migrate_v2_run_manifest(store, run_id)
+            .await
+            .map_err(|error| StorageError::Other(error.to_string()))?
+    } else {
+        value
+    };
     match value {
         Value::Object(map) => Ok(Some(map)),
         _ => Err(StorageError::Other(format!(
@@ -147,6 +151,9 @@ pub async fn record_terminal_outcome(
     crate::queue::submit::validate_run_id(&job.run_id)
         .map_err(|error| StorageError::Other(error.to_string()))?;
     let path = format!("{RUN_PREFIX}/{}.json", job.run_id);
+    crate::queue::submit::migrate_v2_run_manifest(store, &job.run_id)
+        .await
+        .map_err(|error| StorageError::Other(error.to_string()))?;
     for _ in 0..16 {
         let versioned = store.read_text_versioned(&path).await?.ok_or_else(|| {
             StorageError::Other(format!(
@@ -159,8 +166,6 @@ pub async fn record_terminal_outcome(
             .map_err(|error| StorageError::Other(error.to_string()))?;
         if manifest.get("schema").and_then(Value::as_str)
             != Some("stado.run-submission.v3")
-            || manifest.get("request_digest").and_then(Value::as_str)
-                != Some(job.submission_request_digest.as_str())
         {
             return Err(StorageError::Other(format!(
                 "durable run manifest {} does not match terminal job {}",
