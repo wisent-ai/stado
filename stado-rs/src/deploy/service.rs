@@ -1132,7 +1132,7 @@ fn split_error_section(tail: &str) -> (&str, Option<(&str, &str)>) {
 /// substitution, escape the quotes or add a line is refused outright rather
 /// than escaped into something subtle. An empty path means "let the remote
 /// program derive it".
-fn quote_unit_path(path: &str) -> Result<String, DeployError> {
+pub fn quote_unit_path(path: &str) -> Result<String, DeployError> {
     if path.is_empty() {
         return Ok(String::new());
     }
@@ -1296,7 +1296,7 @@ fn validate_unit_argument(arg: &str) -> Result<(), DeployError> {
 /// Reject a unit id that cannot ride the remote program as a shell word.
 /// `shlex_quote` handles the quoting, but a control character in a launchd
 /// label is never a real unit and would corrupt the marker framing.
-fn validate_unit_id(unit: &str) -> Result<(), DeployError> {
+pub fn validate_unit_id(unit: &str) -> Result<(), DeployError> {
     if unit.is_empty() || unit.chars().any(char::is_control) {
         return Err(DeployError(format!(
             "unit {} is not a usable launchd label or systemd unit name",
@@ -5201,8 +5201,10 @@ done
 /// wrong here: the whole point of the filter is to name
 /// `stado agent --target <host>` rather than a bare binary. The charset is
 /// widened by exactly a space and nothing else, so every character a shell
-/// would act on stays refused.
-fn quote_command_match(value: &str) -> Result<String, DeployError> {
+/// would act on stays refused. Shared with
+/// [`super::service_spawn_watch`], which filters the same process table for
+/// the same kind of name and must refuse exactly what the reaper refuses.
+pub fn quote_command_match(value: &str) -> Result<String, DeployError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(DeployError("the command substring is empty".to_string()));
@@ -5317,7 +5319,7 @@ pub enum BootoutScope {
 
 impl BootoutScope {
     /// The word the remote program compares against.
-    fn word(self) -> &'static str {
+    pub fn word(self) -> &'static str {
         match self {
             Self::Any => "any",
             Self::System => "system",
