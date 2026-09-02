@@ -291,17 +291,21 @@ pub async fn list_claimable(
         collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
         return Ok(out);
     }
-    // Extends the existing backfill rather than adding a second repair: it
-    // now covers every queued job, because the index now does. `true` means
-    // the index is known to name every job in `queue/`.
+    // Extends the existing repair rather than adding a second one: it now
+    // covers every queued job, because the index now does. `true` means the
+    // sweep has covered `queue/` end-to-end at least once. The sweep itself
+    // keeps running past that point — it is also driven from the coordinator
+    // tick by `queue::reaper::reap_expired_leases` — because a marker can go
+    // missing after the first full pass.
     let indexed = migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
     collect_from_index(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
     if !indexed {
-        // The index does not name everything yet, so it cannot be the only
-        // way in without stranding the jobs it has not reached. This pass is
-        // the expensive one the index exists to retire, and it retires itself:
-        // the backfill above advances on every call, and once it reports
-        // complete this branch is dead for the life of the store.
+        // No sweep has covered the whole prefix yet, so the index cannot be
+        // the only way in without stranding the jobs it has not reached. This
+        // pass is the expensive one the index exists to retire, and what
+        // retires it is coverage, not the repair going away: the sweep above
+        // advances on every call, and once one has completed this branch is
+        // dead while the bounded repair keeps running behind it.
         collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
     }
     Ok(out)

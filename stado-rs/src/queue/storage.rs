@@ -539,6 +539,24 @@ impl JobStorage {
     /// callers must read it back and verify its submission identity.
     pub async fn create_queued_job_if_absent(&self, job: &Job) -> Result<bool, StorageError> {
         let blob_path = format!("queue/{}.json", job.job_id);
+        // Index ordering rule (see `queue::listing` module docs): the marker
+        // is written BEFORE the job blob is settled. Blob-then-marker leaves
+        // an admitted job with no index entry if anything interrupts the
+        // window — and since the index is the whole listing strategy for
+        // `queue/`, that job is invisible to every scheduler while still
+        // reporting `queued`. It used to self-heal only if the very same
+        // caller retried admission under the same run id, which no other
+        // participant can do on its behalf.
+        //
+        // Every queued job is indexed, not just the prioritized ones.
+        // `priority_key` already sorts priority 0 correctly — it is the
+        // largest inverted key, so those jobs land after all prioritized
+        // work and FIFO among themselves — so this widens the index's
+        // coverage without changing one byte of its name shape. The
+        // listing walk can only be the ordered index if the index names
+        // everything; while it named a subset, the unindexed remainder
+        // needed a second, whole-prefix pass to be reachable at all.
+        self.write_priority_marker(job).await?;
         let created = self
             .backend
             .upload_text_if_absent(&blob_path, &job.to_json())
@@ -546,15 +564,12 @@ impl JobStorage {
         if created {
             let meta = Self::job_metadata(job);
             self.backend.set_metadata(&blob_path, &meta).await?;
-            // Every queued job is indexed, not just the prioritized ones.
-            // `priority_key` already sorts priority 0 correctly — it is the
-            // largest inverted key, so those jobs land after all prioritized
-            // work and FIFO among themselves — so this widens the index's
-            // coverage without changing one byte of its name shape. The
-            // listing walk can only be the ordered index if the index names
-            // everything; while it named a subset, the unindexed remainder
-            // needed a second, whole-prefix pass to be reachable at all.
-            self.write_priority_marker(job).await?;
+        } else if !self.backend.exists(&blob_path).await? {
+            // Lost the create to a generation that has since left `queue/`,
+            // so the marker names nothing. Dropping it is an optimization,
+            // not a correctness step: an orphan is skipped by the walk and
+            // only costs scan budget.
+            self.delete_priority_marker_for(job).await?;
         }
         Ok(created)
     }

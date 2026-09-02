@@ -1,20 +1,27 @@
-//! Idempotent priority-marker backfill for pre-0.4.26 queued jobs.
+//! Standing priority-marker repair for queued jobs missing an index entry.
 //!
-//! Port of `stado/queue/migrations.py`.
+//! Port of `stado/queue/migrations.py`, widened past its original job.
 //!
-//! The priority-marker index introduced in 0.4.26 is auto-populated by
-//! durable queue admission. Jobs already sitting in queue/
-//! when 0.4.26 deployed have no marker and would remain stranded behind
-//! the FIFO listing window because the scheduler only loads the oldest N
-//! queue/ blobs by GCS time_created.
+//! The priority-marker index introduced in 0.4.26 is populated by durable
+//! queue admission. Jobs already sitting in queue/ when 0.4.26 deployed have
+//! no marker, and so does any job whose marker write failed to land after it.
+//! Either way the job is stranded: the listing walk IS the index, so an
+//! unindexed queued job is never claimed while it still reports `queued`.
 //!
-//! This module fixes that automatically: list_jobs_priority_first calls
-//! backfill_priority_markers() before doing its priority-listing pass.
-//! The backfill is resumable via a queue_priority/.migration.json sentinel
-//! that records (cursor, done). Each call processes BACKFILL_BATCH blobs
-//! to fit comfortably inside a Cloud Function 60s tick; subsequent calls
-//! resume past the recorded cursor. Once cursor reaches the end of queue/,
-//! sentinel.done=True and every future call returns immediately.
+//! This module fixes that continuously. [`backfill_priority_markers`] is
+//! driven from the coordinator tick by
+//! [`crate::queue::reaper::reap_expired_leases`], and from
+//! [`super::listing::list_claimable`] while the fallback is still live. It is
+//! resumable via a queue_priority/.migration.json sentinel recording
+//! (cursor, done, coverage). Each call processes at most `batch` blobs, to
+//! fit comfortably inside a Cloud Function 60s tick, and resumes past the
+//! recorded cursor.
+//!
+//! The cursor WRAPS: reaching the end of queue/ rewinds it to the head so
+//! the next call sweeps again. `done` no longer terminates the pass — it
+//! only records that one full sweep has happened, which retires the
+//! whole-prefix listing fallback. A repair that latched shut could not see a
+//! marker lost after it completed, and nothing else would ever look.
 
 use std::collections::HashSet;
 
@@ -51,6 +58,12 @@ const COVERAGE: &str = "all-queued";
 
 /// Python sentinel dict `{"cursor": str, "done": bool}`, plus the coverage
 /// the `done` belongs to.
+///
+/// `done` no longer means "this migration is over and must never run again".
+/// It means "the sweep has covered the prefix end-to-end at least once", so
+/// the whole-prefix fallback in [`super::listing::list_claimable`] can be
+/// switched off. It is sticky across the cursor's rewind: the sweep keeps
+/// running forever, the fallback stays retired.
 struct Sentinel {
     cursor: String,
     done: bool,
@@ -122,21 +135,29 @@ async fn existing_marker_names(store: &JobStorage) -> Result<HashSet<String>, St
     Ok(out)
 }
 
-/// Scan queue/ and write missing markers for queued jobs. Returns `true` iff
-/// migration is complete (sentinel.done set). Idempotent: safe to call
-/// repeatedly. Each call processes at most `batch` queue/ blobs.
+/// Scan queue/ in bounded batches and write any missing marker. Returns
+/// `true` once the index has been swept end-to-end at least once, which is
+/// what lets [`super::listing::list_claimable`] stop paying for the
+/// whole-prefix fallback.
 ///
 /// This is the bounded repair that keeps an unindexed job reachable, and it
 /// is the ONLY one: the widening from priority>0 to every queued job extends
 /// this pass rather than adding a second mechanism beside it.
+///
+/// It never stops. `done` used to latch terminally, which was right while the
+/// index was an optimization and wrong the moment it became the only way to
+/// see a queued job: a marker lost after the sweep completed — a failed write
+/// during plain admission, a process killed between the queue blob and its
+/// marker — left that job invisible to every scheduler forever, because
+/// nothing would ever look again. So `done` now records only "swept once, the
+/// fallback can be switched off", and the cursor REWINDS to the head instead
+/// of latching, so every later call keeps repairing a bounded batch. The
+/// per-call cost stays a names-only listing plus at most `batch` bodies.
 pub async fn backfill_priority_markers(
     store: &JobStorage,
     batch: usize,
 ) -> Result<bool, StorageError> {
     let state = read_sentinel(store).await?;
-    if state.done {
-        return Ok(true);
-    }
     let mut paths: Vec<String> = store
         .list_paths("queue/", 0)
         .await?
@@ -150,6 +171,8 @@ pub async fn backfill_priority_markers(
         paths.drain(..cut);
     }
     if paths.is_empty() {
+        // End of a sweep. Record that one completed and rewind to the head so
+        // the next call starts over rather than never running again.
         write_sentinel(store, "", true).await?;
         return Ok(true);
     }
@@ -181,8 +204,13 @@ pub async fn backfill_priority_markers(
         }
         store.write_priority_marker(&job).await?;
     }
+    // A chunk short of `batch` is the tail of the prefix: this sweep reached
+    // the end. `done` is sticky — once any sweep has covered the prefix, the
+    // fallback stays retired even while a later sweep is mid-flight — and the
+    // cursor keeps advancing so the repair itself never stops.
     let new_cursor = chunk.last().cloned().unwrap_or_default();
-    let is_done = chunk.len() < batch;
-    write_sentinel(store, &new_cursor, is_done).await?;
-    Ok(is_done)
+    let swept = state.done || chunk.len() < batch;
+    let next_cursor = if chunk.len() < batch { "" } else { &new_cursor };
+    write_sentinel(store, next_cursor, swept).await?;
+    Ok(swept)
 }

@@ -72,6 +72,10 @@ pub struct ReaperSummary {
     /// Queued jobs whose `assigned_to` named a silent worker, cleared so
     /// another worker can claim them.
     pub assignments_cleared: usize,
+    /// Whether the marker-index sweep has covered `queue/` end-to-end at
+    /// least once, which is what lets the listing walk drop its
+    /// whole-prefix fallback. Reported, not acted on, here.
+    pub index_swept: bool,
 }
 
 /// Seconds since `status/<job_id>/heartbeat` was last written, or `None`
@@ -312,10 +316,10 @@ async fn clear_silent_assignments(
     Ok(())
 }
 
-/// One reaper pass over the queue: recover phantom running jobs, then
-/// release queued jobs pinned to silent workers. Called from the
-/// coordinator tick before assignment so recovered work is dispatchable in
-/// the same tick.
+/// One reaper pass over the queue: repair the marker index, recover phantom
+/// running jobs, then release queued jobs pinned to silent workers. Called
+/// from the coordinator tick before assignment so recovered work is
+/// dispatchable in the same tick.
 pub async fn reap_expired_leases(
     store: &JobStorage,
     log: &dyn Fn(&str),
@@ -323,6 +327,17 @@ pub async fn reap_expired_leases(
     let now = Utc::now();
     let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
     let mut summary = ReaperSummary::default();
+    // The index repair belongs on this tick, and it never retires. A queued
+    // job whose marker write did not land is invisible to every scheduler
+    // while still reporting `queued` — the same class of stranding this
+    // reaper exists to undo, just on the listing index instead of the lease.
+    // The sweep is bounded per call and its cursor wraps, so this is a fixed
+    // cost per tick that eventually re-examines every queued job rather than
+    // a one-shot migration that stops looking. It runs before the passes
+    // below so a recovered marker is claimable in this same tick.
+    summary.index_swept =
+        crate::queue::migrations::backfill_priority_markers(store, config::MARKER_REPAIR_PER_TICK)
+            .await?;
     for candidate in store.list_jobs("running", 0).await? {
         if candidate.job_id.is_empty() {
             continue;
