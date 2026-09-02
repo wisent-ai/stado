@@ -45,6 +45,7 @@
 //! `stado bootstrap --local` and `stado install-disk-cleanup` use, so a
 //! service deployed remotely is byte-identical to one installed locally.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -652,66 +653,157 @@ pub fn misdeclared_domains(target: &ComputeTarget) -> Vec<MisdeclaredDomain> {
         .collect()
 }
 
-/// A registry-declared service that Stado delivers, on a host that declares no
-/// version for it.
+/// What proves a product is delivered to a host, and therefore that a version
+/// declaration for it is meaningful.
+///
+/// The witness used to be a launchd unit alone, and that was wrong in both
+/// directions on the one host it was written for. On `charless-mac-mini` the
+/// unit it named for `brama` is `com.wisent.always-on.brama`, which is that
+/// product's `legacy_launchd_label`
+/// (`release_control.products.brama.targets.<host>.legacy_launchd_label`) —
+/// the label the release agent boots out of the system domain every pass it
+/// has to bind the stable bind, in [`crate::release_agent`]'s `stop_legacy`.
+/// So the check pointed an operator at a unit that is inactive BY
+/// DECLARATION, and it would have gone silent the moment that legacy plist
+/// was removed, while the gap it reports — a delivered product the host
+/// declares no version for — outlives the unit entirely.
+///
+/// [`DeliveryEvidence::ReleaseTarget`] is therefore the primary witness: it
+/// is the registry's own statement that this host receives this product, and
+/// no launchd unit has to exist for it to hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryEvidence {
+    /// `release_control.products.<product>.targets.<host>` exists: the fleet
+    /// declares this host a release target for the product, and names the
+    /// install root its bytes are staged under. Survives the removal of every
+    /// unit on the host.
+    ReleaseTarget { install_root: String },
+    /// A declared unit whose program sits in the delivery tree
+    /// (`<home>/.stado/services/<product>/…`) and which is NOT any product's
+    /// `legacy_launchd_label` on this host. Kept because a product delivered
+    /// under a unit but absent from `release_control` is still delivered.
+    DeliveredUnit,
+}
+
+/// A Stado-delivered product on a host that declares no version for it.
 ///
 /// Every version diagnostic in this pack is declaration-driven: `host
 /// reconcile` and `service converge` enumerate `managed_versions` and compare
 /// each entry against the host, and `probe_installed_versions` reads only the
-/// binaries that map names. So a delivered service with no entry produces no
+/// binaries that map names. So a delivered product with no entry produces no
 /// row anywhere, and its absence from a clean report reads as agreement.
 ///
-/// Measured on charless-mac-mini on 2026-09-02: `com.wisent.always-on.brama`
-/// runs out of the delivery tree at
-/// `~/.stado/services/brama/current/<platform>/bin/start-with-skarbiec`, the
-/// host declares versions for `skarbiec`, `stado` and `weles-worker` only, and
-/// the running gateway reported 0.2.58 while its own workload registry pinned
-/// 0.2.52. `stado host reconcile` named the two declared binaries that had
-/// drifted and said nothing at all about the gateway every model call in the
-/// fleet goes through; `stado service converge <host> brama` refused with
-/// "declares no brama version", which is the right answer to a question nobody
-/// thinks to ask. Establishing that by hand cost a day of forwarding channels.
+/// Measured on charless-mac-mini on 2026-09-02, and the measurement is what
+/// fixed this check's shape. `brama` is delivered there — install root
+/// `/Users/charles/.stado/services/brama` — and the host declares versions for
+/// `skarbiec`, `stado` and `weles-worker` only, so `stado host reconcile` named
+/// the two declared binaries that had drifted and said nothing at all about the
+/// gateway every model call in the fleet goes through, and
+/// `stado service converge <host> brama` refused with "declares no brama
+/// version". That is the gap.
+///
+/// What is NOT the gap: `com.wisent.always-on.brama` being inactive. That
+/// label is brama's `legacy_launchd_label`, deliberately booted out by the
+/// release agent's `stop_legacy` (`release_agent.rs:680-700`) on every pass
+/// that has to bind the stable bind; the product is served by the rollout's
+/// stable proxy on the declared `stable_bind`, forwarding to whichever
+/// candidate port is active, and `cli/service_verify.rs` records that judging
+/// such a product by unit ownership produced a false `misowned` row on
+/// 2026-09-01. Nothing here treats that unit as the reason a version matters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndeclaredServiceVersion {
     pub host: String,
-    /// The name the CLI addresses the service by.
-    pub name: String,
-    /// The launchd label or systemd unit, so the row names what an operator
-    /// sees in `service list`.
-    pub unit: String,
-    /// The program the declaration runs, on the host.
-    pub program: String,
-    /// The delivery-tree segment the program sits under, which is the name a
-    /// version would be declared against.
+    /// The delivery-tree segment / release-control product key, which is the
+    /// name a version is declared against.
     pub product: String,
+    /// The name the CLI addresses the service by, when a unit declares one.
+    pub name: Option<String>,
+    /// The launchd label or systemd unit an operator can see, when one exists
+    /// that is not this product's legacy label. Carried for recognition only:
+    /// it never decides whether the row exists.
+    pub unit: Option<String>,
+    /// The program that unit runs, on the host.
+    pub program: Option<String>,
+    pub evidence: DeliveryEvidence,
+    /// The stable bind the rollout declares for this product on this host: the
+    /// address its proxy holds instead of any unit.
+    pub stable_bind: Option<String>,
+    /// The label `stop_legacy` boots out for this product on this host, so the
+    /// row says plainly that the dead unit is not the finding.
+    pub legacy_unit: Option<String>,
 }
 
 impl UndeclaredServiceVersion {
     pub fn sentence(&self) -> String {
-        format!(
-            "{} runs {} out of Stado's own delivery tree, so its bytes arrive by \
-             `stado host release` and carry a version — but {} declares no version for \
-             {product:?}. Every version diagnostic here enumerates managed_versions, so \
-             this service is absent from `host reconcile` and `service converge` rather \
-             than reported as drifted: nothing compares what it runs against anything. \
-             Declare one with `stado host declare-version {} --binary {product} \
-             --version X.Y.Z`, reading the running version from `service converge` \
+        let mut sentence = match &self.evidence {
+            DeliveryEvidence::DeliveredUnit => format!(
+                "{} runs {} out of Stado's own delivery tree, so its bytes arrive by \
+                 `stado host release` and carry a version",
+                self.unit.as_deref().unwrap_or(&self.product),
+                self.program.as_deref().unwrap_or_default(),
+            ),
+            DeliveryEvidence::ReleaseTarget { install_root } => format!(
+                "release_control declares {} a release target for {}, staged under \
+                 {install_root}, so its bytes arrive by `stado host release` and carry a \
+                 version",
+                self.host, self.product,
+            ),
+        };
+        sentence.push_str(&format!(
+            " — but {} declares no version for {product:?}. Every version diagnostic here \
+             enumerates managed_versions, so this service is absent from `host reconcile` and \
+             `service converge` rather than reported as drifted: nothing compares what it runs \
+             against anything. Declare one with `stado host declare-version {} --binary \
+             {product} --version X.Y.Z`, reading the running version from `service converge` \
              afterwards rather than inventing it",
-            self.unit,
-            self.program,
             self.host,
             self.host,
             product = self.product,
-        )
+        ));
+        // Naming what an operator can see is useful, so a real unit is
+        // printed here — but only a unit that passed the legacy exclusion.
+        // A `legacy_launchd_label` never reaches this clause; it is reported
+        // below as what it is.
+        if matches!(self.evidence, DeliveryEvidence::ReleaseTarget { .. }) {
+            if let (Some(unit), Some(program)) = (&self.unit, &self.program) {
+                sentence.push_str(&format!(
+                    ". The unit that serves it on this host is {unit}, running {program}"
+                ));
+            }
+        }
+        if let Some(bind) = &self.stable_bind {
+            sentence.push_str(&format!(
+                ". {} is served by the rollout's stable proxy on {bind}, which forwards to \
+                 whichever candidate port is active, and not by a launchd unit of its own",
+                self.product
+            ));
+        }
+        if let Some(legacy) = &self.legacy_unit {
+            sentence.push_str(&format!(
+                ". Its legacy unit {legacy} is booted out of the system domain by the release \
+                 agent, so that unit being inactive is by declaration and is not what this \
+                 finding names"
+            ));
+        }
+        sentence
     }
 
     pub fn to_json(&self) -> Value {
         json!({
             "host": self.host,
+            "product": self.product,
             "name": self.name,
             "unit": self.unit,
             "program": self.program,
-            "product": self.product,
+            "evidence": match &self.evidence {
+                DeliveryEvidence::ReleaseTarget { install_root } => json!({
+                    "kind": "release-target",
+                    "install_root": install_root,
+                }),
+                DeliveryEvidence::DeliveredUnit => json!({"kind": "delivered-unit"}),
+            },
+            "stable_bind": self.stable_bind,
+            "legacy_unit": self.legacy_unit,
             "detail": self.sentence(),
         })
     }
@@ -735,40 +827,125 @@ fn delivery_tree_product(program: &str) -> Option<&str> {
     Some(product)
 }
 
-/// Every Stado-delivered service on TARGET that the host declares no version
+/// A version already accounted for: declared against the product name, or
+/// against the file name of the program a unit runs.
+///
+/// Both readings stay allowed because both delivery shapes are in use:
+/// `brama` is delivered under the product name and runs a launcher script,
+/// while `com.wisent.always-on.stado-object-api` is delivered under its label
+/// and runs the declared `stado` binary. Accepting only one would report the
+/// other on every host that has it.
+fn version_accounted_for(target: &ComputeTarget, product: &str, program: Option<&str>) -> bool {
+    if target.declared_version(product).is_some() {
+        return true;
+    }
+    program.is_some_and(|program| {
+        let file_name = program.rsplit('/').next().unwrap_or_default();
+        target.declared_version(file_name).is_some()
+    })
+}
+
+/// Every label `stop_legacy` boots out on TARGET, across every product the
+/// rollout policy declares for it.
+///
+/// A unit in this set is scheduled for bootout, not for delivery, so it must
+/// never be the witness that a product is delivered here.
+fn legacy_launchd_labels<'a>(
+    target: &ComputeTarget,
+    control: Option<&'a crate::release_control::ReleaseControl>,
+) -> BTreeSet<&'a str> {
+    control
+        .into_iter()
+        .flat_map(|control| control.products.values())
+        .filter_map(|policy| policy.targets.get(&target.name))
+        .filter_map(|policy_target| policy_target.legacy_launchd_label.as_deref())
+        .collect()
+}
+
+/// Every Stado-delivered product on TARGET that the host declares no version
 /// for.
 ///
-/// A service is accounted for when either the delivery-tree segment or the
-/// program's own file name is a declared binary. Both readings are allowed
-/// because the two shapes are both in use: `com.wisent.always-on.brama` is
-/// delivered under the product name `brama` and runs a launcher script, while
-/// `com.wisent.always-on.stado-object-api` is delivered under its label and
-/// runs the declared `stado` binary. Accepting only one of the two would
-/// report the other as a finding on every host that has it.
-pub fn services_without_declared_version(target: &ComputeTarget) -> Vec<UndeclaredServiceVersion> {
-    declared_services(target)
-        .iter()
-        .filter_map(|service| {
-            let product = delivery_tree_product(&service.program)?;
-            let file_name = service.program.rsplit('/').next().unwrap_or_default();
-            if target.declared_version(product).is_some()
-                || target.declared_version(file_name).is_some()
-            {
-                return None;
+/// `control` is `registry.release_control`, the fleet's own statement of which
+/// products are delivered where. It is the primary witness precisely because
+/// it is independent of any launchd unit: a product stays a release target
+/// after its plist is deleted, and the version gap stays with it. A declared
+/// unit running out of the delivery tree is a second, independent witness for
+/// a product `release_control` does not carry — with one exclusion, which is
+/// the whole correction here: a unit that is some product's
+/// `legacy_launchd_label` on this host is deliberately booted out by the
+/// release agent and is never read as evidence of delivery.
+pub fn products_without_declared_version(
+    target: &ComputeTarget,
+    control: Option<&crate::release_control::ReleaseControl>,
+) -> Vec<UndeclaredServiceVersion> {
+    let legacy_labels = legacy_launchd_labels(target, control);
+    // Delivery-tree units that may witness a product, keyed by product:
+    // (service name, unit id, program).
+    let mut units: BTreeMap<String, (String, String, String)> = BTreeMap::new();
+    for service in declared_services(target) {
+        if legacy_labels.contains(service.unit_id()) {
+            continue;
+        }
+        let Some(product) = delivery_tree_product(&service.program) else {
+            continue;
+        };
+        units.entry(product.to_string()).or_insert((
+            service.name.clone(),
+            service.unit_id().to_string(),
+            service.program.clone(),
+        ));
+    }
+
+    let mut rows: BTreeMap<String, UndeclaredServiceVersion> = BTreeMap::new();
+    if let Some(control) = control {
+        for (product, policy) in &control.products {
+            let Some(policy_target) = policy.targets.get(&target.name) else {
+                continue;
+            };
+            let unit = units.get(product);
+            if version_accounted_for(
+                target,
+                product,
+                unit.map(|(_, _, program)| program.as_str()),
+            ) {
+                continue;
             }
-            Some(UndeclaredServiceVersion {
-                host: target.name.clone(),
-                name: service.name.clone(),
-                unit: if service.label.is_empty() {
-                    service.unit.clone()
-                } else {
-                    service.label.clone()
+            rows.insert(
+                product.clone(),
+                UndeclaredServiceVersion {
+                    host: target.name.clone(),
+                    product: product.clone(),
+                    name: unit.map(|(name, _, _)| name.clone()),
+                    unit: unit.map(|(_, unit, _)| unit.clone()),
+                    program: unit.map(|(_, _, program)| program.clone()),
+                    evidence: DeliveryEvidence::ReleaseTarget {
+                        install_root: policy.install_root.clone(),
+                    },
+                    stable_bind: policy_target.stable_bind.clone(),
+                    legacy_unit: policy_target.legacy_launchd_label.clone(),
                 },
-                program: service.program.clone(),
-                product: product.to_string(),
-            })
-        })
-        .collect()
+            );
+        }
+    }
+    for (product, (name, unit, program)) in units {
+        if rows.contains_key(&product) || version_accounted_for(target, &product, Some(&program)) {
+            continue;
+        }
+        rows.insert(
+            product.clone(),
+            UndeclaredServiceVersion {
+                host: target.name.clone(),
+                product,
+                name: Some(name),
+                unit: Some(unit),
+                program: Some(program),
+                evidence: DeliveryEvidence::DeliveredUnit,
+                stable_bind: None,
+                legacy_unit: None,
+            },
+        );
+    }
+    rows.into_values().collect()
 }
 
 // ---------------------------------------------------------------------------
