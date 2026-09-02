@@ -798,15 +798,31 @@ fn lease_is_live(entry: &Map<String, Value>) -> bool {
         .is_some_and(|expires| expires > chrono::Utc::now())
 }
 
+/// The manifest a checkpoint writes into, and the identity it must keep.
+///
+/// `path`, `run_id`, `request` and `request_digest` are read together by every
+/// step below — validation compares the stored manifest against exactly this
+/// quadruple — so they travel as one value rather than as four parameters that
+/// every call site has to repeat in the same order.
+struct RunCheckpoint<'a> {
+    path: &'a str,
+    run_id: &'a str,
+    request: &'a Value,
+    request_digest: &'a str,
+}
+
 async fn claim_entry(
     store: &JobStorage,
-    path: &str,
-    run_id: &str,
-    request: &Value,
-    request_digest: &str,
+    checkpoint: &RunCheckpoint<'_>,
     index: usize,
     owner: &str,
 ) -> Result<EntryClaim, SubmitError> {
+    let RunCheckpoint {
+        path,
+        run_id,
+        request,
+        request_digest,
+    } = *checkpoint;
     for _ in 0..16 {
         let versioned = store
             .read_text_versioned(path)
@@ -894,14 +910,17 @@ async fn claim_entry(
 
 async fn checkpoint_accepted(
     store: &JobStorage,
-    path: &str,
-    run_id: &str,
-    request: &Value,
-    request_digest: &str,
+    checkpoint: &RunCheckpoint<'_>,
     index: usize,
     job_id: &str,
     owner: &str,
 ) -> Result<(), SubmitError> {
+    let RunCheckpoint {
+        path,
+        run_id,
+        request,
+        request_digest,
+    } = *checkpoint;
     for _ in 0..16 {
         let versioned = store
             .read_text_versioned(path)
@@ -1141,19 +1160,15 @@ pub async fn submit_batch(
     // share only this exact request digest and all side effects remain
     // create-if-absent/CAS fenced.
     let owner = format!("submission:{request_digest}");
+    let checkpoint = RunCheckpoint {
+        path: &path,
+        run_id: &run_id,
+        request: &request,
+        request_digest: &request_digest,
+    };
     let mut accepted = Vec::with_capacity(planned.len());
     for index in 0..planned.len() {
-        match claim_entry(
-            &store,
-            &path,
-            &run_id,
-            &request,
-            &request_digest,
-            index,
-            &owner,
-        )
-        .await?
-        {
+        match claim_entry(&store, &checkpoint, index, &owner).await? {
             EntryClaim::Terminal(job) => accepted.push(job),
             EntryClaim::Accepted(planned_job) => {
                 let existing = find_job(&store, &planned_job.job_id)
@@ -1189,17 +1204,7 @@ pub async fn submit_batch(
                     store.repair_queued_admission_metadata(&planned_job).await?;
                     existing
                 };
-                checkpoint_accepted(
-                    &store,
-                    &path,
-                    &run_id,
-                    &request,
-                    &request_digest,
-                    index,
-                    &job.job_id,
-                    &owner,
-                )
-                .await?;
+                checkpoint_accepted(&store, &checkpoint, index, &job.job_id, &owner).await?;
                 accepted.push(job);
             }
         }
