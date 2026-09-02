@@ -1205,16 +1205,58 @@ async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Resu
     }
 }
 
+/// How many consecutive seconds a listener may refuse before it is reported
+/// broken rather than pinched.
+const ACCEPT_FAILURE_LIMIT: u32 = 60;
+
+/// Wait out an accept failure instead of dying of it.
+///
+/// `accept` answering `EMFILE` says the process is momentarily out of
+/// descriptors, which every long-lived server survives by waiting. Returning it
+/// killed the resolver instead: launchd counted 166 runs of
+/// `com.wisent.stado-resolver` on this workstation, each restart dropping every
+/// connection in flight, and four separate `release submit` runs died with
+/// `error sending request for url (http://127.0.0.1:18776/...)` in the middle
+/// of a publication because of it. One connection's resource error must not
+/// close the door for all of them.
+///
+/// The errno itself is not named, because none of the interesting ones have a
+/// stable `ErrorKind` and hard-coding platform numbers is a second thing to be
+/// wrong. A failure is waited out and retried; a listener that refuses without
+/// pause for [`ACCEPT_FAILURE_LIMIT`] consecutive attempts is the one reported
+/// broken, which no descriptor pinch survives and a dead socket always is.
+async fn accept_backoff(bind: &str, error: &std::io::Error, failures: u32) {
+    eprintln!(
+        "stado resolver {bind} accept deferred ({failures}/{ACCEPT_FAILURE_LIMIT}), \
+         retrying in 1s: {error}"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+}
+
 async fn serve_adapter(
     listener: TcpListener,
     adapter: ResolverAdapter,
     state: Arc<ResolverState>,
 ) -> Result<(), String> {
+    let mut failures = 0_u32;
     loop {
-        let (client, _) = listener
-            .accept()
-            .await
-            .map_err(|error| format!("{} accept failed: {error}", adapter.bind))?;
+        let (client, _) = match listener.accept().await {
+            Ok(accepted) => {
+                failures = 0;
+                accepted
+            }
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                if failures >= ACCEPT_FAILURE_LIMIT {
+                    return Err(format!(
+                        "{} accept failed {failures} times in a row: {error}",
+                        adapter.bind
+                    ));
+                }
+                accept_backoff(&adapter.bind, &error, failures).await;
+                continue;
+            }
+        };
         let state = Arc::clone(&state);
         let adapter = adapter.clone();
         tokio::spawn(async move {
@@ -1519,11 +1561,24 @@ async fn proxy_connection(
 }
 
 async fn serve_api(listener: TcpListener, state: Arc<ResolverState>) -> Result<(), String> {
+    let mut failures = 0_u32;
     loop {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .map_err(|error| format!("resolution API accept failed: {error}"))?;
+        let (mut stream, _) = match listener.accept().await {
+            Ok(accepted) => {
+                failures = 0;
+                accepted
+            }
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                if failures >= ACCEPT_FAILURE_LIMIT {
+                    return Err(format!(
+                        "resolution API accept failed {failures} times in a row: {error}"
+                    ));
+                }
+                accept_backoff("resolution API", &error, failures).await;
+                continue;
+            }
+        };
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let response = match read_request(&mut stream).await {
