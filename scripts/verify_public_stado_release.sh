@@ -46,12 +46,21 @@ test -f "$release_dir/$manifest_name"
 # An interrupted upload therefore leaves parts a later attempt cleans up:
 # 0.13.44's first darwin attempt left four when the runner lost its connection
 # mid-archive. Parts are upload state, never coordinate members, so they are
-# dropped here — while any OTHER unexpected member still fails the coordinate.
+# dropped from the listing read here.
+#
+# What is asserted is presence at the writer-verified size, one declared object
+# at a time, and NOT the size of the coordinate. One `product/version/platform`
+# coordinate has two writers: this train publishes nine objects, and
+# `stado release submit`'s signed pipeline publishes `release.json`,
+# `release.sig`, `release.tar.gz` and `qualification.json` beside them.
+# 0.13.45/linux-amd64 held all thirteen, so an equality against the nine this
+# job built refused a coordinate that was whole — a check measuring the
+# publisher's own directory rather than the property that matters.
 listing="$(
   $stado_bin storage objects releases "$product/$version/$platform/" --json |
     jq -c '{objects: [.objects[] | select((.key // .uri) | contains(".__stado_upload/") | not)]}'
 )"
-local_count=0
+
 for source in "$release_dir"/*; do
   name="${source##*/}"
   uri="$prefix/$name"
@@ -62,14 +71,7 @@ for source in "$release_dir"/*; do
     echo "public release coordinate omitted $uri at its writer-verified size $size" >&2
     exit 1
   fi
-  local_count=$((local_count + 1))
 done
-
-listed_count="$(jq -er '.objects | length' <<<"$listing")"
-if [ "$listed_count" -ne "$local_count" ]; then
-  echo "public release coordinate contains $listed_count objects; expected $local_count" >&2
-  exit 1
-fi
 
 for name in "$archive_name" "$manifest_name"; do
   source="$release_dir/$name"
