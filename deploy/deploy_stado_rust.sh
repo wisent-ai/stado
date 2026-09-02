@@ -75,11 +75,17 @@ export STADO_RELEASE_PLATFORM
 # `config show` resolves env over file, and this script has just exported the
 # version, so the file's own declaration is only visible with that variable
 # unset — otherwise the comparison always agrees with itself and never writes.
-DECLARED_VERSION="$(env -u STADO_RELEASE_VERSION "$STADO_BIN" config show 2>/dev/null |
-    jq -r '.resolved.stado_release_version // ""' 2>/dev/null || true)"
-if [ "$DECLARED_VERSION" != "$STADO_RELEASE_VERSION" ]; then
-    "$STADO_BIN" config set release.version "$STADO_RELEASE_VERSION"
-    echo "declared release.version=$STADO_RELEASE_VERSION (was ${DECLARED_VERSION:-unset})"
+# The profile is the installer's own precondition and it refuses without one a
+# few lines later with a sentence that says so; this write stays quiet until
+# there is a file to write, rather than failing the deploy with a confusing
+# config error before that refusal is reached.
+if [ -n "${STADO_CONFIG:-}" ] && [ -r "${STADO_CONFIG:-}" ]; then
+    DECLARED_VERSION="$(env -u STADO_RELEASE_VERSION "$STADO_BIN" config show 2>/dev/null |
+        jq -r '.resolved.stado_release_version // ""' 2>/dev/null || true)"
+    if [ "$DECLARED_VERSION" != "$STADO_RELEASE_VERSION" ]; then
+        "$STADO_BIN" config set release.version "$STADO_RELEASE_VERSION"
+        echo "declared release.version=$STADO_RELEASE_VERSION (was ${DECLARED_VERSION:-unset})"
+    fi
 fi
 
 echo "Deploying Rust Stado from the explicitly selected deployment profile."
