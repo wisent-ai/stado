@@ -495,12 +495,15 @@ fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
                         format!("archive member exceeds the 8 GiB limit: {}", path.display()),
                     ));
                 }
-                total_member_bytes = total_member_bytes.checked_add(member_bytes).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "archive member byte total overflowed",
-                    )
-                })?;
+                total_member_bytes =
+                    total_member_bytes
+                        .checked_add(member_bytes)
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "archive member byte total overflowed",
+                            )
+                        })?;
                 if total_member_bytes > ARCHIVE_MAX_TOTAL_BYTES {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -2940,15 +2943,9 @@ pub(crate) async fn store_object_with_metadata(
     extra_metadata: &BTreeMap<String, String>,
 ) -> Result<String, CmdError> {
     Ok(
-        store_object_with_metadata_outcome(
-            uri,
-            source,
-            content_type,
-            if_absent,
-            extra_metadata,
-        )
-        .await?
-        .uri,
+        store_object_with_metadata_outcome(uri, source, content_type, if_absent, extra_metadata)
+            .await?
+            .uri,
     )
 }
 

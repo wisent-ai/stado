@@ -2949,8 +2949,10 @@ fn source_pin_moves(
                 "service directory route {logical:?} has no declaration source"
             ))
         })?;
-    Ok(source.get("artifact").and_then(Value::as_str) != Some(artifact)
-        || source.get("sha256").and_then(Value::as_str) != Some(sha256))
+    Ok(
+        source.get("artifact").and_then(Value::as_str) != Some(artifact)
+            || source.get("sha256").and_then(Value::as_str) != Some(sha256),
+    )
 }
 
 async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
@@ -5957,8 +5959,7 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             // decided before it — the unit was already ensured on the host —
             // so a lost race is reported instead of retried: re-running the
             // correction would replace a declaration this pass never saw.
-            let (mut document, expected_generation) =
-                registry::fetch_versioned_document().await?;
+            let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
             service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
             service::add_service(&mut document, &record).map_err(click)?;
             Some(registry::push_document_if(&document, &expected_generation).await?)
