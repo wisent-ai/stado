@@ -72,7 +72,9 @@ fn manifest_job_ids(manifest: &Value, run_id: &str) -> Result<Vec<String>, Stora
     manifest
         .get("entries")
         .and_then(Value::as_array)
-        .ok_or_else(|| StorageError::Other(format!("run manifest {run_id} missing durable entries")))?
+        .ok_or_else(|| {
+            StorageError::Other(format!("run manifest {run_id} missing durable entries"))
+        })?
         .iter()
         .map(|entry| {
             entry
@@ -168,7 +170,10 @@ pub async fn reap_terminal_runs(
         let initial_manifest: Value = serde_json::from_str(&initial.content)?;
         crate::queue::submit::validate_stored_run_manifest(&initial_manifest, &run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
-        if initial_manifest.get(CLEANUP_COMPLETED_AT).is_some_and(py_truthy) {
+        if initial_manifest
+            .get(CLEANUP_COMPLETED_AT)
+            .is_some_and(py_truthy)
+        {
             continue;
         }
         if initial_manifest.get(REAPED_AT).is_some_and(py_truthy) {
@@ -184,8 +189,7 @@ pub async fn reap_terminal_runs(
             }
             continue;
         }
-        if initial_manifest.get("schema").and_then(Value::as_str)
-            != Some("stado.run-submission.v3")
+        if initial_manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v3")
         {
             return Err(StorageError::Other(format!(
                 "run manifest {run_id} requires explicit durable-entry migration before reaping"
@@ -209,12 +213,9 @@ pub async fn reap_terminal_runs(
             if entry.get("outcome").is_some_and(Value::is_object) {
                 continue;
             }
-            let job_id = entry
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    StorageError::Other(format!("run manifest {run_id} has an invalid entry"))
-                })?;
+            let job_id = entry.get("job_id").and_then(Value::as_str).ok_or_else(|| {
+                StorageError::Other(format!("run manifest {run_id} has an invalid entry"))
+            })?;
             let mut found = None;
             for prefix in TERMINAL_PREFIXES {
                 if let Some(job) = store.read_job(prefix, job_id).await? {
@@ -286,13 +287,12 @@ pub async fn reap_terminal_runs(
             Err(error) => return Err(error),
         }
         let retained = read_run(store, &run_id).await?.ok_or_else(|| {
-            StorageError::Other(format!("run manifest {run_id} disappeared after reaping CAS"))
+            StorageError::Other(format!(
+                "run manifest {run_id} disappeared after reaping CAS"
+            ))
         })?;
-        crate::queue::submit::validate_stored_run_manifest(
-            &Value::Object(retained),
-            &run_id,
-        )
-        .map_err(|error| StorageError::Other(error.to_string()))?;
+        crate::queue::submit::validate_stored_run_manifest(&Value::Object(retained), &run_id)
+            .map_err(|error| StorageError::Other(error.to_string()))?;
 
         summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
         summary.reaped_runs += 1;
