@@ -13,7 +13,7 @@
 //! through `/api/release/object`, verify the archive SHA-256, check the
 //! required layout, stage the selected member under a versioned directory,
 //! and only after every artifact is verified repoint the active release and
-//! restart the unit.
+//! restart every declared unit that runs it.
 //! A missing or mismatched release archive leaves the currently active
 //! release untouched and aborts the deployment. That
 //! sentence is the whole design; everything below is it, applied to whatever
@@ -83,14 +83,13 @@
 //!   happens before activation, so the previous version is still the active
 //!   one. A rollback is `host release` naming the previous version, which is
 //!   why the versioned staging tree is kept rather than pruned;
-//! - it does not restart a unit it invented. A product either declares a unit
-//!   label alone, which has to be FOUND in the registry's own declared
-//!   service set ([`service::declared_services`]) before it is touched, or
-//!   declares the label together with the unit file that runs it, which is
-//!   itself the statement that the unit exists. Either way the restart goes
-//!   through the shipped `service restart` program, and a product with no
-//!   declared unit — `skarbiec`, a CLI rather than a daemon — is activated
-//!   and reported as having no unit, not silently "restarted".
+//! - it does not restart a unit it invented. A product declares every owning
+//!   unit: a label alone has to be FOUND in the registry's own declared
+//!   service set ([`service::declared_services`]) before it is touched, while
+//!   a label together with the unit file locates a unit the product itself
+//!   declares. Every resolved owner is restarted through the shipped
+//!   `service restart` program. A product with no declared units is activated
+//!   and reported as having no units, not silently "restarted".
 
 use std::path::{Component, Path};
 use std::time::Duration;
@@ -1269,43 +1268,54 @@ fn fail(report: &mut Map<String, Value>, exit_code: i32, error: String) -> Value
     Value::Object(std::mem::take(report))
 }
 
-/// The unit that runs this product on this host, if one is declared.
+/// The units that run this product on this host.
 ///
-/// Two declarations can name it, and both are declarations rather than
+/// Two declarations can name each one, and both are declarations rather than
 /// guesses. The registry's own service set wins whenever it carries the
 /// label: an operator who adopted the unit stated where its file is, and that
 /// statement is newer than any shipped document. Otherwise the product
 /// declaration may LOCATE the unit itself — label, kind and unit file — and
-/// locating it is the statement that it exists. A product that declares only
-/// a label the registry does not carry has no resolvable unit, which is
-/// reported as such and never restarted: that is the rule this command has
-/// always had, that it does not restart a unit nobody said existed.
-pub fn declared_unit(target: &ComputeTarget, product: &Product) -> Option<service::ManagedService> {
-    let unit = product.unit.as_ref()?;
-    let label = unit.label_for(&target.name);
-    if let Some(found) = service::declared_services(target)
-        .into_iter()
-        .find(|declared| declared.matches(&label))
-    {
-        return Some(found);
+/// locating it is the statement that it exists. A product label the registry
+/// does not carry and the product does not locate is omitted and never
+/// restarted.
+pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service::ManagedService> {
+    let registry_units = service::declared_services(target);
+    let mut resolved = Vec::new();
+    for unit in &product.units {
+        let label = unit.label_for(&target.name);
+        let declared = registry_units
+            .iter()
+            .find(|candidate| candidate.matches(&label))
+            .cloned()
+            .or_else(|| {
+                let path = unit.path_for(&target.name)?;
+                Some(match unit.kind.as_deref()? {
+                    products::UNIT_SYSTEMD => service::systemd_service(
+                        &target.name,
+                        &label,
+                        &path,
+                        service::SOURCE_PRODUCT,
+                        "",
+                    ),
+                    _ => service::launchd_service(
+                        &target.name,
+                        &label,
+                        &path,
+                        service::SOURCE_PRODUCT,
+                        "",
+                    ),
+                })
+            });
+        if let Some(declared) = declared {
+            if !resolved
+                .iter()
+                .any(|existing: &service::ManagedService| existing.unit_id() == declared.unit_id())
+            {
+                resolved.push(declared);
+            }
+        }
     }
-    let path = unit.path_for(&target.name)?;
-    match unit.kind.as_deref()? {
-        products::UNIT_SYSTEMD => Some(service::systemd_service(
-            &target.name,
-            &label,
-            &path,
-            service::SOURCE_PRODUCT,
-            "",
-        )),
-        _ => Some(service::launchd_service(
-            &target.name,
-            &label,
-            &path,
-            service::SOURCE_PRODUCT,
-            "",
-        )),
-    }
+    resolved
 }
 
 // ---------------------------------------------------------------------------
@@ -1338,11 +1348,13 @@ pub async fn release_target(
     report.insert("install_root".to_string(), json!(plan.product.root()));
     report.insert("preserved_paths".to_string(), json!(plan.preserved_paths()));
     report.insert("dry_run".to_string(), json!(plan.dry_run));
-    let unit = declared_unit(target, plan.product);
+    let units = declared_units(target, plan.product);
     report.insert(
-        "unit".to_string(),
-        unit.as_ref()
-            .map_or(Value::Null, |declared| json!(declared.unit_id())),
+        "units".to_string(),
+        json!(units
+            .iter()
+            .map(service::ManagedService::unit_id)
+            .collect::<Vec<_>>()),
     );
     let mut steps: Vec<Value> = Vec::new();
 
@@ -1430,7 +1442,7 @@ pub async fn release_target(
     if plan.dry_run {
         report.insert(
             "planned_steps".to_string(),
-            json!(planned_steps(&plan, unit.as_ref(), &code_paths)),
+            json!(planned_steps(&plan, &units, &code_paths)),
         );
         report.insert("steps".to_string(), json!(steps));
         report.insert("exit_code".to_string(), json!(probe.code));
@@ -1485,35 +1497,58 @@ pub async fn release_target(
         );
     }
 
-    // Phase four: restart whatever the registry says runs it.
-    match &unit {
-        Some(declared) => {
-            let restarted = service::restart_service(target, declared, runner).await?;
-            if restarted.succeeded("restarted") {
-                steps.push(step_entry("restart", "ok", None));
-            } else {
-                let detail = restarted.failure();
-                steps.push(step_entry(
-                    "restart",
-                    host_channel::FAILED_STATUS,
-                    Some(detail.clone()),
-                ));
-                report.insert("steps".to_string(), json!(steps));
-                // The new binary IS active; only the unit still runs the old
-                // image. Saying "failed" without saying that would send an
-                // operator looking for an artifact that is already in place.
-                report.insert("activated".to_string(), json!(true));
-                return Ok(fail(&mut report, restarted.exit_code, detail));
-            }
-        }
-        None => steps.push(step_entry(
+    // Phase four: restart every declared unit that runs the installed binary.
+    if units.is_empty() {
+        steps.push(step_entry(
             "restart",
-            "no_declared_unit",
+            "no_declared_units",
             Some(format!(
-                "the registry declares no unit running {} on {}",
+                "the registry declares no units running {} on {}",
                 plan.product.name, target.name
             )),
-        )),
+        ));
+    } else {
+        let mut failures = Vec::new();
+        for declared in &units {
+            let unit_id = declared.unit_id().to_string();
+            match service::restart_service(target, declared, runner).await {
+                Ok(restarted) if restarted.succeeded("restarted") => {
+                    steps.push(step_entry("restart", "ok", Some(unit_id)));
+                }
+                Ok(restarted) => {
+                    let detail = format!("{unit_id}: {}", restarted.failure());
+                    steps.push(step_entry(
+                        "restart",
+                        host_channel::FAILED_STATUS,
+                        Some(detail.clone()),
+                    ));
+                    failures.push((restarted.exit_code, detail));
+                }
+                Err(error) => {
+                    let detail = format!("{unit_id}: {error}");
+                    steps.push(step_entry(
+                        "restart",
+                        host_channel::FAILED_STATUS,
+                        Some(detail.clone()),
+                    ));
+                    failures.push((1, detail));
+                }
+            }
+        }
+        if !failures.is_empty() {
+            let exit_code = failures[0].0;
+            let detail = failures
+                .into_iter()
+                .map(|(_, detail)| detail)
+                .collect::<Vec<_>>()
+                .join("; ");
+            report.insert("steps".to_string(), json!(steps));
+            // The new binary IS active; only the named units still run the old
+            // image. Saying "failed" without saying that would send an
+            // operator looking for an artifact that is already in place.
+            report.insert("activated".to_string(), json!(true));
+            return Ok(fail(&mut report, exit_code, detail));
+        }
     }
 
     report.insert("steps".to_string(), json!(steps));
@@ -1530,7 +1565,7 @@ pub async fn release_target(
 /// control plane about a host nobody looked at.
 fn planned_steps(
     plan: &ReleasePlan,
-    unit: Option<&service::ManagedService>,
+    units: &[service::ManagedService],
     code_paths: &[String],
 ) -> Vec<String> {
     let readback = match &plan.product.readback {
@@ -1574,13 +1609,18 @@ fn planned_steps(
             ));
         }
     }
-    steps.push(match unit {
-        Some(declared) => format!("restart {}", declared.unit_id()),
-        None => format!(
-            "no restart: the registry declares no unit running {}",
+    if units.is_empty() {
+        steps.push(format!(
+            "no restart: the registry declares no units running {}",
             plan.product.name
-        ),
-    });
+        ));
+    } else {
+        steps.extend(
+            units
+                .iter()
+                .map(|declared| format!("restart {}", declared.unit_id())),
+        );
+    }
     steps
 }
 
