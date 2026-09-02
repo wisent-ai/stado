@@ -948,6 +948,446 @@ pub fn products_without_declared_version(
     rows.into_values().collect()
 }
 
+/// The unit file on THIS machine, as the machine holds it.
+///
+/// A plain local read and never ssh, which is what makes it usable from
+/// `registry doctor`: that command answers for the whole fleet out of the
+/// store, and the one host whose unit files it may open is the one it is
+/// running on. A unit on another host yields `None`, and the finding says
+/// the read did not happen instead of reporting an empty environment —
+/// "nothing was read" and "the unit carries nothing" are different facts,
+/// and collapsing them is the exact defect this check exists to catch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalUnitFile {
+    /// Variable names the unit file carries, in file order. Names only: the
+    /// finding is about which variables reach the unit, and a diagnostic has
+    /// no business printing the values of the ones that do.
+    pub carries: Vec<String>,
+    /// The first `ProgramArguments` entry, or the systemd `ExecStart`.
+    pub program: String,
+}
+
+/// Read one unit file off the local filesystem, when it is there to read.
+///
+/// Every failure — absent, unreadable, a binary plist, unparsable — is the
+/// same `None`: the caller's sentence then states that this host's unit was
+/// not read, which is true of all of them.
+pub fn local_unit_file(path: &str, kind: &str) -> Option<LocalUnitFile> {
+    let text = std::fs::read_to_string(path).ok()?;
+    if kind == KIND_LAUNCHD {
+        let document = parse_plist(&text).ok()?;
+        Some(LocalUnitFile {
+            carries: plist_env(&document)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect(),
+            program: document
+                .get("ProgramArguments")
+                .and_then(Value::as_array)
+                .and_then(|argv| argv.first())
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+    } else {
+        let parsed = parse_systemd_unit(&text);
+        Some(LocalUnitFile {
+            carries: parsed.env.into_iter().map(|(name, _)| name).collect(),
+            program: String::new(),
+        })
+    }
+}
+
+/// Why a product's declared environment does not reach the unit serving it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentGap {
+    /// The registry adopted the unit as a pointer at a plist somebody
+    /// installed by hand: it records no program, no arguments and no
+    /// environment, so the document states nothing about what the unit
+    /// starts with. [`ManagedService::program`] documents that shape
+    /// already — "empty for a declaration that only names a path" — and an
+    /// adopted stub is the one case where the registry's own record cannot
+    /// be diffed against anything.
+    UnrecordedDeclaration {
+        /// `managed_since`: how long the stub has stood.
+        adopted_at: String,
+        /// The unit file as this machine holds it, or `None` when the unit
+        /// is on another host and was therefore not read.
+        observed: Option<LocalUnitFile>,
+    },
+    /// No product in `release_control` names this host in its `targets` map.
+    ///
+    /// `release_agent::spawn_release` is the only writer of a product's
+    /// declared `environment`, and the release agent reaches it only through
+    /// `policy.targets.get(host)` (`release_agent.rs:1878`). A host no
+    /// product target names is therefore a host the declaration cannot
+    /// reach by any path — and it is skipped by the same lookup in
+    /// [`products_without_declared_version`], which is why nothing said so.
+    HostNamedByNoTarget {
+        /// The hosts this product's `targets` map does name, so the row says
+        /// where the declaration does land.
+        named_hosts: Vec<String>,
+    },
+}
+
+/// One product whose declared environment cannot reach the unit that serves
+/// it on one host.
+///
+/// Measured on `lukasz-macbook` on 2026-09-02, and the measurement is what
+/// fixed this check's shape. `release_control.products.skarbiec.environment`
+/// declares `SKARBIEC_AUDIT_FILE` and `SKARBIEC_VAULT_FILE`; that product's
+/// `targets` map names `charless-mac-mini` only, and in fact no product
+/// names `lukasz-macbook` at all. The host nevertheless declares
+/// `managed_versions.skarbiec` and runs
+/// `com.wisent.compute.service.skarbiec-control-plane`, which the registry
+/// adopted as inventory on 2026-09-01 with no program, no args and no
+/// environment recorded — three weeks after the plist was hand-created. Its
+/// `EnvironmentVariables` is an empty dict and its only `ProgramArguments`
+/// entry is a hand-authored launcher that exports `SKARBIEC_VAULT_FILE` and
+/// never mentions `SKARBIEC_AUDIT_FILE`, so the journal went to the
+/// unpinned default and reached 573,321,978 bytes while the sibling unit
+/// that pins it held 34,486,246.
+///
+/// Nothing reported any of it. Every existing check either validated the
+/// declaration's own syntax or compared it against another declaration:
+/// `declared_units` (`cli/registry.rs:935`) reads a record's label and
+/// nothing else, the beacon publishes one `state` word per unit
+/// (`deploy/host_health_beacon_macos.sh:108`), and the only comparison of a
+/// product against a host asks `policy.targets.get(host)` first, so the
+/// host missing from every target map is the loop's skip condition rather
+/// than its finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreachableProductEnvironment {
+    pub host: String,
+    /// `release_control` product key whose policy declares the environment.
+    pub product: String,
+    /// Variables that policy declares, with `{home}` expanded exactly as
+    /// `release_agent::spawn_release` expands it — from this host's own
+    /// `ReleaseTargetPolicy::home`, the only home the fleet declares. A
+    /// host no product target names has no declared home, so its row prints
+    /// the template verbatim, which is precisely the declaration that
+    /// reaches nothing.
+    pub declared: Vec<(String, String)>,
+    /// The unit an operator can address on this host.
+    pub unit: String,
+    /// Unit-file path as the registry records it.
+    pub path: String,
+    pub gap: EnvironmentGap,
+}
+
+impl UnreachableProductEnvironment {
+    /// Stable machine-readable category, in `registry doctor`'s vocabulary.
+    pub fn kind(&self) -> &'static str {
+        match self.gap {
+            EnvironmentGap::UnrecordedDeclaration { .. } => "unrecorded-service-environment",
+            EnvironmentGap::HostNamedByNoTarget { .. } => "untargeted-product-host",
+        }
+    }
+
+    /// Names the product declares, for the half of the sentence every
+    /// variant shares.
+    fn declared_names(&self) -> Vec<&str> {
+        self.declared
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
+    /// Declared `name=value` pairs, which is the spelling that tells an
+    /// operator what the unit was supposed to hold.
+    fn declared_pairs(&self) -> String {
+        self.declared
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<String>>()
+            .join(", ")
+    }
+
+    pub fn sentence(&self) -> String {
+        match &self.gap {
+            EnvironmentGap::UnrecordedDeclaration {
+                adopted_at,
+                observed,
+            } => {
+                let mut sentence = format!(
+                    "registry adopted {} on {} as inventory{}, recording no program, no \
+                     arguments and no environment, so the document states nothing about what \
+                     that unit starts with — while release_control.products.{}.environment \
+                     declares {}",
+                    self.unit,
+                    self.host,
+                    if adopted_at.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" on {adopted_at}")
+                    },
+                    self.product,
+                    self.declared_pairs(),
+                );
+                match observed {
+                    Some(unit) => {
+                        let missing: Vec<&str> = self
+                            .declared_names()
+                            .into_iter()
+                            .filter(|name| !unit.carries.iter().any(|held| held == name))
+                            .collect();
+                        sentence.push_str(&format!(
+                            ". The unit file {} on this host carries {}",
+                            self.path,
+                            if unit.carries.is_empty() {
+                                "no environment variables at all".to_string()
+                            } else {
+                                unit.carries.join(", ")
+                            },
+                        ));
+                        if !unit.program.is_empty() {
+                            sentence.push_str(&format!(", and runs {}", unit.program));
+                        }
+                        if missing.is_empty() {
+                            sentence.push_str(
+                                ". Every declared variable is present, so only the record is \
+                                 missing: nothing in the document can confirm that, and the \
+                                 next hand-edit of the unit will go unreported",
+                            );
+                        } else {
+                            sentence.push_str(&format!(
+                                ". {} declared and the unit does not carry {}, so whatever \
+                                 reads {} falls back to its own default with nothing recording \
+                                 that it did",
+                                if missing.len() == 1 {
+                                    format!("{} is", missing[0])
+                                } else {
+                                    format!("{} are", missing.join(" and "))
+                                },
+                                if missing.len() == 1 { "it" } else { "them" },
+                                if missing.len() == 1 { "it" } else { "them" },
+                            ));
+                        }
+                    }
+                    None => sentence.push_str(&format!(
+                        ". The unit file {} was not read: {} is not the host this ran on, and \
+                         `registry doctor` answers from the store and never sshes. Read what \
+                         it carries with `stado service env {} {}`",
+                        self.path, self.host, self.host, self.unit
+                    )),
+                }
+                sentence.push_str(&format!(
+                    ". Record what the unit runs and carries with `stado service adopt {} {}` \
+                     so a later read has something to disagree with",
+                    self.host, self.unit
+                ));
+                sentence
+            }
+            EnvironmentGap::HostNamedByNoTarget { named_hosts } => {
+                let mut sentence = format!(
+                    "{} declares managed_versions.{} and runs {}, but no release_control \
+                     product names {} in its targets map",
+                    self.host, self.product, self.unit, self.host,
+                );
+                if named_hosts.is_empty() {
+                    sentence.push_str(&format!(
+                        "; release_control.products.{}.targets is empty",
+                        self.product
+                    ));
+                } else {
+                    sentence.push_str(&format!(
+                        "; release_control.products.{}.targets names {} instead",
+                        self.product,
+                        named_hosts.join(" and ")
+                    ));
+                }
+                sentence.push_str(&format!(
+                    ". The release agent applies products.{}.environment only for a host that \
+                     map names, so {} cannot reach {} by any delivery path, and every product \
+                     check here resolves the same targets entry first and so skips this host \
+                     rather than reporting it. Either name {} in \
+                     release_control.products.{}.targets, or pin {} in {} on this host",
+                    self.product,
+                    self.declared_pairs(),
+                    self.host,
+                    self.host,
+                    self.product,
+                    self.declared_names().join(" and "),
+                    self.path,
+                ));
+                sentence
+            }
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        let declared: Map<String, Value> = self
+            .declared
+            .iter()
+            .map(|(name, value)| (name.clone(), json!(value)))
+            .collect();
+        let gap = match &self.gap {
+            EnvironmentGap::UnrecordedDeclaration {
+                adopted_at,
+                observed,
+            } => json!({
+                "kind": "unrecorded-declaration",
+                "adopted_at": adopted_at,
+                "unit_carries": observed.as_ref().map(|unit| unit.carries.clone()),
+                "unit_program": observed.as_ref().map(|unit| unit.program.clone()),
+            }),
+            EnvironmentGap::HostNamedByNoTarget { named_hosts } => json!({
+                "kind": "host-named-by-no-target",
+                "named_hosts": named_hosts,
+            }),
+        };
+        json!({
+            "host": self.host,
+            "product": self.product,
+            "declared": declared,
+            "unit": self.unit,
+            "path": self.path,
+            "gap": gap,
+        })
+    }
+}
+
+/// True when PRODUCT is named as a whole delimited run of UNIT's identifier.
+///
+/// Launchd labels are dot- and dash-delimited
+/// (`com.wisent.compute.service.skarbiec-control-plane`), so the product a
+/// unit serves is a delimited segment of its label rather than a substring
+/// of it. Both sides are canonicalised to one delimiter and fenced with it,
+/// which is what lets a product whose own name carries a delimiter match:
+/// half the products in this fleet are spelled `weles-worker` or
+/// `image-video-router`, and comparing single tokens would have matched
+/// none of them — a check that silently matches nothing is the defect this
+/// one was written to catch.
+///
+/// Fenced and not `contains`: a bare `contains` reads `skarbiec` out of
+/// `com.wisent.skarbiecd`, and a check that fires on a coincidence is a
+/// check an operator turns off.
+fn unit_names_product(unit: &str, product: &str) -> bool {
+    if product.is_empty() {
+        return false;
+    }
+    fn fenced(text: &str) -> String {
+        let mut out = String::with_capacity(text.len() + 2);
+        out.push('.');
+        for character in text.chars() {
+            out.push(match character {
+                '.' | '-' | '_' | '/' => '.',
+                other => other.to_ascii_lowercase(),
+            });
+        }
+        out.push('.');
+        out
+    }
+    fenced(unit).contains(&fenced(product))
+}
+
+/// Every product whose declared environment cannot reach the unit serving it
+/// on TARGET.
+///
+/// Two conditions, one instrument, because they are one root cause read at
+/// two ranges: the product's `environment` is written by exactly one place
+/// (`release_agent::spawn_release`) and reached through exactly one lookup
+/// (`policy.targets.get(host)`), so a host that lookup misses gets no
+/// environment, and a unit the registry adopted as a bare path records none
+/// either. Both are reported against the same product policy and in the same
+/// words.
+///
+/// Both require two independent witnesses that this host really runs the
+/// product — the host's own `managed_versions` entry, which is what every
+/// version diagnostic here enumerates, and an adopted unit whose identifier
+/// names the product. Requiring both is deliberate: a product declares an
+/// environment on every host in this fleet, so keying off the policy alone
+/// would fire on every host that has one, and a check that fires everywhere
+/// is a check that gets switched off with the defect still in place.
+///
+/// `local_units` decides which unit files may be opened: it is the name of
+/// the host this process is running on, when the registry resolves one.
+/// Every other host's unit is reported unread rather than empty.
+pub fn unreachable_product_environments(
+    target: &ComputeTarget,
+    control: Option<&crate::release_control::ReleaseControl>,
+    local_units: Option<&str>,
+) -> Vec<UnreachableProductEnvironment> {
+    let Some(control) = control else {
+        return Vec::new();
+    };
+    // Whether ANY product names this host. This is the fleet-wide half and it
+    // is answerable from the document alone: it needs no host to be awake,
+    // which is the point, because the host being absent from every target map
+    // is precisely what stops it from ever being asked.
+    let named_anywhere = control
+        .products
+        .values()
+        .any(|policy| policy.targets.contains_key(&target.name));
+    let readable_here = local_units == Some(target.name.as_str());
+    let services = declared_services(target);
+    let mut rows: Vec<UnreachableProductEnvironment> = Vec::new();
+    for (product, policy) in &control.products {
+        if policy.environment.is_empty() {
+            continue;
+        }
+        // The host's own statement that it runs this product. `stado host
+        // declare-version` writes it and `host reconcile` reads it, so it is
+        // the fleet's existing answer to "does this box run that product".
+        if target.declared_version(product).is_none() {
+            continue;
+        }
+        let Some(service) = services
+            .iter()
+            .find(|service| unit_names_product(service.unit_id(), product))
+        else {
+            continue;
+        };
+        // `{home}` as the release agent would expand it, and left as the
+        // template when there is nothing to expand it from: a host absent
+        // from every `targets` map declares no home, and substituting a
+        // guess here would print a path no declaration names.
+        let home = policy
+            .targets
+            .get(&target.name)
+            .map(|policy_target| policy_target.home.clone())
+            .unwrap_or_default();
+        let declared: Vec<(String, String)> = policy
+            .environment
+            .iter()
+            .map(|(name, value)| {
+                let value = if home.is_empty() {
+                    value.clone()
+                } else {
+                    value.replace("{home}", &home)
+                };
+                (name.clone(), value)
+            })
+            .collect();
+        let row = |gap: EnvironmentGap| UnreachableProductEnvironment {
+            host: target.name.clone(),
+            product: product.clone(),
+            declared: declared.clone(),
+            unit: service.unit_id().to_string(),
+            path: service.path.clone(),
+            gap,
+        };
+        if !named_anywhere {
+            let mut named_hosts: Vec<String> = policy.targets.keys().cloned().collect();
+            named_hosts.sort();
+            rows.push(row(EnvironmentGap::HostNamedByNoTarget { named_hosts }));
+        }
+        // An adopted stub: the record names a path and declares nothing about
+        // what runs there. Reported independently of the target question,
+        // because a host the policy DOES name still has no recorded
+        // declaration to diff, and that is the second silence.
+        if service.program.is_empty() {
+            rows.push(row(EnvironmentGap::UnrecordedDeclaration {
+                adopted_at: service.managed_since.clone(),
+                observed: readable_here
+                    .then(|| local_unit_file(&service.path, &service.kind))
+                    .flatten(),
+            }));
+        }
+    }
+    rows
+}
+
 // ---------------------------------------------------------------------------
 // Read side: the beacon join
 // ---------------------------------------------------------------------------
