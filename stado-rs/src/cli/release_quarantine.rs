@@ -416,11 +416,16 @@ async fn list(args: &QuarantineListArgs) -> Result<(), CmdError> {
     let mut entries = Vec::new();
     if let Some(state) = state.as_ref() {
         for (digest, record) in &state.quarantined {
+            // The same derivation `release doctor` uses, called from the same
+            // place, so the two commands cannot name one digest two things.
+            let classified = super::release_evidence::record_cause(record);
             entries.push(json!({
                 "digest": digest,
                 "reason": record.reason,
                 "quarantined_at": record.quarantined_at.to_rfc3339(),
                 "is_desired_digest": desired == Some(digest.as_str()),
+                "cause": classified.cause.as_str(),
+                "evidence": classified.evidence,
             }));
         }
     }
@@ -455,6 +460,7 @@ async fn list(args: &QuarantineListArgs) -> Result<(), CmdError> {
                     "-".to_string()
                 },
                 entry["quarantined_at"].as_str().unwrap_or("-").to_string(),
+                entry["cause"].as_str().unwrap_or("-").to_string(),
                 entry["reason"]
                     .as_str()
                     .unwrap_or("-")
@@ -465,7 +471,10 @@ async fn list(args: &QuarantineListArgs) -> Result<(), CmdError> {
             ]
         })
         .collect();
-    super::table::print(&["DIGEST", "ROLE", "QUARANTINED AT", "REASON"], &rows);
+    super::table::print(
+        &["DIGEST", "ROLE", "QUARANTINED AT", "CAUSE", "REASON"],
+        &rows,
+    );
     Ok(())
 }
 

@@ -1137,7 +1137,13 @@ pub async fn bootstrap_developer_id(
                 &channel,
                 APPLE_DEVELOPER_ID_ACTION,
                 json!({
-                    "account_item": account_item,
+                    // `login_item`, because that is the key Weles reads.
+                    // dispatch.js resolves `params.login_item ?? params.vault_login_item`
+                    // into WELES_LOGIN_ITEM and has never looked at `account_item`,
+                    // so this parameter arrived, was ignored, and the trajectory
+                    // refused with "invalid Apple account item" before opening a
+                    // browser — every time, since the day it was written.
+                    "login_item": account_item,
                     "apple_csr_path": format!("{work}/request.csr"),
                     "apple_certificate_path": format!("{work}/certificate.cer"),
                     "system_consent": "account-holder-2fa",

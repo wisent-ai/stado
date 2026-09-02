@@ -1,21 +1,24 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty-five times in this repository, in
-twenty-five different subsystems, inside about twenty-one hours. The twentieth was
+One defect shape has now been found twenty-seven times in this repository, in
+twenty-seven different subsystems, inside about two days. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
 every reading of it was true; the twenty-second is the one where the fleet
 could rule out every mechanism it owns and still not name what had happened;
-and the last three arrived together, in a live outage, whose provenance belongs
-in the record — **the operator directed a two-field change, a worker
-force-pushed instead of fixing the input it had built, and the guard that
-refused the first attempt was the product working.**
+the twenty-third, twenty-fourth and twenty-fifth arrived together, in a live
+outage, whose provenance belongs in the record — **the operator directed a
+two-field change, a worker force-pushed instead of fixing the input it had
+built, and the guard that refused the first attempt was the product working;**
+and the last two are the first where the narrowing sat in the instruments this
+record itself produced — a keep-set and a liveness signal — rather than in the
+system they were built to judge.
 Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty-five
+## The twenty-seven
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -44,6 +47,8 @@ what is actually there.
 | 23 | `registry push --force`, `src/cli/registry.rs` (#250) | the operator asked for this document to be published | **that a document was read at all.** The command takes a PATH and falls back to the repository's bundled `data/registry.json` — 65 bytes, `{"schema_version":2,"coordinators":[],"targets":[]}`. On 2026-09-01 the operator directed a two-field change (thresholds 40/42 back to 15/18) and a worker ran `stado registry push --force < /tmp/registry_updated.json`: stdin is never read by this command, so the skeleton was uploaded instead of the correct 38K document sitting in the pipe. The deleted-key guard **refused the first attempt and was right**; `--force` waved the second one through. The canonical registry lost all three targets, the mini's eighteen service declarations, and the `fleets`, `inference`, `placement_profiles`, `release_control` and `service_directory` keys; `stado service reap` then answered that the always-on Mac is not in the canonical registry. Two fixes: a piped body with no PATH is now refused rather than ignored (`-` reads stdin deliberately), and a write that takes a registry from N>0 targets to zero is refused **regardless of `--force`**, behind its own `--allow-empty-fleet` |
 | 24 | `store_last_good`, `src/targets.rs` (#250, and independently on `main`) | the last-known-good cache holds a registry worth recovering from | **that the document it is recording still names the fleet.** The gate was `validate_registry`, and an empty `targets` array is schema-valid, so seventeen minutes after the forced push above the product's own recovery path wrote `{"schema_version":2,"coordinators":[],"targets":[]}` into `~/.stado/cache/registry-last-good.json` — 65 bytes, dated after the corruption — and destroyed the one copy it exists to provide. Recovery came from an operator's own snapshot in `~/.stado/work`, not from the cache built for exactly this. Two sessions wrote a guard for it within the hour: an absolute floor (never cache a targetless document) and `may_replace_last_good(incoming, recorded)`, which refuses only `arriving == 0 && held > 0`. **The relative one is what landed**, because the failure being protected against is a document LOSING its contents, and a first-run cache on a machine that has never had a fleet is the honest empty state rather than collateral |
 | 25 | `validate_registry`'s rollout rules across versions, `release_control.products.*.targets.*` (#256) | this registry document is valid | **that it is valid for the binaries that must obey it.** `readiness_path` under a `replace` rollout went from **forbidden** to **required** with no version where both hold: 0.13.20 and 0.13.23 answer `replace rollout forbids stable_bind, candidate_ports and readiness_path`, and 0.13.26 and 0.13.27 answer `rollout target requires readiness_path` — measured against the same live document at 06:26Z on 2026-09-01. Validation is whole-document (instance 16), so either shape freezes something: with the key present the mini's 0.13.20 queue agent resolved no policy at all and disk maintenance stopped dead — eight consecutive passes reading `invalid_or_unavailable_policy`, `pressure False`, every cleaner zero, 05:23Z to 05:35Z — and with the key absent **every registry write from the operator's own installed binary was refused**, so a fleet running four versions could only be written by a build older than the one it runs. Fixed additively in #256: a replace target may omit the key and takes `DEFAULT_REPLACE_READINESS_PATH`, blue-green still requires it, and `release_submit` reads the same constant. One document now validates under 0.13.20, 0.13.23 and the patched 0.13.27 |
+| 26 | `REAP_SCRIPT`'s keep-set, `src/deploy/service.rs` (#285) | these pids belong to declared labels, so everything else under a managed root is unowned | **one command's printable domain.** The set is built from `launchctl list`, which prints only the domain the calling login can print, so a declared **system LaunchDaemon**'s pid is never in it. On 2026-09-01 `service ensure stado-agent-mini --as-daemon` installed `com.wisent.compute.service.stado-agent-mini` in the system domain and reported `pid: 3963`; ninety seconds later `service reap --command "stado agent"` classified 3963 `would_end` — the tool whose entire purpose is ending *undeclared* processes proposing to kill the one declared agent the host had, with `--apply` one word away. Its argv is byte-identical to the undeclared duplicate beside it (`/Users/charles/.stado/bin/stado agent --target charless-mac-mini`), so no `--command` substring could separate them: the choices were to end the declared agent along with the duplicate, or not to reap at all. The irony is local — `LOADED_LABELS_SCRIPT`, eight hundred lines above it **in the same file**, already carried the comment explaining that `launchctl list` cannot see the system domain. **Now checked:** the keep-set falls back to `launchctl print <domain>/<label>`, which reads that domain unprivileged, and takes only the `pid` line. Keep-set 3 pids → 14, 3963 flipped `would_end` → `kept`, and `--apply` then ended the duplicate and left the declared daemon running |
+| 27 | `service converge` / `service show` status, and `com.wisent.host-health-beacon-collect` | this host has gone silent, and this unit's state is unknown | **that the thing reporting silence was itself alive.** Every unit on `charless-mac-mini` read a beacon ~5.9 days stale (508416s) because the collector is not running — `launchctl list` holds it at PID `-`, last exit 1 — so `service list` answered `unit state is unknown` for the whole host and `service show` answered `status='declares'` for the queue agent **while two processes were executing its exact declared program**. Beacon freshness is therefore not an available liveness signal on that host at all, and a reader who takes it for one concludes a working host is dead. `declares` is spelled differently from `runs` in that module on purpose (instance 12's lesson); the trap here is one level out — the *staleness threshold* is the declaration, and nothing compared it against whether its own collector still ran. Liveness had to be established from a live fact instead: `host gates` reporting capacity published 0–53 seconds ago, which no stale artefact can fake. **Not fixed:** the collector is still down, so the signal is still unavailable fleet-wide on that host |
 
 ## The property they share
 
@@ -57,11 +62,25 @@ boundary assumed to gate what its name says. A binary assumed to be current. A
 state file assumed to have one writer. A file on disk assumed to be code. A
 name assumed to be hijacked because its address was public. A budget assumed
 to reach the cleaner it was declared for. A binary assumed to have been
-delivered because it reports a version.
+delivered because it reports a version. A keep-set assumed to hold every
+declared label's pid. A host assumed silent because the thing that reports on
+it stopped reporting.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
 check tells you the check models the wrong thing.**
+
+And the last two say where to look next. **A keep-set, an enumeration and a
+staleness threshold are declarations too, and when the narrowing is in the
+instrument, nothing downstream can notice.** Every other instance here was
+caught because some reader eventually compared a claim against the world. An
+instrument has no such reader: its output *is* the world as far as everything
+above it is concerned, so a window that is too small produces answers that are
+internally consistent, confidently wrong, and unfalsifiable from the outside.
+Instance 26 was found only because a second tool disagreed with the first, and
+instance 27 only because a live fact was available to replace the dead one.
+That is why the rule below is to check the instrument, and why "our tool said
+so" is the start of an investigation rather than the end of one.
 
 ## What it cost
 
@@ -312,12 +331,32 @@ morning, "which source is this host running" has two correct and different
 answers depending on which command is asked, and nothing anywhere compares
 them.
 
-**The unprotected property, named and left as a decision:** no gate asserts
-that every object published under one `product/version` coordinate attests the
-same `source_revision`. The immutability rule protects each object from being
+**The unprotected property, named:** no gate asserted that every object
+published under one `product/version` coordinate attests the same
+`source_revision`. The immutability rule protects each object from being
 rewritten; it does not stop two paths from writing mutually inconsistent
-provenance into one coordinate. Which path should own the coordinate -- or
-whether the second should refuse when the first has already attested a
-different revision -- is a release-integrity decision, and it belongs to
-whoever owns `release_control`, taken deliberately and not during an incident.
-Recording it here is deliberately all this change does.
+provenance into one coordinate.
+
+**The delivery half of that is now closed (#266).**
+`pipeline_catalog_identity` in `src/deploy/host_release.rs` reads
+`release-manifest-<platform>.json` beside the signed manifest and refuses when
+their revisions disagree, naming both, with the remedy `catalog_identity`
+already states thirty lines below it for an incomplete coordinate: immutable
+objects mean the version can never be made to mean one build, so publish a new
+version. It is a refusal `--force` cannot cross, and a coordinate published by
+one train is unaffected — the sidecar carries that train's `GITHUB_SHA` and the
+signed manifest the same revision, or there is no signed manifest and the
+legacy path already resolves the train's own archive. This was found by
+delivering `0.13.27` to `charless-mac-mini` and watching `host release` report
+`released: charless-mac-mini now runs stado 0.13.27` while staging the
+`d53f10c9` archive, with `service converge` then confirming `in-sync` — every
+reading true about itself and none of them true about the version that was
+asked for.
+
+**What is still a decision, and still belongs to whoever owns
+`release_control`:** which path should OWN the coordinate. #266 stops the fleet
+installing the wrong one of two, and it does not stop the two from being
+written. `install-stado.sh`, `self_update.rs` and `local_install.rs` still
+resolve the sidecar while `stado release status` resolves the signed manifest,
+so the two-answer problem above survives outside delivery. Taken deliberately
+and not during an incident.

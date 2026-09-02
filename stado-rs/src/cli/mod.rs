@@ -1431,9 +1431,10 @@ enum HostCommands {
     /// Repair a stale, reachable host whose beacon publisher proves that the
     /// host-health API verifier is unavailable.
     ///
-    /// Reconciles the existing least-privilege verifier grant on the object
-    /// API authority, waits for the host's normal publisher to write a newer
-    /// beacon, and closes the recorded silence. Refuses every other diagnosis.
+    /// Copies the authoritative route bearer into the object API authority's
+    /// target-local verifier shadow, reconciles the existing least-privilege
+    /// grant, waits for the normal publisher to write a newer beacon, and
+    /// closes the recorded silence. Refuses every other diagnosis.
     #[command(name = "repair-link")]
     RepairLink {
         target: String,
@@ -1542,11 +1543,12 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Make TARGET's dashboard verifier grant match every object namespace
-    /// plus the route-scoped host-health bearer exactly.
+    /// Make TARGET's dashboard verifier shadow and grant match every object
+    /// namespace plus the route-scoped host-health bearer exactly.
     ///
-    /// The existing bearer and expiry are preserved. Stale capabilities are
-    /// removed and missing reads are added without printing the bearer.
+    /// The route bearer is copied from the authoritative vault without
+    /// rotating it. The verifier's existing bearer and expiry are preserved;
+    /// stale capabilities are removed and missing reads are added.
     #[command(name = "reconcile-object-verifier")]
     ReconcileObjectVerifier {
         target: String,
