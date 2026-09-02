@@ -96,6 +96,25 @@ pub fn ssh_hostname(value: &str) -> String {
 /// `_REGISTRY_VERSION`).
 pub const REGISTRY_SCHEMA_VERSION: i64 = 2;
 
+/// Largest `disk_cleanup.max_scan_items` a target may declare, and the value
+/// [`DiskCleanupPolicy::reporting_default`] uses for a target that declares
+/// nothing.
+///
+/// One constant because the two used to disagree. The validator refused
+/// anything above 100,000 while the built-in default was 200,000, so a host
+/// that declared no policy was measured with twice the budget the strictest
+/// possible declaration was allowed to ask for — and an operator writing the
+/// default down verbatim had it refused. Nothing compared the two numbers,
+/// which is the same failure as every other limit in this file that was
+/// declared once and enforced somewhere else.
+///
+/// The ceiling is not what bounds a pass: `DEADLINE_SECONDS` in
+/// `providers::local::disk_cleanup` does, at 30 seconds of wall clock, and
+/// the build-cache walk resumes from where the previous pass stopped instead
+/// of restarting. So raising this cannot make a pass longer; it only decides
+/// how much of a tree one pass may cross before it hands the cursor on.
+pub const MAX_SCAN_ITEMS_CEILING: i64 = 200_000;
+
 /// Raised when a registry does not satisfy the version 2 contract.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -248,7 +267,7 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         &map["max_scan_items"],
         &format!("{location}.max_scan_items"),
         1,
-        Some(100000),
+        Some(MAX_SCAN_ITEMS_CEILING),
     )?;
     if max_scan < max_items {
         return Err(verr(
@@ -1256,7 +1275,7 @@ impl DiskCleanupPolicy {
             target_free_gb: 200,
             max_bytes_per_pass: 64 * 1024_i64.pow(3),
             max_items_per_pass: 512,
-            max_scan_items: 200_000,
+            max_scan_items: MAX_SCAN_ITEMS_CEILING,
             cleaners,
         }
     }
