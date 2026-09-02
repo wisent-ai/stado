@@ -1660,6 +1660,21 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     .about(unit),
             );
         }
+        // Same shape and the same reason it belongs before any beacon: a host
+        // that declares no version for a service it delivers is wrong whether
+        // or not the host is answering, and it is why every version diagnostic
+        // is silent about that service.
+        for undeclared in service::services_without_declared_version(target) {
+            let unit = undeclared.unit.clone();
+            findings.push(
+                Finding::new(
+                    "undeclared-service-version",
+                    &target.name,
+                    undeclared.sentence(),
+                )
+                .about(unit),
+            );
+        }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(
                 "no-heartbeat",

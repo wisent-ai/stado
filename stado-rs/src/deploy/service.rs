@@ -652,6 +652,125 @@ pub fn misdeclared_domains(target: &ComputeTarget) -> Vec<MisdeclaredDomain> {
         .collect()
 }
 
+/// A registry-declared service that Stado delivers, on a host that declares no
+/// version for it.
+///
+/// Every version diagnostic in this pack is declaration-driven: `host
+/// reconcile` and `service converge` enumerate `managed_versions` and compare
+/// each entry against the host, and `probe_installed_versions` reads only the
+/// binaries that map names. So a delivered service with no entry produces no
+/// row anywhere, and its absence from a clean report reads as agreement.
+///
+/// Measured on charless-mac-mini on 2026-09-02: `com.wisent.always-on.brama`
+/// runs out of the delivery tree at
+/// `~/.stado/services/brama/current/<platform>/bin/start-with-skarbiec`, the
+/// host declares versions for `skarbiec`, `stado` and `weles-worker` only, and
+/// the running gateway reported 0.2.58 while its own workload registry pinned
+/// 0.2.52. `stado host reconcile` named the two declared binaries that had
+/// drifted and said nothing at all about the gateway every model call in the
+/// fleet goes through; `stado service converge <host> brama` refused with
+/// "declares no brama version", which is the right answer to a question nobody
+/// thinks to ask. Establishing that by hand cost a day of forwarding channels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndeclaredServiceVersion {
+    pub host: String,
+    /// The name the CLI addresses the service by.
+    pub name: String,
+    /// The launchd label or systemd unit, so the row names what an operator
+    /// sees in `service list`.
+    pub unit: String,
+    /// The program the declaration runs, on the host.
+    pub program: String,
+    /// The delivery-tree segment the program sits under, which is the name a
+    /// version would be declared against.
+    pub product: String,
+}
+
+impl UndeclaredServiceVersion {
+    pub fn sentence(&self) -> String {
+        format!(
+            "{} runs {} out of Stado's own delivery tree, so its bytes arrive by \
+             `stado host release` and carry a version — but {} declares no version for \
+             {product:?}. Every version diagnostic here enumerates managed_versions, so \
+             this service is absent from `host reconcile` and `service converge` rather \
+             than reported as drifted: nothing compares what it runs against anything. \
+             Declare one with `stado host declare-version {} --binary {product} \
+             --version X.Y.Z`, reading the running version from `service converge` \
+             afterwards rather than inventing it",
+            self.unit,
+            self.program,
+            self.host,
+            self.host,
+            product = self.product,
+        )
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "name": self.name,
+            "unit": self.unit,
+            "program": self.program,
+            "product": self.product,
+            "detail": self.sentence(),
+        })
+    }
+}
+
+/// The delivery-tree segment a program path sits under, when it is one.
+///
+/// Stado stages a service release at
+/// `<home>/.stado/services/<product>/<version-or-current>/<platform>/…`, so the
+/// segment straight after `services/` is the name a version is declared
+/// against. A program anywhere else — a system daemon, a Homebrew node, a
+/// bare `~/.stado/bin` binary — is not release-managed under a service name
+/// and is deliberately not judged here: the delivery tree is what makes a
+/// version meaningful.
+fn delivery_tree_product(program: &str) -> Option<&str> {
+    let (_, tail) = program.split_once("/.stado/services/")?;
+    let product = tail.split('/').next()?;
+    if product.is_empty() || !tail.contains('/') {
+        return None;
+    }
+    Some(product)
+}
+
+/// Every Stado-delivered service on TARGET that the host declares no version
+/// for.
+///
+/// A service is accounted for when either the delivery-tree segment or the
+/// program's own file name is a declared binary. Both readings are allowed
+/// because the two shapes are both in use: `com.wisent.always-on.brama` is
+/// delivered under the product name `brama` and runs a launcher script, while
+/// `com.wisent.always-on.stado-object-api` is delivered under its label and
+/// runs the declared `stado` binary. Accepting only one of the two would
+/// report the other as a finding on every host that has it.
+pub fn services_without_declared_version(target: &ComputeTarget) -> Vec<UndeclaredServiceVersion> {
+    declared_services(target)
+        .iter()
+        .filter_map(|service| {
+            let product = delivery_tree_product(&service.program)?;
+            let file_name = service.program.rsplit('/').next().unwrap_or_default();
+            if target.declared_version(product).is_some()
+                || target.declared_version(file_name).is_some()
+            {
+                return None;
+            }
+            Some(UndeclaredServiceVersion {
+                host: target.name.clone(),
+                name: service.name.clone(),
+                unit: if service.label.is_empty() {
+                    service.unit.clone()
+                } else {
+                    service.label.clone()
+                },
+                program: service.program.clone(),
+                product: product.to_string(),
+            })
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Read side: the beacon join
 // ---------------------------------------------------------------------------
