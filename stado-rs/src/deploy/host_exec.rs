@@ -469,6 +469,36 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
     script
 }
 
+fn extract_resolved_executable(
+    stderr: &mut String,
+    candidates: &[&str],
+) -> Result<String, DeployError> {
+    let mut resolved: Option<String> = None;
+    let mut retained = String::with_capacity(stderr.len());
+    for segment in stderr.split_inclusive('\n') {
+        let line = segment.strip_suffix('\n').unwrap_or(segment);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if let Some(path) = line.strip_prefix(RESOLVED_EXECUTABLE_MARKER) {
+            if path.is_empty()
+                || !candidates.contains(&path)
+                || resolved.replace(path.to_string()).is_some()
+            {
+                return Err(DeployError(
+                    "host returned an invalid resolved executable marker".into(),
+                ));
+            }
+        } else {
+            retained.push_str(segment);
+        }
+    }
+    let resolved = resolved.ok_or_else(|| {
+        DeployError("host returned no resolved executable marker".into())
+    })?;
+    *stderr = retained;
+    Ok(resolved)
+}
+
+
 /// Run one approved read-only command on a canonical registry host.
 pub async fn exec_host(
     target_name: &str,
@@ -493,15 +523,7 @@ pub async fn exec_host(
         _ => host_channel::run_program(&target, approved.argv, runner).await?,
     };
     let resolved_executable = if candidates.len() > usize::from(true) {
-        let (line, remainder) = output.stderr.split_once('\n').unwrap_or((&output.stderr, ""));
-        match line.strip_prefix(RESOLVED_EXECUTABLE_MARKER) {
-            Some(path) => {
-                let path = path.to_string();
-                output.stderr = remainder.to_string();
-                path
-            }
-            None => String::new(),
-        }
+        extract_resolved_executable(&mut output.stderr, candidates)?
     } else {
         candidates.first().copied().unwrap_or_default().to_string()
     };
