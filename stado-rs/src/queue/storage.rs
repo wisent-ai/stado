@@ -32,6 +32,21 @@ pub struct JobStorage {
     backend: Arc<dyn BlobBackend>,
     backend_name: String,
     bucket_name: String,
+    /// Where the last bounded claimable-scan stopped in the priority index.
+    ///
+    /// Reachability, and nothing else. A budgeted scan that always restarted
+    /// at the head of the index re-read the same head every poll and could
+    /// never see a job sitting past the budget, which is the starvation the
+    /// budget was supposed to bound rather than cause. Resuming from the last
+    /// visited marker and wrapping at the end of the prefix means every queued
+    /// job is reached within a bounded number of polls.
+    ///
+    /// In memory on purpose: it is a fairness hint, not a fact about the
+    /// queue. Persisting it would add a document that has to be written on
+    /// every poll and reconciled after every crash, to protect a value whose
+    /// only failure mode is starting a scan one page early. Shared across
+    /// clones because the clones are one worker's handle on one store.
+    scan_cursor: Arc<std::sync::Mutex<String>>,
 }
 
 const TRANSITION_PREFIX: &str = "job-transitions";
@@ -356,6 +371,25 @@ impl JobStorage {
             backend,
             backend_name: backend_name.into(),
             bucket_name: bucket_name.into(),
+            scan_cursor: Arc::new(std::sync::Mutex::new(String::new())),
+        }
+    }
+
+    /// Where the last bounded claimable-scan stopped in the priority index.
+    ///
+    /// A poisoned lock is not worth failing a queue poll over: the cursor is a
+    /// fairness hint, so losing it costs one scan that starts at the head.
+    pub(crate) fn scan_cursor(&self) -> String {
+        self.scan_cursor
+            .lock()
+            .map(|cursor| cursor.clone())
+            .unwrap_or_default()
+    }
+
+    /// Record where the next bounded claimable-scan should resume.
+    pub(crate) fn set_scan_cursor(&self, cursor: String) {
+        if let Ok(mut slot) = self.scan_cursor.lock() {
+            *slot = cursor;
         }
     }
 
@@ -477,6 +511,21 @@ impl JobStorage {
         self.backend.list_paths(prefix, oldest_first).await
     }
 
+    /// One name-ascending page of `prefix`, strictly after `start_after`, at
+    /// most `limit` names. See [`BlobBackend::list_page`] for the contract.
+    ///
+    /// The ordered walk of the priority index is built on this rather than on
+    /// [`Self::list_paths`], which cannot answer "the next few names" without
+    /// first materializing every name there is.
+    pub(crate) async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        self.backend.list_page(prefix, start_after, limit).await
+    }
+
     /// (name, updated, metadata) for every blob under prefix, so callers
     /// can filter on metadata before downloading the full body.
     pub async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
@@ -497,9 +546,15 @@ impl JobStorage {
         if created {
             let meta = Self::job_metadata(job);
             self.backend.set_metadata(&blob_path, &meta).await?;
-            if job.priority > 0 {
-                self.write_priority_marker(job).await?;
-            }
+            // Every queued job is indexed, not just the prioritized ones.
+            // `priority_key` already sorts priority 0 correctly — it is the
+            // largest inverted key, so those jobs land after all prioritized
+            // work and FIFO among themselves — so this widens the index's
+            // coverage without changing one byte of its name shape. The
+            // listing walk can only be the ordered index if the index names
+            // everything; while it named a subset, the unindexed remainder
+            // needed a second, whole-prefix pass to be reachable at all.
+            self.write_priority_marker(job).await?;
         }
         Ok(created)
     }
@@ -535,11 +590,9 @@ impl JobStorage {
             Err(StorageError::NotFound(_)) => return Ok(()),
             Err(error) => return Err(error),
         }
-        if current.priority > 0 {
-            self.write_priority_marker(&current).await?;
-        }
+        self.write_priority_marker(&current).await?;
         if !self.backend.exists(&path).await? {
-            self.delete_priority_marker(&planned.job_id).await?;
+            self.delete_priority_marker_for(&current).await?;
         }
         Ok(())
     }
@@ -621,7 +674,13 @@ impl JobStorage {
                 return Ok(());
             }
             if transition.from_prefix == "queue" {
-                self.delete_priority_marker(&transition.job_id).await?;
+                // The hot path: every job that leaves the queue passes here.
+                // The fenced source still carries the `priority` and
+                // `created_at` the marker name was built from, so the name is
+                // computable and this is one delete. Walking the index for a
+                // matching suffix instead would cost a full listing of the
+                // queue per completed job now that every job is indexed.
+                self.delete_priority_marker_for(&source).await?;
             }
             source.state = cleaned_state.clone();
             match self
@@ -835,7 +894,10 @@ impl JobStorage {
         self.backend
             .set_metadata(&destination_path, &Self::job_metadata(&destination))
             .await?;
-        if transition.to_prefix == "queue" && destination.priority > 0 {
+        if transition.to_prefix == "queue" {
+            // Anything re-entering the queue is indexed, whatever its
+            // priority: a requeued job with priority 0 that carried no marker
+            // would be invisible to a listing that walks only the index.
             self.write_priority_marker(&destination).await?;
         }
         self.set_transition_state(&transition.transition_id, job_id, "completed")
@@ -1145,13 +1207,15 @@ impl JobStorage {
         let updated = self
             .rewrite_queued_job(job_id, |job| job.priority = new_priority)
             .await?;
-        self.delete_priority_marker(job_id).await?;
+        // The pre-change key is not derivable from the post-change job — the
+        // priority it was built from is exactly what just changed — so this is
+        // one of the two cases the index walk still exists for. It is an
+        // operator action on a single job, not a per-job lifecycle step.
+        self.repair_priority_markers(job_id).await?;
         if let Some(job) = &updated {
-            if new_priority > 0 {
-                self.write_priority_marker(job).await?;
-            }
+            self.write_priority_marker(job).await?;
             if !self.backend.exists(&format!("queue/{job_id}.json")).await? {
-                self.delete_priority_marker(job_id).await?;
+                self.delete_priority_marker_for(job).await?;
                 return Ok(None);
             }
         }
@@ -1181,10 +1245,22 @@ impl JobStorage {
     }
 
     /// Delete the job blob; also drops the priority marker in `queue/`.
+    ///
+    /// The job is read before it is deleted so the marker can be removed by
+    /// its exact name. A job already gone leaves a marker whose key cannot be
+    /// computed, which is the orphan case the index walk repairs.
     pub async fn delete_job(&self, prefix: &str, job_id: &str) -> Result<(), StorageError> {
+        let indexed = if prefix == "queue" {
+            self.read_job(prefix, job_id).await?
+        } else {
+            None
+        };
         self.delete_blob(&format!("{prefix}/{job_id}.json")).await?;
         if prefix == "queue" {
-            self.delete_priority_marker(job_id).await?;
+            match &indexed {
+                Some(job) => self.delete_priority_marker_for(job).await?,
+                None => self.repair_priority_markers(job_id).await?,
+            }
         }
         Ok(())
     }
@@ -1230,14 +1306,21 @@ impl JobStorage {
 
     // ---- delegates to queue/listing/ (priority markers + bulk fetch) ----
 
-    /// Index entry for priority>0 jobs (`queue_priority/` marker).
+    /// Index entry for a queued job (`queue_priority/` marker).
     pub async fn write_priority_marker(&self, job: &Job) -> Result<(), StorageError> {
         listing::write_marker(self, job).await
     }
 
-    /// Remove any priority marker(s) for this job_id.
-    pub async fn delete_priority_marker(&self, job_id: &str) -> Result<(), StorageError> {
-        listing::delete_marker(self, job_id).await
+    /// Drop the marker this job names, in one delete.
+    pub async fn delete_priority_marker_for(&self, job: &Job) -> Result<(), StorageError> {
+        listing::delete_marker_for(self, job).await
+    }
+
+    /// Repair path: drop every marker naming `job_id` by walking the index.
+    /// Only for the cases where the marker's key is not derivable from the
+    /// job — an orphan, or a key superseded by a priority change.
+    pub async fn repair_priority_markers(&self, job_id: &str) -> Result<(), StorageError> {
+        listing::delete_markers_scanning(self, job_id).await
     }
 
     /// Parallel-fetch job JSONs under `{prefix}/`. Python

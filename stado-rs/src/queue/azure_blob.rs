@@ -28,6 +28,9 @@ pub(crate) const X_MS_VERSION: &str = "2023-11-03";
 pub(crate) const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 /// Resource for IMDS / az-CLI token requests (same audience).
 pub(crate) const STORAGE_RESOURCE: &str = "https://storage.azure.com";
+/// Service ceiling for `maxresults` on List Blobs, and the bulk page size
+/// used when a listing has no window to fill.
+const LIST_MAX_RESULTS: usize = 5_000;
 
 struct Inner {
     http: reqwest::Client,
@@ -115,8 +118,15 @@ impl AzureBlobBackend {
 
     /// Container List Blobs URL; `marker` continues a paginated listing,
     /// `include_metadata` adds each blob's metadata to the response
-    /// (Python `include=["metadata"]`).
-    fn list_url(&self, prefix: &str, marker: Option<&str>, include_metadata: bool) -> String {
+    /// (Python `include=["metadata"]`), `max_results` caps one page
+    /// (`maxresults`; absent = the service default of 5000).
+    fn list_url(
+        &self,
+        prefix: &str,
+        marker: Option<&str>,
+        include_metadata: bool,
+        max_results: Option<usize>,
+    ) -> String {
         let mut url = format!(
             "{}/{}?restype=container&comp=list&prefix={}",
             self.inner.base_url,
@@ -125,6 +135,9 @@ impl AzureBlobBackend {
         );
         if include_metadata {
             url.push_str("&include=metadata");
+        }
+        if let Some(max_results) = max_results {
+            url.push_str(&format!("&maxresults={max_results}"));
         }
         if let Some(marker) = marker {
             url.push_str(&format!("&marker={}", percent_encode(marker)));
@@ -280,6 +293,37 @@ impl AzureBlobBackend {
         Ok(true)
     }
 
+    /// Drive the paginated List Blobs walk, handing each parsed page to
+    /// `consume` as it arrives. The walk ends when the continuation marker
+    /// is exhausted or `consume` returns `false`, so a caller that only
+    /// wants a window can stop paging instead of draining the prefix.
+    async fn walk_list_pages(
+        &self,
+        prefix: &str,
+        include_metadata: bool,
+        max_results: Option<usize>,
+        mut consume: impl FnMut(Vec<ListEntry>) -> bool,
+    ) -> Result<(), StorageError> {
+        let mut marker: Option<String> = None;
+        loop {
+            let url = self.list_url(prefix, marker.as_deref(), include_metadata, max_results);
+            let response = self.send(Method::GET, &url, &[], None).await?;
+            let body = Self::ensure_success(response, &format!("list {prefix}"))
+                .await?
+                .text()
+                .await?;
+            let (entries, next) = parse_list_blobs(&body);
+            if !consume(entries) {
+                break;
+            }
+            match next {
+                Some(next) if !next.is_empty() => marker = Some(next),
+                _ => break,
+            }
+        }
+        Ok(())
+    }
+
     /// One paginated List Blobs walk, parsed into raw entries.
     async fn list_entries(
         &self,
@@ -287,21 +331,11 @@ impl AzureBlobBackend {
         include_metadata: bool,
     ) -> Result<Vec<ListEntry>, StorageError> {
         let mut out = Vec::new();
-        let mut marker: Option<String> = None;
-        loop {
-            let url = self.list_url(prefix, marker.as_deref(), include_metadata);
-            let response = self.send(Method::GET, &url, &[], None).await?;
-            let body = Self::ensure_success(response, &format!("list {prefix}"))
-                .await?
-                .text()
-                .await?;
-            let (entries, next) = parse_list_blobs(&body);
+        self.walk_list_pages(prefix, include_metadata, None, |entries| {
             out.extend(entries);
-            match next {
-                Some(next) if !next.is_empty() => marker = Some(next),
-                _ => break,
-            }
-        }
+            true
+        })
+        .await?;
         Ok(out)
     }
 }
@@ -570,6 +604,54 @@ impl BlobBackend for AzureBlobBackend {
             entries.truncate(oldest_first);
         }
         Ok(entries.into_iter().map(|entry| entry.name).collect())
+    }
+
+    /// List Blobs returns blobs in lexicographic name order and accepts
+    /// `maxresults` plus an opaque continuation `marker`; it has no
+    /// `start-after`/`startOffset`, and the marker is not a blob name, so
+    /// the exclusive cursor cannot be handed to the service. The window is
+    /// therefore filled client-side, but the walk stops the moment it is
+    /// full instead of doing what the generic default does — pull the whole
+    /// prefix listing and cut it on every call, which for the 14k-blob
+    /// queue prefix is three round trips and 14k names to answer a
+    /// head-of-index poll that wants a handful. Name order is what makes
+    /// the skip bounded: past `start_after` every later name qualifies, so
+    /// the discard is a prefix of the walk rather than a filter over all of
+    /// it. Resuming from a deep cursor still scans forward to reach it,
+    /// since Azure cannot express the offset server-side, but these are
+    /// name-only pages (no `include=metadata`, no bodies) — the cost that
+    /// actually hurt was fetching content, not enumerating names.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        // A page smaller than the window would force extra round trips, and
+        // a page sized to the window would do the same while skipping to a
+        // cursor, whose names have to cross the wire either way. So ask for
+        // exactly the window only when there is nothing to skip.
+        let page = if limit == 0 || !start_after.is_empty() {
+            LIST_MAX_RESULTS
+        } else {
+            limit.min(LIST_MAX_RESULTS)
+        };
+        // Uncapped listings grow as they go; a window pre-sizes to itself.
+        let mut names: Vec<String> = Vec::with_capacity(limit.min(page));
+        self.walk_list_pages(prefix, false, Some(page), |entries| {
+            for entry in entries {
+                if entry.name.as_str() <= start_after {
+                    continue;
+                }
+                names.push(entry.name);
+                if limit > 0 && names.len() >= limit {
+                    return false;
+                }
+            }
+            true
+        })
+        .await?;
+        Ok(names)
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {

@@ -37,27 +37,46 @@ const DOWNLOAD_WORKERS: usize = 10;
 /// second concurrency number.
 pub(crate) const BULK_WORKERS: usize = DOWNLOAD_WORKERS;
 
-/// Python sentinel dict `{"cursor": str, "done": bool}`.
+/// The coverage a completed sentinel attests to.
+///
+/// The backfill used to mean "every queued job with priority>0 has a marker",
+/// and a store that finished it recorded `done` forever. The index now has to
+/// name EVERY queued job, so that recorded `done` is an answer to a question
+/// nobody is asking any more: honouring it would leave every pre-existing
+/// priority-0 job unindexed and, since the listing walk is the index,
+/// invisible. Stamping the coverage into the sentinel makes a `done` from the
+/// narrower era simply not apply, so the pass runs again — once — and then
+/// reports complete under the new coverage.
+const COVERAGE: &str = "all-queued";
+
+/// Python sentinel dict `{"cursor": str, "done": bool}`, plus the coverage
+/// the `done` belongs to.
 struct Sentinel {
     cursor: String,
     done: bool,
 }
 
-/// Python `_read_sentinel`.
+/// Python `_read_sentinel`, with the coverage check folded in.
+///
+/// A sentinel written before the index covered every queued job carries no
+/// `coverage` key; its `done` and its `cursor` both describe the narrower
+/// pass, so neither is usable and the walk restarts from the head under the
+/// current coverage.
 async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
+    let fresh = Sentinel {
+        cursor: String::new(),
+        done: false,
+    };
     let Some(raw) = store.download_text(SENTINEL_PATH).await? else {
-        return Ok(Sentinel {
-            cursor: String::new(),
-            done: false,
-        });
+        return Ok(fresh);
     };
     if raw.is_empty() {
-        return Ok(Sentinel {
-            cursor: String::new(),
-            done: false,
-        });
+        return Ok(fresh);
     }
     let value: serde_json::Value = serde_json::from_str(&raw)?;
+    if value.get("coverage").and_then(serde_json::Value::as_str) != Some(COVERAGE) {
+        return Ok(fresh);
+    }
     Ok(Sentinel {
         cursor: value
             .get("cursor")
@@ -72,34 +91,36 @@ async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
 }
 
 /// Python `_write_sentinel` (`json.dumps({"cursor": ..., "done": ...})`
-/// with default separators).
+/// with default separators), stamped with the coverage its `done` attests to.
 async fn write_sentinel(store: &JobStorage, cursor: &str, done: bool) -> Result<(), StorageError> {
-    let body = super::python_json_dumps(&serde_json::json!({"cursor": cursor, "done": done}))?;
+    let body = super::python_json_dumps(
+        &serde_json::json!({"cursor": cursor, "done": done, "coverage": COVERAGE}),
+    )?;
     store.upload_text(SENTINEL_PATH, &body).await
 }
 
-/// All job_ids that already have a priority marker. Each marker name ends
-/// in `-{job_id}.json`. Python `_existing_marker_job_ids`.
+/// All job_ids that already have a marker. Python
+/// `_existing_marker_job_ids`.
+///
+/// Shares [`super::listing::marker_job_id`] with the reader so the backfill
+/// cannot disagree with the walk about which job a marker names.
 async fn existing_marker_job_ids(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
     let mut out = HashSet::new();
-    for path in store.list_paths("queue_priority/", 0).await? {
-        if !path.ends_with(".json") {
-            continue;
+    for path in store.list_paths(super::listing::MARKER_PREFIX, 0).await? {
+        if let Some(job_id) = super::listing::marker_job_id(&path) {
+            out.insert(job_id.to_string());
         }
-        // path layout: queue_priority/{inv}-{ts}-{job_id}.json (skip sentinel)
-        let name = path.rsplit('/').next().unwrap_or("");
-        if name.starts_with('.') {
-            continue;
-        }
-        let tail = name.rsplit('-').next().unwrap_or("");
-        out.insert(tail.strip_suffix(".json").unwrap_or(tail).to_string());
     }
     Ok(out)
 }
 
-/// Scan queue/ and write missing markers for priority>0 jobs. Returns
-/// `true` iff migration is complete (sentinel.done set). Idempotent: safe
-/// to call repeatedly. Each call processes at most `batch` queue/ blobs.
+/// Scan queue/ and write missing markers for queued jobs. Returns `true` iff
+/// migration is complete (sentinel.done set). Idempotent: safe to call
+/// repeatedly. Each call processes at most `batch` queue/ blobs.
+///
+/// This is the bounded repair that keeps an unindexed job reachable, and it
+/// is the ONLY one: the widening from priority>0 to every queued job extends
+/// this pass rather than adding a second mechanism beside it.
 pub async fn backfill_priority_markers(
     store: &JobStorage,
     batch: usize,
@@ -138,7 +159,13 @@ pub async fn backfill_priority_markers(
             continue;
         }
         let job = Job::from_json(&body)?;
-        if job.state != crate::models::job_state::QUEUED || job.priority <= 0 {
+        // Queued-only, deliberately: a marker must never be resurrected for a
+        // job that has already left the queue, or the walk would resolve it
+        // against a `queue/` blob that no longer exists forever. The priority
+        // floor that used to sit beside this check is gone — the index covers
+        // every queued job now, and `priority_key` orders priority 0 as
+        // correctly as any other value.
+        if job.state != crate::models::job_state::QUEUED {
             continue;
         }
         if have.contains(&job.job_id) {

@@ -212,6 +212,28 @@ pub(crate) fn list_url(
     url
 }
 
+/// Object listing endpoint for one bounded, ordered page: `startOffset`
+/// makes the server begin the name-ordered scan at the resume point and
+/// `maxResults` caps the page. `startOffset` is INCLUSIVE, so the caller
+/// still has to drop a name equal to its cursor.
+pub(crate) fn list_page_url(
+    bucket: &str,
+    prefix: &str,
+    page_token: Option<&str>,
+    fields: &str,
+    start_offset: &str,
+    max_results: usize,
+) -> String {
+    let mut url = list_url(bucket, prefix, page_token, fields);
+    if !start_offset.is_empty() {
+        url.push_str(&format!("&startOffset={}", percent_encode(start_offset)));
+    }
+    if max_results > 0 {
+        url.push_str(&format!("&maxResults={max_results}"));
+    }
+    url
+}
+
 #[async_trait]
 impl BlobBackend for GcsBackend {
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError> {
@@ -389,6 +411,60 @@ impl BlobBackend for GcsBackend {
             items.truncate(oldest_first);
         }
         Ok(items.into_iter().map(|(name, _)| name).collect())
+    }
+
+    /// objects.list already answers in lexicographic name order, so
+    /// `startOffset` and `maxResults` express this page server-side. The
+    /// generic default would have followed every `nextPageToken` of the
+    /// prefix — 14k+ names off the `queue/` index, at 1000 per round-trip —
+    /// and sorted them locally only to keep the first few. The one asymmetry
+    /// is that `startOffset` is inclusive while `start_after` is exclusive:
+    /// the boundary name is discarded here, and since that discard can leave
+    /// a `maxResults`-sized page one name short, paging continues until the
+    /// limit is filled or the prefix runs out.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        let fields = "items(name),nextPageToken";
+        let mut out: Vec<String> = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            // Only the shortfall, so a resumed walk never over-fetches.
+            let max_results = if limit > 0 { limit - out.len() } else { 0 };
+            let url = list_page_url(
+                &self.inner.bucket,
+                prefix,
+                page_token.as_deref(),
+                fields,
+                start_after,
+                max_results,
+            );
+            let response = self.send(Method::GET, &url, None).await?;
+            let page: serde_json::Value = ensure_success(response).await?.json().await?;
+            if let Some(array) = page.get("items").and_then(|i| i.as_array()) {
+                for item in array {
+                    let name = item
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default();
+                    if name == start_after {
+                        continue;
+                    }
+                    out.push(name.to_string());
+                    if limit > 0 && out.len() >= limit {
+                        return Ok(out);
+                    }
+                }
+            }
+            match page.get("nextPageToken").and_then(|t| t.as_str()) {
+                Some(token) => page_token = Some(token.to_string()),
+                None => break,
+            }
+        }
+        Ok(out)
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {

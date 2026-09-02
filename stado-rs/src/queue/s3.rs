@@ -314,6 +314,59 @@ impl BlobBackend for S3Backend {
         Ok(objects.into_iter().map(|(key, _)| key).collect())
     }
 
+    /// ListObjectsV2 states this contract natively: keys come back in
+    /// ascending UTF-8 order, `start-after` is already an exclusive cursor,
+    /// and `max-keys` bounds the response on the server. The generic default
+    /// instead drains every continuation token of the prefix and sorts the
+    /// result locally, so reading the head of the 14k-blob `queue/` index cost
+    /// 15 list round-trips and a 14k-element sort per poll.
+    async fn list_page(
+        &self,
+        prefix: &str,
+        start_after: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        let mut out: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut request = self
+                .inner
+                .client
+                .list_objects_v2()
+                .bucket(&self.inner.bucket)
+                .prefix(prefix);
+            if !start_after.is_empty() {
+                // Ignored by S3 once a continuation token is present, which is
+                // correct: the token already resumes past everything returned.
+                request = request.start_after(start_after);
+            }
+            if limit > 0 {
+                // Only what is still missing. S3 caps a page at 1000 anyway,
+                // so the saturating cast never loses a needed key.
+                let remaining = limit - out.len();
+                request = request.max_keys(i32::try_from(remaining).unwrap_or(i32::MAX));
+            }
+            if let Some(token) = &token {
+                request = request.continuation_token(token);
+            }
+            let page = request
+                .send()
+                .await
+                .map_err(|err| sdk_err("list_objects_v2", err))?;
+            for object in page.contents() {
+                out.push(object.key().unwrap_or_default().to_string());
+                if limit > 0 && out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+            match page.next_continuation_token() {
+                Some(next) => token = Some(next.to_string()),
+                None => break,
+            }
+        }
+        Ok(out)
+    }
+
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
         match self
             .inner
