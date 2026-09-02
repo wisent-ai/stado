@@ -31,7 +31,7 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
         queue_counts(&store),
         fleet_claim::read_fleet_claim(&store, &registry, now),
         read_billing(&store),
-        read_gcp_budgets(),
+        read_budgets(&store),
         crate::scheduler::quota::summarize_quotas(&store),
     );
 
@@ -245,6 +245,52 @@ async fn authorized_json(
         return Err(format!("HTTP {status}: {text}"));
     }
     serde_json::from_str(&text).map_err(|err| err.to_string())
+}
+
+/// The budgets the fleet is actually held to.
+///
+/// The autonomy policy's `budgets` block is what gates new cloud placement
+/// (docs: costs), and the cycle persists its verdict as the cost forecast; that
+/// is the figure an operator needs beside the burn. GCP Billing Budgets are
+/// read only while `gcp` is an enabled billing provider: the historical
+/// project's billing is detached on purpose, and asking it for budgets from
+/// every overview turned the whole section into "token request failed".
+async fn read_budgets(store: &JobStorage) -> Value {
+    let forecast: Option<Value> =
+        crate::autonomy::storage::read_json::<Value>(store, "state/autonomy/cost/forecast.json")
+            .await
+            .ok()
+            .flatten();
+    let policy = match &forecast {
+        Some(forecast) => json!({
+            "status": "ok",
+            "source": "autonomy policy, via state/autonomy/cost/forecast.json",
+            "created_at": forecast.get("created_at").cloned().unwrap_or(Value::Null),
+            "hourly_usd": forecast.get("hourly_budget_usd").cloned().unwrap_or(Value::Null),
+            "daily_usd": forecast.get("daily_budget_usd").cloned().unwrap_or(Value::Null),
+            "monthly_usd": forecast.get("monthly_budget_usd").cloned().unwrap_or(Value::Null),
+            "current_hourly_usd": forecast.get("current_hourly_usd").cloned().unwrap_or(Value::Null),
+            "end_of_month_usd": forecast.get("end_of_month_usd").cloned().unwrap_or(Value::Null),
+            "budget_exceeded": forecast.get("budget_exceeded").cloned().unwrap_or(Value::Null),
+            "credit_runway_days": forecast.get("credit_runway_days").cloned().unwrap_or(Value::Null),
+        }),
+        None => json!({
+            "status": "unavailable",
+            "detail": "no cost forecast persisted yet; run `stado optimize run`",
+        }),
+    };
+    let gcp = if crate::config::billing_providers()
+        .iter()
+        .any(|provider| provider == "gcp")
+    {
+        read_gcp_budgets().await
+    } else {
+        json!({
+            "status": "detached",
+            "detail": "gcp is not an enabled billing provider (billing.providers)",
+        })
+    };
+    json!({ "policy": policy, "gcp": gcp })
 }
 
 async fn read_gcp_budgets() -> Value {
@@ -533,40 +579,74 @@ fn print_human(document: &Value, claim: &FleetClaim) {
     }
 
     println!("budgets:");
-    let budgets = &document["budgets"];
-    if budgets.get("status").and_then(Value::as_str) == Some("ok") {
-        let rows = budgets
-            .get("budgets")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if rows.is_empty() {
-            println!("  no GCP budgets configured");
-        }
-        for budget in rows {
-            let name = budget
-                .get("displayName")
-                .and_then(Value::as_str)
-                .unwrap_or("unnamed");
-            let period = budget
-                .pointer("/budgetFilter/calendarPeriod")
-                .and_then(Value::as_str)
-                .unwrap_or("CUSTOM");
-            let amount = budget
-                .pointer("/amount/specifiedAmount")
-                .or_else(|| budget.pointer("/amount/lastPeriodAmount"));
-            println!(
-                "  {name}: {} ({period})",
-                amount.map_or_else(|| "dynamic amount".to_string(), money)
-            );
+    let policy = &document["budgets"]["policy"];
+    if policy.get("status").and_then(Value::as_str) == Some("ok") {
+        let limit = |key: &str| match policy.get(key) {
+            Some(Value::Number(value)) => format!("USD {:.2}", value.as_f64().unwrap_or_default()),
+            _ => "not set".to_string(),
+        };
+        println!(
+            "  policy: hourly {} | daily {} | monthly {}",
+            limit("hourly_usd"),
+            limit("daily_usd"),
+            limit("monthly_usd"),
+        );
+        println!(
+            "  burn: {} USD/h now, {} USD projected at month end, budget exceeded={}",
+            number(policy.get("current_hourly_usd")),
+            number(policy.get("end_of_month_usd")),
+            policy
+                .get("budget_exceeded")
+                .and_then(Value::as_bool)
+                .map_or("unknown".to_string(), |value| value.to_string()),
+        );
+        if let Some(days) = policy.get("credit_runway_days").and_then(Value::as_f64) {
+            println!("  credit runway: {days:.1} days");
         }
     } else {
         println!(
-            "  unavailable: {}",
-            budgets
+            "  policy: {}",
+            policy
                 .get("detail")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error")
         );
+    }
+    let gcp = &document["budgets"]["gcp"];
+    match gcp.get("status").and_then(Value::as_str) {
+        Some("ok") => {
+            let rows = gcp
+                .get("budgets")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if rows.is_empty() {
+                println!("  GCP: no budgets configured");
+            }
+            for budget in rows {
+                let name = budget
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed");
+                let period = budget
+                    .pointer("/budgetFilter/calendarPeriod")
+                    .and_then(Value::as_str)
+                    .unwrap_or("CUSTOM");
+                let amount = budget
+                    .pointer("/amount/specifiedAmount")
+                    .or_else(|| budget.pointer("/amount/lastPeriodAmount"));
+                println!(
+                    "  GCP {name}: {} ({period})",
+                    amount.map_or_else(|| "dynamic amount".to_string(), money)
+                );
+            }
+        }
+        Some("detached") => {}
+        _ => println!(
+            "  GCP: unavailable: {}",
+            gcp.get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        ),
     }
 }
