@@ -52,6 +52,7 @@ pub mod service_resolution;
 pub mod sizing;
 pub mod skarbiec;
 pub mod stream;
+pub mod tailnet;
 pub mod targets;
 pub mod transcripts;
 pub mod watchdog;

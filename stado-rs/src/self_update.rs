@@ -447,7 +447,7 @@ async fn install_release_with(
         log_fn(&format!("self-update: installed {name} {to}"));
     }
     std::fs::File::open(install_dir)?.sync_all()?;
-    recycle_replaced_units(install_dir, &targets, log_fn).await;
+    recycle_replaced_units("self-update", install_dir, &targets, log_fn).await;
     Ok(UpdateOutcome::Updated {
         from: installed,
         to,
@@ -520,7 +520,20 @@ fn stage_for_attestation(
 /// Best effort by construction. The binaries are installed and fsynced before
 /// this runs, so a unit that cannot be restarted must not fail the update that
 /// already succeeded; it is named in the log and left holding the old image.
-async fn recycle_replaced_units(
+///
+/// The queue agent is deliberately left alone. `cli::release_cmd::install_local`
+/// writes `~/.stado/bin/stado.release-version`, and
+/// `providers::local::agent` compares that file with the version it was
+/// compiled from, finishes the slot it is holding, and lets its supervisor
+/// recreate it. Kicking it here would abort a running job to save it a few
+/// minutes, so a unit whose argv carries the `agent` subcommand is reported
+/// and skipped. That handshake is the only one any unit implements, which is
+/// why every other unit needs this function at all.
+///
+/// `context` prefixes every line, because both delivery paths call this and a
+/// log that says `self-update` about a `release install-local` is a lie.
+pub(crate) async fn recycle_replaced_units(
+    context: &str,
     install_dir: &Path,
     replaced: &[String],
     log_fn: &mut dyn FnMut(&str),
@@ -531,13 +544,21 @@ async fn recycle_replaced_units(
         .collect();
     let ours = std::process::id();
     let restarted = if cfg!(target_os = "macos") {
-        recycle_launchd(&paths, ours, log_fn).await
+        recycle_launchd(context, &paths, ours, log_fn).await
     } else {
-        recycle_systemd(&paths, ours, log_fn).await
+        recycle_systemd(context, &paths, ours, log_fn).await
     };
     if restarted == 0 {
-        log_fn("self-update: no other managed unit was running a replaced binary");
+        log_fn(&format!(
+            "{context}: no other managed unit was running a replaced binary"
+        ));
     }
+}
+
+/// Whether an argv belongs to the queue agent, which recycles itself through
+/// the installed-release handshake and must not be kicked mid-slot.
+fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
+    argv.iter().skip(1).any(|token| token.as_ref() == "agent")
 }
 
 /// Stdout of a successful command, or `None` for a missing binary, a spawn
@@ -564,34 +585,56 @@ fn unix_uid() -> Option<u32> {
     Some(std::fs::metadata(home).ok()?.uid())
 }
 
-/// `ProgramArguments[0]`, else `Program`, of one launchd unit. Read through
-/// `plutil`, which every macOS carries, so no plist parser joins the
-/// dependency set for the sake of a single field.
-async fn launchd_program(plist: &Path) -> Option<String> {
+/// The argv of one launchd unit: `ProgramArguments` when it has one, else the
+/// single `Program`. Read through `plutil`, which every macOS carries, so no
+/// plist parser joins the dependency set for the sake of two fields.
+///
+/// The whole argv, not just the program, because the subcommand decides
+/// whether a unit recycles itself — see [`defers_to_release_handshake`].
+async fn launchd_argv(plist: &Path) -> Option<Vec<String>> {
     let path = plist.to_string_lossy().into_owned();
     let rendered =
         command_stdout("/usr/bin/plutil", &["-convert", "json", "-o", "-", &path]).await?;
     let value: serde_json::Value = serde_json::from_str(&rendered).ok()?;
-    value
+    if let Some(arguments) = value
         .get("ProgramArguments")
         .and_then(serde_json::Value::as_array)
-        .and_then(|arguments| arguments.first())
+    {
+        let argv: Vec<String> = arguments
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if !argv.is_empty() {
+            return Some(argv);
+        }
+    }
+    value
+        .get("Program")
         .and_then(serde_json::Value::as_str)
-        .or_else(|| value.get("Program").and_then(serde_json::Value::as_str))
-        .map(str::to_string)
+        .map(|program| vec![program.to_string()])
 }
 
 /// `launchctl list` prints `PID\tStatus\tLabel` after one header row. A job
 /// that is loaded but not running prints `-` for the PID and holds no image,
 /// so it is skipped: it will pick up the new binary the next time launchd
 /// starts it.
-async fn recycle_launchd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&str)) -> usize {
+async fn recycle_launchd(
+    context: &str,
+    paths: &[String],
+    ours: u32,
+    log_fn: &mut dyn FnMut(&str),
+) -> usize {
     let Some(uid) = unix_uid() else {
-        log_fn("self-update: this account's uid is unreadable, so no launchd unit was restarted");
+        log_fn(&format!(
+            "{context}: this account's uid is unreadable, so no launchd unit was restarted"
+        ));
         return 0;
     };
     let Some(listing) = command_stdout("/bin/launchctl", &["list"]).await else {
-        log_fn("self-update: launchctl list failed, so no launchd unit was restarted");
+        log_fn(&format!(
+            "{context}: launchctl list failed, so no launchd unit was restarted"
+        ));
         return 0;
     };
     let home = std::env::var("HOME").unwrap_or_default();
@@ -624,11 +667,19 @@ async fn recycle_launchd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&st
             if !plist.is_file() {
                 continue;
             }
-            let Some(program) = launchd_program(&plist).await else {
+            let Some(argv) = launchd_argv(&plist).await else {
                 continue;
             };
+            let program = argv[0].clone();
             if !paths.iter().any(|path| path == &program) {
                 continue;
+            }
+            if defers_to_release_handshake(&argv) {
+                log_fn(&format!(
+                    "{context}: {label} is running the replaced {program} and recycles itself \
+                     through the installed-release handshake, so it was left to finish its slot"
+                ));
+                break;
             }
             let service = format!("{domain}/{label}");
             if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
@@ -636,12 +687,12 @@ async fn recycle_launchd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&st
                 .is_some()
             {
                 log_fn(&format!(
-                    "self-update: restarted {service} in place; pid {pid} was running the replaced {program}"
+                    "{context}: restarted {service} in place; pid {pid} was running the replaced {program}"
                 ));
                 restarted += 1;
             } else {
                 log_fn(&format!(
-                    "self-update: {service} is running the replaced {program} and this account could not restart it; \
+                    "{context}: {service} is running the replaced {program} and this account could not restart it; \
                      it keeps the old image until launchd replaces the process"
                 ));
             }
@@ -654,7 +705,12 @@ async fn recycle_launchd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&st
 /// systemd holds a replaced image for exactly the same reason launchd does.
 /// `try-restart` acts only on units that are already running and never starts
 /// a stopped one, which is the in-place equivalent of `kickstart -k` here.
-async fn recycle_systemd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&str)) -> usize {
+async fn recycle_systemd(
+    context: &str,
+    paths: &[String],
+    ours: u32,
+    log_fn: &mut dyn FnMut(&str),
+) -> usize {
     let Some(listing) = command_stdout(
         "systemctl",
         &[
@@ -668,7 +724,9 @@ async fn recycle_systemd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&st
     )
     .await
     else {
-        log_fn("self-update: systemctl --user is unavailable, so no systemd unit was restarted");
+        log_fn(&format!(
+            "{context}: systemctl --user is unavailable, so no systemd unit was restarted"
+        ));
         return 0;
     };
     let mut restarted = 0usize;
@@ -687,6 +745,14 @@ async fn recycle_systemd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&st
         let Some(program) = paths.iter().find(|path| exec.contains(path.as_str())) else {
             continue;
         };
+        let argv: Vec<&str> = exec.split_whitespace().collect();
+        if defers_to_release_handshake(&argv) {
+            log_fn(&format!(
+                "{context}: {unit} is running the replaced {program} and recycles itself through \
+                 the installed-release handshake, so it was left to finish its slot"
+            ));
+            continue;
+        }
         let main_pid = command_stdout(
             "systemctl",
             &["--user", "show", "-p", "MainPID", "--value", unit],
@@ -702,12 +768,12 @@ async fn recycle_systemd(paths: &[String], ours: u32, log_fn: &mut dyn FnMut(&st
             .is_some()
         {
             log_fn(&format!(
-                "self-update: restarted {unit} in place; pid {main_pid} was running the replaced {program}"
+                "{context}: restarted {unit} in place; pid {main_pid} was running the replaced {program}"
             ));
             restarted += 1;
         } else {
             log_fn(&format!(
-                "self-update: {unit} is running the replaced {program} and could not be restarted; \
+                "{context}: {unit} is running the replaced {program} and could not be restarted; \
                  it keeps the old image"
             ));
         }

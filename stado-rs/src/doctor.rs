@@ -1437,10 +1437,33 @@ async fn check_release_channel() -> Check {
         return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
     }
 
+    // A 200 for a 201-byte manifest proves the name answers. It does not prove
+    // the route the release archive will travel, and those came apart on
+    // 2026-09-02: this check passed while the same origin resolved to the
+    // public `ts.net` front end and a release train moved 20 MB per 55 seconds
+    // until it was cancelled. Ask where the origin actually is before asking
+    // what it serves.
+    findings_for_origin_route(&api, &mut findings).await;
+
     let uri =
         format!("stado://releases/stado/{version}/{platform}/release-manifest-{platform}.json");
     let endpoint = format!("{api}/api/release/object");
-    let response = match reqwest::Client::new()
+    // The client the product itself uses, trust store, timeouts, tailnet route
+    // and all. A bare `reqwest::Client::new()` here measured a different path
+    // than the one a release travels, which is how this check kept passing
+    // over a route no release could use.
+    let client = match crate::cli::storage::fleet_https_client() {
+        Ok(client) => client,
+        Err(error) => {
+            findings.note(
+                Status::Fail,
+                format!("cannot build the fleet HTTPS client: {error}"),
+            );
+            findings.remedy(RELEASE_REMEDY);
+            return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
+        }
+    };
+    let response = match client
         .get(&endpoint)
         .query(&[("uri", uri.as_str())])
         .send()
@@ -1522,6 +1545,87 @@ async fn check_release_channel() -> Check {
         }
     }
     findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY)
+}
+
+/// Where a tailnet release origin resolves, judged against the tailnet's own
+/// map of its names.
+///
+/// Stado pins the tailnet route itself, so a disagreement is a warning rather
+/// than a failure: this process will reach the right address, and the host
+/// scripts that fetch a release with `curl` will not.
+async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
+    let Some(host) = url::Url::parse(api)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .filter(|host| crate::tailnet::is_magicdns_name(host))
+    else {
+        return;
+    };
+    let pinned = crate::tailnet::address_of(&host);
+    // A resolver with no answer for this suffix is exactly the state being
+    // measured, and `getaddrinfo` can sit on one of those for seconds. Bound
+    // it well inside the shared probe deadline: no answer in two seconds is
+    // the answer.
+    let resolved: Vec<std::net::IpAddr> = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::lookup_host(format!("{host}:443")),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|addresses| addresses.map(|address| address.ip()).collect())
+    .unwrap_or_default();
+    match pinned {
+        None if resolved.is_empty() => {
+            findings.note(
+                Status::Fail,
+                format!(
+                    "{host} is a tailnet name that neither this node's tailnet map nor the \
+                     system resolver can place"
+                ),
+            );
+            findings.remedy(ORIGIN_ROUTE_REMEDY);
+        }
+        None => findings.note(
+            Status::Warn,
+            format!(
+                "{host} resolves only through the system resolver ({}); this node's tailnet map \
+                 does not name it, so the route is whatever public DNS answers",
+                render_addresses(&resolved)
+            ),
+        ),
+        Some(address) if !resolved.contains(&address) => {
+            findings.note(
+                Status::Warn,
+                format!(
+                    "the tailnet places {host} at {address}; the system resolver answers {}. \
+                     Stado pins the tailnet route, a host-side curl does not",
+                    render_addresses(&resolved)
+                ),
+            );
+            findings.remedy(ORIGIN_ROUTE_REMEDY);
+        }
+        Some(address) => findings.note(
+            Status::Pass,
+            format!("{host} resolves to its tailnet address {address}"),
+        ),
+    }
+}
+
+const ORIGIN_ROUTE_REMEDY: &str =
+    "make the tailnet's MagicDNS suffix resolve through the tailnet responder (100.100.100.100) \
+     on this machine, so every consumer of the release origin takes the tailnet route and not a \
+     public front end";
+
+fn render_addresses(addresses: &[std::net::IpAddr]) -> String {
+    if addresses.is_empty() {
+        return "nothing".to_string();
+    }
+    addresses
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ---------------------------------------------------------------------------

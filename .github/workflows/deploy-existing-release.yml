@@ -134,15 +134,10 @@ jobs:
           set -euo pipefail
           version='${{ inputs.version }}'
           platform=linux-amd64
-          prefix="stado://releases/stado/$version/$platform"
           recovered="$RUNNER_TEMP/stado-$version-recovered"
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          for source in "$recovered"/*; do
-            name="${source##*/}"
-            delivered="$RUNNER_TEMP/public-$name"
-            "$stado_bin" storage get "$prefix/$name" "$delivered"
-            cmp --silent "$source" "$delivered"
-          done
+          bash "$GITHUB_WORKSPACE/scripts/verify_public_stado_release.sh" \
+            "$stado_bin" "$recovered" stado "$version" "$platform" "$RUNNER_TEMP"
       - name: Publish the exact tag native release
         env:
           STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}
@@ -300,14 +295,10 @@ jobs:
           set -euo pipefail
           version='${{ inputs.version }}'
           platform=darwin-arm64
-          prefix="stado://releases/stado/$version/$platform"
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          for source in "$STADO_NATIVE_RELEASE_DIR"/*; do
-            name="${source##*/}"
-            delivered="$RUNNER_TEMP/public-native-$name"
-            "$stado_bin" storage get "$prefix/$name" "$delivered"
-            cmp --silent "$source" "$delivered"
-          done
+          bash "$GITHUB_WORKSPACE/scripts/verify_public_stado_release.sh" \
+            "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
+            "$version" "$platform" "$RUNNER_TEMP"
       - name: Acquire release channel bearer
         env:
           WC_SKARBIEC_CONSUMER: stado-release-publisher
