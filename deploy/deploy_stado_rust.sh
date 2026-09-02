@@ -24,6 +24,17 @@ if [ -n "$RELEASE_DIR" ]; then
         chmod u=rwx,go= "$INSTALL_DIR/$name.new"
         mv "$INSTALL_DIR/$name.new" "$INSTALL_DIR/$name"
     done
+    # Leave the receipt `stado service converge` reads before the bytes are
+    # anything but a version string. Never fatal, for the reason
+    # `self_update::install_release_with` gives at the same point: the bytes are
+    # already verified against the canonical manifest and the install is the
+    # point, so a receipt that cannot be written is reported and the delivery
+    # continues — visibly, because a silent miss is what made every delivery to
+    # this host read `unattested`.
+    if ! "$SCRIPT_DIR/stage_release_attestation.sh" "$RELEASE_DIR"; then
+        echo "WARNING: installed from $RELEASE_DIR but staged no attestation copy," \
+            "so 'stado service converge' will read these bytes as unattested"
+    fi
 fi
 
 STADO_BIN="${STADO_BIN:-$INSTALL_DIR/stado}"

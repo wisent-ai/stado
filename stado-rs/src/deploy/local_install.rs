@@ -245,6 +245,20 @@ async fn ensure_bins_at_version_with(
         std::fs::write(&dest, &bytes).map_err(|exc| DeployError(exc.to_string()))?;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
             .map_err(|exc| DeployError(exc.to_string()))?;
+        // The receipt `stado service converge` attests against. These bytes were
+        // verified against the canonical manifest digest above, and this path
+        // used to throw that evidence away exactly as the self-update path did
+        // before it was fixed — leaving a host that had been delivered a
+        // published release reading `unattested`. Never fatal: the install is
+        // the point, and a receipt that cannot be written is reported.
+        if let Err(error) =
+            crate::self_update::stage_for_attestation(name, version, platform, &dest)
+        {
+            echo(&format!(
+                "[install] {name} {version} installed but its attestation copy could not be \
+                 staged, so `stado service converge` will read it as unattested: {error}"
+            ));
+        }
     }
     echo(&format!(
         "[install] downloaded stado {} ({platform}) -> {}",
