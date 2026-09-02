@@ -287,6 +287,14 @@ pub async fn list_claimable(
 /// re-reads the same head forever, which is the starvation it was added to
 /// prevent. An unbounded scan ignores the cursor and walks the whole index
 /// from the head — it starves nothing, and it has no next poll to hand off to.
+///
+/// The cursor only moves when a scan was actually cut short. A scan that
+/// reached the end of the index records an empty cursor and so starts again
+/// at the head, which means an index that fits inside one poll's window and
+/// budget is always read in strict priority order and the rotation never
+/// engages. It engages exactly when the index is bigger than one poll can
+/// hold — the case where something past the window would otherwise never be
+/// looked at.
 async fn collect_from_index(
     store: &JobStorage,
     prefix: &str,
