@@ -1513,7 +1513,15 @@ fn run_with_lock(
         return finish(report, started, Some(home), persist, attempted_at, log_fn);
     }
 
-    let deadline = Instant::now() + std::time::Duration::from_secs_f64(DEADLINE_SECONDS);
+    // The host's declared pass budget, or this module's own 30 seconds when it
+    // declares none. This is the limit that actually decides how much of a
+    // large tree one pass sees: on `lukasz-macbook` `max_scan_items` never
+    // bound and the deadline did, every pass.
+    let pass_seconds = policy
+        .max_pass_seconds
+        .filter(|seconds| *seconds > 0)
+        .map_or(DEADLINE_SECONDS, |seconds| seconds as f64);
+    let deadline = Instant::now() + std::time::Duration::from_secs_f64(pass_seconds);
     // How much of the pass's remaining scan budget one cleaner may spend while
     // declared cleaners behind it have not run yet.
     //

@@ -213,12 +213,34 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         "mode",
         "target_free_gb",
     ];
+    // Optional, and deliberately so: a registry that predates this key must
+    // stay valid, and a host that says nothing keeps the janitor's own
+    // 30-second pass deadline.
+    const OPTIONAL: [&str; 1] = ["max_pass_seconds"];
     let keys: HashSet<&str> = map.keys().map(String::as_str).collect();
-    if keys != REQUIRED.into_iter().collect() {
+    let required: HashSet<&str> = REQUIRED.into_iter().collect();
+    let allowed: HashSet<&str> = REQUIRED.into_iter().chain(OPTIONAL).collect();
+    if !required.is_subset(&keys) || !keys.is_subset(&allowed) {
         return Err(verr(
             location,
-            &format!("must contain exactly {}", py_list_repr(&REQUIRED)),
+            &format!(
+                "must contain exactly {}, and may add {}",
+                py_list_repr(&REQUIRED),
+                py_list_repr(&OPTIONAL)
+            ),
         ));
+    }
+    if let Some(declared) = map.get("max_pass_seconds") {
+        // Upper bound so one pass cannot outlive its own interval: the
+        // shortest `check_interval_seconds` this validator accepts is 60, and
+        // a pass that ran longer than its interval would overlap itself and
+        // meet its own lock.
+        require_int(
+            declared,
+            &format!("{location}.max_pass_seconds"),
+            1,
+            Some(600),
+        )?;
     }
     let mode_location = format!("{location}.mode");
     if !matches!(map["mode"].as_str(), Some("off" | "report" | "enforce")) {
@@ -1227,6 +1249,18 @@ pub struct DiskCleanupPolicy {
     pub max_bytes_per_pass: i64,
     pub max_items_per_pass: i64,
     pub max_scan_items: i64,
+    /// Seconds one pass may spend before it stops and hands its cursor on.
+    ///
+    /// Optional, and absent means the janitor's own `DEADLINE_SECONDS` — 30 —
+    /// so nothing changes for a host that does not declare it. It exists
+    /// because on 2026-09-02 this was the ONLY bound in this policy an
+    /// operator could not declare, and it was the one that bound: the pass on
+    /// `lukasz-macbook` reported `caps: {deadline: true, scan: false, items:
+    /// false, bytes: false}` after crossing 59,588 of 879,559 directories,
+    /// well under its declared `max_scan_items` of 100,000. Every other limit
+    /// here was tunable and none of them was in the way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_pass_seconds: Option<i64>,
     pub cleaners: BTreeMap<String, DiskCleanerPolicy>,
 }
 
@@ -1276,6 +1310,7 @@ impl DiskCleanupPolicy {
             max_bytes_per_pass: 64 * 1024_i64.pow(3),
             max_items_per_pass: 512,
             max_scan_items: MAX_SCAN_ITEMS_CEILING,
+            max_pass_seconds: None,
             cleaners,
         }
     }
