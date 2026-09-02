@@ -570,14 +570,7 @@ pub async fn push(
     // not validate never reaches the registry, whatever token it carries.
     warn_scoped_validation(validate_for_write(&document).await?);
     let location = targets::registry_location();
-    match upload_payload(
-        &payload,
-        force,
-        allow_empty_fleet,
-        if_generation.as_deref(),
-    )
-    .await
-    {
+    match upload_payload(&payload, force, allow_empty_fleet, if_generation.as_deref()).await {
         Ok((generation, previous_generation)) => {
             if json_output {
                 return print_push_receipt(&RegistryPushReceipt {

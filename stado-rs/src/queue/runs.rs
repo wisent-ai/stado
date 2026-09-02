@@ -27,7 +27,6 @@ pub const ALL_PREFIXES: [&str; 6] = [
     "cancelled",
 ];
 
-
 /// Auto-derive a readable name from the run's commands: shared module +
 /// model + the distinct --task values (or a count if many).
 pub fn derive_run_name(commands: &[String]) -> String {
@@ -85,7 +84,6 @@ pub fn derive_run_name(commands: &[String]) -> String {
     parts.join(":")
 }
 
-
 /// Read a run manifest; `None` when it does not exist.
 pub async fn read_run(
     store: &JobStorage,
@@ -100,9 +98,7 @@ pub async fn read_run(
         return Ok(None);
     };
     let value: Value = serde_json::from_str(&versioned.content)?;
-    let value = if value.get("schema").and_then(Value::as_str)
-        == Some("stado.run-submission.v2")
-    {
+    let value = if value.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v2") {
         crate::queue::submit::migrate_v2_run_manifest(store, run_id)
             .await
             .map_err(|error| StorageError::Other(error.to_string()))?
@@ -120,7 +116,14 @@ pub async fn read_run(
 /// Which prefix currently holds this job_id, or None if absent. Terminal wins
 /// over transitional duplicates left by a crash during a fenced move.
 async fn job_state(store: &JobStorage, job_id: &str) -> Result<Option<&'static str>, StorageError> {
-    for prefix in ["cancelled", "failed", "uploaded", "completed", "running", "queue"] {
+    for prefix in [
+        "cancelled",
+        "failed",
+        "uploaded",
+        "completed",
+        "running",
+        "queue",
+    ] {
         if store.read_job(prefix, job_id).await?.is_some() {
             return Ok(Some(prefix));
         }
@@ -164,9 +167,7 @@ pub async fn record_terminal_outcome(
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
         crate::queue::submit::validate_stored_run_manifest(&manifest, &job.run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
-        if manifest.get("schema").and_then(Value::as_str)
-            != Some("stado.run-submission.v3")
-        {
+        if manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v3") {
             return Err(StorageError::Other(format!(
                 "durable run manifest {} does not match terminal job {}",
                 job.run_id, job.job_id
@@ -189,12 +190,10 @@ pub async fn record_terminal_outcome(
                 job.run_id
             )));
         }
-        let planned: crate::models::Job = serde_json::from_value(
-            entry
-                .get("planned_job")
-                .cloned()
-                .ok_or_else(|| StorageError::Other("durable run entry has no planned job".into()))?,
-        )?;
+        let planned: crate::models::Job =
+            serde_json::from_value(entry.get("planned_job").cloned().ok_or_else(|| {
+                StorageError::Other("durable run entry has no planned job".into())
+            })?)?;
         if crate::queue::submit::immutable_job_projection(&planned)
             != crate::queue::submit::immutable_job_projection(job)
         {
@@ -271,11 +270,8 @@ pub async fn run_status(
     let Some(manifest) = read_run(store, run_id).await? else {
         return Ok(None);
     };
-    crate::queue::submit::validate_stored_run_manifest(
-        &Value::Object(manifest.clone()),
-        run_id,
-    )
-    .map_err(|error| StorageError::Other(error.to_string()))?;
+    crate::queue::submit::validate_stored_run_manifest(&Value::Object(manifest.clone()), run_id)
+        .map_err(|error| StorageError::Other(error.to_string()))?;
     let entries = manifest
         .get("entries")
         .and_then(Value::as_array)
@@ -288,10 +284,9 @@ pub async fn run_status(
         ALL_PREFIXES.iter().map(|p| (p.to_string(), 0)).collect();
     let mut missing = 0;
     for entry in entries {
-        let job_id = entry
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| StorageError::Other(format!("run manifest {run_id} has an invalid entry")))?;
+        let job_id = entry.get("job_id").and_then(Value::as_str).ok_or_else(|| {
+            StorageError::Other(format!("run manifest {run_id} has an invalid entry"))
+        })?;
         let retained = entry
             .get("outcome")
             .and_then(Value::as_object)

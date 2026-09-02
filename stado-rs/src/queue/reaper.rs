@@ -100,8 +100,6 @@ fn started_age_seconds(job: &Job, now: chrono::DateTime<Utc>) -> Option<i64> {
     Some((now - started).num_seconds())
 }
 
-
-
 /// Reap one running job whose lease is expired: requeue on the first
 /// expiry, fail on the second. Leaves the job alone (fresh, guarded, or
 /// the fence lost to a concurrent writer) without counting it.
@@ -326,7 +324,6 @@ pub async fn reap_expired_leases(
 ) -> Result<ReaperSummary, StorageError> {
     let now = Utc::now();
     let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
-    let mut summary = ReaperSummary::default();
     // The index repair belongs on this tick, and it never retires. A queued
     // job whose marker write did not land is invisible to every scheduler
     // while still reporting `queued` — the same class of stranding this
@@ -335,9 +332,13 @@ pub async fn reap_expired_leases(
     // cost per tick that eventually re-examines every queued job rather than
     // a one-shot migration that stops looking. It runs before the passes
     // below so a recovered marker is claimable in this same tick.
-    summary.index_swept =
+    let index_swept =
         crate::queue::migrations::backfill_priority_markers(store, config::MARKER_REPAIR_PER_TICK)
             .await?;
+    let mut summary = ReaperSummary {
+        index_swept,
+        ..Default::default()
+    };
     for candidate in store.list_jobs("running", 0).await? {
         if candidate.job_id.is_empty() {
             continue;

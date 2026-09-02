@@ -597,7 +597,11 @@ impl BlobBackend for StadoObjectBackend {
             return Err(Self::response_error(response).await);
         }
         let payload: ObjectList = response.json().await?;
-        let mut names: Vec<String> = payload.objects.into_iter().map(|object| object.key).collect();
+        let mut names: Vec<String> = payload
+            .objects
+            .into_iter()
+            .map(|object| object.key)
+            .collect();
         names.sort_unstable();
         let cut = names.partition_point(|name| name.as_str() <= start_after);
         names.drain(..cut);
