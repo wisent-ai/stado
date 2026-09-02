@@ -106,14 +106,23 @@ async fn fenced_move(
     let from = format!("{from_prefix}/{}.json", job.job_id);
     let to = format!("{to_prefix}/{}.json", job.job_id);
     let body = job.to_json();
-    if !store.create_text_if_absent(&to, &body).await? {
-        return Ok(false);
+    let created = store.create_text_if_absent(&to, &body).await?;
+    if !created {
+        let Some(existing) = store.read_job(to_prefix, &job.job_id).await? else {
+            return Ok(false);
+        };
+        if serde_json::to_value(existing)? != serde_json::to_value(job)? {
+            return Ok(false);
+        }
     }
     match store
         .compare_and_swap_text(&from, expected_version, &body)
         .await
     {
         Ok(_) => {
+            if super::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
+                super::runs::record_terminal_outcome(store, job, to_prefix).await?;
+            }
             store.delete_blob(&from).await?;
             if from_prefix == "queue" {
                 store.delete_priority_marker(&job.job_id).await?;
@@ -122,15 +131,55 @@ async fn fenced_move(
             Ok(true)
         }
         Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
-            store.delete_blob(&to).await?;
+            if created {
+                store.delete_blob(&to).await?;
+            }
             Ok(false)
         }
         Err(error) => {
-            store.delete_blob(&to).await?;
+            if created {
+                store.delete_blob(&to).await?;
+            }
             Err(error)
         }
     }
 }
+
+/// Finish deletion of a source fence left after its destination was committed.
+/// The other copy must carry the same immutable submission identity.
+async fn recover_source_fence(
+    store: &JobStorage,
+    job: &Job,
+    source_prefix: &str,
+) -> Result<bool, StorageError> {
+    let mut destination = None;
+    for prefix in ["cancelled", "failed", "uploaded", "completed", "running", "queue"] {
+        if prefix == source_prefix {
+            continue;
+        }
+        if let Some(existing) = store.read_job(prefix, &job.job_id).await? {
+            if crate::queue::submit::immutable_job_projection(&existing)
+                == crate::queue::submit::immutable_job_projection(job)
+            {
+                destination = Some((prefix, existing));
+                break;
+            }
+        }
+    }
+    let Some((prefix, existing)) = destination else {
+        return Ok(false);
+    };
+    if super::runs::TERMINAL_PREFIXES.contains(&prefix) {
+        super::runs::record_terminal_outcome(store, &existing, prefix).await?;
+    }
+    store.delete_blob(&format!("{source_prefix}/{}.json", job.job_id))
+        .await?;
+    if source_prefix == "queue" {
+        store.delete_priority_marker(&job.job_id).await?;
+    }
+    Ok(true)
+}
+
 
 /// Reap one running job whose lease is expired: requeue on the first
 /// expiry, fail on the second. Leaves the job alone (fresh, guarded, or
@@ -149,6 +198,7 @@ async fn reap_one(
     };
     let mut job = Job::from_json(&versioned.content)?;
     if job.state != job_state::RUNNING {
+        recover_source_fence(store, &job, "running").await?;
         return Ok(());
     }
 
@@ -247,6 +297,10 @@ async fn clear_silent_assignments(
 ) -> Result<(), StorageError> {
     let live = capacity::read_consumer_capacity(store).await?;
     for candidate in store.list_jobs("queue", 0).await? {
+        if candidate.state != job_state::QUEUED {
+            recover_source_fence(store, &candidate, "queue").await?;
+            continue;
+        }
         if candidate.assigned_to.is_empty() || !candidate.pinned_host.is_empty() {
             continue;
         }

@@ -42,7 +42,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::models::JobSecretRef;
-use crate::queue::submit::{submit_job, SubmitOptions};
+use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
 /// Blob prefix holding schedule documents.
@@ -252,6 +252,16 @@ fn default_policy() -> String {
     "skip".into()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleOccurrenceReservation {
+    pub occurrence_key: String,
+    pub occurrence_at: String,
+    pub run_id: String,
+    pub state: String,
+    pub owner: String,
+    pub lease_expires_at: String,
+}
+
 /// A recurring job spec. Field order matches the Python dataclass so the
 /// serialized JSON is key-order identical; missing keys fall back to the
 /// Python dataclass defaults and unknown keys are ignored (`from_dict`).
@@ -265,9 +275,13 @@ pub struct Schedule {
     pub command: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Durable deletion tombstone; retained so deletion cannot erase a claimed
+    /// occurrence between reservation and enqueue.
+    #[serde(default)]
+    pub deleted: bool,
     #[serde(default = "default_tz")]
     pub tz: String,
-    // ---- frozen submit kwargs (mirror submit_job's GCS-path params) ----
+    // ---- frozen durable submission options ----
     #[serde(default = "default_provider")]
     pub provider: String,
     #[serde(default)]
@@ -325,6 +339,10 @@ pub struct Schedule {
     pub last_job_id: String,
     #[serde(default)]
     pub fire_count: i64,
+    /// Durable occurrence reservation. It is written in the same CAS that
+    /// advances next_due_at, then cleared only after durable run acceptance.
+    #[serde(default)]
+    pub pending_occurrence: Option<ScheduleOccurrenceReservation>,
     /// skip: do not fire while last_job_id is still in queue/ or running/.
     /// allow: fire regardless of prior instance.
     #[serde(default = "default_policy")]
@@ -360,8 +378,7 @@ impl Schedule {
         sched
     }
 
-    /// The kwargs to hand `submit_job` for one fire of this schedule
-    /// (Python `submit_kwargs`).
+    /// The frozen options bound into one occurrence's durable run manifest.
     pub fn submit_options(&self) -> SubmitOptions {
         SubmitOptions {
             provider: self.provider.clone(),
@@ -465,75 +482,315 @@ pub async fn list_schedules(store: &JobStorage) -> Result<Vec<Schedule>, Storage
     let mut out = Vec::new();
     for schedule_id in list_schedule_ids(store).await? {
         if let Some(sched) = read_schedule(store, &schedule_id).await? {
-            out.push(sched);
+            if !sched.deleted {
+                out.push(sched);
+            }
         }
     }
     Ok(out)
 }
 
-/// Unconditional overwrite of the schedule blob.
+/// Create a schedule exactly once. Mutable bookkeeping/configuration uses
+/// dedicated CAS updates so it cannot erase a pending occurrence reservation.
 pub async fn write_schedule(store: &JobStorage, sched: &Schedule) -> Result<(), StorageError> {
-    store
-        .upload_text(&path(&sched.schedule_id), &sched.to_json())
-        .await
-}
-
-/// Delete the schedule blob; `false` when it did not exist.
-pub async fn delete_schedule(store: &JobStorage, schedule_id: &str) -> Result<bool, StorageError> {
-    if read_schedule(store, schedule_id).await?.is_none() {
-        return Ok(false);
+    if store
+        .create_text_if_absent(&path(&sched.schedule_id), &sched.to_json())
+        .await?
+    {
+        Ok(())
+    } else {
+        Err(StorageError::StorageConflict(format!(
+            "schedule {} already exists",
+            sched.schedule_id
+        )))
     }
-    store.delete_blob(&path(schedule_id)).await?;
-    Ok(true)
 }
 
-/// Advance `sched.next_due_at` to `new_next_due_at` and persist, but only
-/// if no other writer has touched the blob since it was read (Python
-/// `claim_due`'s GCS `if_generation_match` precondition).
-///
-/// Returns `true` if THIS caller won the claim (and should now submit the
-/// job), `false` if a concurrent coordinator already advanced it. A blob
-/// that vanished since the read is recreated create-only (`if_generation_
-/// match=0` in Python), which also loses the race to a concurrent creator.
-pub async fn claim_due(
+/// CAS-update enablement while preserving any pending occurrence lease.
+pub async fn set_schedule_enabled(
     store: &JobStorage,
-    sched: &mut Schedule,
-    new_next_due_at: &str,
-) -> Result<bool, StorageError> {
-    sched.next_due_at = new_next_due_at.to_string();
-    let body = sched.to_json();
-    let path = path(&sched.schedule_id);
-    match store.read_text_versioned(&path).await? {
-        None => store.create_text_if_absent(&path, &body).await,
-        Some(versioned) => match store
-            .compare_and_swap_text(&path, &versioned.version, &body)
+    schedule_id: &str,
+    enabled: bool,
+    next_due_at: Option<&str>,
+) -> Result<Option<Schedule>, StorageError> {
+    let path = path(schedule_id);
+    for _ in 0..16 {
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            return Ok(None);
+        };
+        let mut sched = Schedule::from_json(&versioned.content)?;
+        if sched.deleted {
+            return Ok(None);
+        }
+        sched.enabled = enabled;
+        if sched.pending_occurrence.is_none() {
+            if let Some(next_due_at) = next_due_at {
+                sched.next_due_at = next_due_at.to_string();
+            }
+        }
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
             .await
         {
-            Ok(_) => Ok(true),
-            Err(StorageError::StorageConflict(_)) => Ok(false),
-            // Deleted between the versioned read and the CAS: Python's
-            // generation-0 upload creates it only when it still does not
-            // exist.
-            Err(StorageError::NotFound(_)) => store.create_text_if_absent(&path, &body).await,
-            Err(exc) => Err(exc),
-        },
+            Ok(_) => return Ok(Some(sched)),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(StorageError::NotFound(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StorageError::StorageConflict(format!(
+        "schedule {schedule_id} remained contended during enablement update"
+    )))
+}
+
+/// CAS-write a durable deletion tombstone; `false` when absent/already deleted.
+pub async fn delete_schedule(store: &JobStorage, schedule_id: &str) -> Result<bool, StorageError> {
+    let path = path(schedule_id);
+    for _ in 0..16 {
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            return Ok(false);
+        };
+        let mut sched = Schedule::from_json(&versioned.content)?;
+        if sched.deleted {
+            return Ok(false);
+        }
+        sched.deleted = true;
+        sched.enabled = false;
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+            .await
+        {
+            Ok(_) => return Ok(true),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(StorageError::NotFound(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StorageError::StorageConflict(format!(
+        "schedule {schedule_id} remained contended during deletion"
+    )))
+}
+
+fn occurrence_token(schedule_id: &str, occurrence_at: &str) -> String {
+    format!("{schedule_id}\0{occurrence_at}")
+}
+
+fn occurrence_lease_live(reservation: &ScheduleOccurrenceReservation) -> bool {
+    DateTime::parse_from_rfc3339(&reservation.lease_expires_at)
+        .ok()
+        .is_some_and(|expires| expires > Utc::now())
+}
+
+async fn reserve_due_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    occurrence_at: &str,
+    new_next_due_at: &str,
+    owner: &str,
+) -> Result<Option<Schedule>, StorageError> {
+    let path = path(schedule_id);
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
+        return Ok(None);
+    };
+    let mut sched = Schedule::from_json(&versioned.content)?;
+    if sched.deleted {
+        return Ok(None);
+    }
+    if sched.pending_occurrence.is_some() || sched.next_due_at != occurrence_at {
+        return Ok(None);
+    }
+    let token = occurrence_token(schedule_id, occurrence_at);
+    sched.next_due_at = new_next_due_at.to_string();
+    sched.pending_occurrence = Some(ScheduleOccurrenceReservation {
+        occurrence_key: stable_run_id("schedule-occurrence", &token),
+        occurrence_at: occurrence_at.to_string(),
+        run_id: stable_run_id("schedule", &token),
+        state: "claimed".into(),
+        owner: owner.to_string(),
+        lease_expires_at: (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+    });
+    match store
+        .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+        .await
+    {
+        Ok(_) => Ok(Some(sched)),
+        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
-// ---------------------------------------------------------------------------
-// fire (Python schedules/fire.py)
-//
-// A schedule is "due" when now >= next_due_at. Firing is:
-//   1. compute the next future occurrence,
-//   2. atomically claim it (claim_due — advances next_due_at FIRST, under
-//      a generation match, so an overlapping invocation can't double-fire),
-//   3. submit the job tagged with schedule_id + a fresh run_id,
-//   4. record last_fired_at / last_run_id / last_job_id / fire_count.
-//
-// catchup_policy is "skip" only for now: if the coordinator was down across
-// several occurrences, step 1 jumps straight to the next future slot, so
-// the backlog collapses to a single fire rather than a burst.
-// ---------------------------------------------------------------------------
+async fn reserve_manual_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    owner: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<Schedule>, StorageError> {
+    let path = path(schedule_id);
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
+        return Ok(None);
+    };
+    let mut sched = Schedule::from_json(&versioned.content)?;
+    if sched.deleted {
+        return Ok(None);
+    }
+    if sched.pending_occurrence.is_some() {
+        return Ok(None);
+    }
+    let occurrence_at = format!(
+        "manual:{}:{}",
+        crate::models::isoformat_utc(now),
+        uuid::Uuid::new_v4().simple()
+    );
+    let token = occurrence_token(schedule_id, &occurrence_at);
+    sched.pending_occurrence = Some(ScheduleOccurrenceReservation {
+        occurrence_key: stable_run_id("schedule-occurrence", &token),
+        occurrence_at,
+        run_id: stable_run_id("schedule", &token),
+        state: "claimed".into(),
+        owner: owner.to_string(),
+        lease_expires_at: (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+    });
+    match store
+        .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+        .await
+    {
+        Ok(_) => Ok(Some(sched)),
+        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+async fn takeover_pending_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    owner: &str,
+) -> Result<Option<Schedule>, StorageError> {
+    let path = path(schedule_id);
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
+        return Ok(None);
+    };
+    let mut sched = Schedule::from_json(&versioned.content)?;
+    let Some(pending) = sched.pending_occurrence.as_mut() else {
+        return Ok(None);
+    };
+    if occurrence_lease_live(pending) && pending.owner != owner {
+        return Ok(None);
+    }
+    pending.state = "claimed".into();
+    pending.owner = owner.to_string();
+    pending.lease_expires_at =
+        (Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
+    match store
+        .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+        .await
+    {
+        Ok(_) => Ok(Some(sched)),
+        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+async fn begin_pending_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    occurrence_key: &str,
+    owner: &str,
+) -> Result<Option<Schedule>, StorageError> {
+    let path = path(schedule_id);
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
+        return Ok(None);
+    };
+    let mut sched = Schedule::from_json(&versioned.content)?;
+    let Some(pending) = sched.pending_occurrence.as_mut() else {
+        return Ok(None);
+    };
+    if pending.occurrence_key != occurrence_key
+        || pending.owner != owner
+        || pending.state != "claimed"
+    {
+        return Ok(None);
+    }
+    pending.state = "enqueuing".into();
+    match store
+        .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+        .await
+    {
+        Ok(_) => Ok(Some(sched)),
+        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+async fn release_pending_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    occurrence_key: &str,
+    owner: &str,
+) {
+    let path = path(schedule_id);
+    let Ok(Some(versioned)) = store.read_text_versioned(&path).await else {
+        return;
+    };
+    let Ok(mut sched) = Schedule::from_json(&versioned.content) else {
+        return;
+    };
+    let Some(pending) = sched.pending_occurrence.as_mut() else {
+        return;
+    };
+    if pending.occurrence_key != occurrence_key || pending.owner != owner {
+        return;
+    }
+    pending.state = "claimed".into();
+    pending.owner.clear();
+    pending.lease_expires_at = Utc::now().to_rfc3339();
+    let _ = store
+        .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+        .await;
+}
+
+async fn accept_pending_occurrence(
+    store: &JobStorage,
+    schedule_id: &str,
+    occurrence_key: &str,
+    owner: &str,
+    job: &crate::models::Job,
+    fired_at: DateTime<Utc>,
+) -> Result<bool, StorageError> {
+    let path = path(schedule_id);
+    for _ in 0..16 {
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            return Ok(false);
+        };
+        let mut sched = Schedule::from_json(&versioned.content)?;
+        let Some(pending) = sched.pending_occurrence.as_ref() else {
+            return Ok(sched.last_run_id == job.run_id && sched.last_job_id == job.job_id);
+        };
+        if pending.occurrence_key != occurrence_key
+            || pending.owner != owner
+            || pending.state != "enqueuing"
+            || pending.run_id != job.run_id
+        {
+            return Ok(false);
+        }
+        sched.last_fired_at = Some(crate::models::isoformat_utc(fired_at));
+        sched.last_run_id = job.run_id.clone();
+        sched.last_job_id = job.job_id.clone();
+        sched.fire_count += 1;
+        sched.pending_occurrence = None;
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+            .await
+        {
+            Ok(_) => return Ok(true),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(StorageError::NotFound(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StorageError::StorageConflict(format!(
+        "schedule {schedule_id} remained contended while accepting occurrence"
+    )))
+}
 
 /// True iff this schedule's most recent fire is still queued/running.
 /// Two direct reads by id — cheap, unlike scanning queue/ (14k+ blobs).
@@ -555,6 +812,101 @@ async fn prev_instance_live(store: &JobStorage, sched: &Schedule) -> bool {
     live.await.unwrap_or(true)
 }
 
+async fn enqueue_pending_occurrence(
+    store: &JobStorage,
+    sched: Schedule,
+    owner: &str,
+    fired_at: DateTime<Utc>,
+) -> Result<Option<crate::models::Job>, StorageError> {
+    let pending = sched.pending_occurrence.clone().ok_or_else(|| {
+        StorageError::Other(format!(
+            "schedule {} has no pending occurrence",
+            sched.schedule_id
+        ))
+    })?;
+    let Some(sched) = begin_pending_occurrence(
+        store,
+        &sched.schedule_id,
+        &pending.occurrence_key,
+        owner,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let pending = sched
+        .pending_occurrence
+        .clone()
+        .expect("begin preserves pending occurrence");
+    let options = SubmitOptions {
+        bucket: store.bucket_name().to_string(),
+        run_id: pending.run_id.clone(),
+        schedule_id: sched.schedule_id.clone(),
+        ..sched.submit_options()
+    };
+    let commands = [sched.command.clone()];
+    let mut jobs = match submit_batch(&commands, &options).await {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            release_pending_occurrence(
+                store,
+                &sched.schedule_id,
+                &pending.occurrence_key,
+                owner,
+            )
+            .await;
+            return Err(StorageError::Other(format!(
+                "durable schedule enqueue failed: {error}"
+            )));
+        }
+    };
+    let job = jobs.pop().ok_or_else(|| {
+        StorageError::Other("durable schedule enqueue returned no job".into())
+    })?;
+    if !accept_pending_occurrence(
+        store,
+        &sched.schedule_id,
+        &pending.occurrence_key,
+        owner,
+        &job,
+        fired_at,
+    )
+    .await?
+    {
+        return Err(StorageError::StorageConflict(format!(
+            "schedule {} ownership changed after durable enqueue",
+            sched.schedule_id
+        )));
+    }
+    Ok(Some(job))
+}
+
+async fn advance_due_without_work(
+    store: &JobStorage,
+    schedule_id: &str,
+    expected_due_at: &str,
+    new_next_due_at: &str,
+) -> Result<bool, StorageError> {
+    let path = path(schedule_id);
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
+        return Ok(false);
+    };
+    let mut sched = Schedule::from_json(&versioned.content)?;
+    if sched.pending_occurrence.is_some() || sched.next_due_at != expected_due_at {
+        return Ok(false);
+    }
+    sched.next_due_at = new_next_due_at.to_string();
+    match store
+        .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+
 /// Fire every due+enabled schedule once. Returns the number fired.
 pub async fn fire_due_schedules(
     store: &JobStorage,
@@ -563,81 +915,117 @@ pub async fn fire_due_schedules(
 ) -> Result<i64, StorageError> {
     let mut fired = 0;
     for schedule_id in list_schedule_ids(store).await? {
-        let Some(mut sched) = read_schedule(store, &schedule_id).await? else {
+        let Some(sched) = read_schedule(store, &schedule_id).await? else {
             continue;
         };
+        let owner = uuid::Uuid::new_v4().simple().to_string();
+        if sched.pending_occurrence.is_some() {
+            let Some(claimed) =
+                takeover_pending_occurrence(store, &schedule_id, &owner).await?
+            else {
+                log(&format!(
+                    "schedule {schedule_id}: pending occurrence is leased by another coordinator"
+                ));
+                continue;
+            };
+            match enqueue_pending_occurrence(store, claimed, &owner, now).await {
+                Ok(Some(job)) => {
+                    fired += 1;
+                    log(&format!(
+                        "schedule {schedule_id}: recovered durable occurrence as job {} (run {})",
+                        job.job_id, job.run_id
+                    ));
+                }
+                Ok(None) => log(&format!(
+                    "schedule {schedule_id}: lost pending occurrence ownership"
+                )),
+                Err(error) => log(&format!(
+                    "schedule {schedule_id}: pending occurrence enqueue failed: {error}"
+                )),
+            }
+            continue;
+        }
         if !sched.enabled || sched.next_due_at.is_empty() {
             continue;
         }
-        let Some(due) = parse_iso(&sched.next_due_at) else {
+        let occurrence_at = sched.next_due_at.clone();
+        let Some(due) = parse_iso(&occurrence_at) else {
             log(&format!(
-                "schedule {schedule_id}: unparseable next_due_at={:?}; skipping",
-                sched.next_due_at
+                "schedule {schedule_id}: unparseable next_due_at={occurrence_at:?}; skipping"
             ));
             continue;
         };
         if due > now {
             continue;
         }
-
-        // Python lets a bad cron here crash the tick (the expression was
-        // validated at create); propagate for the same fail-loud behavior.
         let next_due = crate::models::isoformat_utc(
             compute_next_due(&sched.cron, now, &sched.tz)
-                .map_err(|exc| StorageError::Other(exc.to_string()))?,
+                .map_err(|error| StorageError::Other(error.to_string()))?,
         );
-
         if sched.overlap_policy == "skip" && prev_instance_live(store, &sched).await {
-            // Don't fire on top of a still-running prior instance — but DO
-            // advance next_due_at so we re-evaluate cleanly next tick
-            // instead of re-firing the same overdue slot every tick.
-            sched.next_due_at = next_due;
-            write_schedule(store, &sched).await?;
-            log(&format!(
-                "schedule {schedule_id}: skip fire (prior job {} still live)",
-                sched.last_job_id
-            ));
-            continue;
-        }
-
-        // Claim the occurrence before submitting (CF double-fire guard).
-        if !claim_due(store, &mut sched, &next_due).await? {
-            log(&format!(
-                "schedule {schedule_id}: lost claim race; another coordinator fired it"
-            ));
-            continue;
-        }
-
-        let run_id = crate::queue::runs::generate_run_id();
-        let options = SubmitOptions {
-            bucket: store.bucket_name().to_string(),
-            run_id: run_id.clone(),
-            schedule_id: schedule_id.clone(),
-            ..sched.submit_options()
-        };
-        let job = match submit_job(&sched.command, &options).await {
-            Ok(job) => job,
-            Err(exc) => {
-                // next_due_at is already advanced (occurrence consumed).
-                // Record the miss rather than retry-storming; the next
-                // occurrence fires normally.
+            if advance_due_without_work(store, &schedule_id, &occurrence_at, &next_due).await? {
                 log(&format!(
-                    "schedule {schedule_id}: submit FAILED (SubmitError: {exc}); occurrence skipped"
+                    "schedule {schedule_id}: skip fire (prior job {} still live)",
+                    sched.last_job_id
                 ));
-                continue;
             }
+            continue;
+        }
+        let Some(claimed) = reserve_due_occurrence(
+            store,
+            &schedule_id,
+            &occurrence_at,
+            &next_due,
+            &owner,
+        )
+        .await?
+        else {
+            log(&format!(
+                "schedule {schedule_id}: lost occurrence reservation race"
+            ));
+            continue;
         };
-
-        sched.last_fired_at = Some(crate::models::isoformat_utc(now));
-        sched.last_run_id = run_id.clone();
-        sched.last_job_id = job.job_id.clone();
-        sched.fire_count += 1;
-        write_schedule(store, &sched).await?;
-        fired += 1;
-        log(&format!(
-            "schedule {schedule_id}: fired job {} (run {run_id}); next_due={next_due}",
-            job.job_id
-        ));
+        match enqueue_pending_occurrence(store, claimed, &owner, now).await {
+            Ok(Some(job)) => {
+                fired += 1;
+                log(&format!(
+                    "schedule {schedule_id}: fired job {} (run {}); next_due={next_due}",
+                    job.job_id, job.run_id
+                ));
+            }
+            Ok(None) => log(&format!(
+                "schedule {schedule_id}: lost occurrence ownership before enqueue"
+            )),
+            Err(error) => log(&format!(
+                "schedule {schedule_id}: occurrence enqueue failed and remains recoverable: {error}"
+            )),
+        }
     }
     Ok(fired)
+}
+
+/// Manually fire a schedule through the same durable occurrence reservation as
+/// the coordinator. A pending crash recovery is completed before a new manual
+/// occurrence can be created.
+pub async fn fire_schedule_now(
+    store: &JobStorage,
+    schedule_id: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<crate::models::Job>, StorageError> {
+    let Some(sched) = read_schedule(store, schedule_id).await? else {
+        return Ok(None);
+    };
+    if sched.deleted && sched.pending_occurrence.is_none() {
+        return Ok(None);
+    }
+    let owner = uuid::Uuid::new_v4().simple().to_string();
+    let claimed = if sched.pending_occurrence.is_some() {
+        takeover_pending_occurrence(store, schedule_id, &owner).await?
+    } else {
+        reserve_manual_occurrence(store, schedule_id, &owner, now).await?
+    };
+    let Some(claimed) = claimed else {
+        return Ok(None);
+    };
+    enqueue_pending_occurrence(store, claimed, &owner, now).await
 }

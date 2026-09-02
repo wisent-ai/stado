@@ -38,18 +38,20 @@ use sha2::{Digest, Sha256};
 use crate::config;
 use crate::models::{job_state, Job, JobSecretRef};
 use crate::queue::leases::{LeaseError, ProviderLeaseStore};
-use crate::queue::submit::{submit_job, SubmitOptions};
+use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
 pub const SCHEMA_VERSION: i64 = 1;
-/// Prefixes probed by [`MachineFacade::lookup_job`], in probe order.
+/// Prefixes probed by [`MachineFacade::lookup_job`]. Terminal and running
+/// destinations precede queue so a crash-retained source fence cannot mask the
+/// newer lifecycle state.
 pub const JOB_PREFIXES: [&str; 6] = [
-    "queue",
-    "running",
-    "completed",
-    "uploaded",
-    "failed",
     "cancelled",
+    "failed",
+    "uploaded",
+    "completed",
+    "running",
+    "queue",
 ];
 
 pub const MAX_SOURCE_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
@@ -657,10 +659,8 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     Ok(normalized)
 }
 
-/// The automation facade. Python `MachineFacade(store, submitter)`; the
-/// submitter is always [`submit_job`] here and the Skarbiec-backed compute
-/// API key guard covers the one case Python special-cased on submitter
-/// identity.
+/// The automation facade. Machine request submission is reserved with a
+/// recoverable lease and delegated to the durable run manifest protocol.
 pub struct MachineFacade {
     store: JobStorage,
     bucket: String,
@@ -745,11 +745,21 @@ impl MachineFacade {
 
         let record_path = format!("machine_requests/{request_id}.json");
         let digest = request_digest(&digest_request);
+        let owner = uuid::Uuid::new_v4().simple().to_string();
+        let run_id = stable_run_id("machine", &request_id);
+        let lease_expires_at =
+            (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
         let mut reservation = Map::new();
         reservation.insert("schema_version".into(), Value::from(SCHEMA_VERSION));
         reservation.insert("client_request_id".into(), Value::from(request_id.as_str()));
         reservation.insert("request_digest".into(), Value::from(digest.as_str()));
-        reservation.insert("state".into(), Value::from("submitting"));
+        reservation.insert("run_id".into(), Value::from(run_id.as_str()));
+        reservation.insert("state".into(), Value::from("claimed"));
+        reservation.insert("owner".into(), Value::from(owner.as_str()));
+        reservation.insert(
+            "lease_expires_at".into(),
+            Value::from(lease_expires_at.as_str()),
+        );
         reservation.insert("created_at".into(), Value::from(utcnow()));
         if !source_uri.is_empty() {
             reservation.insert(
@@ -766,55 +776,111 @@ impl MachineFacade {
             )
             .await?;
         if !created {
-            let raw = self.store.download_text(&record_path).await?;
-            let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
-                return Err(MachineError::retryable(
-                    "REQUEST_IN_PROGRESS",
-                    "request reservation is not readable",
-                ));
-            };
-            let existing: Value = serde_json::from_str(&raw).map_err(|_| {
-                MachineError::new("INTERNAL", "stored idempotency record is invalid")
-            })?;
-            if existing.get("request_digest").and_then(Value::as_str) != Some(digest.as_str()) {
+            let versioned = self
+                .store
+                .read_text_versioned(&record_path)
+                .await?
+                .ok_or_else(|| {
+                    MachineError::retryable(
+                        "REQUEST_IN_PROGRESS",
+                        "request reservation is not readable",
+                    )
+                })?;
+            let mut existing: Map<String, Value> = serde_json::from_str::<Value>(&versioned.content)
+                .map_err(|_| MachineError::new("INTERNAL", "stored idempotency record is invalid"))?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| {
+                    MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                })?;
+            if existing.get("request_digest").and_then(Value::as_str) != Some(digest.as_str())
+                || existing.get("run_id").and_then(Value::as_str) != Some(run_id.as_str())
+            {
                 return Err(MachineError::new(
                     "IDEMPOTENCY_CONFLICT",
                     "client_request_id was already used with a different request",
                 ));
             }
-            if let Some(stored_result) = existing.get("result").filter(|r| r.is_object()) {
+            if let Some(stored_result) = existing.get("result").filter(|result| result.is_object()) {
                 if stored_result.get("job").is_some_and(Value::is_object) {
                     return Ok(stored_result.clone());
                 }
             }
-            if let Some(stored_job) = existing.get("job").filter(|j| j.is_object()) {
-                let mut result = Map::new();
-                result.insert("job".into(), stored_job.clone());
-                if let Some(uri) = existing.get("source_archive_uri").and_then(Value::as_str) {
-                    if !uri.is_empty() {
-                        result.insert("source_archive_uri".into(), Value::from(uri));
-                        result.insert(
-                            "source_sha256".into(),
-                            existing
-                                .get("source_sha256")
-                                .cloned()
-                                .unwrap_or_else(|| Value::from("")),
-                        );
-                    }
-                }
-                return Ok(Value::Object(result));
+            let live_lease = existing
+                .get("lease_expires_at")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .is_some_and(|expires| expires > chrono::Utc::now());
+            if live_lease {
+                return Err(MachineError::retryable(
+                    "REQUEST_IN_PROGRESS",
+                    "matching request is still being submitted",
+                ));
             }
+            existing.insert("state".into(), Value::from("claimed"));
+            existing.insert("owner".into(), Value::from(owner.as_str()));
+            existing.insert(
+                "lease_expires_at".into(),
+                Value::from(lease_expires_at.as_str()),
+            );
+            match self
+                .store
+                .compare_and_swap_text(
+                    &record_path,
+                    &versioned.version,
+                    &canonical_json(&Value::Object(existing.clone())),
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
+                    return Err(MachineError::retryable(
+                        "REQUEST_IN_PROGRESS",
+                        "matching request ownership changed concurrently",
+                    ))
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        let versioned = self
+            .store
+            .read_text_versioned(&record_path)
+            .await?
+            .ok_or_else(|| MachineError::retryable("REQUEST_IN_PROGRESS", "reservation disappeared"))?;
+        let mut active: Map<String, Value> = serde_json::from_str::<Value>(&versioned.content)?
+            .as_object()
+            .cloned()
+            .ok_or_else(|| MachineError::new("INTERNAL", "stored idempotency record is invalid"))?;
+        if active.get("owner").and_then(Value::as_str) != Some(owner.as_str())
+            || active.get("state").and_then(Value::as_str) != Some("claimed")
+        {
             return Err(MachineError::retryable(
                 "REQUEST_IN_PROGRESS",
-                "matching request is still being submitted",
+                "matching request ownership changed before enqueue",
             ));
         }
+        active.insert("state".into(), Value::from("enqueuing"));
+        self.store
+            .compare_and_swap_text(
+                &record_path,
+                &versioned.version,
+                &canonical_json(&Value::Object(active.clone())),
+            )
+            .await
+            .map_err(|error| {
+                MachineError::retryable(
+                    "REQUEST_IN_PROGRESS",
+                    format!("matching request ownership changed before enqueue: {error}"),
+                )
+            })?;
 
         // kwargs = normalized request minus client_request_id / command /
         // source_archive_path (Python dict comprehension).
         let str_field = |name: &str| request[name].as_str().unwrap_or_default().to_string();
         let mut options = SubmitOptions {
             bucket: self.bucket.clone(),
+            run_id: run_id.clone(),
             provider: str_field("provider"),
             gpu_type: str_field("gpu_type"),
             pinned_host: str_field("pinned_host"),
@@ -905,12 +971,35 @@ impl MachineFacade {
             options.repo_workdir = String::new();
             options.repo_extras = String::new();
         }
-        let command = request["command"].as_str().unwrap_or_default();
-        let job = match submit_job(command, &options).await {
-            Ok(job) => job,
+        let command = request["command"].as_str().unwrap_or_default().to_string();
+        let submitted = submit_batch(std::slice::from_ref(&command), &options).await;
+        let job = match submitted {
+            Ok(mut jobs) => jobs.pop().ok_or_else(|| {
+                MachineError::retryable("SUBMIT_FAILED", "durable submission returned no job")
+            })?,
             Err(exc) => {
-                // Roll the reservation back so a retry can re-attempt.
-                let _ = self.store.delete_blob(&record_path).await;
+                if let Ok(Some(versioned)) = self.store.read_text_versioned(&record_path).await {
+                    if let Ok(Value::Object(mut released)) =
+                        serde_json::from_str::<Value>(&versioned.content)
+                    {
+                        if released.get("owner").and_then(Value::as_str) == Some(owner.as_str()) {
+                            released.insert("state".into(), Value::from("claimed"));
+                            released.insert(
+                                "lease_expires_at".into(),
+                                Value::from(chrono::Utc::now().to_rfc3339()),
+                            );
+                            released.insert("last_error".into(), Value::from(exc.to_string()));
+                            let _ = self
+                                .store
+                                .compare_and_swap_text(
+                                    &record_path,
+                                    &versioned.version,
+                                    &canonical_json(&Value::Object(released)),
+                                )
+                                .await;
+                        }
+                    }
+                }
                 return Err(MachineError::retryable("SUBMIT_FAILED", exc.to_string()));
             }
         };
@@ -924,24 +1013,74 @@ impl MachineFacade {
             );
             result.insert("source_sha256".into(), Value::from(source_sha.as_str()));
         }
-        let mut completed = reservation;
-        completed.insert("state".into(), Value::from("submitted"));
-        completed.insert("job".into(), normalized);
-        completed.insert("result".into(), Value::Object(result.clone()));
-        completed.insert("completed_at".into(), Value::from(utcnow()));
-        self.store
-            .upload_text(&record_path, &canonical_json(&Value::Object(completed)))
-            .await
-            .map_err(|exc| {
-                MachineError::retryable(
+        for _ in 0..16 {
+            let versioned = self
+                .store
+                .read_text_versioned(&record_path)
+                .await?
+                .ok_or_else(|| {
+                    MachineError::retryable(
+                        "INTERNAL",
+                        "submitted job reservation disappeared before acceptance",
+                    )
+                })?;
+            let mut completed: Map<String, Value> =
+                serde_json::from_str::<Value>(&versioned.content)?
+                    .as_object()
+                    .cloned()
+                    .ok_or_else(|| {
+                        MachineError::new("INTERNAL", "stored idempotency record is invalid")
+                    })?;
+            if let Some(stored) = completed.get("result").filter(|value| value.is_object()) {
+                return Ok(stored.clone());
+            }
+            if completed.get("owner").and_then(Value::as_str) != Some(owner.as_str())
+                || completed.get("state").and_then(Value::as_str) != Some("enqueuing")
+                || completed.get("run_id").and_then(Value::as_str) != Some(run_id.as_str())
+            {
+                return Err(MachineError::retryable(
                     "INTERNAL",
                     format!(
-                        "job {} was submitted but its idempotency record could not be finalized: {exc}",
+                        "job {} was submitted but reservation ownership changed before acceptance",
                         job.job_id
                     ),
+                ));
+            }
+            completed.insert("state".into(), Value::from("accepted"));
+            completed.insert("job".into(), normalized.clone());
+            completed.insert("result".into(), Value::Object(result.clone()));
+            completed.insert("completed_at".into(), Value::from(utcnow()));
+            completed.remove("owner");
+            completed.remove("lease_expires_at");
+            match self
+                .store
+                .compare_and_swap_text(
+                    &record_path,
+                    &versioned.version,
+                    &canonical_json(&Value::Object(completed)),
                 )
-            })?;
-        Ok(Value::Object(result))
+                .await
+            {
+                Ok(_) => return Ok(Value::Object(result)),
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => {
+                    return Err(MachineError::retryable(
+                        "INTERNAL",
+                        format!(
+                            "job {} was submitted but its idempotency record could not be finalized: {error}",
+                            job.job_id
+                        ),
+                    ))
+                }
+            }
+        }
+        Err(MachineError::retryable(
+            "INTERNAL",
+            format!(
+                "job {} was submitted but its idempotency record remained contended",
+                job.job_id
+            ),
+        ))
     }
 
     /// Python `status`.
@@ -1028,15 +1167,24 @@ impl MachineFacade {
             job.state = job_state::CANCELLED.into();
             job.completed_at = Some(utcnow());
             job.error = Some("cancelled".into());
-            self.store.write_job("cancelled", &job).await?;
-            self.store.delete_job("queue", job_id).await?;
-            match self.store.read_job("running", job_id).await? {
-                None => {
+            match self.store.move_job(&job, "queue", "cancelled").await {
+                Ok(()) => {
                     let mut out = Map::new();
                     out.insert("job".into(), normalize_job(&job));
                     return Ok(Value::Object(out));
                 }
-                Some(raced) => job = raced,
+                Err(StorageError::StorageConflict(_)) => {
+                    match self.store.read_job("running", job_id).await? {
+                        Some(raced) => job = raced,
+                        None => {
+                            return Err(MachineError::retryable(
+                                "CANCEL_FAILED",
+                                "job moved while cancellation was being fenced",
+                            ))
+                        }
+                    }
+                }
+                Err(error) => return Err(error.into()),
             }
         }
 
@@ -1066,9 +1214,15 @@ impl MachineFacade {
             job.completed_at = Some(utcnow());
             job.error = Some("cancelled".into());
             job.instance_ref = None;
-            self.store.write_job("cancelled", &job).await?;
-            self.store.delete_job("running", job_id).await?;
-            self.store.delete_job("failed", job_id).await?;
+            self.store
+                .move_job(&job, "running", "cancelled")
+                .await
+                .map_err(|error| {
+                    MachineError::retryable(
+                        "CANCEL_FAILED",
+                        format!("job moved while cancellation was being fenced: {error}"),
+                    )
+                })?;
             let mut out = Map::new();
             out.insert("job".into(), normalize_job(&job));
             return Ok(Value::Object(out));

@@ -1,11 +1,9 @@
-//! The 'run' primitive: the tracking entity above a job.
+//! Durable run manifests are the admission and recovery authority above jobs.
 //!
-//! Port of `stado/queue/runs/__init__.py`. One `wc submit` invocation = one
-//! run. Written once to `runs/<run_id>.json` with the member job_ids and
-//! submitter provenance, then never mutated (static manifest — avoids GCS
-//! read-modify-write contention across the fleet). Run status is *derived*
-//! from the members' current prefixes, so "is run X done?" costs
-//! O(run size) targeted reads instead of an O(whole-queue) scan.
+//! One submission request owns one `runs/<run_id>.json` document. Its `entries`
+//! are CAS-mutated through planned/claimed/enqueuing/accepted/terminal/reaped;
+//! terminal entries retain the final job document so deleting lifecycle blobs
+//! never turns an old request into new queue work.
 
 use std::collections::BTreeMap;
 
@@ -92,91 +90,24 @@ pub fn derive_run_name(commands: &[String]) -> String {
     parts.join(":")
 }
 
-/// Inputs for the immutable run manifest. Python
-/// `write_run_manifest(store, run_id, name, submitter_app, submitted_by,
-/// submitted_from, commands, job_ids)`.
-pub struct RunManifest<'a> {
-    pub run_id: &'a str,
-    /// Explicit name (`WC_RUN_NAME`); `None`/empty auto-derives from commands.
-    pub name: Option<&'a str>,
-    /// Orchestrator name; `None`/empty becomes "manual".
-    pub submitter_app: Option<&'a str>,
-    pub submitted_by: &'a str,
-    pub submitted_from: &'a str,
-    pub commands: &'a [String],
-    pub job_ids: &'a [String],
-}
-
-/// Write the immutable run manifest. Called once after all member jobs are
-/// queued so job_ids is complete.
-pub async fn write_run_manifest(
-    store: &JobStorage,
-    manifest: &RunManifest<'_>,
-) -> Result<(), StorageError> {
-    let name = match manifest.name {
-        Some(name) if !name.is_empty() => name.to_string(),
-        _ => derive_run_name(manifest.commands),
-    };
-    let submitter_app = match manifest.submitter_app {
-        Some(app) if !app.is_empty() => app,
-        _ => "manual",
-    };
-    // Key order matches the Python dict; json.dumps(indent=2) maps to
-    // serde_json::to_string_pretty.
-    let mut body = Map::new();
-    body.insert("run_id".into(), Value::from(manifest.run_id));
-    body.insert("name".into(), Value::from(name));
-    body.insert(
-        "created_at".into(),
-        Value::from(Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()),
-    );
-    body.insert("submitter_app".into(), Value::from(submitter_app));
-    body.insert("submitted_by".into(), Value::from(manifest.submitted_by));
-    body.insert(
-        "submitted_from".into(),
-        Value::from(manifest.submitted_from),
-    );
-    body.insert("n_jobs".into(), Value::from(manifest.job_ids.len()));
-    body.insert(
-        "job_ids".into(),
-        Value::Array(
-            manifest
-                .job_ids
-                .iter()
-                .map(|j| Value::from(j.as_str()))
-                .collect(),
-        ),
-    );
-    body.insert(
-        "commands".into(),
-        Value::Array(
-            manifest
-                .commands
-                .iter()
-                .map(|c| Value::from(c.as_str()))
-                .collect(),
-        ),
-    );
-    store
-        .upload_text(
-            &format!("{RUN_PREFIX}/{}.json", manifest.run_id),
-            &serde_json::to_string_pretty(&Value::Object(body))?,
-        )
-        .await
-}
 
 /// Read a run manifest; `None` when it does not exist.
 pub async fn read_run(
     store: &JobStorage,
     run_id: &str,
 ) -> Result<Option<Map<String, Value>>, StorageError> {
-    let Some(raw) = store
-        .download_text(&format!("{RUN_PREFIX}/{run_id}.json"))
+    let Some(versioned) = store
+        .read_text_versioned(&format!("{RUN_PREFIX}/{run_id}.json"))
         .await?
     else {
         return Ok(None);
     };
-    let value: Value = serde_json::from_str(&raw)?;
+    let mut value: Value = serde_json::from_str(&versioned.content)?;
+    if value.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v2") {
+        value = crate::queue::submit::migrate_v2_run_manifest(store, run_id)
+            .await
+            .map_err(|error| StorageError::Other(error.to_string()))?;
+    }
     match value {
         Value::Object(map) => Ok(Some(map)),
         _ => Err(StorageError::Other(format!(
@@ -185,14 +116,134 @@ pub async fn read_run(
     }
 }
 
-/// Which prefix currently holds this job_id, or None if absent.
+/// Which prefix currently holds this job_id, or None if absent. Terminal wins
+/// over transitional duplicates left by a crash during a fenced move.
 async fn job_state(store: &JobStorage, job_id: &str) -> Result<Option<&'static str>, StorageError> {
-    for prefix in ALL_PREFIXES {
+    for prefix in ["cancelled", "failed", "uploaded", "completed", "running", "queue"] {
         if store.read_job(prefix, job_id).await?.is_some() {
             return Ok(Some(prefix));
         }
     }
     Ok(None)
+}
+
+/// Retain an exact terminal job before its lifecycle blobs can be deleted.
+/// Jobs predating durable submission manifests have no submission identity
+/// and are left on their legacy lifecycle path; v3 jobs fail closed on any
+/// manifest mismatch.
+pub async fn record_terminal_outcome(
+    store: &JobStorage,
+    job: &crate::models::Job,
+    prefix: &str,
+) -> Result<(), StorageError> {
+    if !TERMINAL_PREFIXES.contains(&prefix) {
+        return Err(StorageError::Other(format!(
+            "{prefix} is not a terminal job prefix"
+        )));
+    }
+    let Some(index) = job.submission_command_index else {
+        return Ok(());
+    };
+    if job.run_id.is_empty() || job.submission_request_digest.is_empty() {
+        return Ok(());
+    }
+    crate::queue::submit::migrate_v2_run_manifest(store, &job.run_id)
+        .await
+        .map_err(|error| StorageError::Other(error.to_string()))?;
+    let path = format!("{RUN_PREFIX}/{}.json", job.run_id);
+    for _ in 0..16 {
+        let versioned = store.read_text_versioned(&path).await?.ok_or_else(|| {
+            StorageError::Other(format!(
+                "durable run manifest {} disappeared before terminal transition",
+                job.run_id
+            ))
+        })?;
+        let mut manifest: Value = serde_json::from_str(&versioned.content)?;
+        if manifest.get("schema").and_then(Value::as_str)
+            != Some("stado.run-submission.v3")
+            || manifest.get("request_digest").and_then(Value::as_str)
+                != Some(job.submission_request_digest.as_str())
+        {
+            return Err(StorageError::Other(format!(
+                "durable run manifest {} does not match terminal job {}",
+                job.run_id, job.job_id
+            )));
+        }
+        let entry = manifest
+            .get_mut("entries")
+            .and_then(Value::as_array_mut)
+            .and_then(|entries| entries.get_mut(index))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "durable run manifest {} has no entry {index}",
+                    job.run_id
+                ))
+            })?;
+        if entry.get("job_id").and_then(Value::as_str) != Some(job.job_id.as_str()) {
+            return Err(StorageError::Other(format!(
+                "durable run manifest {} maps entry {index} to a different job",
+                job.run_id
+            )));
+        }
+        let planned: crate::models::Job = serde_json::from_value(
+            entry
+                .get("planned_job")
+                .cloned()
+                .ok_or_else(|| StorageError::Other("durable run entry has no planned job".into()))?,
+        )?;
+        if crate::queue::submit::immutable_job_projection(&planned)
+            != crate::queue::submit::immutable_job_projection(job)
+        {
+            return Err(StorageError::Other(format!(
+                "terminal job {} does not match its immutable run projection",
+                job.job_id
+            )));
+        }
+        if entry.get("state").and_then(Value::as_str) == Some("reaped") {
+            return Ok(());
+        }
+        if let Some(existing) = entry.get("outcome") {
+            let existing_prefix = existing.get("prefix").and_then(Value::as_str);
+            let existing_job = existing.get("job");
+            if existing_prefix == Some(prefix)
+                && existing_job == Some(&serde_json::to_value(job).expect("Job serialization"))
+            {
+                return Ok(());
+            }
+            return Err(StorageError::Other(format!(
+                "terminal outcome for job {} changed",
+                job.job_id
+            )));
+        }
+        entry.insert("state".into(), Value::from("terminal"));
+        entry.remove("owner");
+        entry.remove("lease_expires_at");
+        entry.insert(
+            "outcome".into(),
+            serde_json::json!({
+                "prefix": prefix,
+                "recorded_at": Utc::now().to_rfc3339(),
+                "job": job,
+            }),
+        );
+        match store
+            .compare_and_swap_text(
+                &path,
+                &versioned.version,
+                &serde_json::to_string_pretty(&manifest)?,
+            )
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StorageError::StorageConflict(format!(
+        "run manifest {} remained contended while recording job {}",
+        job.run_id, job.job_id
+    )))
 }
 
 /// Per-state counts for a run, derived from its members' current prefixes.
@@ -217,22 +268,40 @@ pub async fn run_status(
     let Some(manifest) = read_run(store, run_id).await? else {
         return Ok(None);
     };
-    let job_ids: Vec<String> = manifest
-        .get("job_ids")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|j| j.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+    let entries = manifest
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            StorageError::Other(format!(
+                "run manifest {run_id} has no durable entries; resubmit or explicitly migrate it"
+            ))
+        })?;
     let mut counts: BTreeMap<String, i64> =
         ALL_PREFIXES.iter().map(|p| (p.to_string(), 0)).collect();
     let mut missing = 0;
-    for job_id in &job_ids {
-        match job_state(store, job_id).await? {
-            Some(prefix) => *counts.get_mut(prefix).expect("prefix initialized") += 1,
-            None => missing += 1,
+    for entry in entries {
+        let job_id = entry
+            .get("job_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| StorageError::Other(format!("run manifest {run_id} has an invalid entry")))?;
+        let retained = entry
+            .get("outcome")
+            .and_then(Value::as_object)
+            .and_then(|outcome| outcome.get("prefix"))
+            .and_then(Value::as_str);
+        match retained {
+            Some(prefix) if TERMINAL_PREFIXES.contains(&prefix) => {
+                *counts.get_mut(prefix).expect("terminal prefix initialized") += 1;
+            }
+            Some(prefix) => {
+                return Err(StorageError::Other(format!(
+                    "run manifest {run_id} retained invalid outcome prefix {prefix}"
+                )));
+            }
+            None => match job_state(store, job_id).await? {
+                Some(prefix) => *counts.get_mut(prefix).expect("prefix initialized") += 1,
+                None => missing += 1,
+            },
         }
     }
     let terminal: i64 = TERMINAL_PREFIXES.iter().map(|p| counts[*p]).sum();
@@ -244,10 +313,7 @@ pub async fn run_status(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        n_jobs: manifest
-            .get("n_jobs")
-            .and_then(Value::as_i64)
-            .unwrap_or(job_ids.len() as i64),
+        n_jobs: entries.len() as i64,
         counts,
         missing,
         in_flight,

@@ -3,7 +3,7 @@
 //! Port of `stado/queue/migrations.py`.
 //!
 //! The priority-marker index introduced in 0.4.26 is auto-populated by
-//! JobStorage.write_job() at submit time. Jobs already sitting in queue/
+//! durable queue admission. Jobs already sitting in queue/
 //! when 0.4.26 deployed have no marker and would remain stranded behind
 //! the FIFO listing window because the scheduler only loads the oldest N
 //! queue/ blobs by GCS time_created.

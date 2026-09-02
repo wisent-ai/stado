@@ -368,19 +368,6 @@ impl JobStorage {
 
     // ---- job operations ----
 
-    /// Write the job JSON to `{prefix}/{job_id}.json`, stamp filter metadata
-    /// (`gpu_mem_gb`, `priority`, `gpu_type`, provider routing), and — for
-    /// priority>0 jobs in `queue/` — write the `queue_priority/` index marker.
-    pub async fn write_job(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
-        let blob_path = format!("{}/{}.json", prefix, job.job_id);
-        self.backend.upload_text(&blob_path, &job.to_json()).await?;
-        let meta = Self::job_metadata(job);
-        self.backend.set_metadata(&blob_path, &meta).await?;
-        if prefix == "queue" && job.priority > 0 {
-            self.write_priority_marker(job).await?;
-        }
-        Ok(())
-    }
 
     /// Create a queued job exactly once. Existing content is never overwritten;
     /// callers must read it back and verify its submission identity.
@@ -390,7 +377,7 @@ impl JobStorage {
             .backend
             .upload_text_if_absent(&blob_path, &job.to_json())
             .await?;
-        if created || self.backend.exists(&blob_path).await? {
+        if created {
             let meta = Self::job_metadata(job);
             self.backend.set_metadata(&blob_path, &meta).await?;
             if job.priority > 0 {
@@ -400,12 +387,70 @@ impl JobStorage {
         Ok(created)
     }
 
-    /// Atomically claim a queued job by creating its `running/` record.
-    /// Exactly one agent can win the create-if-absent race. A concurrent
-    /// cancellation marker fences the winner before workload execution.
+    /// Repair admission metadata only after a losing create has been read and
+    /// validated against the durable planned job. A concurrent move turns this
+    /// into a no-op and any marker written in that window is removed.
+    pub async fn repair_queued_admission_metadata(
+        &self,
+        planned: &Job,
+    ) -> Result<(), StorageError> {
+        let path = format!("queue/{}.json", planned.job_id);
+        let Some(versioned) = self.read_text_versioned(&path).await? else {
+            return Ok(());
+        };
+        let current = Job::from_json(&versioned.content)?;
+        if crate::queue::submit::immutable_job_projection(&current)
+            != crate::queue::submit::immutable_job_projection(planned)
+        {
+            return Err(StorageError::StorageConflict(format!(
+                "{path} does not match validated durable admission"
+            )));
+        }
+        match self
+            .backend
+            .set_metadata(&path, &Self::job_metadata(&current))
+            .await
+        {
+            Ok(()) => {}
+            Err(StorageError::NotFound(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        if current.priority > 0 {
+            self.write_priority_marker(&current).await?;
+        }
+        if !self.backend.exists(&path).await? {
+            self.delete_priority_marker(&planned.job_id).await?;
+        }
+        Ok(())
+    }
+
+    /// Atomically claim the current queued generation. The running destination
+    /// is create-only and the queued source is CAS-fenced, so a stale listing
+    /// can neither recreate running nor erase a concurrent queue rewrite.
     pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
         let queue_path = format!("queue/{}.json", job.job_id);
-        if !self.backend.exists(&queue_path).await? {
+        let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
+            return Ok(false);
+        };
+        let current = Job::from_json(&versioned.content)?;
+        if current.state != crate::models::job_state::QUEUED
+            || crate::queue::submit::immutable_job_projection(&current)
+                != crate::queue::submit::immutable_job_projection(job)
+        {
+            return Ok(false);
+        }
+        for terminal in crate::queue::runs::TERMINAL_PREFIXES {
+            if self
+                .backend
+                .exists(&format!("{terminal}/{}.json", job.job_id))
+                .await?
+            {
+                return Ok(false);
+            }
+        }
+        let cancellation = format!("cancellations/{}.json", job.job_id);
+        let cancelled = format!("cancelled/{}.json", job.job_id);
+        if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
             return Ok(false);
         }
         let running_path = format!("running/{}.json", job.job_id);
@@ -416,27 +461,27 @@ impl JobStorage {
         {
             return Ok(false);
         }
-        // A competing agent may have completed and removed the queued record
-        // after this agent listed it but before the running claim landed.
-        // Never resurrect that stale in-memory copy after the winner removes
-        // its running record.
-        if !self.backend.exists(&queue_path).await? {
+        if self.backend.exists(&cancellation).await? || self.backend.exists(&cancelled).await? {
             self.backend.delete(&running_path).await?;
             return Ok(false);
+        }
+        match self
+            .compare_and_swap_text(&queue_path, &versioned.version, &job.to_json())
+            .await
+        {
+            Ok(_) => {}
+            Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
+                self.backend.delete(&running_path).await?;
+                return Ok(false);
+            }
+            Err(error) => {
+                self.backend.delete(&running_path).await?;
+                return Err(error);
+            }
         }
         self.backend
             .set_metadata(&running_path, &Self::job_metadata(job))
             .await?;
-
-        let cancellation = format!("cancellations/{}.json", job.job_id);
-        let cancelled = format!("cancelled/{}.json", job.job_id);
-        if self.backend.download_text(&cancellation).await?.is_some()
-            || self.backend.download_text(&cancelled).await?.is_some()
-        {
-            self.backend.delete(&running_path).await?;
-            return Ok(false);
-        }
-
         self.backend.delete(&queue_path).await?;
         self.delete_priority_marker(&job.job_id).await?;
         Ok(true)
@@ -474,8 +519,56 @@ impl JobStorage {
         Ok(Some(Job::from_json(&data)?))
     }
 
-    /// Atomically rewrite one queued job's priority and rebuild its marker.
-    /// `None` means the job left `queue/` before the update could finish.
+    async fn rewrite_queued_job<F>(
+        &self,
+        job_id: &str,
+        mutate: F,
+    ) -> Result<Option<Job>, StorageError>
+    where
+        F: Fn(&mut Job),
+    {
+        let path = format!("queue/{job_id}.json");
+        for _ in 0..3 {
+            let Some(versioned) = self.read_text_versioned(&path).await? else {
+                return Ok(None);
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            if job.state != crate::models::job_state::QUEUED {
+                return Ok(None);
+            }
+            mutate(&mut job);
+            match self
+                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
+                .await
+            {
+                Ok(_) => {}
+                Err(StorageError::StorageConflict(_)) => continue,
+                Err(error) => return Err(error),
+            }
+            if !self.backend.exists(&path).await? {
+                return Ok(None);
+            }
+            if let Err(error) = self
+                .backend
+                .set_metadata(&path, &Self::job_metadata(&job))
+                .await
+            {
+                if matches!(&error, StorageError::NotFound(_)) {
+                    return Ok(None);
+                }
+                return Err(error);
+            }
+            if !self.backend.exists(&path).await? {
+                return Ok(None);
+            }
+            return Ok(Some(job));
+        }
+        Err(StorageError::StorageConflict(format!(
+            "queue/{job_id}.json remained contended during rewrite"
+        )))
+    }
+
+    /// CAS-update one current queued generation's priority and marker.
     pub async fn update_queued_priority(
         &self,
         job_id: &str,
@@ -486,50 +579,42 @@ impl JobStorage {
                 "job priority must be between 0 and 99999999".into(),
             ));
         }
-        let path = format!("queue/{job_id}.json");
-        for _ in 0..3 {
-            let Some(versioned) = self.read_text_versioned(&path).await? else {
-                return Ok(None);
-            };
-            let mut job = Job::from_json(&versioned.content)?;
-            job.priority = new_priority;
-            match self
-                .compare_and_swap_text(&path, &versioned.version, &job.to_json())
-                .await
-            {
-                Ok(_) => {}
-                Err(StorageError::StorageConflict(_)) => continue,
-                Err(error) => return Err(error),
-            }
-
-            if !self.backend.exists(&path).await? {
-                self.delete_priority_marker(job_id).await?;
-                return Ok(None);
-            }
-            if let Err(error) = self
-                .backend
-                .set_metadata(&path, &Self::job_metadata(&job))
-                .await
-            {
-                if matches!(&error, StorageError::NotFound(_)) {
-                    self.delete_priority_marker(job_id).await?;
-                    return Ok(None);
-                }
-                return Err(error);
-            }
-            self.delete_priority_marker(job_id).await?;
+        let updated = self
+            .rewrite_queued_job(job_id, |job| job.priority = new_priority)
+            .await?;
+        self.delete_priority_marker(job_id).await?;
+        if let Some(job) = &updated {
             if new_priority > 0 {
-                self.write_priority_marker(&job).await?;
+                self.write_priority_marker(job).await?;
             }
-            if !self.backend.exists(&path).await? {
+            if !self.backend.exists(&format!("queue/{job_id}.json")).await? {
                 self.delete_priority_marker(job_id).await?;
                 return Ok(None);
             }
-            return Ok(Some(job));
         }
-        Err(StorageError::StorageConflict(format!(
-            "queue/{job_id}.json changed while its priority was being updated"
-        )))
+        Ok(updated)
+    }
+
+    /// CAS-update the measured queue sizing without recreating moved work.
+    pub async fn update_queued_gpu_mem(
+        &self,
+        job_id: &str,
+        gpu_mem_gb: i64,
+    ) -> Result<Option<Job>, StorageError> {
+        self.rewrite_queued_job(job_id, |job| job.gpu_mem_gb = gpu_mem_gb)
+            .await
+    }
+
+    /// CAS-update the makespan assignment without recreating moved work.
+    pub async fn update_queued_assignment(
+        &self,
+        job_id: &str,
+        assigned_to: &str,
+    ) -> Result<Option<Job>, StorageError> {
+        self.rewrite_queued_job(job_id, |job| {
+            job.assigned_to = assigned_to.to_string()
+        })
+        .await
     }
 
     /// Delete the job blob; also drops the priority marker in `queue/`.
@@ -541,24 +626,102 @@ impl JobStorage {
         Ok(())
     }
 
-    /// Move a job between prefixes: write-then-delete. NOT atomic — a crash
-    /// between the two can leave the job in both prefixes (readers tolerate
-    /// duplicates) or neither; kept from Python, where the same window
-    /// exists.
+    /// Move one current source generation to a create-only destination.
     ///
-    /// After the move, [`tombstone::on_transition`] writes a
-    /// fixed/failed_again marker when this terminates a re-submitted job.
+    /// The source is read versioned before the destination is created, then
+    /// CAS-rewritten to the destination state as a durable fence before the
+    /// source path is deleted. A crash can leave two readable copies, but a
+    /// stale caller can never create a destination after the source has moved.
     pub async fn move_job(
         &self,
         job: &Job,
         from_prefix: &str,
         to_prefix: &str,
     ) -> Result<(), StorageError> {
-        self.write_job(to_prefix, job).await?;
-        self.delete_blob(&format!("{from_prefix}/{}.json", job.job_id))
-            .await?;
+        let from = format!("{from_prefix}/{}.json", job.job_id);
+        let to = format!("{to_prefix}/{}.json", job.job_id);
+        let Some(versioned) = self.read_text_versioned(&from).await? else {
+            if let Some(existing) = self.read_job(to_prefix, &job.job_id).await? {
+                if serde_json::to_value(existing)? == serde_json::to_value(job)? {
+                    return Ok(());
+                }
+            }
+            return Err(StorageError::StorageConflict(format!(
+                "{from} no longer exists; refusing stale move to {to}"
+            )));
+        };
+        let current = Job::from_json(&versioned.content)?;
+        let expected_source_state = if from_prefix == "queue" {
+            crate::models::job_state::QUEUED
+        } else {
+            from_prefix
+        };
+        if current.state != expected_source_state && current.state != job.state {
+            return Err(StorageError::StorageConflict(format!(
+                "{from} is in state {}, not {expected_source_state}",
+                current.state
+            )));
+        }
+        if crate::queue::submit::immutable_job_projection(&current)
+            != crate::queue::submit::immutable_job_projection(job)
+        {
+            return Err(StorageError::StorageConflict(format!(
+                "{from} immutable submission identity changed"
+            )));
+        }
+        let body = job.to_json();
+        let created = self.backend.upload_text_if_absent(&to, &body).await?;
+        if !created {
+            let existing = self
+                .read_job(to_prefix, &job.job_id)
+                .await?
+                .ok_or_else(|| {
+                    StorageError::StorageConflict(format!(
+                        "{to} won create-if-absent but is unreadable"
+                    ))
+                })?;
+            if serde_json::to_value(existing)? != serde_json::to_value(job)? {
+                return Err(StorageError::StorageConflict(format!(
+                    "{to} already contains a different lifecycle outcome"
+                )));
+            }
+        }
+        match self
+            .compare_and_swap_text(&from, &versioned.version, &body)
+            .await
+        {
+            Ok(_) => {}
+            Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => {
+                if created {
+                    self.backend.delete(&to).await?;
+                }
+                return Err(StorageError::StorageConflict(format!(
+                    "{from} changed during move to {to}"
+                )));
+            }
+            Err(error) => {
+                if created {
+                    self.backend.delete(&to).await?;
+                }
+                return Err(error);
+            }
+        }
+        if crate::queue::runs::TERMINAL_PREFIXES.contains(&to_prefix) {
+            crate::queue::runs::record_terminal_outcome(self, job, to_prefix).await?;
+        }
+        if created {
+            self.backend
+                .set_metadata(&to, &Self::job_metadata(job))
+                .await?;
+        }
+        self.backend.delete(&from).await?;
         if from_prefix == "queue" {
             self.delete_priority_marker(&job.job_id).await?;
+        }
+        if to_prefix == "queue" {
+            if created && job.priority > 0 {
+                self.write_priority_marker(job).await?;
+            }
         }
         tombstone::on_transition(self, job, to_prefix).await;
         Ok(())

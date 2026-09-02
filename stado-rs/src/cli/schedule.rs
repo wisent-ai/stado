@@ -7,8 +7,6 @@
 use chrono::Utc;
 
 use crate::models::isoformat_utc;
-use crate::queue::runs::generate_run_id;
-use crate::queue::submit::{submit_job, SubmitOptions};
 use crate::queue::JobStorage;
 use crate::schedules::{
     self, compute_next_due, cron_is_valid, generate_schedule_id, read_schedule, Schedule,
@@ -172,20 +170,25 @@ pub async fn rm(schedule_id: &str) -> Result<(), CmdError> {
 /// Python `_set_enabled`.
 async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdError> {
     let store = JobStorage::new().await?;
-    let Some(mut s) = read_schedule(&store, schedule_id).await? else {
+    let Some(s) = read_schedule(&store, schedule_id).await? else {
         return Err(CmdError::click(format!("schedule {schedule_id} not found")));
     };
-    s.enabled = enabled;
-    if enabled {
-        // Recompute next_due from now so a long-paused schedule doesn't
-        // fire immediately for a stale overdue slot.
-        s.next_due_at = isoformat_utc(
+    let next_due = if enabled {
+        Some(isoformat_utc(
             compute_next_due(&s.cron, Utc::now(), &s.tz)
                 .map_err(|exc| CmdError::click(exc.to_string()))?,
-        );
-    }
-    schedules::write_schedule(&store, &s).await?;
-    Ok(s)
+        ))
+    } else {
+        None
+    };
+    schedules::set_schedule_enabled(
+        &store,
+        schedule_id,
+        enabled,
+        next_due.as_deref(),
+    )
+    .await?
+    .ok_or_else(|| CmdError::click(format!("schedule {schedule_id} not found")))
 }
 
 /// `schedule pause ID`: disable a schedule without deleting it.
@@ -207,22 +210,19 @@ pub async fn resume(schedule_id: &str) -> Result<(), CmdError> {
 /// next run time.
 pub async fn run(schedule_id: &str) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let Some(mut s) = read_schedule(&store, schedule_id).await? else {
+    if read_schedule(&store, schedule_id).await?.is_none() {
         return Err(CmdError::click(format!("schedule {schedule_id} not found")));
-    };
-    let run_id = generate_run_id();
-    let options = SubmitOptions {
-        bucket: crate::config::bucket().to_string(),
-        run_id: run_id.clone(),
-        schedule_id: schedule_id.to_string(),
-        ..s.submit_options()
-    };
-    let job = submit_job(&s.command, &options).await?;
-    s.last_fired_at = Some(isoformat_utc(Utc::now()));
-    s.last_run_id = run_id.clone();
-    s.last_job_id = job.job_id.clone();
-    s.fire_count += 1;
-    schedules::write_schedule(&store, &s).await?;
-    println!("fired {schedule_id} -> job {} (run {run_id})", job.job_id);
+    }
+    let job = schedules::fire_schedule_now(&store, schedule_id, Utc::now())
+        .await?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "schedule {schedule_id} occurrence is being submitted by another owner"
+            ))
+        })?;
+    println!(
+        "fired {schedule_id} -> job {} (run {})",
+        job.job_id, job.run_id
+    );
     Ok(())
 }

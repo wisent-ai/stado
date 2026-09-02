@@ -9,7 +9,7 @@
 //! cloud backend rather than network exposure of this directory.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
@@ -118,7 +118,10 @@ impl LocalBackend {
         tmp.write_all(data)?;
         tmp.as_file().sync_all()?;
         match tmp.persist_noclobber(&target) {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                File::open(parent)?.sync_all()?;
+                Ok(true)
+            }
             Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
             Err(err) => Err(err.error.into()),
         }
@@ -137,6 +140,7 @@ impl LocalBackend {
         tmp.write_all(data)?;
         tmp.as_file().sync_all()?;
         tmp.persist(target).map_err(|err| err.error)?;
+        File::open(parent)?.sync_all()?;
         Ok(())
     }
 

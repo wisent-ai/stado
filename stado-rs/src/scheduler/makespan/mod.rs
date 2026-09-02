@@ -457,23 +457,15 @@ pub async fn assign_jobs_at(
         }
     }
     if !to_write.is_empty() {
-        // Fresh read-modify-write of ONLY assigned_to. The Job objects in
-        // `to_write` were read at tick start; writing them whole back at
-        // tick end resurrects whatever fields changed meanwhile —
-        // notably gpu_mem_gb, which an external de-hardcode / the agent's
-        // OOM-escalation may have just rewritten. Re-read each blob now
-        // and touch only assigned_to so the live gpu_mem_gb is preserved.
+        // CAS-update only assigned_to on the still-current queued generation;
+        // a stale tick cannot recreate a job already claimed or terminated.
         use futures::StreamExt;
         futures::stream::iter(&to_write)
             .map(|job| async move {
-                let Some(mut fresh) = store.read_job("queue", &job.job_id).await? else {
-                    return Ok::<(), StorageError>(()); // claimed/moved since tick start
-                };
-                if fresh.assigned_to == job.assigned_to {
-                    return Ok(());
-                }
-                fresh.assigned_to = job.assigned_to.clone();
-                store.write_job("queue", &fresh).await
+                store
+                    .update_queued_assignment(&job.job_id, &job.assigned_to)
+                    .await?;
+                Ok::<(), StorageError>(())
             })
             .buffered(16)
             .collect::<Vec<Result<(), StorageError>>>()
