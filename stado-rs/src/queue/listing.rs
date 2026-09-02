@@ -305,21 +305,30 @@ pub async fn list_claimable(
         collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
         return Ok(out);
     }
-    // Extends the existing repair rather than adding a second one: it now
-    // covers every queued job, because the index now does. `true` means the
-    // sweep has covered `queue/` end-to-end at least once. The sweep itself
-    // keeps running past that point — it is also driven from the coordinator
-    // tick by `queue::reaper::reap_expired_leases` — because a marker can go
-    // missing after the first full pass.
-    let indexed = migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
+    // Coverage is a one-object read; the sweep that establishes it is not.
+    // Asking [`migrations::has_swept`] first is what keeps a poll down to a
+    // page of names: driving the sweep from here unconditionally would make
+    // every poll list all of `queue/` AND all of `queue_priority/` and fetch
+    // up to a batch of job documents — the whole-prefix per-poll cost this
+    // walk exists to remove, and the documented way to blow a 60s tick. The
+    // standing bounded repair runs per coordinator tick in
+    // `queue::reaper::reap_expired_leases`, which is where that cost belongs.
+    let indexed = migrations::has_swept(store).await?;
+    if !indexed {
+        // Only while the fallback is still live: the sweep runs before the
+        // index is read so a marker it writes is claimable on this poll, and
+        // it is what eventually retires the fallback below.
+        migrations::backfill_priority_markers(store, migrations::BACKFILL_BATCH).await?;
+    }
     collect_from_index(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
     if !indexed {
         // No sweep has covered the whole prefix yet, so the index cannot be
         // the only way in without stranding the jobs it has not reached. This
         // pass is the expensive one the index exists to retire, and what
-        // retires it is coverage, not the repair going away: the sweep above
-        // advances on every call, and once one has completed this branch is
-        // dead while the bounded repair keeps running behind it.
+        // retires it is coverage: the sweep just above advances on every poll
+        // that lands here, and once one reaches the tail both this branch and
+        // that sweep stop running from polls — the bounded repair keeps going
+        // on the coordinator tick instead.
         collect_oldest_first(store, prefix, scan, &mut out, &mut seen, &mut scanned).await?;
     }
     Ok(out)

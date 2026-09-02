@@ -8,14 +8,16 @@
 //! Either way the job is stranded: the listing walk IS the index, so an
 //! unindexed queued job is never claimed while it still reports `queued`.
 //!
-//! This module fixes that continuously. [`backfill_priority_markers`] is
-//! driven from the coordinator tick by
-//! [`crate::queue::reaper::reap_expired_leases`], and from
-//! [`super::listing::list_claimable`] while the fallback is still live. It is
-//! resumable via a queue_priority/.migration.json sentinel recording
-//! (cursor, done, coverage). Each call processes at most `batch` blobs, to
-//! fit comfortably inside a Cloud Function 60s tick, and resumes past the
-//! recorded cursor.
+//! This module fixes that continuously. The standing bounded repair,
+//! [`backfill_priority_markers`], is driven from the coordinator tick by
+//! [`crate::queue::reaper::reap_expired_leases`]. It is also driven from
+//! [`super::listing::list_claimable`], but ONLY while the whole-prefix
+//! fallback is still live: a poll asks the cheap [`has_swept`] first, so a
+//! store whose index is already covered pays one small read per poll rather
+//! than a sweep. It is resumable via a queue_priority/.migration.json
+//! sentinel recording (cursor, done, coverage). Each call processes at most
+//! `batch` blobs, to fit comfortably inside a Cloud Function 60s tick, and
+//! resumes past the recorded cursor.
 //!
 //! The cursor WRAPS: reaching the end of queue/ rewinds it to the head so
 //! the next call sweeps again. `done` no longer terminates the pass — it
@@ -103,6 +105,18 @@ async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
     })
 }
 
+/// Whether some sweep has covered `queue/` end-to-end under the current
+/// coverage. One small download, and the only question
+/// [`super::listing::list_claimable`] needs answered per poll.
+///
+/// Deliberately separate from [`backfill_priority_markers`]: coverage is
+/// cheap to read, the repair that establishes it is not, and conflating them
+/// made every poll pay a sweep. A sentinel from the narrower priority>0 era
+/// reads as not-swept, exactly as the walk requires.
+pub async fn has_swept(store: &JobStorage) -> Result<bool, StorageError> {
+    Ok(read_sentinel(store).await?.done)
+}
+
 /// Python `_write_sentinel` (`json.dumps({"cursor": ..., "done": ...})`
 /// with default separators), stamped with the coverage its `done` attests to.
 async fn write_sentinel(store: &JobStorage, cursor: &str, done: bool) -> Result<(), StorageError> {
@@ -135,10 +149,14 @@ async fn existing_marker_names(store: &JobStorage) -> Result<HashSet<String>, St
     Ok(out)
 }
 
-/// Scan queue/ in bounded batches and write any missing marker. Returns
-/// `true` once the index has been swept end-to-end at least once, which is
-/// what lets [`super::listing::list_claimable`] stop paying for the
-/// whole-prefix fallback.
+/// Scan queue/ in bounded batches and write any missing marker. Returns the
+/// same coverage answer [`has_swept`] reads, so a caller that already ran a
+/// sweep needs no second read.
+///
+/// NOT cheap: two whole-prefix name listings plus up to `batch` job
+/// documents. Callers that only need to know whether the index is covered
+/// MUST ask [`has_swept`]; this is the repair, and it belongs on a tick, not
+/// on a scheduler poll.
 ///
 /// This is the bounded repair that keeps an unindexed job reachable, and it
 /// is the ONLY one: the widening from priority>0 to every queued job extends
