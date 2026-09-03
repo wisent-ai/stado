@@ -76,6 +76,24 @@ pub struct ReaperSummary {
     /// least once, which is what lets the listing walk drop its
     /// whole-prefix fallback. Reported, not acted on, here.
     pub index_swept: bool,
+    /// Queued jobs whose durable transition could not be finished, so the
+    /// sweep stepped over them instead of failing. Each one is logged by id
+    /// with the storage refusal that named it.
+    ///
+    /// This counter exists because the alternative was measured: on
+    /// 2026-09-03 one job document in `queue/` disagreed with its own
+    /// recorded `completed` transition, and because the recovery call in
+    /// [`clear_silent_assignments`] propagated with `?`, that single
+    /// object aborted the ENTIRE agent tick — `agent loop failed:
+    /// queue/job-cd5dfcf78b6727f30fec0c87.json does not match completed
+    /// transition …; restarting after bounded delay`, once every ten
+    /// seconds for hours. The agent still published capacity, so every
+    /// reader saw a live host `claiming: yes` with `blockers: none` and
+    /// `0 free slot(s) of 1 declared`, while nothing was ever claimed: the
+    /// slot was not occupied, the loop that fills it never reached the
+    /// claim. A per-record fault with a whole-host blast radius, reported
+    /// as capacity.
+    pub stuck_transitions: usize,
 }
 
 /// Seconds since `status/<job_id>/heartbeat` was last written, or `None`
@@ -261,7 +279,20 @@ async fn clear_silent_assignments(
 ) -> Result<(), StorageError> {
     let live = capacity::read_consumer_capacity(store).await?;
     for candidate in store.list_jobs("queue", 0).await? {
-        store.recover_job_transition(&candidate.job_id).await?;
+        // One unfinishable transition is a fact about ONE job, and it used
+        // to end the sweep for every other job on the host. The blast
+        // radius belongs to the record that caused it: name the job, count
+        // it, keep sweeping. A caller that wants the fleet to stop on this
+        // reads `ReaperSummary::stuck_transitions`, which is a different
+        // question from "did the tick run".
+        if let Err(error) = store.recover_job_transition(&candidate.job_id).await {
+            summary.stuck_transitions += 1;
+            log(&format!(
+                "{}: durable transition could not be finished, stepping over it: {error}",
+                candidate.job_id
+            ));
+            continue;
+        }
         let Some(current) = store.read_job("queue", &candidate.job_id).await? else {
             continue;
         };
