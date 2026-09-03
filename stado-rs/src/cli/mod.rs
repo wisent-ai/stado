@@ -1913,6 +1913,16 @@ enum HostCommands {
         /// Local acquisition-scope catalog file to deliver and register.
         source: String,
     },
+    /// Deliver the checked-in Weles receipt-trust renderer to TARGET and print
+    /// the public five-field Spis receipt-trust document it builds from
+    /// TARGET's own live Skarbiec. The admission authority's private half
+    /// never leaves the host.
+    #[command(name = "render-spis-admission-trust")]
+    RenderSpisAdmissionTrust {
+        target: String,
+        /// Local renderer to deliver and run.
+        source: String,
+    },
     /// Report TARGET's stado-managed binaries, forward markers and loopback
     /// listeners, and whether each marker still matches a live listener.
     Inventory {
@@ -2900,6 +2910,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::cron(&target, prune.as_deref(), restore.as_deref(), apply, json).await,
             HostCommands::SyncAcquisitionScopes { target, source } => {
                 host::sync_acquisition_scopes(&target, &source).await
+            }
+            HostCommands::RenderSpisAdmissionTrust { target, source } => {
+                host::render_spis_admission_trust(&target, &source).await
             }
             HostCommands::RetagVaultItem {
                 target,

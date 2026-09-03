@@ -4034,6 +4034,341 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
     Ok(())
 }
 
+/// The schema both halves of the Spis/Weles bridge require of the public
+/// receipt-trust document.
+const SPIS_TRUST_SCHEMA: &str = "wisent.spis-weles-receipt-trust.v1";
+
+/// The one browser action the Spis admission binding grants.
+const SPIS_TRUST_ACTION: &str = "generic_browser_task";
+
+/// Exactly the fields the document carries. A sixth would be refused by the
+/// consumer's `deny_unknown_fields` deserializer, so it is refused here first.
+const SPIS_TRUST_FIELDS: &[&str] = &[
+    "schema",
+    "organizationId",
+    "allowedAction",
+    "receiptKeys",
+    "keySetVersion",
+];
+
+/// The managed Skarbiec units whose own environment names the vault the
+/// daemon actually serves, at the system paths the fleet installs them.
+///
+/// Which file is live is a property of the running daemon, not a default: a
+/// host carries several vault files and `skarbiec` without
+/// `SKARBIEC_VAULT_FILE` picks one that may hold nothing. Reading the unit is
+/// how that question gets answered against the host rather than against a
+/// guess.
+const SKARBIEC_UNIT_PLISTS: &[&str] = &[
+    "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
+    "/Library/LaunchAgents/com.wisent.always-on.skarbiec.plist",
+];
+
+/// The environment the Skarbiec daemon on this host is actually started with.
+///
+/// The vault is only the half that decides WHICH secrets answer. Skarbiec
+/// decrypts by spawning GnuPG, so `GNUPGHOME` decides WHETHER any of them do,
+/// and a read that inherits the vault without the keyring fails on the first
+/// field with GnuPG's own "No such file or directory". Both come from the same
+/// unit, so both are taken from it rather than one being read and the other
+/// assumed.
+async fn live_skarbiec_environment(
+    resolved: &ComputeTarget,
+    home: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<Vec<(String, String)>, String> {
+    use crate::deploy::host_channel;
+
+    let mut units: Vec<String> = SKARBIEC_UNIT_PLISTS
+        .iter()
+        .map(|path| (*path).to_string())
+        .collect();
+    units.push(format!(
+        "{home}/Library/LaunchAgents/com.wisent.skarbiec.plist"
+    ));
+
+    let extract = |unit: &str, key: &'static str| {
+        let unit = unit.to_string();
+        async move {
+            let read = host_channel::run_program(
+                resolved,
+                &[
+                    "/usr/bin/plutil",
+                    "-extract",
+                    &format!("EnvironmentVariables.{key}"),
+                    "raw",
+                    "-o",
+                    "-",
+                    unit.as_str(),
+                ],
+                runner,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            Ok::<Option<String>, String>(if read.ok() {
+                let declared = read.stdout.trim();
+                (!declared.is_empty()).then(|| declared.to_string())
+            } else {
+                None
+            })
+        }
+    };
+
+    for unit in &units {
+        let present = host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(unit)),
+            runner,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        if !present {
+            continue;
+        }
+        // The unit that names a vault is the one serving this host; a unit that
+        // does not is not a Skarbiec this read may borrow an environment from.
+        let Some(vault) = extract(unit, "SKARBIEC_VAULT_FILE").await? else {
+            continue;
+        };
+        let mut environment = vec![("SKARBIEC_VAULT_FILE".to_string(), vault)];
+        if let Some(keyring) = extract(unit, "GNUPGHOME").await? {
+            environment.push(("GNUPGHOME".to_string(), keyring));
+        }
+        return Ok(environment);
+    }
+    Err(
+        "no managed Skarbiec unit on this host declares SKARBIEC_VAULT_FILE, so the live vault \
+         cannot be identified and a read would silently answer from the wrong file"
+            .to_string(),
+    )
+}
+
+/// The public document, checked the way its consumers check it, before it is
+/// allowed off the host.
+fn judge_spis_trust(text: &str) -> Result<(), String> {
+    let document: Value =
+        serde_json::from_str(text).map_err(|_| "the renderer did not emit one JSON document")?;
+    let fields = document
+        .as_object()
+        .ok_or("the rendered receipt trust is not a JSON object")?;
+    if fields.len() != SPIS_TRUST_FIELDS.len()
+        || !SPIS_TRUST_FIELDS.iter().all(|name| fields.contains_key(*name))
+    {
+        return Err(format!(
+            "the rendered receipt trust must carry exactly {}",
+            SPIS_TRUST_FIELDS.join(", ")
+        ));
+    }
+    if fields.get("schema").and_then(Value::as_str) != Some(SPIS_TRUST_SCHEMA) {
+        return Err(format!("the rendered receipt trust schema is not {SPIS_TRUST_SCHEMA}"));
+    }
+    if fields.get("allowedAction").and_then(Value::as_str) != Some(SPIS_TRUST_ACTION) {
+        return Err(format!("the rendered allowedAction is not {SPIS_TRUST_ACTION}"));
+    }
+    let organization = fields
+        .get("organizationId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let uuid_shaped = organization.len() == 36
+        && organization
+            .chars()
+            .enumerate()
+            .all(|(index, character)| match index {
+                8 | 13 | 18 | 23 => character == '-',
+                _ => character.is_ascii_hexdigit(),
+            });
+    if !uuid_shaped {
+        return Err("the rendered organizationId is not a UUID".to_string());
+    }
+    if fields
+        .get("keySetVersion")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
+        return Err("the rendered keySetVersion is empty".to_string());
+    }
+    let keys = fields
+        .get("receiptKeys")
+        .and_then(Value::as_object)
+        .ok_or("the rendered receiptKeys is not an object")?;
+    if keys.is_empty() {
+        return Err("the rendered receiptKeys is empty".to_string());
+    }
+    for (identifier, key) in keys {
+        if identifier.trim().is_empty() {
+            return Err("a rendered receipt key identifier is empty".to_string());
+        }
+        // The verifier hands this string straight to Node's Ed25519 `verify`,
+        // which takes a PEM. A base64 body or a DER blob would be accepted
+        // here and rejected at the first real receipt.
+        match key.as_str() {
+            Some(text) if text.contains("-----BEGIN PUBLIC KEY-----") => {}
+            _ => {
+                return Err(format!(
+                    "receipt key {identifier} is not a PEM public key"
+                ))
+            }
+        }
+    }
+    // A private half in a document destined for a public repository is the one
+    // mistake this command exists to make impossible.
+    if text.contains("PRIVATE KEY") {
+        return Err("the rendered document carries private key material".to_string());
+    }
+    Ok(())
+}
+
+/// `stado host render-spis-admission-trust TARGET SOURCE` — deliver the
+/// checked-in Weles renderer to TARGET and print the public Spis receipt-trust
+/// document it builds there.
+///
+/// The point of doing it this way is what does NOT travel. The admission
+/// authority's private half stays in the vault it was minted into; the
+/// renderer reads the vault on the host that holds it, assembles the
+/// five-field public document, and only that document crosses the channel.
+/// An operator station that renders locally would have to pull the item's
+/// fields to itself first, and the four it needs are public only because the
+/// fifth — which the same read would expose — is not.
+///
+/// Two audited halves and no third way in, the shape
+/// [`sync_acquisition_scopes`] established: the renderer travels through the
+/// [`stream_file`] delivery channel into `$HOME/.stado/files`, owner-only and
+/// checksummed on arrival, and what runs is this command's own fixed argv.
+/// Unlike that command this one reaps what it delivered — the retired helper
+/// channel had a writer and no reaper, and `host provenance` still counts the
+/// scripts it left behind.
+pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(), CmdError> {
+    use crate::deploy::host_channel;
+
+    let metadata = std::fs::symlink_metadata(source)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(CmdError::usage("renderer source must be a regular file"));
+    }
+    let name = catalog_file_name(source)?;
+    let (delivered, _bytes) = deliver_file(target, source, &name).await?;
+
+    let resolved = host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let refused = |detail: String| {
+        CmdError::click(format!(
+            "{}: the renderer reached {delivered} and produced no document: {detail}",
+            resolved.name
+        ))
+    };
+
+    let home = host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    // `deliver_file` reports where the file landed for an operator to read —
+    // with `$HOME` unexpanded, because that is the spelling the delivery
+    // channel used. It is a message, not a path: quoting it for a remote test
+    // asks about a directory literally named `$HOME`. The usable path is the
+    // same one the channel built, composed here against the resolved home, the
+    // way `register_acquisition_scopes` composes the catalog it reads.
+    let installed = format!("{home}/{DELIVERED_FILES_DIR}/{name}");
+    let declared = match live_skarbiec_environment(&resolved, &home, &runner).await {
+        Ok(environment) => environment,
+        Err(detail) => {
+            remove_remote(&resolved, &[installed.as_str()], &runner).await;
+            return Err(refused(detail));
+        }
+    };
+    let vault = declared
+        .iter()
+        .find(|(key, _)| key == "SKARBIEC_VAULT_FILE")
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+
+    // The renderer is a Node program, at the interpreter this fleet's macOS
+    // hosts install; a host that resolves `node` elsewhere answers for itself
+    // rather than being assumed.
+    let brewed = "/opt/homebrew/bin/node";
+    let node = if host_channel::remote_test(&resolved, &format!("-x {brewed}"), &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        brewed.to_string()
+    } else {
+        let looked_up = host_channel::run_command(&resolved, "command -v node", &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let found = looked_up.stdout.trim().to_string();
+        if found.is_empty() {
+            remove_remote(&resolved, &[installed.as_str()], &runner).await;
+            return Err(refused("no Node runtime is installed on this host".to_string()));
+        }
+        found
+    };
+
+    for file in [&skarbiec, &vault, &installed] {
+        let present = host_channel::remote_test(
+            &resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(file)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !present {
+            remove_remote(&resolved, &[installed.as_str()], &runner).await;
+            return Err(refused(format!("required file is missing: {file}")));
+        }
+    }
+
+    // The item id and the field names are the renderer's own compile-time
+    // constants, so nothing that could name a secret field reaches this
+    // command line, and no field VALUE ever does.
+    //
+    // The PATH is explicit for the same reason `register_acquisition_scopes`
+    // sets one: Skarbiec decrypts by spawning GnuPG, and a login shell reached
+    // through the channel does not necessarily carry the Homebrew prefix the
+    // fleet installs it under.
+    let mut assignments = vec![format!(
+        "PATH={}",
+        crate::deploy::shlex_quote("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+    )];
+    for (key, value) in &declared {
+        assignments.push(format!("{key}={}", crate::deploy::shlex_quote(value)));
+    }
+    assignments.push(format!(
+        "SKARBIEC_BIN={}",
+        crate::deploy::shlex_quote(&skarbiec)
+    ));
+    let rendered = host_channel::run_command(
+        &resolved,
+        &format!(
+            "{} {} {}",
+            assignments.join(" "),
+            crate::deploy::shlex_quote(&node),
+            crate::deploy::shlex_quote(&installed),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    remove_remote(&resolved, &[installed.as_str()], &runner).await;
+    if !rendered.ok() {
+        return Err(refused(host_channel::last_error_line(
+            &rendered,
+            "the renderer refused",
+        )));
+    }
+    judge_spis_trust(&rendered.stdout).map_err(refused)?;
+
+    // The host's own bytes, verbatim: this document is committed to a public
+    // repository and compared byte-for-byte at activation, so re-serializing
+    // it here would be this command quietly authoring it.
+    print!("{}", rendered.stdout);
+    if !rendered.stdout.ends_with('\n') {
+        println!();
+    }
+    Ok(())
+}
+
 async fn transfer_secret(
     target: &str,
     name: &str,
