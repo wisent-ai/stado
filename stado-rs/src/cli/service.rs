@@ -6472,34 +6472,65 @@ async fn follow_current(
     directory: &str,
     runner: &crate::deploy::Runner,
 ) -> Result<bool, CmdError> {
+    // What the unit file on the host actually says today, always read, because
+    // the declaration being right is not evidence that the file is. Those two
+    // drifted apart on 2026-09-03 -- the declaration named the package program
+    // and the file said `stado coordinator coordinator` -- and an earlier
+    // version of this function returned here without looking, because the
+    // DECLARED path was already on `current` and there was seemingly nothing
+    // to repoint. Nothing else in the deployment path compares the two, so
+    // that file would have sat there until the next reload.
+    let report = service::show_service(target, declared, runner)
+        .await
+        .map_err(click)?;
+    // The summary is `<program> <args...>`, then ` (current -> ...)`.
+    let rendered = report
+        .detail
+        .trim()
+        .split(" (current ->")
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     // A declaration that renders the unit states its program on its own. Only
     // a declaration that merely points at a hand-installed plist has none, and
-    // then the rendered summary is the only source there is -- so it is read
-    // for its path alone, up to the first space, rather than for a filename
-    // that would carry the arguments with it.
-    let report;
+    // then the rendered summary is the only source there is -- read for its
+    // path alone rather than for a filename that would carry the arguments
+    // with it.
     let program = if declared.program.trim().is_empty() {
-        report = service::show_service(target, declared, runner)
-            .await
-            .map_err(click)?;
-        report
-            .detail
-            .trim()
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
+        rendered.split_whitespace().next().unwrap_or_default()
     } else {
         declared.program.trim()
     };
     let marker = format!("/services/{directory}/");
+    let pinned_to_a_version = match program.split_once(&marker) {
+        Some((_, rest)) => match rest.split_once('/') {
+            Some((segment, _)) => segment != "current",
+            None => false,
+        },
+        None => true,
+    };
+    // The file agrees with the declaration word for word and the declaration
+    // is already on `current`: nothing to write.
+    let declared_argv = if declared.program.trim().is_empty() {
+        String::new()
+    } else {
+        let mut words = vec![program.to_string()];
+        words.extend(declared.args.iter().cloned());
+        words.join(" ")
+    };
+    if !pinned_to_a_version && (declared_argv.is_empty() || declared_argv == rendered) {
+        return Ok(false);
+    }
     let wanted = if let Some((root, rest)) = program.split_once(&marker) {
         let Some((segment, tail)) = rest.split_once('/') else {
             return Ok(false);
         };
         if segment == "current" {
-            return Ok(false);
+            program.to_string()
+        } else {
+            format!("{root}{marker}current/{tail}")
         }
-        format!("{root}{marker}current/{tail}")
     } else {
         let executable = std::path::Path::new(program)
             .file_name()
@@ -6585,7 +6616,24 @@ restore_and_fail() {
 ' "$1" >&2
   exit 1
 }
-$sudo_prefix /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $wanted" "$unit_path"   || $sudo_prefix /usr/libexec/PlistBuddy -c "Set :Program $wanted" "$unit_path"   || restore_and_fail "could not set the program on $unit_path"
+if [ "${compare_argv:-0}" = "1" ]; then
+  # The whole vector is rewritten from the declaration, not just its first
+  # element. Setting element zero alone is what let a duplicated subcommand
+  # survive a repoint: the program was corrected in place while the stale
+  # extra word sat behind it, and the file stayed unrunnable.
+  $sudo_prefix /usr/libexec/PlistBuddy -c "Delete :ProgramArguments" "$unit_path" >/dev/null 2>&1 || true
+  $sudo_prefix /usr/libexec/PlistBuddy -c "Add :ProgramArguments array" "$unit_path"     || restore_and_fail "could not create ProgramArguments on $unit_path"
+  $sudo_prefix /usr/libexec/PlistBuddy -c "Add :ProgramArguments: string $wanted" "$unit_path"     || restore_and_fail "could not set the program on $unit_path"
+  if [ -n "${expected_args:-}" ]; then
+    printf '%s\n' "$expected_args" | while IFS= read -r word; do
+      [ -n "$word" ] || continue
+      $sudo_prefix /usr/libexec/PlistBuddy -c "Add :ProgramArguments: string $word" "$unit_path" || exit 1
+    done || restore_and_fail "could not set the declared arguments on $unit_path"
+  fi
+  $sudo_prefix /usr/libexec/PlistBuddy -c "Delete :Program" "$unit_path" >/dev/null 2>&1 || true
+else
+  $sudo_prefix /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $wanted" "$unit_path"     || $sudo_prefix /usr/libexec/PlistBuddy -c "Set :Program $wanted" "$unit_path"     || restore_and_fail "could not set the program on $unit_path"
+fi
 rendered="$($sudo_prefix /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' "$unit_path" 2>/dev/null | /usr/bin/sed -e '1d' -e '$d' -e 's/^ *//' | /usr/bin/grep -v '^$')"
 [ -n "$rendered" ] || rendered="$($sudo_prefix /usr/libexec/PlistBuddy -c 'Print :Program' "$unit_path" 2>/dev/null)"
 program="$(printf '%s
