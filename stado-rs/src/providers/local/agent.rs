@@ -868,6 +868,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     if disk_low_bytes.is_some() {
         log_fn("init: loaded validated disk low watermark from janitor state");
     }
+    // The janitor owns its own cadence from here. It is still invoked at the
+    // tick's poll interval -- the cleanup engine's own lock and policy decide
+    // what a pass does -- but off the critical path, so a long pass delays only
+    // the next pass and never a capacity broadcast. Held in scope for the
+    // agent's lifetime: dropping the handle aborts the pass loop, so a release
+    // handoff does not leave a janitor behind.
+    let janitor_reports = crate::providers::local::agent_janitor::JanitorReports::new();
+    let _janitor = janitor_reports.spawn_janitor(
+        std::time::Duration::from_secs(crate::constants::POLL_INTERVAL_S),
+        |active_slots| async move {
+            disk_cleanup::run_cleanup_once(
+                active_slots,
+                false,
+                disk_cleanup::CleanupWriter::AgentTick,
+                &mut |msg: &str| agent_log(msg),
+            )
+            .await
+        },
+    );
     loop {
         // Phase breadcrumbs for the 40GB a2-highgpu-1g first-iter hang.
         log_fn("loop: iter-start");
@@ -927,19 +946,27 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 return Err(anyhow::anyhow!(detail));
             }
         }
-        // The janitor's bounded cleanup pass (Python `run_cleanup_once`,
-        // wrapped there in try/except BaseException — the Rust port folds
-        // every failure into the returned report by construction).
-        let cleanup_report = disk_cleanup::run_cleanup_once(
-            slots.len() as i64,
-            false,
-            disk_cleanup::CleanupWriter::AgentTick,
-            log_fn,
-        )
-        .await;
-        agent_diag.insert("disk_cleanup".into(), cleanup_report.clone());
-        if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
-            disk_low_bytes = Some(reported_low);
+        // The janitor's bounded cleanup pass runs on its own task
+        // ([`super::agent_janitor`]); this tick only reads passes that have
+        // already finished. Awaiting the pass here is what made a release
+        // builder invisible: a 13.6-minute `healthy_noop` pass held the
+        // capacity publication far past the 180s staleness cutoff, so
+        // `release submit` refused a healthy, correctly declared builder.
+        // Publication must happen at the heartbeat interval whatever the
+        // janitor is doing, so nothing on this line may ever wait for it.
+        janitor_reports.set_active_slots(slots.len() as i64);
+        if let Some(cleanup_report) = janitor_reports.latest() {
+            if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
+                disk_low_bytes = Some(reported_low);
+            }
+            agent_diag.insert("disk_cleanup".into(), cleanup_report);
+        } else {
+            // No pass has completed yet. Say so rather than leaving the key
+            // absent, which reads identically to a wedged janitor.
+            agent_diag.insert(
+                "disk_cleanup".into(),
+                serde_json::json!({"outcome": "no_pass_completed_yet"}),
+            );
         }
         // Admission reads the canonical declaration directly as well as the
         // janitor report. Cleanup deliberately uses a cross-process lock; a

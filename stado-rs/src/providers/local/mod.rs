@@ -10,6 +10,7 @@
 //! executor.
 
 pub mod agent;
+pub mod agent_janitor;
 pub mod azure_self;
 pub mod disk_cleanup;
 pub mod disk_gate;

@@ -5769,8 +5769,66 @@ pub fn classify_image(
     Some(ImageState::Replaced { running, installed })
 }
 
-/// Managed units on one host whose live process is executing an image that is
-/// not the file their `ProgramArguments` name.
+/// One managed unit's image, as read on the machine holding its process —
+/// including the units that turned out to be fine.
+///
+/// Two callers need this and they must never disagree: `registry doctor`
+/// reports the units that are stale, and `service refresh-image` refuses to
+/// act on a unit that is not. A refusal has to name the identity it found, so
+/// the clean answer is a value here rather than an absence, and the finding is
+/// derived from it by [`UnitImageObservation::finding`] instead of being
+/// produced by a second pass that could drift from the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitImageObservation {
+    pub host: String,
+    /// launchd label. Empty on the observation that covers a whole host.
+    pub unit: String,
+    pub unit_path: String,
+    /// `ProgramArguments[0]`: the file the unit says it starts.
+    pub program: String,
+    pub pid: Option<u32>,
+    pub process_age_seconds: Option<i64>,
+    pub installed_age_seconds: Option<i64>,
+    /// The image the live process is executing, when it was read.
+    pub running: Option<ImageIdentity>,
+    /// The file the unit declares, as it stands now.
+    pub installed: Option<ImageIdentity>,
+    /// `None` when the process is executing the file the unit declares, or
+    /// when the replacement is still inside [`IMAGE_SETTLE_SECONDS`].
+    pub state: Option<ImageState>,
+}
+
+impl UnitImageObservation {
+    /// The `registry doctor` row for this observation, or `None` when there is
+    /// nothing to report.
+    pub fn finding(&self) -> Option<StaleUnitImage> {
+        Some(StaleUnitImage {
+            host: self.host.clone(),
+            unit: self.unit.clone(),
+            unit_path: self.unit_path.clone(),
+            program: self.program.clone(),
+            pid: self.pid,
+            process_age_seconds: self.process_age_seconds,
+            installed_age_seconds: self.installed_age_seconds,
+            state: self.state.clone()?,
+        })
+    }
+
+    /// Whether the running image and the declared file are the same file.
+    ///
+    /// `None` while either identity is unread, which is the answer this whole
+    /// module exists to keep apart from `true`.
+    pub fn agrees(&self) -> Option<bool> {
+        Some(
+            self.running
+                .as_ref()?
+                .is_same_file(self.installed.as_ref()?),
+        )
+    }
+}
+
+/// Every managed unit on one host with the image its live process is
+/// executing.
 ///
 /// LOCAL ONLY, and the signature says so. Which image a pid is executing is a
 /// question only the kernel holding that pid can answer: nothing in the store
@@ -5778,10 +5836,10 @@ pub fn classify_image(
 /// [`ManagedService`] records a path rather than an identity. So `local_units`
 /// is the name of the host this process is running on, exactly as
 /// [`unreachable_product_environments`] uses it, and every other host gets one
-/// row saying its units were not measured. That row is deliberate: the state
-/// this check exists to remove is an unread one rendered as passing, and a
-/// remote host silently omitted would be that same defect wearing this check's
-/// name.
+/// observation saying its units were not measured. That row is deliberate: the
+/// state this check exists to remove is an unread one rendered as passing, and
+/// a remote host silently omitted would be that same defect wearing this
+/// check's name.
 ///
 /// A unit with no matching process yields nothing. That is not a silence but
 /// the honest answer — a job that is loaded and not running holds no image,
@@ -5789,23 +5847,32 @@ pub fn classify_image(
 /// joined on the WHOLE argument vector rather than on `argv[0]`, because every
 /// stado unit on a host runs the same binary and the subcommand is the entire
 /// difference between them.
-pub fn units_running_replaced_images(
+pub fn observe_unit_images(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
-) -> Vec<StaleUnitImage> {
-    let whole_host = |reason: String| StaleUnitImage {
+) -> Vec<UnitImageObservation> {
+    let blank = |unit: &str, unit_path: &str, state: Option<ImageState>| UnitImageObservation {
         host: target.name.clone(),
-        unit: String::new(),
-        unit_path: String::new(),
+        unit: unit.to_string(),
+        unit_path: unit_path.to_string(),
         program: String::new(),
         pid: None,
         process_age_seconds: None,
         installed_age_seconds: None,
-        state: ImageState::Unread {
-            subject: format!("the executing image of every unit on {}", target.name),
-            reason,
-        },
+        running: None,
+        installed: None,
+        state,
+    };
+    let whole_host = |reason: String| {
+        blank(
+            "",
+            "",
+            Some(ImageState::Unread {
+                subject: format!("the executing image of every unit on {}", target.name),
+                reason,
+            }),
+        )
     };
     if local_units != Some(target.name.as_str()) {
         let declared = declared_services(target).len();
@@ -5834,18 +5901,15 @@ pub fn units_running_replaced_images(
 
     // One pass over the unit files, then one image read for every pid they
     // name.
-    let mut rows: Vec<StaleUnitImage> = Vec::new();
+    let mut rows: Vec<UnitImageObservation> = Vec::new();
     let mut pending: Vec<(String, String, String, u32, Option<i64>)> = Vec::new();
     for (label, unit_path) in local_launchd_units(target, &home) {
-        let unread = |subject: String, reason: String| StaleUnitImage {
-            host: target.name.clone(),
-            unit: label.clone(),
-            unit_path: unit_path.clone(),
-            program: String::new(),
-            pid: None,
-            process_age_seconds: None,
-            installed_age_seconds: None,
-            state: ImageState::Unread { subject, reason },
+        let unread = |subject: String, reason: String| {
+            blank(
+                &label,
+                &unit_path,
+                Some(ImageState::Unread { subject, reason }),
+            )
         };
         let Some(unit) = local_unit_file(&unit_path, KIND_LAUNCHD) else {
             rows.push(unread(
@@ -5891,48 +5955,110 @@ pub fn units_running_replaced_images(
     };
 
     for (label, unit_path, program, pid, age) in pending {
-        let render = |state: ImageState, installed_age: Option<i64>| StaleUnitImage {
+        let mut row = UnitImageObservation {
             host: target.name.clone(),
             unit: label.clone(),
             unit_path: unit_path.clone(),
             program: program.clone(),
             pid: Some(pid),
             process_age_seconds: age,
-            installed_age_seconds: installed_age,
-            state,
+            installed_age_seconds: None,
+            running: images.get(&pid).cloned(),
+            installed: None,
+            state: None,
         };
         let (installed, written_epoch) = match installed_image(Path::new(&program)) {
             Ok(read) => read,
             Err(reason) => {
-                rows.push(render(
-                    ImageState::Unread {
-                        subject: format!("{label}'s declared program {program}"),
-                        reason,
-                    },
-                    None,
-                ));
+                row.state = Some(ImageState::Unread {
+                    subject: format!("{label}'s declared program {program}"),
+                    reason,
+                });
+                rows.push(row);
                 continue;
             }
         };
         let installed_age = now_epoch - written_epoch;
-        let Some(running) = images.get(&pid) else {
-            rows.push(render(
-                ImageState::Unread {
-                    subject: format!("the image pid {pid} is executing for {label}"),
-                    reason: "no text mapping was readable for that pid: it exited between the \
-                             process listing and this read, or it belongs to another account"
-                        .to_string(),
-                },
-                Some(installed_age),
-            ));
+        row.installed_age_seconds = Some(installed_age);
+        row.installed = Some(installed.clone());
+        let Some(running) = row.running.clone() else {
+            row.state = Some(ImageState::Unread {
+                subject: format!("the image pid {pid} is executing for {label}"),
+                reason: "no text mapping was readable for that pid: it exited between the \
+                         process listing and this read, or it belongs to another account"
+                    .to_string(),
+            });
+            rows.push(row);
             continue;
         };
-        if let Some(state) = classify_image(running, &installed, installed_age) {
-            rows.push(render(state, Some(installed_age)));
-        }
+        row.state = classify_image(&running, &installed, installed_age);
+        rows.push(row);
     }
     rows.sort_by(|left, right| left.unit.cmp(&right.unit).then(left.pid.cmp(&right.pid)));
     rows
+}
+
+/// Managed units on one host whose live process is executing an image that is
+/// not the file their `ProgramArguments` name.
+///
+/// The `registry doctor` view of [`observe_unit_images`]: the same pass, with
+/// the units that are fine dropped.
+pub fn units_running_replaced_images(
+    target: &ComputeTarget,
+    local_units: Option<&str>,
+    now_epoch: i64,
+) -> Vec<StaleUnitImage> {
+    observe_unit_images(target, local_units, now_epoch)
+        .iter()
+        .filter_map(UnitImageObservation::finding)
+        .collect()
+}
+
+/// Restart one launchd unit on THIS machine, in place.
+///
+/// `kickstart -k`, the same verb `self_update::recycle_launchd` uses, so the
+/// remediation and the delivery path stop a unit the same way. The domain
+/// comes off the unit-file path through [`UnitDomain`]: a system LaunchDaemon
+/// belongs to `system` and needs root, and a LaunchAgent belongs to a login.
+/// `gui/<uid>` is tried first and `user/<uid>` second, because a host with no
+/// graphical session has only the latter and `recycle_launchd`'s gui-only
+/// spelling is exactly why a unit there can be left behind.
+///
+/// Returns the service target that answered, so a report can name the domain
+/// the restart actually happened in rather than the one it assumed.
+pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, String> {
+    use std::os::unix::fs::MetadataExt;
+    let domain = UnitDomain::from_path(unit_path);
+    if matches!(domain, UnitDomain::Unknown) {
+        return Err(format!(
+            "{unit_path} is in none of launchd's three unit directories, so no domain places it"
+        ));
+    }
+    let candidates: Vec<String> = if domain.requires_privileged_bootstrap() {
+        vec!["system".to_string()]
+    } else {
+        let home = std::env::var_os("HOME").ok_or("this process has no HOME")?;
+        let uid = std::fs::metadata(&home)
+            .map_err(|error| format!("this account's uid is unreadable: {error}"))?
+            .uid();
+        vec![format!("gui/{uid}"), format!("user/{uid}")]
+    };
+    let mut refusals = Vec::new();
+    for domain in candidates {
+        let service = format!("{domain}/{label}");
+        let output = std::process::Command::new("/bin/launchctl")
+            .args(["kickstart", "-k", &service])
+            .output()
+            .map_err(|error| format!("/bin/launchctl did not run: {error}"))?;
+        if output.status.success() {
+            return Ok(service);
+        }
+        refusals.push(format!(
+            "{service}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Err(refusals.join("; "))
 }
 
 // ---------------------------------------------------------------------------
