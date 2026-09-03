@@ -2474,10 +2474,19 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     if findings.is_empty() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
-        "{} divergence(s) between {location} and live host state",
+    // A negative verdict, not a fault: the command ran, read everything it
+    // reads, and answered. Dressed as a `CmdError::click` it was classified
+    // by its own wording, so an operator was told the command failed and we
+    // could not attribute it to anything but their request or credentials
+    // [unknown] — four false claims about a check that worked. The same
+    // silent exit `release status`, `host software`, `resolver status` and
+    // `web route` verdicts use carries the one thing a gate owes its caller:
+    // a non-zero code, and the count beside the two things compared.
+    eprintln!(
+        "{} divergence(s) between {location} and live host state; each is named above",
         findings.len()
-    )))
+    );
+    Err(CmdError::silent(super::CLICK_ERROR_CODE))
 }
 
 // ---------------------------------------------------------------------------
