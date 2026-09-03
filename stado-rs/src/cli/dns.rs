@@ -609,13 +609,18 @@ async fn set(
     Ok(())
 }
 
-async fn remove(
+/// Delete one record from a zone and verify it is gone.
+///
+/// Public for the same reason [`ensure_record`] is: a product's hostname and
+/// an operator's hand-typed record must take the same path through the
+/// registrar, or the whole-zone merge has two implementations again — and the
+/// deleting one is the half that removes records nobody named.
+pub(crate) async fn remove_record(
     name: &str,
     record_type: &str,
     zone: Option<&str>,
     credential: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
+) -> Result<Value, CmdError> {
     let record_type = normalized_type(record_type)?;
     let zone = match zone {
         Some(zone) => Zone::parse(zone)?,
@@ -643,20 +648,32 @@ async fn remove(
             )));
         }
     }
-    let report = json!({
+    Ok(json!({
         "zone": zone.name,
         "name": name,
         "type": record_type,
         "removed": removed,
         "records_after": kept.len(),
-    });
+    }))
+}
+
+async fn remove(
+    name: &str,
+    record_type: &str,
+    zone: Option<&str>,
+    credential: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let report = remove_record(name, record_type, zone, credential).await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
-            "{name} {record_type}: removed {removed} record(s); {} remain in {}",
-            kept.len(),
-            zone.name
+            "{name} {}: removed {} record(s); {} remain in {}",
+            report["type"].as_str().unwrap_or_default(),
+            report["removed"].as_u64().unwrap_or_default(),
+            report["records_after"].as_u64().unwrap_or_default(),
+            report["zone"].as_str().unwrap_or_default(),
         );
     }
     Ok(())
