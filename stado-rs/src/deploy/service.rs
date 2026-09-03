@@ -5867,7 +5867,13 @@ pub fn units_running_replaced_images(
         let declared = unit.arguments.join(" ");
         for (pid, age, argv) in &processes {
             if argv == &declared {
-                pending.push((label.clone(), unit_path.clone(), unit.program.clone(), *pid, *age));
+                pending.push((
+                    label.clone(),
+                    unit_path.clone(),
+                    unit.program.clone(),
+                    *pid,
+                    *age,
+                ));
             }
         }
     }

@@ -2123,11 +2123,9 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         // `self_update::recycle_replaced_units` cycles a unit only inside the
         // invocation that replaced its bytes; an unrelated restart is what
         // ended it.
-        for image in service::units_running_replaced_images(
-            target,
-            local_host.as_deref(),
-            now.timestamp(),
-        ) {
+        for image in
+            service::units_running_replaced_images(target, local_host.as_deref(), now.timestamp())
+        {
             let mut finding = Finding::new(image.kind(), &target.name, image.sentence());
             // The row that reports a whole host unread names no unit, and
             // attaching an empty label to it would let the `missing-plist`
