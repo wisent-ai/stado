@@ -3390,8 +3390,44 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
     Ok(bytes.len() as u64)
 }
 
-/// Every `(version, platform)` coordinate the release channel actually holds
-/// for one product, newest version first.
+/// One `(version, platform)` coordinate the release channel holds, with the
+/// object names it actually carries and when its claim was written.
+///
+/// The names come along because the audit's questions are about the SET, not
+/// about any one object: "is this whole", "is this only a claim", "did two
+/// publishers disagree". They are already in the listing this walk performs,
+/// so carrying them costs nothing and saves the caller a second walk.
+#[derive(Debug, Clone)]
+pub(crate) struct PublishedCoordinate {
+    pub version: String,
+    pub platform: String,
+    /// Every object name directly under the coordinate prefix.
+    pub names: BTreeSet<String>,
+    /// When [`crate::release_control::RELEASE_REVISION_NAME`] was written, as
+    /// the store reports it. `None` when the coordinate has no claim, or when
+    /// the store answered the listing without a timestamp.
+    pub claim_written_at: Option<DateTime<Utc>>,
+}
+
+impl PublishedCoordinate {
+    /// A coordinate that holds its claim and nothing else.
+    ///
+    /// The claim is written create-only BEFORE any artifact, by every
+    /// publisher, so this is the state of a publication that stated which
+    /// build it was and then wrote no bytes. It is not a partial coordinate:
+    /// there is nothing to be short of yet, and `SHA256SUMS` — the object
+    /// that declares what a complete coordinate holds — is exactly what is
+    /// missing, so no object-level audit can say more than "absent".
+    pub fn claim_only(&self) -> bool {
+        self.names.len() == 1
+            && self
+                .names
+                .contains(crate::release_control::RELEASE_REVISION_NAME)
+    }
+}
+
+/// Every coordinate the release channel actually holds for one product,
+/// newest version first.
 ///
 /// Derived from the store's own listing rather than from git tags. A tag is
 /// created before publication and survives one that never completed, so a tag
@@ -3400,18 +3436,26 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
 /// objects of 9 from April until it was found by accident.
 pub(crate) async fn published_release_coordinates(
     product: &str,
-) -> Result<Vec<(String, String)>, CmdError> {
+) -> Result<Vec<PublishedCoordinate>, CmdError> {
     let prefix = format!("{product}/");
-    // Keys, whichever store answers. The authenticated list route when the
-    // object API is configured; the backend's own listing otherwise, so the
-    // audit still runs on a host holding its releases locally rather than
-    // reporting that it could not look.
-    let keys: Vec<String> = match RemoteObjectApi::configured()? {
+    // Keys and their timestamps, whichever store answers. The authenticated
+    // list route when the object API is configured; the backend's own listing
+    // otherwise, so the audit still runs on a host holding its releases
+    // locally rather than reporting that it could not look.
+    let keys: Vec<(String, Option<DateTime<Utc>>)> = match RemoteObjectApi::configured()? {
         Some(remote) => remote
             .list("releases", &prefix)
             .await?
             .into_iter()
-            .filter_map(|entry| entry.get("key").and_then(Value::as_str).map(str::to_string))
+            .filter_map(|entry| {
+                let key = entry.get("key").and_then(Value::as_str)?.to_string();
+                let updated = entry
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+                    .map(|stamp| stamp.with_timezone(&Utc));
+                Some((key, updated))
+            })
             .collect(),
         None => {
             let store = JobStorage::new().await?;
@@ -3424,13 +3468,13 @@ pub(crate) async fn published_release_coordinates(
                 .filter_map(|blob| {
                     crate::object_store::ObjectRef::from_storage_path(&blob.name)
                         .ok()
-                        .map(|object| object.key().to_string())
+                        .map(|object| (object.key().to_string(), blob.updated))
                 })
                 .collect()
         }
     };
-    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
-    for key in keys {
+    let mut seen: BTreeMap<(String, String), PublishedCoordinate> = BTreeMap::new();
+    for (key, updated) in keys {
         let key = key.as_str();
         // Residue from an interrupted multipart upload is not a published
         // object. `stado storage put` stages parts at
@@ -3455,16 +3499,28 @@ pub(crate) async fn published_release_coordinates(
         if parts.len() < 4 || parts[0] != product {
             continue;
         }
-        seen.insert((parts[1].to_string(), parts[2].to_string()));
+        let name = parts[3..].join("/");
+        let entry = seen
+            .entry((parts[1].to_string(), parts[2].to_string()))
+            .or_insert_with(|| PublishedCoordinate {
+                version: parts[1].to_string(),
+                platform: parts[2].to_string(),
+                names: BTreeSet::new(),
+                claim_written_at: None,
+            });
+        if name == crate::release_control::RELEASE_REVISION_NAME {
+            entry.claim_written_at = updated;
+        }
+        entry.names.insert(name);
     }
-    let mut coordinates: Vec<(String, String)> = seen.into_iter().collect();
+    let mut coordinates: Vec<PublishedCoordinate> = seen.into_values().collect();
     coordinates.sort_by(|left, right| {
-        if left.0 == right.0 {
-            return left.1.cmp(&right.1);
+        if left.version == right.version {
+            return left.platform.cmp(&right.platform);
         }
         // `version_newer(a, b)` is "b is newer than a", so this asks whether
         // `left` is the newer version and puts it first.
-        if crate::release::version_newer(&right.0, &left.0) {
+        if crate::release::version_newer(&right.version, &left.version) {
             std::cmp::Ordering::Less
         } else {
             std::cmp::Ordering::Greater

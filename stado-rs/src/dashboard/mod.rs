@@ -1282,27 +1282,29 @@ impl Dashboard {
             // client resolves its credential from the same routing function.
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
             if object.namespace() == "releases" && !immutable {
-                Ok(false)
+                Ok(Some("release_write_must_be_create_only"))
             } else {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(
-                self,
-                request,
-                object.namespace(),
-                object.key(),
-                false,
-                "put",
+            object_decision(
+                authorize_object(
+                    self,
+                    request,
+                    object.namespace(),
+                    object.key(),
+                    false,
+                    "put",
+                )
+                .await,
             )
-            .await
         };
         match authorized {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(None) => {}
+            Ok(Some(reason)) => {
                 return Some(send_json(
                     http_status("401"),
-                    &json!({"error": "unauthorized or non-immutable release write"}),
+                    &json!({"error": "unauthorized", "reason": reason}),
                 ))
             }
             Err(()) => {
@@ -1434,12 +1436,17 @@ impl Dashboard {
                 let listing = list && namespace != "system";
                 authorize_release(self, request, &policy_key, listing).await
             } else {
-                authorize_object(self, request, &namespace, &key_or_prefix, list, action).await
+                object_decision(
+                    authorize_object(self, request, &namespace, &key_or_prefix, list, action).await,
+                )
             };
             match authorized {
-                Ok(true) => {}
-                Ok(false) => {
-                    return send_json(http_status("401"), &json!({"error": "unauthorized"}))
+                Ok(None) => {}
+                Ok(Some(reason)) => {
+                    return send_json(
+                        http_status("401"),
+                        &json!({"error": "unauthorized", "reason": reason}),
+                    )
                 }
                 Err(()) => {
                     return send_json(
@@ -2273,29 +2280,26 @@ impl Dashboard {
             crate::object_store::release_policy_key(object.namespace(), object.key())
         {
             if object.namespace() == "releases" && !payload.if_absent {
-                Ok(false)
+                Ok(Some("release_write_must_be_create_only"))
             } else {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(
-                self,
-                request,
-                object.namespace(),
-                object.key(),
-                false,
-                "put",
+            object_decision(
+                authorize_object(
+                    self,
+                    request,
+                    object.namespace(),
+                    object.key(),
+                    false,
+                    "put",
+                )
+                .await,
             )
-            .await
         };
         match authorized {
-            Ok(true) => {}
-            Ok(false) => {
-                return object_compose_error(
-                    http_status("401"),
-                    "unauthorized or non-immutable release write",
-                )
-            }
+            Ok(None) => {}
+            Ok(Some(reason)) => return object_compose_error(http_status("401"), reason),
             Err(()) => {
                 return object_compose_error(http_status("503"), "object authorization unavailable")
             }
@@ -2639,27 +2643,29 @@ impl Dashboard {
             // client resolves its credential from the same routing function.
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
             if object.namespace() == "releases" && !immutable {
-                Ok(false)
+                Ok(Some("release_write_must_be_create_only"))
             } else {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(
-                self,
-                request,
-                object.namespace(),
-                object.key(),
-                false,
-                "put",
+            object_decision(
+                authorize_object(
+                    self,
+                    request,
+                    object.namespace(),
+                    object.key(),
+                    false,
+                    "put",
+                )
+                .await,
             )
-            .await
         };
         match authorized {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(None) => {}
+            Ok(Some(reason)) => {
                 return send_json(
                     http_status("401"),
-                    &json!({"error": "unauthorized or non-immutable release write"}),
+                    &json!({"error": "unauthorized", "reason": reason}),
                 )
             }
             Err(()) => {
@@ -2705,19 +2711,26 @@ impl Dashboard {
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
-            authorize_object(
-                self,
-                request,
-                object.namespace(),
-                object.key(),
-                false,
-                "delete",
+            object_decision(
+                authorize_object(
+                    self,
+                    request,
+                    object.namespace(),
+                    object.key(),
+                    false,
+                    "delete",
+                )
+                .await,
             )
-            .await
         };
         match authorized {
-            Ok(true) => {}
-            Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Ok(None) => {}
+            Ok(Some(reason)) => {
+                return send_json(
+                    http_status("401"),
+                    &json!({"error": "unauthorized", "reason": reason}),
+                )
+            }
             Err(()) => {
                 return send_json(
                     http_status("503"),
@@ -3620,15 +3633,67 @@ async fn authorize_object(
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
 }
 
+/// Why one release request was refused, as a stable code an operator can act
+/// on.
+///
+/// A bare `{"error":"unauthorized"}` covers three faults that need opposite
+/// repairs — no publisher declared for the key, no bearer presented at all,
+/// and a bearer that does not match the publisher item — and on 2026-09-03 it
+/// cost most of a day. `stado storage stat` answered it for
+/// `stado://system/release-catalog/<product>.json` for every product,
+/// including ones that publish successfully, while the same publisher bearer
+/// authorized `stado://sources/<product>/…` on the same host in the same
+/// second. Nothing on either end said which of the three it was, so every
+/// hypothesis had to be excluded by experiment: the token values, the
+/// publisher declaration on the host, the configuration cache, the token
+/// cache, and the host's own build.
+#[derive(Debug, Clone, Copy)]
+enum ReleaseRefusal {
+    /// `release_api.publishers` declares nothing that covers this key.
+    NoPublisher,
+    /// The request carried no `Authorization: Bearer` at all.
+    NoBearer,
+    /// A bearer was presented and is not the publisher item's token.
+    BearerMismatch,
+}
+
+impl ReleaseRefusal {
+    /// The code the 401 body carries. Stable, because it is what a script and
+    /// a runbook match on.
+    fn code(self) -> &'static str {
+        match self {
+            Self::NoPublisher => "no_publisher_for_key",
+            Self::NoBearer => "no_bearer_presented",
+            Self::BearerMismatch => "bearer_does_not_match_publisher_item",
+        }
+    }
+}
+
+/// The decision one object request reached: `None` authorized, `Some(code)`
+/// refused with a reason, `Err(())` the authority could not be consulted.
+type ObjectDecision = Result<Option<&'static str>, ()>;
+
+/// A plain boolean authorization, given the shape [`ObjectDecision`] wants.
+fn object_decision(authorized: Result<bool, ()>) -> ObjectDecision {
+    authorized.map(|allowed| {
+        if allowed {
+            None
+        } else {
+            Some("object_grant_does_not_cover_key")
+        }
+    })
+}
+
 /// Authenticate one immutable release publisher after resolving the exact
-/// product prefix inside `stado://releases`. The former global object token is
-/// never consulted.
+/// product prefix, and say why when it refuses.
+///
+/// The former global object token is never consulted.
 async fn authorize_release(
     dashboard: &Dashboard,
     request: &Request,
     key_or_prefix: &str,
     list: bool,
-) -> Result<bool, ()> {
+) -> ObjectDecision {
     config::release_api_publishers().map_err(|_| ())?;
     let policy = if list {
         config::release_publisher_for_list(key_or_prefix).map(|(policy, _)| policy)
@@ -3636,12 +3701,47 @@ async fn authorize_release(
         config::release_publisher_for_key(key_or_prefix)
     };
     let Some(policy) = policy else {
-        return Ok(false);
+        // The key, not the bearer: nothing was even looked up to compare
+        // against, and the repair is a `release_api.publishers` entry.
+        tracing::warn!(
+            key = key_or_prefix,
+            list,
+            reason = ReleaseRefusal::NoPublisher.code(),
+            "release request refused: no declared publisher covers this key"
+        );
+        return Ok(Some(ReleaseRefusal::NoPublisher.code()));
     };
     let expected = dashboard.release_token(policy.item()).await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-    Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
+    if supplied.is_empty() {
+        tracing::warn!(
+            key = key_or_prefix,
+            list,
+            item = policy.item(),
+            reason = ReleaseRefusal::NoBearer.code(),
+            "release request refused: no bearer presented for this publisher item"
+        );
+        return Ok(Some(ReleaseRefusal::NoBearer.code()));
+    }
+    if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
+        return Ok(None);
+    }
+    // Lengths only, never a prefix of either value: a bearer is credential
+    // material and a leading fragment of one is still a fragment of one. The
+    // two lengths are enough to separate "a different credential entirely"
+    // from "the same credential with a stray byte", which was the live
+    // question on the day this line was written.
+    tracing::warn!(
+        key = key_or_prefix,
+        list,
+        item = policy.item(),
+        expected_len = expected.len(),
+        supplied_len = supplied.len(),
+        reason = ReleaseRefusal::BearerMismatch.code(),
+        "release request refused: the presented bearer is not this publisher item's token"
+    );
+    Ok(Some(ReleaseRefusal::BearerMismatch.code()))
 }
 
 async fn authorize_service(request: &Request, service: &str, action: &str) -> Result<bool, ()> {
