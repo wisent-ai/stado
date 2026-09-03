@@ -78,6 +78,26 @@ pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STA
 /// worst case is 40 s, inside one [`CAPACITY_HEARTBEAT_INTERVAL_S`].
 pub const AGENT_STORE_READ_TIMEOUT_S: u64 = 20;
 
+/// Ceiling on ONE text object read out of the store.
+///
+/// The timeout above bounds how long a read may wait. It does not bound how
+/// much the read may bring back, and an object body is buffered whole in the
+/// process that asked for it — so an unbounded read is unbounded memory as
+/// well as unbounded time, and a budget that fires afterwards fires too late.
+/// `charless-mac-mini` was measured on 2026-09-03 with 88 MB of free pages,
+/// ~3 GB held by the compressor and 3.1M swap-outs after seven days of
+/// uptime, and the agent's loop is the process performing these reads on that
+/// host every tick.
+///
+/// Sized against what these documents are, not against what a host can
+/// afford: the canonical registry is ~41 KB, a job is a few KB, a capacity
+/// row and the queue-control record are smaller still. 16 MiB is several
+/// hundred times the largest of them, so nothing legitimate is refused, and
+/// a reply declaring more than this is refused before its body is requested.
+/// Software artifacts do not read through here — they are unlimited and go
+/// straight to a file.
+pub const STORE_DOCUMENT_MAX_BYTES: usize = 16 * 1024 * 1024;
+
 /// Per-job heartbeat interval (derived from the 15-min staleness threshold).
 pub const SLOT_HEARTBEAT_INTERVAL_S: u64 = 60;
 

@@ -1547,7 +1547,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         //
         // Re-read every iteration, never cached: `stado queue resume` has
         // to reach a running agent without an operator restarting it.
-        let queue_control = control::read(&store).await?;
+        //
+        // Bounded like every other store read in this tick: the NEXT capacity
+        // publication is behind it, so an unbounded read here takes the host
+        // off the fleet just as surely as one ahead of the publication does.
+        // A lapsed budget claims nothing this tick, which is always the safe
+        // direction -- an agent that skips a claim loses a poll interval; an
+        // agent whose broadcast goes stale loses the fleet's belief that it
+        // exists.
+        let Ok(queue_control) = tokio::time::timeout(store_read_budget, control::read(&store)).await
+        else {
+            log_fn(&format!(
+                "loop: queue-control read exceeded its {}s budget; claiming nothing this tick and \
+                 publishing again",
+                constants::AGENT_STORE_READ_TIMEOUT_S
+            ));
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
+        };
+        let queue_control = queue_control?;
         agent_diag.insert("queue_paused".into(), Value::from(queue_control.paused));
         // Which build is answering for this host. The broadcast carried a
         // capacity verdict, a claim-loop census and a disk report and never the
@@ -1642,37 +1660,60 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // every poll, forever, while its own assigned job sat past the window.
         // The re-read below re-applies the rule to the FRESH document, which
         // is a different fact from the listed snapshot.
-        let listed = store
-            .list_claimable_jobs(
-                "queue",
-                &crate::queue::listing::JobScan {
-                    want: CLAIM_CANDIDATE_WINDOW,
-                    scan_budget: QUEUE_SCAN_BUDGET,
-                    max_gpu_mem_gb: free_vram_gb,
-                    eligible: &|job| {
-                        helpers::job_eligible(
-                            job,
-                            &gpu_type,
-                            total_vram_gb,
-                            kind,
-                            &consumer_id,
-                            slots.len(),
-                            pinned_only,
-                        )
+        //
+        // The listing and the re-reads share ONE budget, because together they
+        // are this tick's single question -- "what may I claim right now" --
+        // and the answer stops being worth the fleet's belief that this host is
+        // alive well before a slow store finishes giving it. A lapsed budget
+        // claims nothing and publishes again.
+        let queued = match tokio::time::timeout(store_read_budget, async {
+            let listed = store
+                .list_claimable_jobs(
+                    "queue",
+                    &crate::queue::listing::JobScan {
+                        want: CLAIM_CANDIDATE_WINDOW,
+                        scan_budget: QUEUE_SCAN_BUDGET,
+                        max_gpu_mem_gb: free_vram_gb,
+                        eligible: &|job| {
+                            helpers::job_eligible(
+                                job,
+                                &gpu_type,
+                                total_vram_gb,
+                                kind,
+                                &consumer_id,
+                                slots.len(),
+                                pinned_only,
+                            )
+                        },
+                        // A claim loop wants reachability and so takes the
+                        // shared rotation: a job past this poll's window is
+                        // reached by a later poll rather than never.
+                        from_head: false,
                     },
-                    // A claim loop wants reachability and so takes the shared
-                    // rotation: a job past this poll's window is reached by a
-                    // later poll rather than never.
-                    from_head: false,
-                },
-            )
-            .await?;
-        let mut queued = Vec::with_capacity(listed.len());
-        for candidate in listed {
-            if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
-                queued.push(job);
+                )
+                .await?;
+            let mut queued = Vec::with_capacity(listed.len());
+            for candidate in listed {
+                if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
+                    queued.push(job);
+                }
             }
-        }
+            Ok::<_, StorageError>(queued)
+        })
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                log_fn(&format!(
+                    "loop: claimable-job read exceeded its {}s budget; claiming nothing this tick \
+                     and publishing again",
+                    constants::AGENT_STORE_READ_TIMEOUT_S
+                ));
+                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+                continue;
+            }
+        };
+        let mut queued = queued;
         queued.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
@@ -1781,9 +1822,23 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             if cap_reached && !(share_now && is_raw_share) {
                 continue;
             }
-            let need = job
-                .gpu_mem_gb
-                .max(estimate_gpu_memory(&cmd, &sizing, &store).await?);
+            // Sizing comes out of the store too. A lapsed budget skips THIS
+            // candidate rather than falling back to the job's declared figure:
+            // the declared figure is the floor, and admitting a job on it when
+            // the measured estimate is unknown is how a host claims work that
+            // does not fit.
+            let Ok(estimated) =
+                tokio::time::timeout(store_read_budget, estimate_gpu_memory(&cmd, &sizing, &store))
+                    .await
+            else {
+                log_fn(&format!(
+                    "loop: VRAM estimate for {} exceeded its {}s budget; not claiming it this tick",
+                    job.job_id,
+                    constants::AGENT_STORE_READ_TIMEOUT_S
+                ));
+                continue;
+            };
+            let need = job.gpu_mem_gb.max(estimated?);
             // Hard VRAM safety buffer: refuse if declared use after admission
             // would leave less than the dynamic VRAM safety buffer. Use live
             // free VRAM, not only slot-declared usage, so external users such
@@ -1811,10 +1866,27 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // child process. Only meaningful when the job actually needs
             // VRAM: on sub-buffer hosts total-buffer goes negative, which
             // would otherwise reject even need==0 (CPU-only) jobs.
-            let mut projected_used = need;
-            for s in &slots {
-                projected_used += helpers::slot_vram(&s.slot, &sizing, &store).await?;
-            }
+            // Same rule for the running slots' projection: one budget for the
+            // whole projection, and an unfinished projection refuses the
+            // candidate instead of admitting it against an incomplete total.
+            let projection = tokio::time::timeout(store_read_budget, async {
+                let mut projected_used = need;
+                for s in &slots {
+                    projected_used += helpers::slot_vram(&s.slot, &sizing, &store).await?;
+                }
+                Ok::<_, StorageError>(projected_used)
+            })
+            .await;
+            let Ok(projected_used) = projection else {
+                log_fn(&format!(
+                    "loop: running-slot VRAM projection exceeded its {}s budget; not claiming {} \
+                     this tick",
+                    constants::AGENT_STORE_READ_TIMEOUT_S,
+                    job.job_id
+                ));
+                continue;
+            };
+            let projected_used = projected_used?;
             if need > 0 && projected_used > total_vram_gb - vram_safety_buffer_gb(total_vram_gb) {
                 diag_vram_rejected += 1;
                 agent_diag.insert(

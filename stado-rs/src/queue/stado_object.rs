@@ -305,12 +305,35 @@ impl StadoObjectBackend {
     /// A declared length is the only thing that can be checked, so it is the
     /// only thing that is: a chunked or otherwise unlengthed response has
     /// nothing to disagree with and passes through exactly as before.
-    async fn whole_body(response: Response, path: &str) -> Result<Vec<u8>, StorageError> {
+    ///
+    /// `limit` is the second thing a declared length is good for. An object
+    /// read is buffered whole, in this process, and `to_vec` holds a second
+    /// copy while it is built, so an unbounded read is unbounded MEMORY and
+    /// not merely unbounded time. A timeout cannot help with that: it fires
+    /// after the bytes are already resident. Callers that read a document
+    /// whose size is part of its contract pass a ceiling, and a response
+    /// declaring more than the ceiling is refused BEFORE the body is
+    /// requested, so the bytes never arrive. Callers that read software
+    /// artifacts pass `None`: those are legitimately large and are written
+    /// straight to a file.
+    async fn whole_body(
+        response: Response,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<u8>, StorageError> {
         let declared = response
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.trim().parse::<usize>().ok());
+        if let (Some(limit), Some(declared)) = (limit, declared) {
+            if declared > limit {
+                return Err(StorageError::Other(format!(
+                    "Stado object API declared {declared} bytes for {path}, over the {limit}-byte \
+                     document ceiling; refused without reading the body"
+                )));
+            }
+        }
         let bytes = response.bytes().await?.to_vec();
         if let Some(declared) = declared {
             if bytes.len() != declared {
@@ -320,7 +343,40 @@ impl StadoObjectBackend {
                 )));
             }
         }
+        // An unlengthed response had nothing to refuse in advance. Name what
+        // arrived rather than handing a document of unknown size to a parser:
+        // the memory is already spent, but the read stops being a silent way
+        // to grow this process without bound.
+        if let Some(limit) = limit {
+            if bytes.len() > limit {
+                return Err(StorageError::Other(format!(
+                    "Stado object API returned {} bytes for {path} with no declared length, over \
+                     the {limit}-byte document ceiling",
+                    bytes.len()
+                )));
+            }
+        }
         Ok(bytes)
+    }
+
+    /// One object read, optionally under a byte ceiling. See
+    /// [`Self::whole_body`] for what the ceiling buys and why a timeout does
+    /// not buy it.
+    async fn download_bytes_limited(
+        &self,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let response =
+            Self::send_through_boundary(self.request(Method::GET, self.object_url(path, &[])?))
+                .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::response_error(response).await);
+        }
+        Ok(Some(Self::whole_body(response, path, limit).await?))
     }
 
     async fn upload(
@@ -447,7 +503,15 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
-        let Some(bytes) = self.download_bytes(path).await? else {
+        // Every text object this store serves is a document: a registry, a
+        // policy, a job, a capacity row, a queue-control record. Their sizes
+        // are part of their contract, so they read under the document
+        // ceiling and a reply that declares more than that never lands in
+        // this process at all.
+        let Some(bytes) = self
+            .download_bytes_limited(path, Some(crate::constants::STORE_DOCUMENT_MAX_BYTES))
+            .await?
+        else {
             return Ok(None);
         };
         String::from_utf8(bytes)
@@ -456,16 +520,9 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let response =
-            Self::send_through_boundary(self.request(Method::GET, self.object_url(path, &[])?))
-                .await?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !response.status().is_success() {
-            return Err(Self::response_error(response).await);
-        }
-        Ok(Some(Self::whole_body(response, path).await?))
+        // Unlimited: this is also the route a software artifact takes on its
+        // way to `download_to_filename`.
+        self.download_bytes_limited(path, None).await
     }
 
     /// One `stado://releases/...` object off the fleet's public release
@@ -537,7 +594,14 @@ impl BlobBackend for StadoObjectBackend {
                 ))
             })?
             .to_string();
-        let bytes = Self::whole_body(response, path).await?;
+        // Same ceiling as the unversioned read: this is the route the
+        // canonical registry and every conditional-write document take.
+        let bytes = Self::whole_body(
+            response,
+            path,
+            Some(crate::constants::STORE_DOCUMENT_MAX_BYTES),
+        )
+        .await?;
         let content = String::from_utf8(bytes)
             .map_err(|error| StorageError::Other(format!("invalid UTF-8 in {path}: {error}")))?;
         Ok(Some(VersionedText { content, version }))
