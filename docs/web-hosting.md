@@ -319,6 +319,58 @@ Nothing removes a Vercel project. A hostname stops being served by Vercel when
 its DNS record stops pointing there, and that record is the last step of
 `stado web route`.
 
+### A redirect is a product with no unit
+
+Five of the fleet's Vercel projects are one rewrite each: `aiwisent.com`,
+`getwisent.com`, `trywisent.com`, `wisentai.com` and `wisentplatform.com` all
+answer `https://wisent-app.com/:path*` and nothing else. Their repositories
+carry a `vercel.json` with a single redirect, no framework and no build. There
+is no application to host, and expressing one as a web product with a port and
+a consumer would mean declaring a unit nobody runs.
+
+So a product may declare a hostname and a target instead:
+
+```console
+stado web declare aiwisent-com \
+  --hostname aiwisent.com \
+  --redirect-to https://wisent-app.com
+stado web route aiwisent-com
+```
+
+`--host`, `--port`, `--consumer`, `--readyz`, `--env`, `--secret` and
+`--database` are refused beside `--redirect-to`, and the configuration parser
+refuses the same combination: a declaration carrying both says two different
+things about what the product is. The edge renders a `redir` block rather than
+a `reverse_proxy`, and the rest of the path is unchanged — the hostname is
+reconciled into the edge, the record is written by `stado dns`, and the
+certificate is ordered for it like any other:
+
+```
+aiwisent.com {
+	redir https://wisent-app.com{uri} 308
+}
+```
+
+`{uri}` carries the path and the query across, which is exactly what the
+Vercel rewrite's `/:path*` did. The status is 308 rather than 301 because 308
+preserves the method and the body: a `POST` to the old hostname arrives at the
+new one as a `POST`, where 301 lets a client turn it into a `GET` and a form
+submission silently becomes a page load. Permanent either way — these
+hostnames are not coming back.
+
+The target must be `https://` with a public host name, no query, no fragment
+and no trailing slash. A redirect Stado publishes on its own edge must not
+send a browser to a hostname it holds no certificate for, a query would
+collide with the appended `{uri}`, and a trailing slash would make every
+redirected path a double slash. A path prefix is allowed:
+`--redirect-to https://wisent-app.com/pricing`.
+
+`stado web deploy` refuses a redirect and says which command publishes it;
+`stado web status` reports it as `kind: redirect` with its target and whether
+its hostname resolves to the edge, rather than asking a host about a unit that
+was never deployable; `stado web remove` retracts the hostname and reports
+`no-unit`.
+
 ## The command sequence
 
 Stand up the edge once for the whole fleet:
