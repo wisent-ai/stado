@@ -25,7 +25,7 @@
 //! released on close), which cannot fail in a way worth logging.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -242,6 +242,27 @@ struct GpuPowerLimitState {
     detail: String,
 }
 
+/// How long between two reads of the host's placement policy file.
+///
+/// The worker re-reads the file itself every 30 seconds
+/// (`CACHE_TTL_MS`, `placement-policy.ts`), so a reconcile slower than that
+/// only delays when a registry edit takes effect, never how long a wrong file
+/// stays in force once corrected. The same 300 the power limit uses: one
+/// number for "how often this agent re-asserts a declaration".
+const PLACEMENT_RECONCILE_INTERVAL_S: u64 = GPU_POWER_RECONCILE_INTERVAL_S;
+
+/// The last placement-policy reconcile, so the pass is skipped while nothing
+/// has changed and the outcome still reaches the capacity diagnostics.
+struct PlacementPolicyState {
+    /// `(enabled, actions)` last written or confirmed — what the worker acts
+    /// on, which is the only part a rewrite would change.
+    desired: (bool, Vec<String>),
+    checked_at: Instant,
+    checked_at_utc: String,
+    ok: bool,
+    detail: String,
+}
+
 async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
     let output = tokio::time::timeout(
         Duration::from_secs(30),
@@ -273,6 +294,144 @@ async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
         return Err("nvidia-smi power query returned no GPUs".to_string());
     }
     Ok(limits)
+}
+
+/// Put this host's registry-declared Weles policy into the file its worker
+/// reads, and report `(detail, (enabled, actions))`.
+///
+/// The document is built by [`crate::cli::placement::policy_document`] — the
+/// same builder `stado host publish-placement-policy` uses, so the bytes an
+/// operator delivers from the coordinator and the bytes this writes are one
+/// shape decided in one place.
+///
+/// Three properties the operator path also holds:
+///
+///   stamped     the generation is read with the document, and a read that
+///               cannot produce one writes nothing. An unstamped policy is the
+///               untraceable file this whole path exists to retire.
+///   atomic      written to a temporary file in the destination directory and
+///               renamed, so a worker reading concurrently sees the whole old
+///               document or the whole new one.
+///   quiet       a file whose entry already carries the declared `enabled` and
+///               actions is left alone. `_source.published_at` moves on every
+///               build, so comparing whole documents would rewrite the file
+///               every pass and hand the worker a fresh mtime for no change.
+async fn reconcile_placement_policy(
+    target: &ComputeTarget,
+) -> Result<(String, (bool, Vec<String>)), String> {
+    let (_, generation) = crate::cli::registry::fetch_versioned_document()
+        .await
+        .map_err(|error| format!("registry generation unavailable: {error}"))?;
+    let policy = crate::cli::placement::policy_document(
+        target,
+        &generation,
+        crate::cli::placement::RECONCILED_BY,
+    )
+    .map_err(|error| error.to_string())?;
+    let desired = crate::cli::placement::policy_effect(&policy);
+
+    // The check `apply_policy` performs remotely, performed here for the same
+    // reason: a policy whose entries name no identity of this machine does not
+    // fail loudly in the worker. Its loader resolves to `enabled: false` and it
+    // declines every row in silence — 29,616 times, the last time this fleet
+    // learned it — so a writer that cannot see itself in the document must
+    // write nothing and say why.
+    let identity =
+        crate::cli::placement::normalize_hostname(&crate::providers::vast::system_hostname());
+    if !names_this_host(&policy, &identity) {
+        return Err(format!(
+            "the registry declares no identity matching {identity:?} for target {}, so the \
+             policy built from it would name every host except this one and the worker would \
+             decline every routed row. Declare {identity:?} in that target's `hostnames`",
+            target.name
+        ));
+    }
+
+    let path = placement_policy_path()?;
+    let held = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(held) = &held {
+        if crate::cli::placement::policy_effect(held) == desired {
+            return Ok((
+                format!("{} already carries the declaration", path.display()),
+                desired,
+            ));
+        }
+    }
+
+    let directory = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+    let staged = directory.join(format!(".{}.stado-agent", PLACEMENT_POLICY_FILE));
+    let bytes = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&policy).map_err(|error| error.to_string())?
+    );
+    std::fs::write(&staged, bytes)
+        .map_err(|error| format!("cannot stage {}: {error}", staged.display()))?;
+    std::fs::rename(&staged, &path).map_err(|error| {
+        let _ = std::fs::remove_file(&staged);
+        format!("cannot install {}: {error}", path.display())
+    })?;
+    Ok((
+        format!(
+            "wrote {} at registry generation {generation}",
+            path.display()
+        ),
+        desired,
+    ))
+}
+
+/// Whether `policy` carries an entry this machine's worker will match, by the
+/// loader's own rule: `hostname` equal, or `identity` present in `aliases`,
+/// both normalized (`placement-policy.ts`).
+fn names_this_host(policy: &Value, identity: &str) -> bool {
+    policy
+        .get("hosts")
+        .and_then(Value::as_array)
+        .is_some_and(|hosts| {
+            hosts.iter().any(|host| {
+                let named = host
+                    .get("hostname")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| {
+                        crate::cli::placement::normalize_hostname(name) == identity
+                    });
+                named
+                    || host
+                        .get("aliases")
+                        .and_then(Value::as_array)
+                        .is_some_and(|aliases| {
+                            aliases.iter().filter_map(Value::as_str).any(|alias| {
+                                crate::cli::placement::normalize_hostname(alias) == identity
+                            })
+                        })
+            })
+        })
+}
+
+/// Basename of the worker's policy file, per `placement-policy.ts`.
+const PLACEMENT_POLICY_FILE: &str = "placement-policy.json";
+
+/// Where the worker reads it: `WELES_PLACEMENT_POLICY_FILE` when set, else
+/// `$HOME/.config/weles/placement-policy.json`. The override is honoured
+/// because a writer that ignores it writes a file nobody reads.
+fn placement_policy_path() -> Result<PathBuf, String> {
+    if let Some(override_path) = std::env::var_os("WELES_PLACEMENT_POLICY_FILE") {
+        let path = PathBuf::from(override_path);
+        if !path.as_os_str().is_empty() {
+            return Ok(path);
+        }
+    }
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| "HOME is unset, so the worker's policy path is unknown".to_string())?;
+    Ok(PathBuf::from(home)
+        .join(".config")
+        .join("weles")
+        .join(PLACEMENT_POLICY_FILE))
 }
 
 /// Reconcile the host-level NVIDIA board power cap declared in the registry.
@@ -860,6 +1019,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
 
     let mut last_cap: Option<LastCap> = None;
     let mut gpu_power_limit_state: Option<GpuPowerLimitState> = None;
+    let mut placement_policy_state: Option<PlacementPolicyState> = None;
     let mut pinned_only = false; // registry ComputeTarget.pinned_only, refreshed per poll
                                  // Python `disk_low_bytes = _persisted_disk_low_bytes()`: reuse the last
                                  // canonical low watermark from the janitor's owner-controlled state
@@ -1161,6 +1321,75 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                         "gpu_power_limit_ok",
                         "gpu_power_limit_checked_at",
                         "gpu_power_limit_detail",
+                    ] {
+                        agent_diag.remove(key);
+                    }
+                }
+                // The registry declares `weles.actions` per host and the
+                // worker reads its own `placement-policy.json`. Until this
+                // ran, the only thing joining them was an operator typing
+                // `stado host publish-placement-policy`, so the two drifted
+                // silently: the registry listed an action the file did not
+                // and the worker declined every routed row while the
+                // declaration said it was allowed. Asserted here for the same
+                // reason the power limit is — a declaration nothing enforces
+                // is a declaration written for nobody.
+                if t.weles.is_some() {
+                    let reconcile_due = placement_policy_state.as_ref().is_none_or(|state| {
+                        !state.ok
+                            || state.checked_at.elapsed()
+                                >= Duration::from_secs(PLACEMENT_RECONCILE_INTERVAL_S)
+                    });
+                    if reconcile_due {
+                        let checked_at_utc = isoformat_utc(Utc::now());
+                        let (ok, detail, desired) = match reconcile_placement_policy(t).await {
+                            Ok((detail, desired)) => (true, detail, desired),
+                            Err(detail) => {
+                                log_fn(&format!(
+                                    "placement-policy reconciliation failed: {detail}"
+                                ));
+                                (false, detail, (false, Vec::new()))
+                            }
+                        };
+                        placement_policy_state = Some(PlacementPolicyState {
+                            desired,
+                            checked_at: Instant::now(),
+                            checked_at_utc,
+                            ok,
+                            detail,
+                        });
+                    }
+                    if let Some(state) = &placement_policy_state {
+                        agent_diag.insert(
+                            "placement_policy_enabled".into(),
+                            Value::from(state.desired.0),
+                        );
+                        agent_diag.insert(
+                            "placement_policy_actions".into(),
+                            Value::from(state.desired.1.clone()),
+                        );
+                        agent_diag.insert("placement_policy_ok".into(), Value::from(state.ok));
+                        agent_diag.insert(
+                            "placement_policy_checked_at".into(),
+                            Value::from(state.checked_at_utc.clone()),
+                        );
+                        agent_diag.insert(
+                            "placement_policy_detail".into(),
+                            Value::from(state.detail.clone()),
+                        );
+                    }
+                } else {
+                    // A host that declares no `weles` block has no policy to
+                    // assert, and the file it may already carry is not this
+                    // agent's to remove: deleting it would take a worker out
+                    // on the strength of an absent declaration.
+                    placement_policy_state = None;
+                    for key in [
+                        "placement_policy_enabled",
+                        "placement_policy_actions",
+                        "placement_policy_ok",
+                        "placement_policy_checked_at",
+                        "placement_policy_detail",
                     ] {
                         agent_diag.remove(key);
                     }
