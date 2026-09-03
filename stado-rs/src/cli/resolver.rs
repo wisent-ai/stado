@@ -600,6 +600,18 @@ const TUNNEL_OPEN_POLL: Duration = Duration::from_millis(100);
 /// A forward costs one process for as long as the destination is in use, and a
 /// request costs the two sockets it would cost anyway. Fan-out stops being a
 /// function of traffic, so there is nothing to bound and nothing to refuse.
+///
+/// The forwarding process is not the forward. When a control master is already
+/// up -- and [`select_resolver_ssh_path`] leaves one up, because its probe runs
+/// under the same `ControlMaster=auto` -- `ssh -N -L` is a multiplex slave: it
+/// hands the listener to the master and exits 0 immediately, before the master
+/// has bound it. Judging the forward by that corpse read every hand-off as a
+/// dead transport: `refused connection: the SSH forward to <destination>
+/// exited before it accepted: exit status: 0`, 56 times in one resolver
+/// lifetime on this workstation and 41 of them on `stado-object-api`, each one
+/// answered to the client as `HTTP 502 upstream unavailable`. So the port is
+/// what proves a forward here, and `child` only says whether the process that
+/// asked for it failed.
 struct Tunnel {
     local: u16,
     child: tokio::process::Child,
@@ -635,7 +647,21 @@ impl Tunnel {
             .map_err(|error| format!("could not start the SSH forward: {error}"))?;
         let deadline = tokio::time::Instant::now() + TUNNEL_OPEN_BUDGET;
         loop {
+            // The port first, and the process only when the port is still
+            // shut. A slave that handed its listener to a live control master
+            // is already gone by the time the master binds, so asking the
+            // process first turns every hand-off into a refusal.
+            if let Ok(open) = TcpStream::connect(("127.0.0.1", local)).await {
+                drop(open);
+                return Ok(Self { local, child });
+            }
             match child.try_wait() {
+                // A clean exit with the port still shut is the hand-off in
+                // progress: the master owns the listener now and has the rest
+                // of the budget to bind it. A forward that never arrives is
+                // reported by the deadline below, naming the wait rather than
+                // an exit status that was never the failure.
+                Ok(Some(status)) if status.success() => {}
                 Ok(Some(status)) => {
                     return Err(format!(
                         "the SSH forward to {destination} exited before it accepted: {status}"
@@ -643,10 +669,6 @@ impl Tunnel {
                 }
                 Ok(None) => {}
                 Err(error) => return Err(format!("SSH forward wait failed: {error}")),
-            }
-            if let Ok(open) = TcpStream::connect(("127.0.0.1", local)).await {
-                drop(open);
-                return Ok(Self { local, child });
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(format!(
@@ -658,9 +680,22 @@ impl Tunnel {
         }
     }
 
-    /// Whether the forwarding process is still there to carry traffic.
-    fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+    /// Whether this forward may still carry traffic.
+    ///
+    /// A multiplex slave exits 0 as soon as the control master takes its
+    /// listener, so a dead child with a clean status leaves a live forward
+    /// behind; only a non-zero exit says the transport failed. Treating the
+    /// clean exit as death discarded a warm forward on every single request,
+    /// which put every request back into the opening race above instead of
+    /// once per destination. What actually proves a forward is the dial in
+    /// [`ResolverState::tunnel_connect`], and that already retries once
+    /// against a freshly opened one.
+    fn usable(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => status.success(),
+            Err(_) => false,
+        }
     }
 }
 
@@ -686,37 +721,53 @@ struct ResolverState {
 }
 
 impl ResolverState {
-    /// A connection to `host:port` behind `destination`, over the forward this
-    /// resolver keeps for that pair, opening it if this is its first use.
+    /// A connection to `host:port` behind the first of `paths` that answers,
+    /// over the forward this resolver keeps for that pair, opening it if this
+    /// is its first use.
     ///
     /// Opening holds the pool lock, so two requests for a cold destination
     /// cannot race into two forwards. Openings are rare; a warm destination
     /// only reads the port.
+    ///
+    /// Path selection is part of opening, not part of connecting. It used to
+    /// run in `proxy_connection` ahead of this call, so every accepted
+    /// connection to a host that declares an `ssh_fallbacks` entry -- as
+    /// `charless-mac-mini` declares `lan` -- paid one `ssh <destination> true`
+    /// process, bounded at twenty seconds, before any traffic moved. That is
+    /// the process per request this transport exists to remove, and it also
+    /// left a control master up for the forward to be handed to. Selecting
+    /// under the pool lock costs one probe per forward instead of one per
+    /// request, and a warm destination costs none.
     async fn tunnel_connect(
         &self,
-        destination: &str,
+        active_host: &str,
+        paths: &[targets::SshConnectionPath],
         host: &str,
         port: u16,
     ) -> Result<TcpStream, String> {
-        let key = format!("{destination}|{host}:{port}");
+        // Keyed by the host, not by a destination: which of its paths answers
+        // is chosen while the forward is opened, and one forward per host is
+        // the point.
+        let key = format!("{active_host}|{host}:{port}");
         // Two attempts: a forward that died between the liveness check and the
         // dial, or a local port some other process took, is retried once
         // against a freshly opened one. A second failure is the answer.
         for attempt in 0..2 {
-            let local = {
+            let (local, destination) = {
                 let mut tunnels = self.tunnels.lock().await;
                 let live = tunnels
                     .get_mut(&key)
-                    .and_then(|tunnel| tunnel.alive().then_some(tunnel.local));
+                    .and_then(|tunnel| tunnel.usable().then_some(tunnel.local));
                 match live {
-                    Some(local) => local,
+                    Some(local) => (local, None),
                     None => {
                         // Dropping the entry kills the dead child.
                         tunnels.remove(&key);
-                        let tunnel = Tunnel::open(destination, host, port).await?;
+                        let path = select_resolver_ssh_path(paths).await?;
+                        let tunnel = Tunnel::open(&path.destination, host, port).await?;
                         let local = tunnel.local;
                         tunnels.insert(key.clone(), tunnel);
-                        local
+                        (local, Some(path.destination.clone()))
                     }
                 }
             };
@@ -725,8 +776,9 @@ impl ResolverState {
                 Err(error) => {
                     self.tunnels.lock().await.remove(&key);
                     if attempt == 1 {
+                        let named = destination.as_deref().unwrap_or(active_host);
                         return Err(format!(
-                            "the SSH forward to {destination} for {host}:{port} refused a \
+                            "the SSH forward to {named} for {host}:{port} refused a \
                              connection on 127.0.0.1:{local}: {error}"
                         ));
                     }
@@ -1616,10 +1668,10 @@ async fn proxy_connection(
             .map_err(|error| format!("local upstream connect failed: {error}"))
     } else {
         let paths = resolved_ssh_paths(&resolved);
-        match select_resolver_ssh_path(&paths).await {
-            Ok(ssh) => state.tunnel_connect(&ssh.destination, host, port).await,
-            Err(error) => Err(format!("active host {:?}: {error}", resolved.active_host)),
-        }
+        state
+            .tunnel_connect(&resolved.active_host, &paths, host, port)
+            .await
+            .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))
     };
     // A refusal is written to the client before anything is read from it, so
     // the sentence names the reason instead of a socket that closed silently.

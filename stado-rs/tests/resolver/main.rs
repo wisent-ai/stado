@@ -572,10 +572,23 @@ struct Serving {
 
 impl Serving {
     fn start(home: &Path, storage: &Path, args: &[&str]) -> Self {
+        Self::spawn(home, args, configured(home, storage, args))
+    }
+
+    /// The same, with `ahead` in front of `PATH`, which is what lets a test
+    /// answer the resolver's `ssh` with one of its own.
+    fn start_behind(home: &Path, storage: &Path, args: &[&str], ahead: &Path) -> Self {
+        let mut command = configured(home, storage, args);
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        command.env("PATH", format!("{}:{inherited}", ahead.display()));
+        Self::spawn(home, args, command)
+    }
+
+    fn spawn(home: &Path, args: &[&str], mut command: Command) -> Self {
         let output = home.join(format!("serving-{}.log", args.join("-")));
         let log = std::fs::File::create(&output).expect("output file for a served command");
         let errors = log.try_clone().expect("one file for both streams");
-        let child = configured(home, storage, args)
+        let child = command
             .stdout(std::process::Stdio::from(log))
             .stderr(std::process::Stdio::from(errors))
             .spawn()
@@ -934,4 +947,315 @@ fn a_forward_that_cannot_open_refuses_the_read_instead_of_hanging() {
         wait_until_listening(api_port, Duration::from_secs(5)),
         "the resolver stopped answering on its own API port"
     );
+}
+
+/// The same document with a second SSH path on the active host.
+///
+/// Every host in this fleet carries one -- `charless-mac-mini` declares `lan`
+/// beside its tailnet primary -- and no transport test had one, because the
+/// fixture above states in a comment that it declares exactly one path so that
+/// "path selection returns it without probing". Path selection is the thing
+/// that probes, so the branch every real host takes was the branch nothing
+/// ran.
+fn proxy_registry_document_with_fallback(
+    generation: u64,
+    api_port: u16,
+    adapter_port: u16,
+    upstream_port: u16,
+    remote: &str,
+    fallback: &str,
+) -> String {
+    let mut document: serde_json::Value = serde_json::from_str(&proxy_registry_document(
+        generation,
+        api_port,
+        adapter_port,
+        upstream_port,
+        Some(remote),
+    ))
+    .expect("the fixture is a document");
+    document["targets"][1]["ssh_fallbacks"] = serde_json::json!([
+        {"name": "lan", "destination": fallback},
+    ]);
+    document.to_string()
+}
+
+/// An `ssh` of this test's own, ahead of the resolver's `PATH`, that answers
+/// the way OpenSSH answers behind a live control master.
+///
+/// It records what it was asked for and always exits 0:
+///
+/// * `<destination> true` -- one line in `probes`. That is the path probe, and
+///   counting it is how this suite can say whether it runs once per forward or
+///   once per request.
+/// * `-N -L 127.0.0.1:<local>:<host>:<port> <destination>` -- one line in
+///   `handoffs`, then exit 0 without binding anything. This is the multiplex
+///   hand-off verbatim: the slave gives the listener to the master and is gone
+///   before the master has bound it, so the exit says nothing about the
+///   forward. [`bind_handed_off_forwards`] plays the master.
+fn fake_ssh(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let probes = dir.join("probes");
+    let handoffs = dir.join("handoffs");
+    let script = dir.join("ssh");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+forward=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in -L) forward="$arg";; esac
+  prev="$arg"
+done
+if [ -n "$forward" ]; then
+  echo "$forward" >> "{handoffs}"
+else
+  echo probe >> "{probes}"
+fi
+exit 0
+"#,
+            handoffs = handoffs.display(),
+            probes = probes.display(),
+        ),
+    )
+    .expect("the fake ssh is written");
+    let mut mode = std::fs::metadata(&script)
+        .expect("the fake ssh exists")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("the fake ssh is executable");
+    (probes, handoffs)
+}
+
+fn lines(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Play the control master: bind every `-L` listener the slave handed over and
+/// relay it to the address that `-L` named, for as long as the returned flag
+/// says to.
+///
+/// The bind happens after the slave has already exited, which is the ordering
+/// this whole test exists for.
+fn bind_handed_off_forwards(
+    handoffs: std::path::PathBuf,
+) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = stop.clone();
+    std::thread::spawn(move || {
+        let mut bound: Vec<String> = Vec::new();
+        while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+            for spec in lines(&handoffs) {
+                if bound.contains(&spec) {
+                    continue;
+                }
+                // `127.0.0.1:<local>:<host>:<port>`
+                let field: Vec<&str> = spec.split(':').collect();
+                if field.len() != 4 {
+                    continue;
+                }
+                let (local, upstream) = (
+                    format!("{}:{}", field[0], field[1]),
+                    format!("{}:{}", field[2], field[3]),
+                );
+                let Ok(listener) = TcpListener::bind(&local) else {
+                    continue;
+                };
+                bound.push(spec);
+                let flag = flag.clone();
+                std::thread::spawn(move || {
+                    for accepted in listener.incoming() {
+                        if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
+                        let Ok(mut client) = accepted else { return };
+                        let Ok(mut server) = TcpStream::connect(&upstream) else {
+                            continue;
+                        };
+                        let (mut client_up, mut server_up) = (
+                            client.try_clone().expect("client half"),
+                            server.try_clone().expect("server half"),
+                        );
+                        std::thread::spawn(move || {
+                            let _ = std::io::copy(&mut client_up, &mut server_up);
+                            let _ = server_up.shutdown(std::net::Shutdown::Write);
+                        });
+                        std::thread::spawn(move || {
+                            let _ = std::io::copy(&mut server, &mut client);
+                            let _ = client.shutdown(std::net::Shutdown::Write);
+                        });
+                    }
+                });
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    });
+    stop
+}
+
+/// A forward handed to a live control master carries the read; it is not a
+/// refusal.
+///
+/// `ssh -N -L` behind a master is a multiplex slave: it asks the master for the
+/// listener and exits 0 immediately, before the master has bound it. Judging
+/// the forward by that exit answered the client `HTTP 502 upstream
+/// unavailable` -- 56 of them in one resolver lifetime on this workstation, 41
+/// on `stado-object-api`, each one a release-pipeline object read that died
+/// while the transport underneath it was healthy. The port is what proves a
+/// forward, so the read must come back.
+#[test]
+fn a_forward_handed_to_a_control_master_carries_the_read() {
+    let upstream_port = free_port();
+    let api_port = free_port();
+    let adapter_port = free_port();
+    let (home, storage) = fixture(&proxy_registry_document_with_fallback(
+        7,
+        api_port,
+        adapter_port,
+        upstream_port,
+        "u@192.0.2.1",
+        "u@192.0.2.2",
+    ));
+    let (home, storage) = (home.path(), storage.path());
+    let (_probes, handoffs) = fake_ssh(home);
+
+    let upstream = Serving::start(
+        home,
+        storage,
+        &[
+            "dashboard",
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            &upstream_port.to_string(),
+        ],
+    );
+    assert!(
+        wait_until_listening(upstream_port, Duration::from_secs(60)),
+        "the object API never bound 127.0.0.1:{upstream_port}: {}",
+        upstream.said()
+    );
+    let stop = bind_handed_off_forwards(handoffs);
+    let mut resolver = Serving::start_behind(
+        home,
+        storage,
+        &["resolver", "serve", "--target", "w1"],
+        home,
+    );
+    assert!(
+        wait_until_listening(adapter_port, Duration::from_secs(60)),
+        "the resolver never bound its declared adapter 127.0.0.1:{adapter_port}: {}",
+        resolver.said()
+    );
+
+    let health = http_get(adapter_port, "/healthz", Duration::from_secs(60))
+        .expect("the adapter answers a health read");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        !health.starts_with("HTTP/1.1 502"),
+        "a forward the control master accepted was refused as dead: {health}\n{}",
+        resolver.said()
+    );
+    assert!(
+        health.starts_with("HTTP/1.1 200 OK") && health.contains("\"ok\":true"),
+        "the object API's answer did not come back over the handed-off forward: {health}\n{}",
+        resolver.said()
+    );
+    assert!(
+        resolver.running(),
+        "the resolver died carrying a handed-off forward"
+    );
+}
+
+/// A host that declares a fallback SSH path is probed once per forward, not
+/// once per request.
+///
+/// The probe is an `ssh <destination> true` process bounded at twenty seconds.
+/// Running it in `proxy_connection` put one of them in front of every accepted
+/// connection to every host in this fleet, because every host in this fleet
+/// declares a fallback -- the process per request this transport was rewritten
+/// to remove, and the thing that leaves a control master up for the forward to
+/// be handed to.
+#[test]
+fn a_fallback_path_is_probed_once_per_forward_not_once_per_request() {
+    let upstream_port = free_port();
+    let api_port = free_port();
+    let adapter_port = free_port();
+    let (home, storage) = fixture(&proxy_registry_document_with_fallback(
+        7,
+        api_port,
+        adapter_port,
+        upstream_port,
+        "u@192.0.2.1",
+        "u@192.0.2.2",
+    ));
+    let (home, storage) = (home.path(), storage.path());
+    let (probes, handoffs) = fake_ssh(home);
+
+    let upstream = Serving::start(
+        home,
+        storage,
+        &[
+            "dashboard",
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            &upstream_port.to_string(),
+        ],
+    );
+    assert!(
+        wait_until_listening(upstream_port, Duration::from_secs(60)),
+        "the object API never bound 127.0.0.1:{upstream_port}: {}",
+        upstream.said()
+    );
+    let stop = bind_handed_off_forwards(handoffs);
+    let mut resolver = Serving::start_behind(
+        home,
+        storage,
+        &["resolver", "serve", "--target", "w1"],
+        home,
+    );
+    assert!(
+        wait_until_listening(adapter_port, Duration::from_secs(60)),
+        "the resolver never bound its declared adapter 127.0.0.1:{adapter_port}: {}",
+        resolver.said()
+    );
+
+    let readers: Vec<_> = (0..8)
+        .map(|_| {
+            std::thread::spawn(move || http_get(adapter_port, "/healthz", Duration::from_secs(60)))
+        })
+        .collect();
+    let answers: Vec<_> = readers
+        .into_iter()
+        .map(|reader| reader.join().expect("reader thread joins"))
+        .collect();
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    for (index, answer) in answers.iter().enumerate() {
+        let answer = answer
+            .as_ref()
+            .unwrap_or_else(|error| panic!("read {index} of 8 was not answered: {error}"));
+        assert!(
+            answer.starts_with("HTTP/1.1 200 OK"),
+            "read {index} of 8 got: {answer}\n{}",
+            resolver.said()
+        );
+    }
+    let probed = lines(&probes).len();
+    assert!(
+        probed >= 1,
+        "no path was ever probed, so this test measured nothing: {}",
+        resolver.said()
+    );
+    assert_eq!(
+        probed, 1,
+        "the resolver probed the active host's SSH paths {probed} times for 8 reads \
+         over one forward"
+    );
+    assert!(resolver.running(), "the resolver died under 8 reads");
 }
