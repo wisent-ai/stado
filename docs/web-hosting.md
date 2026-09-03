@@ -280,6 +280,31 @@ apart. When the site root is the checkout root, `.git`, `.github`, `.vercel`,
 `.next`, `node_modules`, `release/` and any `.env*` file are left out: they are
 not part of the site, and one of them is a credential.
 
+### A web platform beside a binary platform
+
+A product can host a site and ship a binary from one repository. `jeden` is a
+Rust CLI whose documentation site is its `web` directory, and its
+`.wisent-release.json` declares a `runtime` contract — the binary, its
+launcher and the schema versions the rollout state machine reads.
+
+That contract is declared once for the product, and it applies to the
+platforms it describes. A platform whose stage map contains both the
+runtime's `binary` and its `launcher` ships the runtime and is held to the
+contract; a platform whose stage map contains neither ships something else,
+like a site tarball, and the contract says nothing about it. A platform with
+exactly one of the two is still refused, because that is the half-staged case
+the check exists for: a rollout would install something the host cannot
+start. A `runtime` that no platform stages at all is refused too — it is a
+declaration nothing checks against the world, and the first rollout would be
+what discovered it.
+
+`stado release submit` reads the same rule when it publishes: a platform that
+ships no runtime publishes no binary path, no launcher and no schema
+versions, rather than inheriting the product's and claiming a binary that
+exists in none of its own bytes. Rollout is unaffected either way — a rollout
+target names the platform it rolls out, in the product's rollout policy, so a
+web platform is only ever rolled out if someone declared it there.
+
 ## The hostname and DNS model
 
 One web product owns one hostname. The hostname's zone is whatever the

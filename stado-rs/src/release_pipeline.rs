@@ -411,6 +411,65 @@ fn argv(value: &[String]) -> bool {
             .all(|part| !part.is_empty() && !part.as_bytes().contains(&0))
 }
 
+/// What one platform is, with respect to the product's `runtime` contract.
+///
+/// The contract is declared once for the product, but a product can now have
+/// platforms that do not ship it: `jeden` is a Rust CLI with a documentation
+/// site, and `stado web build` stages a site tarball with no binary in it.
+/// Holding that platform to a contract about a binary refused a manifest that
+/// was correct, so the contract applies to the platforms it describes.
+///
+/// The rule reads off the stage map, which is the only place a platform says
+/// what it produces, and it is deliberately the least surprising one: both
+/// destinations present means this platform ships the runtime, neither means
+/// it ships something else, and one without the other is the half-staged
+/// mistake the check was written to catch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeRole {
+    /// Stages the runtime's binary and its launcher.
+    Runtime,
+    /// Stages neither, so the runtime contract says nothing about it.
+    NotRuntime,
+    /// Stages one of the two. A rollout of this would install something the
+    /// host cannot start.
+    HalfStaged,
+}
+
+/// One platform's role, from its staged destinations.
+///
+/// A product with no `runtime` has no runtime platforms, which is why the
+/// contract is taken by reference rather than assumed: the same function then
+/// answers for every manifest, and `publish` and the validator cannot drift
+/// into two different readings of one rule.
+pub fn runtime_role(
+    destinations: &BTreeSet<&str>,
+    runtime: Option<&RuntimeContract>,
+) -> RuntimeRole {
+    let Some(runtime) = runtime else {
+        return RuntimeRole::NotRuntime;
+    };
+    match (
+        destinations.contains(runtime.binary.as_str()),
+        destinations.contains(runtime.launcher.as_str()),
+    ) {
+        (true, true) => RuntimeRole::Runtime,
+        (false, false) => RuntimeRole::NotRuntime,
+        _ => RuntimeRole::HalfStaged,
+    }
+}
+
+/// The role of one platform of a parsed manifest, for callers that hold the
+/// recipe rather than a set of destinations — the release pipeline's publish
+/// step, which must not stamp a runtime coordinate onto a platform that ships
+/// no runtime.
+pub fn platform_runtime_role(
+    recipe: &PlatformRecipe,
+    runtime: Option<&RuntimeContract>,
+) -> RuntimeRole {
+    let destinations: BTreeSet<&str> = recipe.stage.values().map(String::as_str).collect();
+    runtime_role(&destinations, runtime)
+}
+
 pub fn parse_product_manifest(bytes: &[u8]) -> Result<ProductManifest, String> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("{PRODUCT_MANIFEST}: invalid JSON: {error}"))?;
@@ -486,6 +545,10 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
     if manifest.platforms.is_empty() {
         return Err("release manifest platforms must not be empty".into());
     }
+    // How many platforms actually ship the declared runtime. A product may
+    // now have platforms that do not — a web site beside a binary — and the
+    // count is what keeps a runtime nothing stages from passing.
+    let mut runtime_platforms = 0_usize;
     for (platform, recipe) in &manifest.platforms {
         if !platform_identifier(platform)
             || !RUNNER_PLATFORMS.contains(&recipe.runner_platform.as_str())
@@ -543,15 +606,35 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
                 return Err(format!("{platform}: stage paths are unsafe or duplicate"));
             }
         }
-        if let Some(runtime) = &manifest.runtime {
-            if !destinations.contains(runtime.binary.as_str())
-                || !destinations.contains(runtime.launcher.as_str())
-            {
+        match runtime_role(&destinations, manifest.runtime.as_ref()) {
+            // Both destinations staged: the platform ships the runtime, and
+            // is held to exactly what it was held to before.
+            RuntimeRole::Runtime => runtime_platforms += 1,
+            // Neither: the platform ships something else. `jeden`'s web site,
+            // built by `stado web build`, stages a site tarball and no binary
+            // at all, and holding it to a contract about a binary refused a
+            // manifest that was correct.
+            RuntimeRole::NotRuntime => {}
+            // Exactly one of the two: the half-staged case this check exists
+            // for. A platform that stages the binary and not its launcher
+            // rolls out something the host cannot start.
+            RuntimeRole::HalfStaged => {
                 return Err(format!(
                     "{platform}: runtime binary and launcher must be staged destinations"
                 ));
             }
         }
+    }
+    // A `runtime` no platform stages is a declaration nothing checks against
+    // the world: the coordinate would publish with a binary path that exists
+    // in no artifact, and the first rollout would find out. `jeden`'s
+    // manifest is exactly that today — `runtime.binary` is `jeden` while both
+    // platforms stage `bin/jeden` — and it must stay refused rather than
+    // become valid because the per-platform rule stopped looking.
+    if manifest.runtime.is_some() && runtime_platforms == 0 {
+        return Err(
+            "runtime is declared but no platform stages its binary and launcher: either a platform is missing them from its stage map, or the product declares no runtime".into(),
+        );
     }
     if manifest.promotion.reconcile != manifest.runtime.is_some() {
         return Err("runtime must be declared exactly when promotion.reconcile is true".into());
