@@ -244,6 +244,9 @@ pub struct ReleaseRequest {
     pub sha256: String,
     pub archive_name: String,
     pub member: String,
+    /// The exact published byte count of `archive_name`, read on this side so
+    /// the target never has to discover it.
+    pub archive_bytes: u64,
     /// The public Stado origin serving immutable releases.
     pub release_api: String,
     pub dry_run: bool,
@@ -262,6 +265,7 @@ pub struct ReleasePlan {
     pub source_commit: String,
     pub archive_name: String,
     pub member: String,
+    pub archive_bytes: u64,
     pub release_api: String,
     pub declared_version: String,
     pub dry_run: bool,
@@ -410,6 +414,7 @@ pub fn plan(
         source_commit: request.source_commit.clone(),
         archive_name: request.archive_name.clone(),
         member: request.member.clone(),
+        archive_bytes: request.archive_bytes,
         release_api: request.release_api.trim_end_matches('/').to_string(),
         declared_version: declared.to_string(),
         dry_run: request.dry_run,
@@ -645,19 +650,28 @@ fetch_release_object() {
   fetch_path=$2
   fetch_head="$fetch_path.head"
   fetch_part="$fetch_path.part"
-  fetch_total=$(release_object_total "$fetch_uri" "$fetch_head") || {
+  # The operator side read the published size before this program existed, so
+  # the total is bound, not discovered. Deriving it from a `Range: 0-0`
+  # answer's `Content-Range` only worked through the tailnet proxy: the
+  # dashboard's own release route serves no ranges, so the host that serves
+  # the store fetching over its own loopback got no `Content-Range` and
+  # refused with `no_declared_size`. The probe remains for a bound of zero,
+  # which is a caller that could not read the size.
+  fetch_total=$archive_bytes
+  if [ "$fetch_total" -eq 0 ]; then
+    fetch_total=$(release_object_total "$fetch_uri" "$fetch_head") || {
+      /bin/rm -f "$fetch_head"
+      say fetch failed
+      return 1
+    }
     /bin/rm -f "$fetch_head"
-    say fetch failed
-    return 1
-  }
-  /bin/rm -f "$fetch_head"
+  fi
   case "$fetch_total" in
     ''|*[!0-9]*)
       say fetch no_declared_size
       return 1
       ;;
   esac
-  say fetch_bytes "$fetch_total"
   fetch_have=0
   while [ "$fetch_have" -lt "$fetch_total" ]; do
     fetch_end=$((fetch_have + fetch_chunk_bytes - 1))
@@ -1268,6 +1282,9 @@ fn bindings(plan: &ReleasePlan) -> String {
         shlex_quote(&crate::watchdog::hostname()),
         plan.product.root(),
     );
+    // A number, so it is bound unquoted and validated as a number on this
+    // side by its type.
+    bound.push_str(&format!("archive_bytes={}\n", plan.archive_bytes));
     // Where the origin's name lives, for the target's own `curl`.
     //
     // The caller reads the manifest through a client that pins tailnet names
@@ -1491,6 +1508,12 @@ pub async fn release_target(
     report.insert("declared_version".to_string(), json!(plan.declared_version));
     report.insert("release_uri".to_string(), json!(plan.release_uri()));
     report.insert("sha256".to_string(), json!(plan.sha256));
+    // The address the TARGET was told to fetch from. Its absence cost an hour
+    // on 2026-09-03: `fetch no_declared_size` says the answer carried no
+    // `Content-Range`, and nothing in the receipt said which origin had
+    // answered, so the one fact that separates "the store cannot serve ranges"
+    // from "the target reached the wrong server" was not in the report.
+    report.insert("release_api".to_string(), json!(plan.release_api));
     report.insert("staged_path".to_string(), json!(plan.staged_path()));
     report.insert("active_path".to_string(), json!(plan.active_path()));
     report.insert("install_root".to_string(), json!(plan.product.root()));
@@ -2273,6 +2296,33 @@ pub async fn release_host(
         || registry
             .service(OBJECT_API_SERVICE)
             .is_some_and(|object_api| object_api.active_host == target.name);
+    // Two roles, one string, and they are not the same address.
+    //
+    // This process reads the catalog from `release_api_origin()`, which has to
+    // be reachable from HERE. The TARGET then fetches the archive itself, and
+    // the host that serves the release object API is the one case where the
+    // public name is the worse address: `charless-mac-mini` asking its own
+    // tailnet name hairpins back into its own `tailscale serve`. The service
+    // directory states the address each host uses to reach a loopback
+    // service, so the target's own entry is that address, and
+    // `release_origin_allowed` has always permitted loopback HTTP for exactly
+    // this case.
+    let target_release_api = registry
+        .service(OBJECT_API_SERVICE)
+        .filter(|object_api| object_api.active_host == target.name)
+        .and_then(|object_api| object_api.address_for(&target.name))
+        .map(|endpoint| endpoint.url.trim_end_matches('/').to_string())
+        .filter(|url| loopback_http_origin(url))
+        .unwrap_or(release_api);
+    // The published byte count, read here so the target never derives it from
+    // a `Range: 0-0` answer. See `cli::storage::release_object_size`.
+    let archive_uri = format!(
+        "stado://releases/{}/{version}/{platform}/{}",
+        product.source.product, identity.archive_name
+    );
+    let archive_bytes = crate::cli::storage::release_object_size(&archive_uri)
+        .await
+        .map_err(|error| DeployError(error.to_string()))?;
     let request = ReleaseRequest {
         binary: product.name.clone(),
         version: version.to_string(),
@@ -2281,7 +2331,8 @@ pub async fn release_host(
         sha256: identity.sha256,
         archive_name: identity.archive_name,
         member: identity.member,
-        release_api,
+        archive_bytes,
+        release_api: target_release_api,
         dry_run,
         reinstall,
     };
