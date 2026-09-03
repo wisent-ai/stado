@@ -71,7 +71,11 @@ pub(crate) enum WebCommands {
         #[arg(long, default_value = "/")]
         readyz: String,
         /// Which edge terminates TLS for the hostname.
-        #[arg(long, default_value = "stado", value_parser = crate::config::WEB_API_EDGES)]
+        #[arg(
+            long,
+            default_value = "stado",
+            value_parser = clap::builder::PossibleValuesParser::new(crate::config::WEB_API_EDGES)
+        )]
         edge: String,
         /// Plain environment entry, `NAME=value`; repeatable.
         #[arg(long = "env")]
