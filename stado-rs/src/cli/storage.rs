@@ -2064,8 +2064,9 @@ impl RemoteObjectApi {
                 Ok(response) => response,
                 Err(error) => {
                     last_read_error = Some(format!(
-                        "error sending authenticated object GET after {} bytes: {error}",
-                        body.len()
+                        "error sending authenticated object GET after {} bytes: {}",
+                        body.len(),
+                        super::http_failure(&error)
                     ));
                     if recovery == 3 {
                         break;
