@@ -4894,6 +4894,31 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
+    remote_skarbiec_json_at(target, arguments, None).await
+}
+
+/// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
+/// the target account's home.
+///
+/// `sync_dir()` in Skarbiec's own `net::sync` reads `SKARBIEC_SYNC_DIR` and
+/// otherwise takes `$HOME/.skarbiec-sync`, and the file inside it is always
+/// `vault.enc.json`. Naming it here is what lets the preview list the mirror's
+/// items with the same read-only `list` the live vault answers.
+const SKARBIEC_MIRROR_RELATIVE: &str = ".skarbiec-sync/vault.enc.json";
+
+/// [`remote_skarbiec_json`], optionally against a vault file other than the
+/// target's live one.
+///
+/// The override exists for the sync preview and for nothing else: the only way
+/// to say what a pull would change is to read the mirror as a vault, and
+/// Skarbiec answers that question for whatever `SKARBIEC_VAULT_FILE` names.
+/// The path is built from the target's own `$HOME`, never from an operator
+/// argument, so this widens what Stado can read and not who can choose it.
+async fn remote_skarbiec_json_at(
+    target: &str,
+    arguments: &[String],
+    vault_relative: Option<&str>,
+) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
         .first()
         .map(String::as_str)
@@ -4930,7 +4955,10 @@ async fn remote_skarbiec_json(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
-    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let vault_environment = match vault_relative {
+        Some(relative) => format!("SKARBIEC_VAULT_FILE={home}/{relative}"),
+        None => format!("SKARBIEC_VAULT_FILE={vault}"),
+    };
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let tool_path = skarbiec_tool_path(&home);
     let mut invocation = vec![
@@ -4960,12 +4988,172 @@ async fn remote_skarbiec_json(
     Ok((resolved, report))
 }
 
+/// One item as the target's own `skarbiec list` reports it, reduced to what a
+/// sync verdict turns on.
+struct MirrorItem {
+    revision: i64,
+    updated_at: String,
+    deleted: bool,
+}
+
+fn mirror_items(
+    report: &Value,
+) -> Result<std::collections::BTreeMap<String, MirrorItem>, CmdError> {
+    let rows = report
+        .as_array()
+        .ok_or_else(|| CmdError::click("Skarbiec list did not answer an array of items"))?;
+    let mut items = std::collections::BTreeMap::new();
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        items.insert(
+            id.to_string(),
+            MirrorItem {
+                revision: row.get("revision").and_then(Value::as_i64).unwrap_or(-1),
+                updated_at: row
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                deleted: row.get("deleted").and_then(Value::as_bool) == Some(true),
+            },
+        );
+    }
+    Ok(items)
+}
+
+/// What `stado host sync-vault` would do to TARGET, without doing any of it.
+///
+/// This preview exists because the operation it previews is not a merge, and
+/// its name invites everyone to read it as one. `skarbiec sync-pull` copies the
+/// mirror file over the live vault whole (`net::sync`: "A pull replaces the
+/// whole live vault"), and merging is refused by design because "mirror and
+/// live vault may be encrypted to different recipient sets". The only guard is
+/// a refusal when a live item id is absent from the mirror; an id present on
+/// both sides with different content is replaced by the mirror's copy with no
+/// comment at all. So the interesting number is not how many items would be
+/// added — it is how many would be replaced, and which of those something on
+/// the host reads.
+///
+/// The comparison is `skarbiec list` against the live vault and against the
+/// mirror file, both read-only, both over the same host channel. It reports the
+/// mirror **as it currently sits on the host**: `sync-pull` runs `git pull`
+/// first, so a mirror the target has not fetched yet can carry more than this
+/// says. That is stated in the output rather than papered over, because a
+/// preview that silently assumed a fetch would be a preview of a different
+/// operation.
+async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let list = vec![String::from("list")];
+    let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
+    let (_, mirror_report) =
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE)).await?;
+    let live = mirror_items(&live_report)?;
+    let mirror = mirror_items(&mirror_report)?;
+
+    let mut rows = Vec::new();
+    let mut conflicts = 0usize;
+    let mut lost = 0usize;
+    let mut new = 0usize;
+    let mut same = 0usize;
+    for (id, mirrored) in &mirror {
+        match live.get(id) {
+            None => {
+                new += 1;
+                rows.push(json!({
+                    "item": id,
+                    "verdict": "new",
+                    "mirror_revision": mirrored.revision,
+                }));
+            }
+            Some(current)
+                if current.revision == mirrored.revision
+                    && current.updated_at == mirrored.updated_at =>
+            {
+                same += 1;
+            }
+            Some(current) => {
+                conflicts += 1;
+                rows.push(json!({
+                    "item": id,
+                    "verdict": "conflict",
+                    "host_revision": current.revision,
+                    "mirror_revision": mirrored.revision,
+                    "host_updated_at": current.updated_at,
+                    "mirror_updated_at": mirrored.updated_at,
+                }));
+            }
+        }
+    }
+    // The same set Skarbiec's own `items_missing_from_mirror` computes, and for
+    // the same reason it ignores tombstones: losing a soft-deleted item is not
+    // losing data, and a pull that would drop a live one is refused outright.
+    for (id, current) in &live {
+        if current.deleted || mirror.contains_key(id) {
+            continue;
+        }
+        lost += 1;
+        rows.push(json!({
+            "item": id,
+            "verdict": "lost",
+            "host_revision": current.revision,
+        }));
+    }
+
+    let would_apply = lost == 0;
+    let report = json!({
+        "target": resolved.name,
+        "mirror": format!("$HOME/{SKARBIEC_MIRROR_RELATIVE}"),
+        "mirror_freshness": "as it sits on the host; sync-pull fetches first, so an unfetched mirror can carry more",
+        "host_items": live.len(),
+        "mirror_items": mirror.len(),
+        "counts": {"new": new, "same": same, "conflict": conflicts, "lost": lost},
+        "items": rows,
+        "would_apply": would_apply,
+        "detail": if would_apply {
+            "sync-pull would replace the live vault file with the mirror; every shared item takes the mirror's copy"
+        } else {
+            "sync-pull would refuse: the live vault carries items the mirror does not"
+        },
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: {} host item(s), {} mirror item(s) — {new} new, {same} same, {conflicts} conflict, {lost} lost",
+            resolved.name,
+            live.len(),
+            mirror.len()
+        );
+        for row in &rows {
+            println!(
+                "  {:<8} {}",
+                row["verdict"].as_str().unwrap_or_default(),
+                row["item"].as_str().unwrap_or_default()
+            );
+        }
+        println!("  {}", report["detail"].as_str().unwrap_or_default());
+    }
+    if conflicts == 0 && lost == 0 {
+        Ok(())
+    } else {
+        Err(CmdError::silent(1))
+    }
+}
+
 /// Pull the encrypted Skarbiec mirror into TARGET's live vault.
 ///
-/// Skarbiec performs the destructive comparison itself: a remote vault with
-/// local-only items is backed up and refused rather than overwritten. Stado
-/// supplies the managed host channel and deliberately exposes no force path.
-pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Not a merge, whatever the name suggests. `skarbiec sync-pull` copies the
+/// mirror over the live vault whole; Skarbiec backs the live vault up first
+/// and refuses when a live item id is absent from the mirror, and Stado
+/// deliberately exposes no force path. An id on both sides takes the mirror's
+/// copy with no comment, which is why `--check` exists and should be run
+/// first: it names every item that would be replaced and every one that would
+/// be lost.
+pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<(), CmdError> {
+    if check {
+        return preview_vault_sync(target, json_output).await;
+    }
     let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-pull")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         let reason = report
