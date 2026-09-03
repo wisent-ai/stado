@@ -855,30 +855,43 @@ pub async fn reclaim_host(
     // best-effort — an unreadable queue store must not turn a disk repair
     // into an outage — but a read failure keeps EVERY workdir (empty
     // keep-list would keep none), so the stage fails closed.
+    //
+    // The store's own sentence travels into the refusal. It used to be
+    // discarded (`Err(_)`), and on 2026-09-03 that cost the release train an
+    // hour and three attempts: `release-capacity` refused with "the queue
+    // store is unreadable" and nothing anywhere said which read failed or
+    // why. The queue held 13 parseable records and `running/` was empty, both
+    // verified object by object through the same CLI, so the sentence was the
+    // only thing that could have named the real failure — and it had been
+    // thrown away at the only place that saw it. A refusal an operator cannot
+    // act on is the defect this fleet keeps paying for.
+    let mut unreadable: Vec<String> = Vec::new();
     let live_jobs = match crate::queue::JobStorage::new().await {
         Ok(store) => {
             let mut ids = Vec::new();
-            let mut readable = true;
             for state in ["queue", "running"] {
                 match store.list_jobs(state, 0).await {
                     Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
-                    Err(_) => readable = false,
+                    Err(error) => unreadable.push(format!("{state}/: {error}")),
                 }
             }
-            if readable {
+            if unreadable.is_empty() {
                 Some(ids)
             } else {
                 None
             }
         }
-        Err(_) => None,
+        Err(error) => {
+            unreadable.push(format!("opening the queue store: {error}"));
+            None
+        }
     };
     let Some(live_jobs) = live_jobs else {
-        return Err(DeployError(
+        return Err(DeployError(format!(
             "the queue store is unreadable, so the terminal-workdir keep-list cannot be built; \
-             refusing to reclaim workdirs blind"
-                .to_string(),
-        ));
+             refusing to reclaim workdirs blind — {}",
+            unreadable.join("; ")
+        )));
     };
     let target_free_gb = target
         .disk_cleanup
