@@ -99,10 +99,12 @@ impl ObjectRef {
     /// became permanently unreadable against this fleet's 9,026-object store.
     ///
     /// That is what stopped the release trains on 2026-09-03: `stado host
-    /// reclaim` builds its keep-list from `queue/` and `running/`, refuses to
-    /// reclaim workdirs blind when the store cannot be read, and every
-    /// `release-capacity` barrier failed on it — 0.13.49 and 0.13.50 both died
-    /// there with publication never attempted.
+    /// reclaim` builds its keep-list from `queue/` and `running/`, and back
+    /// then it refused the whole reclamation when the store could not be
+    /// read, so every `release-capacity` barrier failed on it — 0.13.49 and
+    /// 0.13.50 both died there with publication never attempted. Today an
+    /// unreadable store costs only the `queue_workdirs` stage, which skips
+    /// and names the store's own error.
     ///
     /// So the boundary the caller wrote is the boundary the store is asked
     /// about, and a caller that deliberately passes a partial name still gets
