@@ -2562,14 +2562,24 @@ impl RemoteObjectApi {
                     "Stado object API returned an invalid object-list URI: {error}"
                 ))
             })?;
+            // Two different faults, and they were one refusal. An item whose
+            // `uri`, `namespace` and `key` disagree is a broken store and
+            // must stop the read. An item outside the requested prefix is a
+            // gateway that answered a wider question than it was asked —
+            // `prefix=queue/` returning `queue_priority/` — and the honest
+            // response is to keep what was asked for, because a fleet still
+            // running that gateway must not make this reader refuse a store
+            // that holds exactly the right objects.
             if object.namespace() != namespace
-                || !object.key().starts_with(prefix)
                 || item.namespace.as_str() != object.namespace()
                 || item.key.as_str() != object.key()
             {
                 return Err(CmdError::click(
                     "Stado object API returned an inconsistent object-list item",
                 ));
+            }
+            if !object.key().starts_with(prefix) {
+                continue;
             }
             values.push(json!({
                 "uri": item.uri,

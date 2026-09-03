@@ -156,9 +156,23 @@ jobs:
     env:
       STADO_VERSION: ${{ needs.identity.outputs.version }}
     steps:
+      - uses: actions/checkout@v5
+      # The tree being released judges its own capacity.
+      #
+      # This step used to run `$HOME/.stado/bin/stado`, which is by
+      # construction older than the revision under release — and on 2026-09-03
+      # that staleness cost the 0.13.50 train everything: a migration created
+      # `queue_priority/` beside `queue/`, the installed gateway answered
+      # `prefix=queue/` with both, the installed client could not build the
+      # terminal-workdir keep-list, and the job refused before a single object
+      # was published. The fix for that listing is in this tree; the installed
+      # binary cannot have it, and a release that cannot start until the fix
+      # is installed cannot install the fix.
+      - name: Build the capacity binary from this revision
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Reclaim declared release capacity
         run: |
-          stado="$HOME/.stado/bin/stado"
+          stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           reclaimed=false
           for attempt in 1 2 3; do
             if "$stado" host reclaim lukasz-macbook --apply \
