@@ -49,7 +49,7 @@ use crate::object_store::OBJECT_API_CHUNK_BYTES;
 use crate::queue::copy::{
     self, CopyOptions, CopyPlan, CopyReport, Endpoint, Outcome, CANONICAL_PREFIXES,
 };
-use crate::queue::{BlobBackend, BlobInfo, JobStorage};
+use crate::queue::{BlobBackend, BlobInfo, JobStorage, StorageError};
 
 use super::table::print as print_table;
 use super::CmdError;
@@ -1003,6 +1003,16 @@ impl SizeProbe {
 // ---- stat ----
 
 /// What the store said about one object.
+///
+/// Five states, not three. Three collapsed every way of not getting an answer
+/// into `unreachable`, so a `401` refusal, a `503` boundary that is down and
+/// the resolver's own `502 upstream unavailable` all arrived as one verdict,
+/// separable only by reading a detail string -- and a caller asking "is this
+/// coordinate spent" cannot branch on prose. Two releases turned on that
+/// question on 2026-09-03 and got `unreachable` for three different causes
+/// with three different remedies. Each of these is something a reader can act
+/// on: fix a credential for the refused, retry the unavailable, chase the
+/// transport for the unreachable.
 enum Presence {
     /// The store answered and the object is there.
     Present {
@@ -1014,9 +1024,119 @@ enum Presence {
     },
     /// The store answered and the object is NOT there.
     Absent,
-    /// The store did not answer. This is the state `BlobBackend::exists`
+    /// The store answered and refused the question: this reader may not ask
+    /// it. Nothing is known about the object, and asking again unchanged
+    /// cannot learn anything.
+    Refused(String),
+    /// The store answered that it cannot answer right now. Nothing is known
+    /// about the object, and the same question may be answered later.
+    Unavailable(String),
+    /// Nothing answered at all. This is the state `BlobBackend::exists`
     /// cannot express.
     Unreachable(String),
+}
+
+impl Presence {
+    /// The one-word verdict a script branches on. The exit code says only
+    /// whether the question was answered, so the three unanswered states have
+    /// to be distinguishable here or they are not distinguishable at all.
+    fn state(&self) -> &'static str {
+        match self {
+            Self::Present { .. } => "present",
+            Self::Absent => "absent",
+            Self::Refused(_) => "refused",
+            Self::Unavailable(_) => "unavailable",
+            Self::Unreachable(_) => "unreachable",
+        }
+    }
+
+    /// Whether the store answered the question that was asked.
+    ///
+    /// `present` and `absent` are answers; the other three are not. The
+    /// exit-code contract turns on exactly this, so a caller can never read a
+    /// store that did not answer as a store that answered "gone".
+    fn answered(&self) -> bool {
+        matches!(self, Self::Present { .. } | Self::Absent)
+    }
+
+    fn detail(&self) -> Option<String> {
+        match self {
+            Self::Present { detail, .. } => detail.clone(),
+            Self::Absent => None,
+            Self::Refused(detail) | Self::Unavailable(detail) | Self::Unreachable(detail) => {
+                Some(detail.clone())
+            }
+        }
+    }
+
+    /// Why this unanswered question stays unanswered, naming what the caller
+    /// can do about THIS state rather than about not-answering in general.
+    ///
+    /// Empty for an answered question, which needs no such sentence. Every
+    /// caller reaches this only behind [`Presence::answered`], so that one
+    /// predicate stays the single statement of the exit-code contract and
+    /// this stays the single statement of the reason.
+    fn unanswered_sentence(&self, path: &str) -> String {
+        let (verdict, remedy, detail) = match self {
+            Self::Present { .. } | Self::Absent => return String::new(),
+            Self::Refused(detail) => (
+                "REFUSED",
+                "the store answered that this reader may not ask: repair the credential or the \
+                 grant, because the same question asked again cannot learn anything",
+                detail,
+            ),
+            Self::Unavailable(detail) => (
+                "UNAVAILABLE",
+                "the store answered that it cannot answer right now: this same question may be \
+                 answered later, so retry it",
+                detail,
+            ),
+            Self::Unreachable(detail) => (
+                "UNREACHABLE",
+                "nothing answered at all: chase the transport in front of the store",
+                detail,
+            ),
+        };
+        format!(
+            "{path:?} is {verdict}, not absent — {remedy}: {detail}. Treat the object's \
+             existence as unknown."
+        )
+    }
+}
+
+/// Which unanswered state one HTTP status is.
+///
+/// Only ever reached for a status that is not a success, not a redirect and
+/// not a 404, so every arm here is a way of not answering the question.
+/// `401`/`403` is the store refusing it. `429`/`503` is the store saying "not
+/// now" -- the object plane answers `503 object authorization unavailable`
+/// when its Skarbiec boundary is down, which is a wait, not a dead store. A
+/// gateway status is the proxy in front of the store rather than the store:
+/// Stado's own service resolver writes exactly `502 upstream unavailable`
+/// when its SSH forward cannot carry a connection, and nothing answered in
+/// that case, so it has to stay `unreachable`.
+fn unanswered_for_status(status: u16, detail: String) -> Presence {
+    match status {
+        401 | 403 => Presence::Refused(detail),
+        429 | 503 => Presence::Unavailable(detail),
+        _ => Presence::Unreachable(detail),
+    }
+}
+
+/// The same judgement for a backend error, which carries a status when the
+/// backend spoke HTTP and carries none when the failure was below HTTP.
+fn unanswered_for_error(error: &StorageError) -> Presence {
+    let detail = error.to_string();
+    match error {
+        StorageError::Stado { status, .. } | StorageError::Gcs { status, .. } => {
+            unanswered_for_status(*status, detail)
+        }
+        // Authentication that could not be established is this reader lacking
+        // standing to ask, which is a refusal however far below HTTP it
+        // happened.
+        StorageError::Auth(_) => Presence::Refused(detail),
+        _ => Presence::Unreachable(detail),
+    }
 }
 
 /// Existence probe for one object.
@@ -1047,7 +1167,7 @@ async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
                 detail: Some(format!("no version token: {err}")),
             },
             Ok(None) => Presence::Absent,
-            Err(_) => Presence::Unreachable(err.to_string()),
+            Err(_) => unanswered_for_error(&err),
         },
     }
 }
@@ -1087,9 +1207,14 @@ fn backend_prefix(backend: &Arc<dyn BlobBackend>, prefix: &str) -> Result<String
 }
 
 /// Exit code contract: zero means the question was ANSWERED (`present` or
-/// `absent`), non-zero means it was not (`unreachable`). Scripting an
-/// "is it gone?" check on the exit status therefore never mistakes a dead
-/// store for a drained one; branch on `state` for present-vs-absent.
+/// `absent`), non-zero means it was not (`refused`, `unavailable`,
+/// `unreachable`). Scripting an "is it gone?" check on the exit status
+/// therefore never mistakes a store that could not answer for a drained one.
+///
+/// Branch on `state` for which of the five it was. The three non-zero states
+/// used to be one word, so a caller that wanted to retry a transient outage,
+/// or to stop and fix a credential, had to grep a prose detail line to tell
+/// which it was looking at.
 async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     // Which store is even being asked. A `stado://releases/...` object lives in the
     // release channel, reached by its own route; the job store never held those bytes,
@@ -1222,7 +1347,9 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
                         ),
                     Err(err) => (BTreeMap::new(), None, Some(err.to_string())),
                 },
-                Presence::Absent | Presence::Unreachable(_) => (BTreeMap::new(), None, None),
+                // Nothing else is known to be there, so there is no listing
+                // worth asking for and no metadata to carry.
+                _ => (BTreeMap::new(), None, None),
             };
             (
                 presence,
@@ -1235,15 +1362,18 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
         }
     };
 
-    let (state, size, version, detail) = match &presence {
-        Presence::Present {
-            size,
-            version,
-            detail,
-        } => ("present", Some(*size), version.clone(), detail.clone()),
-        Presence::Absent => ("absent", None, None, None),
-        Presence::Unreachable(err) => ("unreachable", None, None, Some(err.clone())),
-    };
+    let (state, size, version, detail) = (
+        presence.state(),
+        match &presence {
+            Presence::Present { size, .. } => Some(*size),
+            _ => None,
+        },
+        match &presence {
+            Presence::Present { version, .. } => version.clone(),
+            _ => None,
+        },
+        presence.detail(),
+    );
 
     if args.json {
         echo_json(&serde_json::to_value(StorageStatReceipt {
@@ -1283,22 +1413,27 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
         print_table(&["FIELD", "VALUE"], &rows);
         if matches!(presence, Presence::Absent) {
             println!(
-                "\nThe store ANSWERED: {:?} is not there. This is not the same as an \
-                 unreachable store.",
+                "\nThe store ANSWERED: {:?} is not there. This is not the same as a store \
+                 that refused the question, could not answer it now, or could not be \
+                 reached at all.",
                 args.path
             );
         }
     }
 
-    match presence {
-        Presence::Present { .. } | Presence::Absent => Ok(()),
-        Presence::Unreachable(err) => Err(CmdError::click(format!(
-            "{:?} is UNREACHABLE, not absent — the store did not answer: {err}. \
-             Treat the object's existence as unknown.{}",
-            args.path,
-            inferred_namespace_hint(&args.path)
-        ))),
+    // The exit-code contract: zero means the question was ANSWERED (`present`
+    // or `absent`), non-zero means it was not (`refused`, `unavailable`,
+    // `unreachable`). Scripting an "is it gone?" check on the exit status
+    // therefore never mistakes a store that could not answer for a drained
+    // one; branch on `state` for which answer, and for which kind of silence.
+    if presence.answered() {
+        return Ok(());
     }
+    Err(CmdError::click(format!(
+        "{}{}",
+        presence.unanswered_sentence(&args.path),
+        inferred_namespace_hint(&args.path)
+    )))
 }
 
 /// The sentence a bare path earns when the store refuses it.
@@ -1685,6 +1820,36 @@ impl RemoteObjectApi {
                 "release_api.publishers declares no publisher for {policy_key}"
             ))
         })?;
+        // A newly declared product's publisher item is readable by nobody:
+        // writing an item grants nothing, because a Skarbiec grant is per item
+        // and per field. `stado host reconcile-release-verifier --product P T`
+        // settles the release verifier's own grant, and this settles the
+        // consumer a store-routed read authenticates as, which is the other of
+        // the two identities this read can travel under. Both are needed and
+        // neither implies the other, which is why declaring a product used to
+        // take one command plus a hand-run `skarbiec token-mint`.
+        //
+        // Advisory, never fatal, and that distinction was earned. Widening a
+        // grant requires the consumer's own bearer file to still hash to what
+        // the vault recorded, and a caller running as a different identity —
+        // `WC_SKARBIEC_CONSUMER=stado-release-publisher` with its acquisition
+        // token file, which is how the release train authenticates — may hold
+        // a bearer this machine cannot reproduce. Refusing there turned a read
+        // that was already authorized into `refusing to re-mint it, because
+        // the holders of the recorded bearer could not be given it back`: a
+        // correct refusal about a repair nobody asked for, reported as though
+        // the read itself had failed. The read is the question; whether a
+        // grant could be widened first is a convenience, and a convenience
+        // that cannot run says so and steps aside.
+        if let Err(error) =
+            crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"])
+        {
+            eprintln!(
+                "could not widen the grant on release publisher item {} before reading it, \
+                 continuing with the grant as it stands: {error}",
+                publisher.item()
+            );
+        }
         let token = crate::skarbiec::read_release_token(publisher.item(), "token")
             .await
             .map_err(|error| {
@@ -1699,6 +1864,26 @@ impl RemoteObjectApi {
                     publisher.item()
                 ))
             })?;
+        // A token that cannot become a header value is refused here, by name.
+        // reqwest reports that case as the bare string `builder error`, with no
+        // item, no field and no failure point that means anything: on
+        // 2026-09-03 `stado storage stat
+        // stado://system/release-catalog/preferences-landing.json` answered
+        // exactly that, and the same command for two other products answered
+        // an honest HTTP 401, so the operator's only signal that the fault was
+        // in a credential and not in the network was that one product differed
+        // from the others. A bearer is header material; whether one is usable
+        // is knowable before the request, and the answer names the item.
+        if reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
+            return Err(CmdError::click(format!(
+                "release publisher item {}'s token field cannot form an Authorization header: it \
+                 is {} bytes and carries a character a header value may not (a newline or a \
+                 control byte, most often a trailing newline stored with the value). Rewrite the \
+                 field with the value alone",
+                publisher.item(),
+                token.len()
+            )));
+        }
         Ok(Some(token))
     }
 
@@ -2028,8 +2213,9 @@ impl RemoteObjectApi {
                 Ok(response) => response,
                 Err(error) => {
                     last_read_error = Some(format!(
-                        "error sending authenticated object GET after {} bytes: {error}",
-                        body.len()
+                        "error sending authenticated object GET after {} bytes: {}",
+                        body.len(),
+                        super::http_failure(&error)
                     ));
                     if recovery == 3 {
                         break;
@@ -2511,12 +2697,16 @@ impl RemoteObjectApi {
     /// Reading its silence as `absent` is how a baseline naming a published artifact
     /// gets certified against a store that could not have served it either way.
     ///
-    /// Three states, because two would let silence pass for absence. A redirect
-    /// counts as present: this route answers a served object by redirecting to where
-    /// the bytes live, and the client does not follow it, so the redirect IS the
-    /// testimony. An explicit 404 is absence. Anything else -- a refused connection,
-    /// a proxy's error page, a status this does not know -- is unreachable, which the
-    /// exit-code contract reports as a question nobody answered.
+    /// Five states, because two would let silence pass for absence and three let
+    /// every kind of silence pass for one kind. A redirect counts as present: this
+    /// route answers a served object by redirecting to where the bytes live, and the
+    /// client does not follow it, so the redirect IS the testimony. An explicit 404
+    /// is absence. Every other status is a way of not answering, and
+    /// [`unanswered_for_status`] says which way, because `401` (this reader may not
+    /// ask), `503` (the boundary is down, ask again) and `502` (the resolver's SSH
+    /// forward carried nothing) have three different remedies and used to arrive as
+    /// one word. A transport error that never produced a status answered nothing at
+    /// all, so it is unreachable outright.
     async fn stat_release(&self, uri: &str) -> Result<Presence, CmdError> {
         let endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
         match self.request(reqwest::Method::GET, endpoint).send().await {
@@ -2535,9 +2725,10 @@ impl RemoteObjectApi {
                 } else if status == reqwest::StatusCode::NOT_FOUND {
                     Ok(Presence::Absent)
                 } else {
-                    Ok(Presence::Unreachable(format!(
-                        "the release channel answered HTTP {status}"
-                    )))
+                    Ok(unanswered_for_status(
+                        status.as_u16(),
+                        format!("the release channel answered HTTP {status}"),
+                    ))
                 }
             }
             Err(error) => Ok(Presence::Unreachable(error.to_string())),
@@ -3137,23 +3328,26 @@ pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
 /// object in it, and one of those is a 72 MB archive; a presence question
 /// must not download it.
 ///
-/// [`Presence::Unreachable`] propagates as an error rather than `false`,
+/// An unanswered [`Presence`] propagates as an error rather than `false`,
 /// because "the store did not answer" read as "the object is missing" is the
 /// exact confusion [`Presence`] exists to keep visible — and here it would
 /// turn a network blip into a false accusation that a good release is
-/// half-published.
+/// half-published. The refusal carries WHICH kind of unanswered it was, so
+/// the caller deciding whether a coordinate is spent is told whether to
+/// repair a credential, wait, or chase the transport.
 pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> {
     let object = crate::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     if object.namespace() == "releases" {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
-            return match remote.stat_release(&uri).await? {
-                Presence::Present { .. } => Ok(true),
-                Presence::Absent => Ok(false),
-                Presence::Unreachable(detail) => Err(CmdError::click(format!(
-                    "cannot tell whether {uri} is published: {detail}"
-                ))),
-            };
+            let presence = remote.stat_release(&uri).await?;
+            if !presence.answered() {
+                return Err(CmdError::click(format!(
+                    "cannot tell whether {uri} is published — {}",
+                    presence.unanswered_sentence(&uri)
+                )));
+            }
+            return Ok(matches!(presence, Presence::Present { .. }));
         }
     }
     let store = JobStorage::new().await?;
@@ -3175,12 +3369,16 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
     let uri = object.to_string();
     if object.namespace() == "releases" {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
-            return match remote.stat_release(&uri).await? {
+            let presence = remote.stat_release(&uri).await?;
+            if !presence.answered() {
+                return Err(CmdError::click(format!(
+                    "cannot read the published size of {uri} — {}",
+                    presence.unanswered_sentence(&uri)
+                )));
+            }
+            return match presence {
                 Presence::Present { size, .. } => Ok(size as u64),
-                Presence::Absent => Err(CmdError::click(format!("{uri} is not published"))),
-                Presence::Unreachable(detail) => Err(CmdError::click(format!(
-                    "cannot read the published size of {uri}: {detail}"
-                ))),
+                _ => Err(CmdError::click(format!("{uri} is not published"))),
             };
         }
     }

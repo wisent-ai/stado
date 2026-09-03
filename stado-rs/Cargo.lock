@@ -2683,7 +2683,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stado"
-version = "0.14.2"
+version = "0.14.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3418,7 +3418,7 @@ dependencies = [
 [[package]]
 name = "wisent-errors"
 version = "1.0.0"
-source = "git+https://github.com/wisent-ai/wisent-errors?rev=e3014d2c900e499e171aeed8804da10bc7d93bf8#e3014d2c900e499e171aeed8804da10bc7d93bf8"
+source = "git+https://github.com/wisent-ai/wisent-errors?rev=dc809f44cce81ac1b9b325f55fd9b2f3127930e9#dc809f44cce81ac1b9b325f55fd9b2f3127930e9"
 
 [[package]]
 name = "writeable"

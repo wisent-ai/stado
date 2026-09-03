@@ -10,6 +10,13 @@
 # interval should be approximately one minute.
 
 set -euo pipefail
+# The units this host is asked about. `WC_HEALTH_UNITS` is the operator's own
+# addition; the registry's declarations for this host are unioned onto it below,
+# once the binary that can read them is resolved. A hand-typed list was the only
+# source until 2026-09-03, and the registry had declared `stado-resolver` on
+# ubuntu-server-rtx-pro-6000 while the beacon watched `wisent-agent.service`
+# alone -- so `registry doctor` reported `missing-plist` for a unit that was
+# active with a live pid. Two lists and nothing reconciling them.
 UNITS_TO_WATCH="${WC_HEALTH_UNITS:-wisent-agent.service}"
 HOST_SLUG=$(/bin/hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')
 
@@ -29,6 +36,22 @@ if [ ! -x "$STADO_BIN" ]; then
     # here instead is why the fleet's one Linux machine reported nothing.
     collect_only=yes
     STADO_BIN=""
+fi
+
+# Union the registry's own declarations for this host onto the list above.
+#
+# Asked of the binary rather than derived here, for the same reason the
+# inference summary is: the registry is the binary's to read, and a second
+# reader in shell would be a second answer to "what does this host run".
+# Failure is not fatal -- a host that cannot reach the registry still reports
+# the units it was told about, which is strictly more than nothing.
+if [ -n "$STADO_BIN" ] && declared_units=$("$STADO_BIN" host beacon-units 2>/dev/null); then
+    for declared in $declared_units; do
+        case ",${UNITS_TO_WATCH}," in
+            *",${declared},"*) ;;
+            *) UNITS_TO_WATCH="${UNITS_TO_WATCH},${declared}" ;;
+        esac
+    done
 fi
 
 # The same coordinates the macOS collector derives, for the same reason: the
@@ -89,24 +112,132 @@ disk_pct="${disk_pct_str%%%}"
 disk_avail_gb=$(( ${disk_avail_kb:-0} / 1024 / 1024 ))
 
 
-# systemctl unit states (one entry per UNITS_TO_WATCH item, comma-sep).
+# `systemctl --user`, with the environment a login shell does not carry.
+# Transcribed from the `systemctl_user()` helper the remote service scripts
+# already use, because a state read that asks a different manager than the
+# writer used is a state read about a different unit.
+systemctl_user() {
+    runtime="/run/user/$(/usr/bin/id -u)"
+    /usr/bin/env \
+        XDG_RUNTIME_DIR="$runtime" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+        /usr/bin/systemctl --user "$@"
+}
+
+# Run one systemctl query against a named manager.
+systemctl_in() {
+    manager="$1"
+    shift
+    case "$manager" in
+        system) /usr/bin/systemctl "$@" ;;
+        user) systemctl_user "$@" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Which manager has the unit loaded: `system`, `user`, or nothing.
+#
+# `LoadState` is the discriminator, because it separates the two facts this
+# script used to merge: `not-found` means this manager has never heard of the
+# unit, and `loaded` means it has and can be asked about its state. The fleet
+# installs some units into `systemd --user` under `~/.config/systemd/user`, so
+# asking the SYSTEM manager about one answered `not-found` and every such unit
+# was recorded `inactive`.
+unit_manager() {
+    if [ "$(/usr/bin/systemctl show -p LoadState --value "$1" 2>/dev/null)" = loaded ]; then
+        printf 'system\n'
+    elif [ "$(systemctl_user show -p LoadState --value "$1" 2>/dev/null)" = loaded ]; then
+        printf 'user\n'
+    fi
+}
+
+# Which launchd domain holds the label: `system`, `gui/<uid>`, or nothing.
+#
+# `launchctl print` is read-only, needs no privilege on Darwin, and is the ONLY
+# reader that can answer for the system domain -- `launchctl list` cannot print
+# it at all. That gap is not theoretical: `com.wisent.always-on.brama` and
+# `com.wisent.always-on.skarbiec` are declared as system LaunchDaemons on
+# charless-mac-mini, and the beacon there reported both `inactive` while
+# `brama serve` and `skarbiec serve` were listening. The system domain is asked
+# first, in the order `service bootout` acts in.
+launchd_domain() {
+    for domain in "system" "gui/$(/usr/bin/id -u)"; do
+        if /bin/launchctl print "$domain/$1" >/dev/null 2>&1; then
+            printf '%s\n' "$domain"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# One scalar out of `launchctl print`, or empty.
+#
+# Only `pid`, `state`, `last exit code` and `runs` are ever taken: the same
+# fixed set `stado service label-print` restricts itself to, because
+# `launchctl print` also dumps the job's whole environment and this fleet's
+# units carry tokens there. A beacon that published those would put
+# credentials into an object every host can read.
+launchd_field() {
+    printf '%s\n' "$2" | /usr/bin/awk -v key="$1" '
+        $0 ~ "^[[:space:]]*" key " = " {
+            sub("^[[:space:]]*" key " = ", "")
+            gsub(/^"|"$/, "")
+            print
+            exit
+        }' 2>/dev/null
+}
+# Per-unit state, from whichever manager on this host actually holds the unit.
+#
+# Branched on the OS because until 2026-09-03 it was not: the loop asked
+# `/usr/bin/systemctl` on every host, so on the macOS boxes -- where every
+# managed unit is a launchd job -- it asked a binary that does not exist and
+# recorded `inactive` for all of them.
+os=$(/usr/bin/uname -s 2>/dev/null || printf 'unknown')
 units_json=""
 for unit in ${UNITS_TO_WATCH//,/ }; do
     case "$unit" in
         *weles*) echo "host_health_beacon: raw Weles unit lifecycle is forbidden"; false ;;
     esac
-    if /usr/bin/systemctl is-active "$unit" >/dev/null 2>&1; then
-        state="active"
-    elif /usr/bin/systemctl is-failed "$unit" >/dev/null 2>&1; then
-        state="failed"
+    manager=""
+    state="unknown"
+    n_restarts="?"
+    since="?"
+    if [ "$os" = "Darwin" ]; then
+        manager=$(launchd_domain "$unit")
+        if [ -n "$manager" ]; then
+            printed=$(/bin/launchctl print "$manager/$unit" 2>/dev/null || printf '')
+            pid=$(launchd_field pid "$printed")
+            last_exit=$(launchd_field 'last exit code' "$printed")
+            runs=$(launchd_field runs "$printed")
+            if [ -n "$pid" ]; then
+                state="active"
+            elif [ -n "$last_exit" ] && [ "$last_exit" != 0 ]; then
+                state="failed"
+            else
+                state="inactive"
+            fi
+            n_restarts="${runs:-?}"
+        fi
     else
-        state="inactive"
+        manager=$(unit_manager "$unit")
+        if [ -n "$manager" ]; then
+            if systemctl_in "$manager" is-active "$unit" >/dev/null 2>&1; then
+                state="active"
+            elif systemctl_in "$manager" is-failed "$unit" >/dev/null 2>&1; then
+                state="failed"
+            else
+                state="inactive"
+            fi
+            n_restarts=$(systemctl_in "$manager" show -p NRestarts --value "$unit" 2>/dev/null || echo "?")
+            since=$(systemctl_in "$manager" show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null || echo "?")
+        fi
     fi
-    # Restart counter: parse from `systemctl show -p NRestarts`.
-    n_restarts=$(/usr/bin/systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo "?")
-    since=$(/usr/bin/systemctl show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null || echo "?")
+    # An empty manager means no manager on this host has the unit loaded, so
+    # nothing was observed. Reported as `unknown` and NOT as `inactive`: "I
+    # could not see it" and "it is stopped" are different facts, and merging
+    # them is what let running units be reported as ones that do not exist.
     if [ -n "$units_json" ]; then units_json="$units_json,"; fi
-    units_json="$units_json\"$unit\":{\"state\":\"$state\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
+    units_json="$units_json\"$unit\":{\"state\":\"$state\",\"manager\":\"${manager:-none}\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
 done
 
 if [ -n "$STADO_BIN" ] && inference_json=$("$STADO_BIN" inference beacon); then

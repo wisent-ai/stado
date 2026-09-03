@@ -169,6 +169,7 @@ async fn import_activations(
                 "Invalid value for '--desired-state-dir': Directory '{desired_state_dir}' does not exist."
             )),
             code: 2,
+            ..CmdError::default()
         });
     }
     let manifest = build_activation_manifest(repo, revision, dir, run_id, job_ids, version)
@@ -353,6 +354,7 @@ async fn publish(
                 "Invalid value for 'MANIFEST_PATH': File '{manifest_path}' does not exist."
             )),
             code: 2,
+            ..CmdError::default()
         });
     }
     let manifest = ArtifactManifest::from_json(&std::fs::read_to_string(path)?)?;
