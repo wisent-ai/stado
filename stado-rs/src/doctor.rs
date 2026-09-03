@@ -81,12 +81,24 @@ fn storage_adapter(name: &str) -> Option<crate::capabilities::StorageAdapter> {
 /// concurrently, so this bounds the whole command and not one row of it.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(u8::BITS as u64);
 
-/// Verdict of one check.
+/// Verdict of one check — or, for [`Status::Unmeasured`], the absence of a
+/// verdict.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Status {
     /// Nothing to do.
     #[default]
     Pass,
+    /// The probe never answered, so this check says nothing about the world.
+    ///
+    /// Not a verdict. A probe that ran out of its budget used to be a FAIL,
+    /// and on 2026-09-03 that made `doctor` report six failures of which four
+    /// were 8- and 24-second timeouts under load the doctor itself was
+    /// generating — the same three checks passed five minutes later. An
+    /// operator who is shown four wolves learns to ignore the shepherd, and
+    /// "the probe did not answer" is a statement about the probe, never about
+    /// the deployment. This is the `absent` versus `unreachable` distinction
+    /// this fleet already treats as load-bearing everywhere else.
+    Unmeasured,
     /// Works, but a documented hazard is live.
     Warn,
     /// Blocking: the deployment cannot do its job in this state.
@@ -98,6 +110,7 @@ impl Status {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Pass => "PASS",
+            Self::Unmeasured => "UNMEASURED",
             Self::Warn => "WARN",
             Self::Fail => "FAIL",
         }
@@ -107,6 +120,7 @@ impl Status {
     pub const fn key(self) -> &'static str {
         match self {
             Self::Pass => "pass",
+            Self::Unmeasured => "unmeasured",
             Self::Warn => "warn",
             Self::Fail => "fail",
         }
@@ -114,12 +128,21 @@ impl Status {
 
     /// The more severe of two verdicts. Lets a check that inspects several
     /// providers reach one verdict without ranking numbers.
+    ///
+    /// `Unmeasured` outranks `Pass` and nothing else: an incomplete sweep must
+    /// not read as clean, and must not read as broken either.
     pub const fn worst(self, other: Self) -> Self {
         match (self, other) {
             (Self::Fail, _) | (_, Self::Fail) => Self::Fail,
             (Self::Warn, _) | (_, Self::Warn) => Self::Warn,
+            (Self::Unmeasured, _) | (_, Self::Unmeasured) => Self::Unmeasured,
             _ => Self::Pass,
         }
+    }
+
+    /// Whether this row is a statement about the deployment at all.
+    pub const fn is_verdict(self) -> bool {
+        !matches!(self, Self::Unmeasured)
     }
 }
 
@@ -139,6 +162,14 @@ pub struct Check {
     pub detail: String,
     /// The env var or command that changes the outcome.
     pub remedy: String,
+    /// What this check interrogated, as fields rather than as prose.
+    ///
+    /// Empty means the check counts no subjects — one endpoint, one config
+    /// file, one yes-or-no question — not that it looked at nothing. A check
+    /// that does count subjects puts the number here as well as in `detail`,
+    /// so "did this check actually measure anything" is answerable from
+    /// `doctor --json` without parsing English.
+    pub measured: Vec<crate::fleet_shape::Measurement>,
 }
 
 impl Check {
@@ -155,6 +186,7 @@ impl Check {
             status,
             detail,
             remedy: remedy.to_string(),
+            measured: Vec::new(),
         }
     }
 
@@ -166,6 +198,20 @@ impl Check {
         Self::new(id, title, Status::Fail, detail, remedy)
     }
 
+    /// A check whose probe never answered. Carries no verdict about the
+    /// deployment, and says which budget it ran out of.
+    fn unmeasured(id: &'static str, title: &'static str, detail: String, remedy: &str) -> Self {
+        Self::new(id, title, Status::Unmeasured, detail, remedy)
+    }
+
+    /// Record what one rule interrogated. Chainable so a probe can state its
+    /// subject count on the same expression that builds the row.
+    fn measuring(mut self, check: &'static str, host: Option<String>, subjects: u64) -> Self {
+        self.measured
+            .push(crate::fleet_shape::Measurement::new(check, host, subjects));
+        self
+    }
+
     fn to_json(&self) -> Value {
         json!({
             "id": self.id,
@@ -173,6 +219,7 @@ impl Check {
             "status": self.status.key(),
             "detail": self.detail,
             "remedy": self.remedy,
+            "measured": self.measured.iter().map(crate::fleet_shape::Measurement::to_json).collect::<Vec<Value>>(),
         })
     }
 }
@@ -185,6 +232,7 @@ struct Findings {
     status: Status,
     notes: Vec<String>,
     remedies: Vec<String>,
+    measurements: Vec<crate::fleet_shape::Measurement>,
 }
 
 impl Findings {
@@ -202,6 +250,12 @@ impl Findings {
         }
     }
 
+    /// Record what one rule interrogated, beside the prose note that says the
+    /// same thing in a sentence.
+    fn measure(&mut self, measurement: crate::fleet_shape::Measurement) {
+        self.measurements.push(measurement);
+    }
+
     /// `base` is the knob that governs this check when nothing went wrong.
     fn into_check(self, id: &'static str, title: &'static str, base: &str) -> Check {
         let remedy = if self.remedies.is_empty() {
@@ -215,6 +269,7 @@ impl Findings {
             status: self.status,
             detail: self.notes.join("; "),
             remedy,
+            measured: self.measurements,
         }
     }
 }
@@ -250,6 +305,16 @@ impl Report {
             .count()
     }
 
+    /// Checks whose probe never answered. Counted separately from `failed`
+    /// on purpose: adding them together is what made `doctor` report six
+    /// failures when two were real.
+    pub fn unmeasured(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|check| check.status == Status::Unmeasured)
+            .count()
+    }
+
     pub fn warned(&self) -> usize {
         self.checks
             .iter()
@@ -263,6 +328,7 @@ impl Report {
             "status": self.status().key(),
             "failed": self.failed(),
             "warned": self.warned(),
+            "unmeasured": self.unmeasured(),
             "checks": self.checks.iter().map(Check::to_json).collect::<Vec<Value>>(),
         })
     }
@@ -306,13 +372,16 @@ async fn check_placement() -> Check {
     let document = match crate::cli::registry::fetch_document().await {
         Ok(document) => document,
         Err(error) => {
-            return Check::new(
+            // The registry is this check's only source of truth, so a
+            // registry nobody could read leaves the question unanswered
+            // rather than answered badly. Same distinction as an elapsed
+            // probe: no reading, therefore no verdict.
+            return Check::unmeasured(
                 PLACEMENT_ID,
                 PLACEMENT_TITLE,
-                Status::Warn,
-                format!("the registry could not be read: {error}"),
+                format!("not measured: the registry could not be read: {error}"),
                 PLACEMENT_REMEDY,
-            )
+            );
         }
     };
     let here = crate::providers::vast::system_hostname();
@@ -326,10 +395,16 @@ async fn check_placement() -> Check {
             PLACEMENT_TITLE,
             "the directory declares no services".to_string(),
             PLACEMENT_REMEDY,
-        );
+        )
+        .measuring(PLACEMENT_ID, Some(here), 0);
     };
     let mut squatting: Vec<String> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
+    // Declared services whose port this host actually probed. A directory
+    // entry with no active host or no resolvable port is not a subject: it
+    // was skipped, and counting it would inflate the only number that says
+    // whether this row means anything.
+    let mut probed = 0_u64;
     for (name, entry) in services {
         let Some(active) = entry.get("active_host").and_then(serde_json::Value::as_str) else {
             continue;
@@ -337,6 +412,7 @@ async fn check_placement() -> Check {
         let Some(port) = crate::cli::directory::service_port(entry, active) else {
             continue;
         };
+        probed += 1;
         if active.starts_with(&here) || here.starts_with(active) {
             // The placed host itself: the question is the opposite one. A
             // directory entry naming this host while nothing answers its port
@@ -363,13 +439,14 @@ async fn check_placement() -> Check {
         }
     }
     let problems: Vec<String> = squatting.into_iter().chain(absent).collect();
-    if problems.is_empty() {
+    let verdict = if problems.is_empty() {
         Check::pass(
             PLACEMENT_ID,
             PLACEMENT_TITLE,
-            "this host holds no port belonging to a service placed elsewhere, and every \
-             service placed here answers"
-                .to_string(),
+            format!(
+                "{probed} declared service port(s) probed from here; this host holds no port \
+                 belonging to a service placed elsewhere, and every service placed here answers"
+            ),
             PLACEMENT_REMEDY,
         )
     } else {
@@ -379,7 +456,8 @@ async fn check_placement() -> Check {
             problems.join("; "),
             PLACEMENT_REMEDY,
         )
-    }
+    };
+    verdict.measuring(PLACEMENT_ID, Some(here), probed)
 }
 
 /// Run a probe under an explicit deadline. A row whose work grows with the
@@ -396,10 +474,18 @@ async fn bounded_within(
 ) -> Check {
     match tokio::time::timeout(deadline, probe).await {
         Ok(check) => check,
-        Err(_) => Check::fail(
+        // NOT a FAIL. The budget elapsed, which says the probe did not
+        // answer in time and says nothing whatever about the deployment.
+        // Reported as a failure it made three checks read broken under the
+        // doctor's own load and pass again minutes later, which teaches an
+        // operator to discount every row in the table.
+        Err(_) => Check::unmeasured(
             id,
             title,
-            format!("probe did not answer within {deadline:?}"),
+            format!(
+                "not measured: the probe did not answer within {deadline:?}, so this check \
+                 says nothing about the deployment either way"
+            ),
             remedy,
         ),
     }
@@ -699,6 +785,17 @@ async fn check_fleet_shape() -> Check {
         findings.note(Status::Fail, finding.line());
         findings.remedy(finding.command.clone());
     }
+    // The per-rule counts the sweep already computed, as fields beside the
+    // prose. Every host swept contributes one row per rule, so a rule that
+    // proved nothing on one host is visible without reading a sentence.
+    for measurement in &sweep.measurements {
+        findings.measure(measurement.clone());
+    }
+    findings.measure(crate::fleet_shape::Measurement::new(
+        SHAPE_ID,
+        None,
+        u64::from(sweep.measured),
+    ));
     if sweep.measured == 0 {
         findings.note(Status::Fail, sweep.summary());
     } else {
@@ -1438,6 +1535,11 @@ async fn check_release_integrity() -> Check {
             format!("{whole} of {audited} recent published coordinates are whole"),
         );
     }
+    findings.measure(crate::fleet_shape::Measurement::new(
+        INTEGRITY_ID,
+        None,
+        audited as u64,
+    ));
     findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY)
 }
 

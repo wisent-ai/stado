@@ -70,6 +70,10 @@ const CONFIG_NEEDLES: &[&str] = &[
     "is required",
     "not configured",
     "is not configured",
+    // `doctor`'s release row says "must all be configured", and the same
+    // shape reaches here as "must be configured". Matching the phrase rather
+    // than the negation keeps a broken configuration out of `unknown`.
+    "be configured",
     "missing env",
     "must be set",
     "env var",

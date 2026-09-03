@@ -43,6 +43,44 @@ use crate::deploy::{host_channel, host_disk, service, Runner};
 use crate::queue::copy::Endpoint;
 use crate::targets::{ComputeTarget, Registry};
 
+/// How many subjects one rule interrogated on one host.
+///
+/// The prose note beside it says the same thing in a sentence an operator
+/// reads. This is the same number in a field something else can consume: a
+/// count nobody can query is a count nobody can trend, gate or alert on, and
+/// on 2026-09-03 answering "did the prefix rule actually look at anything"
+/// meant parsing a 54,894-character string by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Measurement {
+    /// Stable id of the rule that did the interrogating, or of the check
+    /// itself when the count is not per-rule.
+    pub check: &'static str,
+    /// The host the subjects were counted on, when the count is per-host.
+    pub host: Option<String>,
+    /// Subjects actually interrogated. Zero means this rule proved nothing
+    /// here, which is a result and not a silence.
+    pub subjects: u64,
+}
+
+impl Measurement {
+    pub fn new(check: &'static str, host: Option<String>, subjects: u64) -> Self {
+        Self {
+            check,
+            host,
+            subjects,
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "check": self.check,
+            "host": self.host,
+            "subjects": self.subjects,
+            "proved_nothing": self.subjects == 0,
+        })
+    }
+}
+
 /// One thing that is not the way the fleet says it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -91,6 +129,8 @@ pub struct Sweep {
     /// What a check measured when it had nothing to report. Present so that a
     /// silent check and a check with nothing to check are distinguishable.
     pub notes: Vec<String>,
+    /// The same per-rule counts the notes carry in prose, as fields.
+    pub measurements: Vec<Measurement>,
 }
 
 impl Sweep {
@@ -195,12 +235,13 @@ async fn sweep_host(
     result: &mut Sweep,
 ) {
     match tokio::time::timeout(HOST_TIMEOUT, host_findings(registry, target, runner)).await {
-        Ok(Ok((mut findings, mut notes))) => {
+        Ok(Ok((mut findings, mut notes, mut measurements))) => {
             result.measured += 1;
             for finding in findings.drain(..) {
                 result.record(finding);
             }
             result.notes.append(&mut notes);
+            result.measurements.append(&mut measurements);
         }
         Ok(Err(error)) => result.unreachable.push((target.name.clone(), error)),
         Err(_) => result.unreachable.push((
@@ -217,7 +258,7 @@ async fn host_findings(
     registry: &Registry,
     target: &ComputeTarget,
     runner: &Runner,
-) -> Result<(Vec<Finding>, Vec<String>), String> {
+) -> Result<(Vec<Finding>, Vec<String>, Vec<Measurement>), String> {
     let mut findings = Vec::new();
     let mut notes = Vec::new();
     let (loaded, posture) = service::loaded_units_with_posture(target, runner)
@@ -251,6 +292,7 @@ async fn host_findings(
     // but a human who already knows the code, so "how many subjects did this
     // check interrogate" was unanswerable from `doctor --json` even though the
     // number was right there.
+    let mut measurements = Vec::new();
     for (check, measured) in [
         (PREFIX_CHECK, labels_measured),
         (ORPHAN_CHECK, orphan_measured),
@@ -267,6 +309,11 @@ async fn host_findings(
                 ""
             }
         ));
+        measurements.push(Measurement::new(
+            check,
+            Some(target.name.clone()),
+            measured as u64,
+        ));
     }
     // One inventory read, two questions: which processes hold which declared
     // ports, and whether the artefacts behind the service units are the ones
@@ -275,7 +322,7 @@ async fn host_findings(
         service_artefacts(target, &reading, &mut findings, &mut notes);
     }
     disk_headroom(target, runner, &mut findings, &mut notes).await;
-    Ok((findings, notes))
+    Ok((findings, notes, measurements))
 }
 
 /// A label carries this fleet's minted prefix exactly once.
