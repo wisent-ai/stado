@@ -263,20 +263,28 @@ if [ -n "$node_dir" ]; then
 fi
 appium_version=''
 drivers=''
+warnings=''
 if [ -n "$appium" ]; then
   appium_version=$("$appium" --version 2>/dev/null | /usr/bin/tr -d '\n\r' || printf '')
   # `driver list --installed` writes its table on stderr in some Appium
   # builds, so both streams are read and the names are matched out of it.
-  drivers=$("$appium" driver list --installed 2>&1 | /usr/bin/tr -d '\r' | /usr/bin/tr '\n' ' ' || printf '')
+  listing=$("$appium" driver list --installed 2>&1 | /usr/bin/tr -d '\r' || printf '')
+  drivers=$(printf '%s' "$listing" | /usr/bin/tr '\n' ' ')
+  # The server's incompatibility verdicts, kept APART from the listing.
+  # Joined into one blob they cannot be told apart, and the reader ends up
+  # quoting a driver's whole table back at the operator as if it were the
+  # sentence about one driver. One field per question.
+  warnings=$(printf '%s' "$listing" | /usr/bin/grep -E 'may be incompatible' | /usr/bin/tr '\n' ' ' || printf '')
 fi
 adb_version=''
 if [ -n "$adb" ]; then
   adb_version=$("$adb" version 2>/dev/null | /usr/bin/head -n 1 | /usr/bin/tr -d '\n\r' || printf '')
 fi
-printf '{"appium_path":"%s","appium_version":"%s","drivers":"%s","adb_path":"%s","adb_version":"%s"}\n' \
+printf '{"appium_path":"%s","appium_version":"%s","drivers":"%s","warnings":"%s","adb_path":"%s","adb_version":"%s"}\n' \
   "$(json_escape "$appium")" \
   "$(json_escape "$appium_version")" \
   "$(json_escape "$drivers")" \
+  "$(json_escape "$warnings")" \
   "$(json_escape "$adb")" \
   "$(json_escape "$adb_version")"
 "##;
@@ -783,7 +791,7 @@ pub async fn verify(
     // says nothing about them cannot fail on them, and a report that omitted
     // them is how `charless-mac-mini` kept a driver the server refuses to
     // host, waiting to deadlock npm for the next install into that tree.
-    for (driver, server_said) in incompatible_drivers(&installed_drivers) {
+    for (driver, server_said) in incompatible_drivers(&field("warnings")) {
         if declared.drivers.iter().any(|held| *held == driver) {
             continue;
         }
