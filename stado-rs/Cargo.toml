@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.14.1"
+version = "0.14.6"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -47,7 +47,15 @@ tempfile = "3"
 # Pinned to a commit, not to a branch. A shared failure vocabulary that moves
 # under this crate with no commit here saying so is how the trim rule changed
 # twice in one hour; the lock is the second guard, this rev is the first.
-wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "e3014d2c900e499e171aeed8804da10bc7d93bf8" }
+#
+# `dc809f4` adds `refused`, for a policy that said no. Nothing in the previous
+# seven codes described a refusal this fleet states itself: `not_found` sends
+# an operator looking for a missing path, `auth` names a credential that was
+# never presented, and `config` calls our deployment broken when it is working
+# as declared. The allowlist below this crate's `host exec` needed exactly
+# that word, and inventing it locally would have been the second vocabulary
+# this dependency exists to prevent.
+wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "dc809f44cce81ac1b9b325f55fd9b2f3127930e9" }
 
 [dev-dependencies]
 parking_lot = "0.12"

@@ -179,6 +179,40 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// `stado host beacon-units` — the unit ids the registry declares for this
+/// machine, one per line.
+///
+/// The list the health beacon must ask systemd or launchd about. Answered from
+/// the registry rather than assembled in the collector, because the registry
+/// is already the one place that says what a host runs and a second list in
+/// shell would be a second answer to that question. That second list existed:
+/// `WC_HEALTH_UNITS`, typed per host, and on ubuntu-server-rtx-pro-6000 it
+/// named `wisent-agent.service` alone while the registry declared
+/// `stado-resolver` there. The declared unit was never asked about, so the
+/// beacon carried no entry for it and `registry doctor` reported it as a unit
+/// the host does not have — while it was active with a live pid.
+///
+/// Never fails the caller. A machine that is not in the registry, or a
+/// registry that cannot be read, prints nothing and exits zero: the beacon
+/// then reports the operator's own list, and a collector that died here would
+/// report nothing at all.
+pub async fn beacon_units() -> Result<(), CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let Ok(Some(target)) = crate::providers::local::agent::lookup_self_auto(&hostname).await else {
+        return Ok(());
+    };
+    for service in crate::deploy::service::declared_services(&target) {
+        let unit = service.unit_id();
+        // A unit id carrying a space or a comma would break the collector's
+        // own comma-separated list, and nothing in this fleet has one.
+        if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
+            continue;
+        }
+        println!("{unit}");
+    }
+    Ok(())
+}
+
 fn valid_beacon_host(host: &str) -> bool {
     let bytes = host.as_bytes();
     !bytes.is_empty()
@@ -2725,11 +2759,26 @@ fn gib(blocks: i64) -> f64 {
 
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
 /// command (`docs/missing-commands.md` item six).
+///
+/// The failure keeps whatever
+/// [`crate::deploy::host_exec::ExecRefusal`] already knew about itself:
+/// an allowlist refusal reaches the operator as the code it stated, its
+/// approved spellings as help beside it, and — when `--json` was asked
+/// for — as a document rather than as prose the caller cannot parse.
 pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_exec::exec_host(target, &words, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(|exc| {
+            let mut error = CmdError::click(exc.message).machine_readable(json);
+            if let Some(code) = exc.code {
+                error = error.stating(code);
+            }
+            if let Some(help) = exc.help {
+                error = error.helping(help);
+            }
+            error
+        })?;
     let expected = crate::deploy::host_exec::OK_STATUS;
     if json {
         print_json(&report);
@@ -6699,6 +6748,164 @@ pub async fn weles_browser_runtime(
         Some(reason) => Err(CmdError::click(reason)),
         None => Ok(()),
     }
+}
+
+/// `stado host mobile-runtime TARGET [--repair] [--json]` — verify, and
+/// optionally install, the mobile automation runtime a host declares.
+///
+/// A host that declares no runtime exits zero after saying so. That is not a
+/// pass rounded out of silence: `mobile_runtime` absent means the host is not
+/// a mobile placement, and the alternative — failing every host in the fleet
+/// against a runtime two of them need — is how an operator learns to write
+/// `|| true` after the command, which is the argument
+/// [`crate::host_software`] makes about programs nothing declares.
+pub async fn mobile_runtime(target: &str, repair: bool, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let Some(declared) = crate::deploy::mobile_runtime::requirement(&resolved).cloned() else {
+        if json {
+            print_json(&json!({
+                "status": crate::deploy::mobile_runtime::OK_STATUS,
+                "target": resolved.name,
+                "runtime": "undeclared",
+                "components": [],
+            }));
+        } else {
+            println!(
+                "{}: declares no mobile_runtime, so nothing is required of it here. Declare one \
+                 in the registry target to place a mobile capture family on this host",
+                resolved.name
+            );
+        }
+        return Ok(());
+    };
+    let mut report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let mut installed: Vec<String> = Vec::new();
+    if repair {
+        installed = crate::deploy::mobile_runtime::repair(&resolved, &declared, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // Re-verify: the host's own answer decides, not the installer's.
+        report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+
+    if json {
+        let mut object = report.to_report(&resolved.name);
+        object.insert("repaired".to_string(), json!(installed));
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+    } else {
+        println!("host:     {}", resolved.name);
+        println!("runtime:  {}", report.verdict());
+        for line in &installed {
+            println!("repair:   {line}");
+        }
+        super::table::print(
+            &["COMPONENT", "DECLARED", "OBSERVED", "STATE", "RESOLVED AT"],
+            &report
+                .components
+                .iter()
+                .map(|component| {
+                    vec![
+                        component.name.clone(),
+                        component.declared.clone(),
+                        if component.observed.is_empty() {
+                            "-".to_string()
+                        } else {
+                            component.observed.clone()
+                        },
+                        component.state.clone(),
+                        component.path.clone(),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    match report.failure(&resolved.name) {
+        Some(reason) => Err(CmdError::click(reason)),
+        None => Ok(()),
+    }
+}
+
+/// `stado host mobile-placement [--family ios|android] [--json]` — which
+/// hosts a mobile capture family may be placed on.
+///
+/// Read out of the registry's declarations and nothing else, contacting no
+/// host. That is the point of it: before this existed, the way to find out
+/// whether a host could take the iOS family was to ask the host, and a
+/// refusal from a machine that cannot run the family at all was
+/// indistinguishable from a fleet-wide policy gap — which is exactly how the
+/// four crawl families spent 2026-09-03 blocked on a question nobody could
+/// answer. A host that declares no runtime for the family is not in the
+/// answer, so it is never asked.
+///
+/// An empty answer exits non-zero and names the capability: no host declaring
+/// the family is a state to act on, not a quiet zero.
+pub async fn mobile_placement(family: Option<&str>, json: bool) -> Result<(), CmdError> {
+    if let Some(asked) = family {
+        if crate::deploy::mobile_runtime::family_driver(asked).is_none() {
+            return Err(CmdError::usage(format!(
+                "{asked:?} is not a mobile capture family; this build carries {}",
+                crate::deploy::mobile_runtime::FAMILIES
+                    .iter()
+                    .map(|(name, driver)| format!("{name} (driver {driver})"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )));
+        }
+    }
+    let registry = load_registry_by_source("auto").await?;
+    let placements = crate::deploy::mobile_runtime::placements(&registry, family);
+    if json {
+        print_json(&json!({
+            "status": "mobile_placement",
+            "capability": crate::deploy::mobile_runtime::CAPABILITY_ID,
+            "family": family,
+            "placements": placements,
+        }));
+    } else if placements.is_empty() {
+        println!(
+            "no registry host declares the {} capability for {}",
+            crate::deploy::mobile_runtime::CAPABILITY_ID,
+            family.unwrap_or("any mobile capture family"),
+        );
+    } else {
+        super::table::print(
+            &["FAMILY", "HOST", "DRIVER", "APPIUM", "RESOLVE APPIUM AT", "RESOLVE ADB AT"],
+            &placements
+                .iter()
+                .map(|placement| {
+                    vec![
+                        placement.family.clone(),
+                        placement.host.clone(),
+                        placement.driver.clone(),
+                        placement.appium.clone(),
+                        placement.appium_paths.join(" "),
+                        if placement.adb_paths.is_empty() {
+                            "-".to_string()
+                        } else {
+                            placement.adb_paths.join(" ")
+                        },
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    if placements.is_empty() {
+        return Err(CmdError::click(format!(
+            "no host declares {} for {}; declare targets[].mobile_runtime with the family's \
+             driver on a host that can carry it",
+            crate::deploy::mobile_runtime::CAPABILITY_ID,
+            family.unwrap_or("any mobile capture family"),
+        )));
+    }
+    Ok(())
 }
 
 /// What one `host capability-route` invocation asks for.

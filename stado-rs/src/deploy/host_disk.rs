@@ -257,6 +257,17 @@ pub struct CleanupState {
     pub path: Option<String>,
     pub last_pass_at: Option<String>,
     pub last_success_at: Option<String>,
+    /// When a pass was last PREVENTED from running because a workload held
+    /// the run lock in shared mode, from the janitor's own
+    /// `last_prevented_at`.
+    ///
+    /// The distinction `last_success_at` alone cannot draw. A janitor that is
+    /// being prevented is healthy and blocked; a janitor that is silent is
+    /// broken or unscheduled; and before this was recorded both read as the
+    /// same absence, so a host running one long job looked exactly like a host
+    /// whose janitor had died. `None` on a host that has never been prevented,
+    /// and on any host whose janitor predates the stamp.
+    pub last_prevented_at: Option<String>,
     pub outcome: Option<String>,
     /// Which process wrote the report this reading came from, and the version
     /// of the binary that wrote it.
@@ -492,6 +503,10 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
         path: None,
         last_pass_at: text("started_at").or_else(|| last_attempt.and_then(iso_from_epoch)),
         last_success_at: text("last_success_at"),
+        last_prevented_at: document
+            .get("last_prevented_at")
+            .and_then(Value::as_f64)
+            .and_then(iso_from_epoch),
         outcome: text("outcome"),
         writer: text("writer"),
         writer_version: text("writer_version"),
@@ -542,6 +557,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "path": state.path,
             "last_pass_at": state.last_pass_at,
             "last_success_at": state.last_success_at,
+            "last_prevented_at": state.last_prevented_at,
             "outcome": state.outcome,
             "writer": state.writer,
             "writer_version": state.writer_version,

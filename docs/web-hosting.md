@@ -206,6 +206,80 @@ executes the product's `start` script on the port the unit passes it. A product
 whose build needs a credential names it in the platform's `secret_env` as
 `VAR: "item#field"`.
 
+A build-time value that is not a credential goes in the platform's `env`
+instead, as a literal:
+
+```json
+"env": { "NEXT_PUBLIC_SITE_URL": "https://content.wisent.ai" }
+```
+
+`stado web build` exports both maps into the install and the build. The split
+is not cosmetic. `secret_env` names a Skarbiec item and field, so a public
+constant kept there becomes a credential the fleet grants, syncs and audits
+for nothing, and its value stops being visible in the diff that changed it.
+`echo-web`'s build refuses to run without `NEXT_PUBLIC_SITE_URL`, and that URL
+is on the public internet. One variable in both maps is refused: it would have
+two answers.
+
+### A static site is a web product too
+
+Six of these sites are directories of files — `byk-landing`,
+`handtohuman-landing`, `kronika-landing` and `transcript-lake-landing` are
+`index.html` and a stylesheet at the top of the repository, `jeden`'s site is
+its `web` directory, and `tama-landing` builds one into `dist/`. Vercel served
+them by copying the directory, and they are hosted here the same way rather
+than being rewritten as Node servers.
+
+**One rule decides which a product is: a product that declares a `start`
+script is a server, and a product that does not is a static site.** Nothing
+else is consulted — not `next.config.*`, not a dependency on `next`, not which
+directories exist. `start` is what the launcher runs, so "is there a server to
+start" and "what does this product declare" have to be one question. A product
+with a `build` and no `start` is a site whose build writes its files; a product
+with neither is a site whose files are committed, and it needs no
+`package.json` at all.
+
+**The site root is what `--root` names in the build argv, and the checkout
+root when nothing names one.** There is deliberately no probe order over
+`public`, `site`, `dist` and `.`: a probe order is a guess, and a build that
+guesses stages a directory nobody declared.
+
+```json
+"platforms": {
+  "web": {
+    "runner_platform": "darwin-arm64",
+    "quality": [{ "name": "web-quality", "argv": ["stado", "web", "quality", "--root", "dist"] }],
+    "build": { "argv": ["stado", "web", "build", "--root", "dist"] },
+    "stage": {
+      "dist/tama-landing-web.tar.gz": "tama-landing-web.tar.gz",
+      "dist/tama-landing-web.tar.gz.sha256": "tama-landing-web.tar.gz.sha256",
+      "dist/SOURCE_REVISION": "SOURCE_REVISION"
+    }
+  }
+}
+```
+
+The artifact holds the site under one fixed directory, `site/`, plus the same
+`bin/start-web` launcher and a `bin/serve-static.mjs` server generated into the
+tarball. That server uses only `node:http`, `node:fs` and `node:path`: a global
+`serve` would be a dependency of the host rather than of the release, and
+`npx serve` would fetch from the npm registry the first time a unit started —
+a network call in the run path, resolving a version nobody pinned, on a host
+whose whole point is that it runs the bytes someone published. It resolves a
+request as an exact file, then `<path>.html`, then `<path>/index.html`, which
+is the `cleanUrls` behaviour these sites were served with, answers `404.html`
+when the product ships one, refuses anything but `GET` and `HEAD`, and confines
+every resolved path to the site root.
+
+The launcher is the same script with one line different, so the unit's
+contract does not change: the install root resolved from `$0`, `PORT` passed by
+the unit and refused when unset, `WEB_ENV_FILE` sourced with assignments
+exported, and `127.0.0.1` only. **`stado web deploy` is unchanged** — it
+installs a tarball and runs `bin/start-web`, and it cannot tell the two kinds
+apart. When the site root is the checkout root, `.git`, `.github`, `.vercel`,
+`.next`, `node_modules`, `release/` and any `.env*` file are left out: they are
+not part of the site, and one of them is a credential.
+
 ## The hostname and DNS model
 
 One web product owns one hostname. The hostname's zone is whatever the

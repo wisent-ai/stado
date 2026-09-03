@@ -154,25 +154,30 @@ pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 /// This host's janitor has not completed a pass within
 /// [`STALL_INTERVALS`] times its own declared `check_interval_seconds`.
 ///
-/// A BLOCKER, and its own condition rather than a shade of
-/// [`DISK_PRESSURE_UNRESOLVED`]: those two are the disk being full and the
-/// mechanism that empties it being dead, they fail at different times, and
-/// the second one is the one nothing in this product could see. On
-/// `lukasz-macbook` the janitor logged 12,197 passes between 2026-08-18 and
-/// 2026-09-02 and deleted nothing in any of them — 8,539 never resolved a
-/// policy and 2,030 never got the run lock — so `last_success_at` stayed
-/// null for fifteen days while every gate in the fleet read green. The host
-/// then crossed its low watermark, releases stopped fleet-wide, and the
-/// space came back by hand at one in the morning.
+/// A BLOCKER while the disk is also under pressure, and a note otherwise, and
+/// its own condition rather than a shade of [`DISK_PRESSURE_UNRESOLVED`]:
+/// those two are the disk being full and the mechanism that empties it being
+/// dead, they fail at different times, and the second one is the one nothing
+/// in this product could see. On `lukasz-macbook` the janitor logged 12,197
+/// passes between 2026-08-18 and 2026-09-02 and deleted nothing in any of
+/// them — 8,539 never resolved a policy and 2,030 never got the run lock — so
+/// `last_success_at` stayed null for fifteen days while every gate in the
+/// fleet read green. The host then crossed its low watermark, releases stopped
+/// fleet-wide, and the space came back by hand at one in the morning.
 ///
-/// Blocking and not a note, unlike [`LOCAL_SNAPSHOTS_UNRECLAIMABLE`],
-/// because this is not context for a verdict somebody else reached: a host
-/// whose disk-safety mechanism has not run is a host whose free space is
-/// unmanaged, and admitting work onto it is how the incident above happened
-/// a second time. Hosts that declare `mode: "off"` are exempt — a janitor
-/// nobody armed is not a janitor that stalled — and so is a host with no
-/// declared interval to be late against, which [`DISK_CLEANUP_POLICY_UNKNOWN`]
-/// already reports.
+/// Two things this deliberately is not. It is not a pass that was PREVENTED:
+/// a workload holds the run lock in shared mode for its whole duration and
+/// every pass meanwhile answers `lock_busy`, which is the modelled answer and
+/// not a fault, so a janitor being turned away is measured by
+/// `last_prevented_at` and never accumulates here. And it does not refuse work
+/// on a host that still has its headroom: below the watermark a stalled
+/// janitor must block, because nothing is bringing the space back and
+/// admitting a job is how the incident above ended; above it, refusing work
+/// creates no space and only removes capacity.
+///
+/// Hosts that declare `mode: "off"` are exempt — a janitor nobody armed is not
+/// a janitor that stalled — and so is a host with no declared interval to be
+/// late against, which [`DISK_CLEANUP_POLICY_UNKNOWN`] already reports.
 pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 
 /// How many of its own check intervals a janitor may miss before
@@ -448,15 +453,41 @@ fn assemble(
     let stall_after_seconds = policy
         .filter(|policy| policy.mode != "off")
         .map(|policy| policy.check_interval_seconds * STALL_INTERVALS);
-    let disk_cleanup_stalled = match (stall_after_seconds, cleanup_success_age_seconds) {
-        (None, _) => false,
-        // Declared, armed, and no completed pass on record at all. Reported
-        // rather than excused: a janitor that has never finished a pass is the
-        // fifteen-day case exactly, and the state file being absent or fresh
-        // says nothing about whether the thing ever worked.
-        (Some(_), None) => true,
-        (Some(limit), Some(age)) => age > limit,
+    // How long the janitor has been PREVENTED rather than silent. A workload
+    // holds the run lock in shared mode for its whole duration, by design, and
+    // every pass that starts meanwhile answers `lock_busy` — the modelled
+    // answer, not a fault.
+    let cleanup_prevented_age_seconds = reading
+        .state
+        .last_prevented_at
+        .as_deref()
+        .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
+        .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds());
+    // A pass prevented within the same window the stall is measured over is a
+    // janitor that is still running and still being turned away, so the age of
+    // its last success says nothing about its health. Only silence does.
+    //
+    // This is the whole of the 2026-09-03 false blocker: charless-mac-mini ran
+    // one job for 42 minutes, the in-process janitor polled every ten seconds
+    // throughout, and because a prevented pass recorded nothing the success age
+    // reached 2311s against a 1200s limit and `claiming` went off — on a host
+    // with 17.3 GiB free against a 15 GiB watermark and
+    // `disk_pressure_unresolved: false`. The host was refusing new work because
+    // it was doing work.
+    let cleanup_prevented = match (stall_after_seconds, cleanup_prevented_age_seconds) {
+        (Some(limit), Some(age)) => age <= limit,
+        _ => false,
     };
+    let disk_cleanup_stalled = !cleanup_prevented
+        && match (stall_after_seconds, cleanup_success_age_seconds) {
+            (None, _) => false,
+            // Declared, armed, and no completed pass on record at all. Reported
+            // rather than excused: a janitor that has never finished a pass is
+            // the fifteen-day case exactly, and the state file being absent or
+            // fresh says nothing about whether the thing ever worked.
+            (Some(_), None) => true,
+            (Some(limit), Some(age)) => age > limit,
+        };
 
     let mut blockers: Vec<String> = Vec::new();
     // First in the vector, ahead of the staleness it causes: an agent bound to
@@ -480,7 +511,18 @@ fn assemble(
     // Directly after the pressure it explains: an operator who reads
     // "free 45 GiB, watermark 100 GiB" needs the next line to say whether
     // anything is still trying, and for fifteen days there was no such line.
-    if disk_cleanup_stalled {
+    //
+    // It blocks only while the disk is also under pressure, and that is the
+    // case where a stalled janitor genuinely must refuse work: the host is
+    // already below the watermark, nothing is bringing it back, and admitting
+    // a job onto an unmanaged disk is how the fifteen-day incident ended. Above
+    // the watermark it is a NOTE. Refusing work on a host with headroom does
+    // not create a single byte of space; it only removes capacity from the
+    // fleet, and it removed the always-on Mac from the fleet on 2026-09-03 over
+    // a janitor that was healthy. The condition stays visible either way —
+    // `disk_cleanup_stalled` is carried as a field and embedded in the release
+    // verdict, so nothing that could see this before has stopped seeing it.
+    if disk_cleanup_stalled && disk_pressure_unresolved {
         blockers.push(DISK_CLEANUP_STALLED.to_string());
     }
     if diag_flag(payload, "disk_cleanup_policy_known") == Some(false) || low_watermark_gb.is_none()
@@ -505,6 +547,13 @@ fn assemble(
     }
     if disk_pressure_unresolved && local_snapshots.is_some_and(|count| count > 0) {
         notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
+    }
+    // A janitor that is late on a host that still has its headroom. Not a
+    // blocker (see the pressure gate above) and not silence either: an
+    // operator has to be told that the mechanism which maintains this host's
+    // free space is not running, before the day it matters.
+    if disk_cleanup_stalled && !disk_pressure_unresolved {
+        notes.push(DISK_CLEANUP_STALLED.to_string());
     }
     if agent_store.is_none() {
         notes.push(AGENT_STORE_UNREADABLE.to_string());

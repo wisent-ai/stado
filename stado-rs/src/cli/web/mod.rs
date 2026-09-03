@@ -154,11 +154,26 @@ pub(crate) enum WebCommands {
     /// Runs on a release worker, inside the checkout Stado prepared. The
     /// recipe in `.wisent-release.json` names this command; an operator does
     /// not run it by hand.
-    Quality,
+    Quality {
+        /// The directory the site is served from, repository-relative.
+        ///
+        /// Only a static site names one. Absent, the site root is the
+        /// checkout root.
+        #[arg(long)]
+        root: Option<String>,
+    },
     /// Build the checked-out web product and stage its runnable tarball.
     ///
     /// Runs on a release worker, inside the checkout Stado prepared.
-    Build,
+    Build {
+        /// The directory the site is served from, repository-relative.
+        ///
+        /// Only a static site names one — for a product whose build script
+        /// writes into `dist/`, or whose site is not at the repository root.
+        /// Absent, the site root is the checkout root.
+        #[arg(long)]
+        root: Option<String>,
+    },
 }
 
 pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
@@ -202,8 +217,8 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
         WebCommands::Status { name, json } => status::status(name.as_deref(), json).await,
         WebCommands::Route { name, check, json } => route::route(&name, check, json).await,
         WebCommands::Edge(command) => edge::dispatch(command).await,
-        WebCommands::Quality => build::quality(),
-        WebCommands::Build => build::build(),
+        WebCommands::Quality { root } => build::quality(root.as_deref()),
+        WebCommands::Build { root } => build::build(root.as_deref()),
     }
 }
 
