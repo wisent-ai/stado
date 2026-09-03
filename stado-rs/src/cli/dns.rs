@@ -147,6 +147,14 @@ pub(crate) struct Record {
     pub ttl: String,
 }
 
+/// The four fields of the registrar credential a Namecheap call needs.
+///
+/// Named as a set because the grant is widened over the set: asking for one
+/// field at a time would leave a consumer that can read `api_user` and not
+/// `api_key`, which fails on the second read of the first command anybody
+/// runs.
+const REGISTRAR_FIELDS: [&str; 4] = ["api_user", "api_key", "username", "client_ip"];
+
 /// The registrar credential: four named fields, read one at a time so the
 /// broker never hands over a whole item.
 struct Registrar {
@@ -158,6 +166,7 @@ struct Registrar {
 
 impl Registrar {
     async fn read(item: &str) -> Result<Self, CmdError> {
+        settle_readable(item).await?;
         Ok(Self {
             api_user: field(item, "api_user").await?,
             api_key: field(item, "api_key").await?,
@@ -176,6 +185,61 @@ impl Registrar {
             ("TLD".into(), zone.tld.clone()),
         ]
     }
+}
+
+/// Make the registrar credential readable by the consumer this command
+/// authenticates as, before reading it.
+///
+/// Skarbiec grants are per item and per field, so an item nobody has granted
+/// yet is readable by nobody — the first run of `stado dns list wisent.com`
+/// answered `HTTP 403: consumer not authorized to read item field` for
+/// exactly that reason, with the credential sitting in the vault the whole
+/// time and `stado credentials get namecheap_auto --field api_user` answering
+/// the same 403 beside it. The alternative was an operator running `skarbiec
+/// token-mint` by hand, which replaces a whole capability list rather than
+/// adding to it and is how a fleet loses its credentials.
+///
+/// [`crate::credential_store::grant::grant_field_reads`] is the widening that
+/// already exists for this: it reads the live grant, refuses unless the
+/// consumer's own bearer file still hashes to what the vault recorded, takes
+/// the union with what is asked for, and preserves the remaining TTL.
+/// `stado fleet key` settles a freshly minted channel key the same way.
+///
+/// The consumer widened is deliberately [`crate::config::skarbiec_consumer`]
+/// and not the credential-store admin: `read_string` authenticates with that
+/// exact triple — consumer, token file, grant mode — so widening any other
+/// identity leaves the 403 in place while reporting a grant was written. That
+/// is the mistake this comment exists to stop the next reader repeating. A
+/// file store answers its owner directly and has no grant to widen, so this
+/// is a no-op there.
+async fn settle_readable(item: &str) -> Result<(), CmdError> {
+    if crate::credential_store::skarbiec_url().is_none() {
+        return Ok(());
+    }
+    let consumer = crate::config::skarbiec_consumer();
+    let token_file = crate::config::skarbiec_token_file();
+    let outcome = crate::credential_store::grant::grant_field_reads(
+        consumer,
+        std::path::Path::new(token_file),
+        item,
+        &REGISTRAR_FIELDS,
+    )
+    .map_err(|error| {
+        CmdError::click(format!(
+            "cannot make the registrar credential {item:?} readable by {consumer}: {error}"
+        ))
+    })?;
+    if outcome.wrote() {
+        // stderr, not stdout: `--json` callers parse one document, and a
+        // widened grant is not part of it.
+        eprintln!(
+            "granted {consumer} read on {} ({} capabilities held, was {})",
+            outcome.added.join(", "),
+            outcome.held_after,
+            outcome.held_before
+        );
+    }
+    Ok(())
 }
 
 async fn field(item: &str, name: &str) -> Result<String, CmdError> {
