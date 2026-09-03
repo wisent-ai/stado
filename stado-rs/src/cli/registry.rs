@@ -1984,7 +1984,7 @@ fn unread_configuration() -> Vec<Finding> {
 
 /// `stado registry doctor [--json]` — diff registry declarations against
 /// live host state: hosts with no heartbeat, stale beacons, missing
-/// plists, unmanaged agents.
+/// plists, unmanaged agents, and a build that refuses the document itself.
 ///
 /// Exits non-zero on any divergence, naming each one, so it drops straight
 /// into a cron or a CI gate. Liveness comes from the beacons and the
@@ -2046,6 +2046,26 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         .ok()
         .flatten()
         .map(|target| target.name.clone());
+
+    // The raw document, not the typed `Registry`. Two checks below need it and
+    // neither can use the loaded one: `service_directory` and
+    // `service_resolver` are raw-JSON blocks whose model lives in
+    // `service_resolution` so the unread-declaration check is about exactly the
+    // keys no model in this build names, and the build-versus-registry check
+    // has to hold this build's validator against the bytes the authority is
+    // serving.
+    //
+    // Read once, before the per-host loop, because both readers want the same
+    // document and a second fetch could answer with a different generation.
+    //
+    // This read is why the check below can fire at all. `read_registry` above
+    // does NOT gate on `validate_registry`: `fetch_registry_remote_uncached`
+    // loads the document through `load_registry_from_str`, which SKIPS what it
+    // cannot model, and only the last-known-good cache is held to the
+    // contract. So a build that refuses the published registry still reads it,
+    // still answers every question in this command, and — until this row
+    // existed — reported the fleet as if nothing had refused anything.
+    let document = fetch_document().await?;
 
     for target in &registry.targets {
         let slugs = host_health::beacon_slugs(target, &target.name);
@@ -2127,6 +2147,23 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                 finding = finding.about(image.unit.clone());
             }
             findings.push(finding);
+        }
+        // The condition that opened both silent windows, and the one no check
+        // above can see: the build is refusing the document. Nothing had been
+        // replaced when either window opened — the installed file and the
+        // running image agreed, which is why `units_running_replaced_images`
+        // fires nothing — and the REGISTRY was what moved. `resolver status`
+        // learned to publish this for the resolver's own process (#345); this
+        // is the same fault measured for the build an operator is holding,
+        // on the surface that carries every other kind of drift.
+        //
+        // Local-only, and every other machine gets its unmeasured row, for
+        // the reason `observe_unit_images` states about pids: a build's
+        // verdict is knowable only by running that build.
+        for skew in
+            targets::builds_refusing_registry(&target.name, &document, local_host.as_deref())
+        {
+            findings.push(Finding::new(skew.kind(), &target.name, skew.sentence()));
         }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(
@@ -2244,12 +2281,6 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     // document with itself and with the last measurement rather than with a
     // heartbeat, so they run for every target, including the dispatcher pools
     // the liveness checks above skip.
-    //
-    // The raw document, not the typed `Registry`: `service_directory` and
-    // `service_resolver` are raw-JSON blocks whose model lives in
-    // `service_resolution`, and the unread-declaration check is about exactly the
-    // keys no model in this build names.
-    let document = fetch_document().await?;
     let entries: BTreeMap<&str, &Value> = document
         .get("targets")
         .and_then(Value::as_array)
