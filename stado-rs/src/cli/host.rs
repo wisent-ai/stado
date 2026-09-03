@@ -7065,7 +7065,14 @@ pub async fn mobile_placement(family: Option<&str>, json: bool) -> Result<(), Cm
         );
     } else {
         super::table::print(
-            &["FAMILY", "HOST", "DRIVER", "APPIUM", "RESOLVE APPIUM AT", "RESOLVE ADB AT"],
+            &[
+                "FAMILY",
+                "HOST",
+                "DRIVER",
+                "APPIUM",
+                "RESOLVE APPIUM AT",
+                "RESOLVE ADB AT",
+            ],
             &placements
                 .iter()
                 .map(|placement| {

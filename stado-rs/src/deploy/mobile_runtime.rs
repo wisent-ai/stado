@@ -486,7 +486,11 @@ pub fn incompatible_drivers(listing: &str) -> Vec<(String, String)> {
         let Some((name, _)) = rest.1.split_once('"') else {
             continue;
         };
-        if name.is_empty() || found.iter().any(|(held, _): &(String, String)| held == name) {
+        if name.is_empty()
+            || found
+                .iter()
+                .any(|(held, _): &(String, String)| held == name)
+        {
             continue;
         }
         found.push((
@@ -792,7 +796,7 @@ pub async fn verify(
     // them is how `charless-mac-mini` kept a driver the server refuses to
     // host, waiting to deadlock npm for the next install into that tree.
     for (driver, server_said) in incompatible_drivers(&field("warnings")) {
-        if declared.drivers.iter().any(|held| *held == driver) {
+        if declared.drivers.contains(&driver) {
             continue;
         }
         let version = installed_driver_version(&installed_drivers, &driver)
@@ -1015,7 +1019,10 @@ mod tests {
 
     #[test]
     fn a_listed_driver_with_no_version_is_not_guessed_at() {
-        assert_eq!(installed_driver_version("- uiautomator2 [installed]", "uiautomator2"), None);
+        assert_eq!(
+            installed_driver_version("- uiautomator2 [installed]", "uiautomator2"),
+            None
+        );
     }
 
     fn registry_with(entries: &[(&str, Value)]) -> crate::targets::Registry {
@@ -1117,7 +1124,10 @@ mod tests {
             "lukasz-macbook",
             serde_json::json!({"appium":"3.7.0","drivers":["xcuitest"],"platform_tools":false}),
         )]);
-        assert!(placements(&registry, Some("ios")).remove(0).adb_paths.is_empty());
+        assert!(placements(&registry, Some("ios"))
+            .remove(0)
+            .adb_paths
+            .is_empty());
     }
 
     #[test]
