@@ -61,6 +61,7 @@ pub mod resources;
 pub mod results;
 pub mod schedule;
 pub mod secrets;
+pub mod seed_freshness;
 pub mod service;
 pub mod service_converge;
 pub mod service_verify;
@@ -1334,6 +1335,62 @@ enum HostCommands {
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
+    /// Read or set TARGET's disk-cleanup policy in the canonical registry.
+    ///
+    /// Without a mutating flag this prints the policy in force. With one it
+    /// rewrites exactly the named fields, validates the whole registry, and
+    /// compare-and-swaps it, so a policy is an operator declaration rather
+    /// than a document somebody edits by hand. A target that declares no
+    /// policy is seeded from the reporting default before the flags apply.
+    #[command(name = "disk-cleanup")]
+    DiskCleanupPolicy {
+        target: String,
+        /// `off`, `report` or `enforce`; only `enforce` deletes.
+        #[arg(long)]
+        mode: Option<String>,
+        /// Seconds between passes.
+        #[arg(long)]
+        check_interval_seconds: Option<i64>,
+        /// A pass does nothing while more than this many GB are free.
+        #[arg(long)]
+        low_free_gb: Option<i64>,
+        /// A pass stops as soon as this many GB are free.
+        #[arg(long)]
+        target_free_gb: Option<i64>,
+        /// Directories one pass may delete.
+        #[arg(long)]
+        max_items_per_pass: Option<i64>,
+        /// Bytes one pass may delete.
+        #[arg(long)]
+        max_bytes_per_pass: Option<i64>,
+        /// Directories one pass may cross.
+        #[arg(long)]
+        max_scan_items: Option<i64>,
+        /// Seconds one pass may spend; absent means the janitor's own 30.
+        #[arg(long)]
+        max_pass_seconds: Option<i64>,
+        /// Drop the declared pass deadline and return to the janitor's own.
+        #[arg(long)]
+        clear_max_pass_seconds: bool,
+        /// Enable a cleaner by name; repeatable.
+        #[arg(long = "cleaner")]
+        add_cleaner: Vec<String>,
+        /// Disable a cleaner by name; repeatable.
+        #[arg(long)]
+        remove_cleaner: Vec<String>,
+        /// Narrow one cleaner's walk, as `NAME=PATH`; repeatable.
+        #[arg(long, value_name = "NAME=PATH")]
+        cleaner_root: Vec<String>,
+        /// Return one cleaner to its default root; repeatable.
+        #[arg(long)]
+        clear_cleaner_root: Vec<String>,
+        /// One cleaner's age gate, as `NAME=SECONDS`; repeatable.
+        #[arg(long, value_name = "NAME=SECONDS")]
+        cleaner_min_age_seconds: Vec<String>,
+        /// Emit the policy and registry generation as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
     #[command(name = "gpu-power-limit")]
     GpuPowerLimit {
@@ -1906,6 +1963,27 @@ enum HostCommands {
         #[arg(long)]
         file: Option<String>,
         /// Emit the report as JSON. Binary file content is base64 encoded.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Whether each of TARGET's login rows still holds an authenticator seed
+    /// its account accepts.
+    ///
+    /// The vault is asked whether a seed exists; the recorded sign-in history
+    /// is asked whether codes computed from it were accepted or refused, and
+    /// since when. Four conditions with four different repairs come out of
+    /// that join: a seed last known good, a seed every attempt has refused
+    /// since a date, a declared `totp_secret` field carrying nothing, and a
+    /// row whose kind has no such field at all. Reads the host's own files, so
+    /// it still answers while the Weles worker API is down. No seed, password
+    /// or one-time code is read, printed or returned, and no code is computed.
+    #[command(name = "authenticator-seed-freshness")]
+    AuthenticatorSeedFreshness {
+        target: String,
+        /// Judge only this login item instead of every login row.
+        #[arg(long)]
+        login_item: Option<String>,
+        /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -2665,6 +2743,46 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 watts,
                 json,
             } => host::gpu_power_limit(&target, watts, json).await,
+            HostCommands::DiskCleanupPolicy {
+                target,
+                mode,
+                check_interval_seconds,
+                low_free_gb,
+                target_free_gb,
+                max_items_per_pass,
+                max_bytes_per_pass,
+                max_scan_items,
+                max_pass_seconds,
+                clear_max_pass_seconds,
+                add_cleaner,
+                remove_cleaner,
+                cleaner_root,
+                clear_cleaner_root,
+                cleaner_min_age_seconds,
+                json,
+            } => {
+                host::disk_cleanup_policy(
+                    &target,
+                    host::DiskCleanupPolicyEdit {
+                        mode,
+                        check_interval_seconds,
+                        low_free_gb,
+                        target_free_gb,
+                        max_items_per_pass,
+                        max_bytes_per_pass,
+                        max_scan_items,
+                        max_pass_seconds,
+                        clear_max_pass_seconds,
+                        add_cleaner,
+                        remove_cleaner,
+                        cleaner_root,
+                        clear_cleaner_root,
+                        cleaner_min_age_seconds,
+                    },
+                    json,
+                )
+                .await
+            }
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
@@ -2934,6 +3052,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 file,
                 json,
             } => host::weles_run_diagnostics(&target, &run_id, file.as_deref(), json).await,
+            HostCommands::AuthenticatorSeedFreshness {
+                target,
+                login_item,
+                json,
+            } => {
+                seed_freshness::authenticator_seed_freshness(&target, login_item.as_deref(), json)
+                    .await
+            }
             HostCommands::WelesImageInspect { target, url, json } => {
                 host::weles_image_inspect(&target, &url, json).await
             }

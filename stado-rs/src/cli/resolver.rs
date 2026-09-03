@@ -277,6 +277,19 @@ async fn select_resolver_ssh_path(
             Err(_) => failures.push(format!("{}: timed out after 20s", path.name)),
         }
     }
+    // Both call sites of the cleanup below ran at startup, which was enough
+    // while this service restarted every few minutes: 176 launchd runs on
+    // 2026-09-02, each one arriving at a clean slate. With the descriptor
+    // ceiling raised the process now stays up, and a master that dies inside
+    // one lifetime leaves its socket file behind for the rest of it. ssh then
+    // says `ControlSocket ... already exists, disabling multiplexing` and
+    // opens a private connection per request until the authority's sshd
+    // resets them, which reads from the outside as the object store being
+    // unreachable. Unlinking costs nothing - live sessions keep their
+    // descriptors and the next attempt opens a fresh master - so a path that
+    // answered nothing gets its socket dropped here rather than at the next
+    // restart that no longer comes.
+    drop_stale_ssh_sockets();
     Err(format!(
         "no registry SSH connection path answered ({})",
         failures.join("; ")

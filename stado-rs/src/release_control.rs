@@ -25,9 +25,95 @@ pub const RELEASE_MANIFEST_NAME: &str = "release.json";
 pub const RELEASE_SIGNATURE_NAME: &str = "release.sig";
 pub const RELEASE_ARCHIVE_NAME: &str = "release.tar.gz";
 pub const RELEASE_QUALIFICATION_NAME: &str = "qualification.json";
+/// The one object that says which build a coordinate belongs to.
+///
+/// Immutability protects an object, not a version. Two publishers write this
+/// prefix — the tag train writes the executables, `SHA256SUMS`, the platform
+/// archive and `release-manifest-<platform>.json`; the signed pipeline writes
+/// [`RELEASE_MANIFEST_NAME`], [`RELEASE_SIGNATURE_NAME`],
+/// [`RELEASE_ARCHIVE_NAME`] and [`RELEASE_QUALIFICATION_NAME`] — and those two
+/// name sets are DISJOINT, so `--if-absent` never refused either of them.
+/// A version number lives in `Cargo.toml`, which many commits share, so both
+/// producers were entitled to the same coordinate from different revisions.
+///
+/// `stado/0.13.46/darwin-arm64` is what that costs: `release.json` attests
+/// `446ad490…`, `release-manifest-darwin-arm64.json` attests `641a52b2…`, and
+/// `pipeline_catalog_identity` refuses to deliver a version that means two
+/// builds. It refuses at delivery, after both writes; immutable objects mean
+/// the version can never be made to mean one build again.
+///
+/// This object is claimed create-only BEFORE any artifact, by every publisher,
+/// so the second revision is refused while nothing has been written yet.
+pub const RELEASE_REVISION_NAME: &str = "source-revision.json";
 const MAX_RELEASE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
+
+/// The source revision one `product/version/platform` coordinate attests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoordinateRevision {
+    pub schema_version: u32,
+    pub product: String,
+    pub version: String,
+    pub platform: String,
+    pub source_revision: String,
+}
+
+impl CoordinateRevision {
+    /// One claim for exactly these coordinates and this commit.
+    ///
+    /// The revision must be a full lowercase Git commit, the same shape
+    /// [`validate_manifest`] requires: an abbreviated or uppercase spelling of
+    /// one commit would compare unequal to the same commit written the other
+    /// way, and this record exists to be compared.
+    pub fn new(
+        product: &str,
+        version: &str,
+        platform: &str,
+        source_revision: &str,
+    ) -> Result<Self, String> {
+        if !identifier(product) || !identifier(version) || !identifier(platform) {
+            return Err(
+                "release product, version, and platform must be canonical coordinates".to_string(),
+            );
+        }
+        if source_revision.len() != 40
+            || !source_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(
+                "coordinate source revision must be a full lowercase Git commit".to_string(),
+            );
+        }
+        Ok(Self {
+            schema_version: 1,
+            product: product.to_string(),
+            version: version.to_string(),
+            platform: platform.to_string(),
+            source_revision: source_revision.to_string(),
+        })
+    }
+
+    /// The exact bytes this claim is stored as.
+    ///
+    /// Field order is the declaration order and every value is a checked
+    /// identifier, so two publishers holding the same facts serialize the same
+    /// bytes — which is what makes the create-only put idempotent for a
+    /// republish and a refusal for a different build.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    /// Whether this claim describes the coordinate the caller is publishing.
+    pub fn describes(&self, product: &str, version: &str, platform: &str) -> bool {
+        self.schema_version == 1
+            && self.product == product
+            && self.version == version
+            && self.platform == platform
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

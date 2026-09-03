@@ -535,6 +535,21 @@ Operators pin an exact immutable version and platform. Upgrade requires a
 verified release manifest, compatible schema range, backup, health check, and
 rollback coordinate. No runtime follows a mutable `latest` binary.
 
+One version means one build, and that is enforced where publication starts
+rather than where delivery ends. Two publishers write a
+`releases/<product>/<version>/<platform>/` coordinate — the release train
+writes the executables, `SHA256SUMS`, the platform archive and
+`release-manifest-<platform>.json`; the signed pipeline writes `release.json`,
+`release.sig`, `release.tar.gz` and `qualification.json` — and immutability
+alone never separated them, because those name sets are disjoint. Each
+publisher therefore claims `source-revision.json` create-only before its first
+artifact, through `stado release claim-coordinate PRODUCT VERSION PLATFORM
+--source-commit COMMIT`. The first build to reach a version states it; a
+second build is refused there, with the coordinate still empty of artifacts,
+and the refusal names both commits. Republishing the same version from the
+same commit confirms the record and is idempotent, which is what a resumed or
+recovered publication needs.
+
 Stado release artifacts contain the client only; they never bundle or apply
 Supabase migrations. Database rollout is versioned and deployed from
 [`wisent-supabase-oko`](https://github.com/wisent-ai/wisent-supabase-oko)

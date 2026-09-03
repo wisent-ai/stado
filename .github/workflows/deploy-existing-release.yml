@@ -121,6 +121,11 @@ jobs:
           cp "$manifest" "$recovered/release-manifest-$platform.json"
           cp "$archive" "$recovered/stado-v$version-$platform.tar.gz"
 
+          # The same claim every publisher makes first. A resume republishes
+          # the tag's own build, so this confirms the record the train already
+          # wrote and refuses a coordinate some other build owns.
+          "$stado_bin" release claim-coordinate stado "$version" "$platform" \
+            --source-commit "$tag_commit"
           for source in "$recovered"/*; do
             name="${source##*/}"
             "$stado_bin" storage put "$prefix/$name" "$source" --if-absent
@@ -128,8 +133,16 @@ jobs:
       - name: Verify public immutable bytes
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
-          WC_SKARBIEC_CONSUMER: stado-release-api-verifier
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+          # The publisher's acquisition grant, because this step is a CLIENT of
+          # the release channel. `stado-release-api-verifier` is the grant the
+          # object API server presents to verify incoming release bearers, and
+          # Stado refuses it here by design: "release verifier token file must
+          # be distinct from coordinator and product-object verifier grants".
+          # So the 0.13.47 delivery died in this step, on a coordinate whose
+          # bytes were already complete and public, with a message about vault
+          # configuration rather than about the release.
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -266,6 +279,11 @@ jobs:
             "$tag_source/scripts/release_manifest.sh"
           mv "$archive" "$release_dir/$archive_name"
 
+          # The claim before the first put, as in the train: a rebuild of the
+          # tag's own commit confirms the existing record, and any other build
+          # is refused here rather than at delivery.
+          "$recovery_stado" release claim-coordinate stado "$version" "$platform" \
+            --source-commit "$tag_commit"
           for source in "$release_dir"/*; do
             name="${source##*/}"
             state="$("$recovery_stado" storage stat "$prefix/$name" --json |
@@ -289,8 +307,11 @@ jobs:
       - name: Verify public native immutable bytes
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
-          WC_SKARBIEC_CONSUMER: stado-release-api-verifier
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
+          # A client of the release channel, so the publisher's acquisition
+          # grant — see the linux leg above for why the server's verifier grant
+          # is refused here.
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -299,18 +320,23 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/verify_public_stado_release.sh" \
             "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
             "$version" "$platform" "$RUNNER_TEMP"
-      - name: Acquire release channel bearer
-        env:
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
-        run: |
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          token="$("$stado_bin" secrets get stado-release-publisher --field token)"
-          test -n "$token"
-          echo "::add-mask::$token"
-          echo "STADO_API_TOKEN=$token" >> "$GITHUB_ENV"
+      # No raw bearer is acquired for the delivery. This step used to run
+      # `stado secrets get stado-release-publisher --field token` and export it
+      # as `STADO_API_TOKEN`, and Skarbiec refuses that read on purpose:
+      #
+      #   Error: Skarbiec returned HTTP 403:
+      #   {"error":"consumer not authorized to read item field"}
+      #
+      # An acquisition grant lets the client obtain its own bearer inside the
+      # process; it is not a licence to hand the secret to a shell. That
+      # refusal ended the 0.13.47 delivery after every publish and both public
+      # verifications had passed. The delivery authenticates the way every
+      # other step in this file does — the publisher's acquisition grant — and
+      # needs no token in the environment at all.
       - name: Deploy the existing immutable release
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
           STADO_BIN: ${{ github.workspace }}/stado-rs/target/release/stado
+          WC_SKARBIEC_CONSUMER: stado-release-publisher
+          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
         run: scripts/deploy_existing_stado_release.sh '${{ inputs.version }}'

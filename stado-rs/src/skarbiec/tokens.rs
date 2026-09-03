@@ -35,6 +35,13 @@ pub async fn read_machine_token(item: &str, field: &str) -> Result<Option<String
     Client::machine_verifier()?.read_string(item, field).await
 }
 
+/// Resolve one registry-API client bearer through the dedicated verifier
+/// grant. The caller selects `item` from `registry_api.clients`, never from a
+/// request.
+pub async fn read_registry_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+    Client::registry_verifier()?.read_string(item, field).await
+}
+
 pub async fn read_service_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
     Client::service_verifier()?.read_string(item, field).await
 }

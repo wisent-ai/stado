@@ -62,11 +62,40 @@ const STATE_PATH_MARK: &str = "@STATE_PATH@";
 /// the same terms: a crate constant, shell-quoted before it is spliced.
 const LOCK_PATH_MARK: &str = "@LOCK_PATH@";
 
-/// The fixed remote program, with the janitor's state path spliced in by
-/// [`remote_script`]. Read-only: disk usage, cleanup state, snapshots, and a
-/// bounded two-level inventory of the two writable roots that dominate macOS.
-const REMOTE_SCRIPT_TEMPLATE: &str = r#"set -u
-/bin/df -Pk / 2>/dev/null | while IFS= read -r row; do
+/// What the caller of [`remote_script_for`] is going to read.
+///
+/// The script is the definition of every measurement here, so a caller that
+/// consumes fewer fields must not get a second implementation of the ones it
+/// shares: each section below is one constant, and every scope splices the
+/// same constants. Two scopes therefore cannot drift on a field they both
+/// keep, because there is only ever one text producing it.
+///
+/// This exists because the cost is not evenly spread. [`INVENTORY_SECTION`]
+/// runs `du -xk -d 2 "$HOME"` and a depth-5 walk of `/private/var/folders`;
+/// the depth caps the OUTPUT, never the traversal, so it walks the whole
+/// tree. Measured on `lukasz-macbook` on 2026-09-02: the three fields
+/// `host gates` reads take 0.8s together, while the full script had not
+/// finished after 180s and burned `user 7m27s` of CPU, so
+/// `stado host gates lukasz-macbook` died on the two-minute
+/// [`host_channel::remote_timeout`] having computed nothing an operator
+/// could read — `disk_cleanup_stalled` and `cleanup_success_age_seconds`
+/// were unobtainable on the machine the command was running on. The work
+/// was performed for a consumer that does not exist: `host gates` never
+/// reads `inventory`, `clone_summaries` or `lock_holders`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskScope {
+    /// Every field. `host disk`'s [`to_report`] reads all eight, so its
+    /// script is unchanged and its cost is the cost of what it prints.
+    Full,
+    /// `usage`, `state` and `snapshots` only: exactly the three fields
+    /// `deploy::host_gates::assemble` reads. The omitted sections are
+    /// independent commands, so the kept fields are produced by the same
+    /// text, in the same order, as under [`DiskScope::Full`].
+    GateInputs,
+}
+
+/// `df` — the `usage` field. Read by both scopes.
+const DISK_USAGE_SECTION: &str = r#"/bin/df -Pk / 2>/dev/null | while IFS= read -r row; do
   set -- $row
   case "${1:-}" in
     Filesystem|"") continue ;;
@@ -74,13 +103,22 @@ const REMOTE_SCRIPT_TEMPLATE: &str = r#"set -u
   printf 'STADO_DISK\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
 done
-state="$HOME/@STATE_PATH@"
+"#;
+
+/// The janitor's state file — the `state` field, which carries
+/// `last_success_at` and `low_bytes`. Read by both scopes: it is where
+/// `cleanup_success_age_seconds` and `disk_cleanup_stalled` come from.
+const CLEANUP_STATE_SECTION: &str = r#"state="$HOME/@STATE_PATH@"
 if [ -r "$state" ]; then
   printf 'STADO_CLEANUP_STATE\t%s\n' "$(/usr/bin/tr -d '\t\r\n' < "$state")"
 else
   printf 'STADO_CLEANUP_STATE_MISSING\t%s\n' "$state"
 fi
-lock="$HOME/@LOCK_PATH@"
+"#;
+
+/// `lsof` on the run lock — `lock_holders`, `lock_read`, `lock_path`. Read
+/// only by `host disk`'s report; `host gates` never looks at them.
+const CLEANUP_LOCK_SECTION: &str = r#"lock="$HOME/@LOCK_PATH@"
 # Who holds the janitor's run lock. `lock_busy` in a cleanup report and
 # `cleanup_in_progress` in an agent's capacity broadcast are the same fact
 # seen from two sides, and neither one names the holder -- so a host can
@@ -105,7 +143,11 @@ if [ -e "$lock" ] && [ -x /usr/sbin/lsof ]; then
   }
   printf 'STADO_CLEANUP_LOCK_END\t%s\n' "$lock"
 fi
-if [ -x /usr/bin/tmutil ]; then
+"#;
+
+/// `tmutil` — the `snapshots` field. Read by both scopes:
+/// `local_snapshots_unreclaimable` counts them.
+const SNAPSHOT_SECTION: &str = r#"if [ -x /usr/bin/tmutil ]; then
   /usr/bin/tmutil listlocalsnapshots / 2>/dev/null | while IFS= read -r row; do
     case "$row" in
       com.apple.*) printf 'STADO_SNAPSHOT\t%s\n' "$row" ;;
@@ -113,7 +155,15 @@ if [ -x /usr/bin/tmutil ]; then
   done
   printf 'STADO_SNAPSHOT_END\t%s\n' 'listed'
 fi
-if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Darwin" ]; then
+"#;
+
+/// The `du` inventory and the Chromium clone census — `inventory` and
+/// `clone_summaries`. Read only by `host disk`'s report, and the whole cost
+/// of this script: the depth caps the output, not the traversal, so
+/// `du -xk -d 2 "$HOME"` walks the entire home tree. One Darwin guard wraps
+/// both loops, so the section is self-contained and omitting it leaves a
+/// script that still parses to the same values for every other field.
+const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Darwin" ]; then
   for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/Library/Caches:3" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
     root=${spec%:*}
     depth=${spec##*:}
@@ -136,9 +186,34 @@ done
 fi
 "#;
 
-/// The remote program with the janitor's state and lock paths in place.
+/// The remote program for a caller that reads every field.
+///
+/// Retained as the name the existing callers use, and defined in terms of
+/// [`remote_script_for`] so there is one builder and one set of sections.
 pub fn remote_script() -> String {
-    REMOTE_SCRIPT_TEMPLATE
+    remote_script_for(DiskScope::Full)
+}
+
+/// The remote program carrying exactly the sections SCOPE consumes, with the
+/// janitor's state and lock paths in place.
+///
+/// Assembled from the section constants rather than from per-scope text: a
+/// field two scopes share is produced by the same bytes in both, so the
+/// cheap script cannot report a different `usage`, `state` or `snapshots`
+/// than the full one. The sections are independent commands reading
+/// independent sources, so dropping one cannot alter another's output.
+pub fn remote_script_for(scope: DiskScope) -> String {
+    let mut script = String::from("set -u\n");
+    script.push_str(DISK_USAGE_SECTION);
+    script.push_str(CLEANUP_STATE_SECTION);
+    if scope == DiskScope::Full {
+        script.push_str(CLEANUP_LOCK_SECTION);
+    }
+    script.push_str(SNAPSHOT_SECTION);
+    if scope == DiskScope::Full {
+        script.push_str(INVENTORY_SECTION);
+    }
+    script
         .replace(
             STATE_PATH_MARK,
             &shlex_quote(&disk_cleanup::state_relative_path()),

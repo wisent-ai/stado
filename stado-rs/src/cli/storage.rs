@@ -2562,14 +2562,24 @@ impl RemoteObjectApi {
                     "Stado object API returned an invalid object-list URI: {error}"
                 ))
             })?;
+            // Two different faults, and they were one refusal. An item whose
+            // `uri`, `namespace` and `key` disagree is a broken store and
+            // must stop the read. An item outside the requested prefix is a
+            // gateway that answered a wider question than it was asked —
+            // `prefix=queue/` returning `queue_priority/` — and the honest
+            // response is to keep what was asked for, because a fleet still
+            // running that gateway must not make this reader refuse a store
+            // that holds exactly the right objects.
             if object.namespace() != namespace
-                || !object.key().starts_with(prefix)
                 || item.namespace.as_str() != object.namespace()
                 || item.key.as_str() != object.key()
             {
                 return Err(CmdError::click(
                     "Stado object API returned an inconsistent object-list item",
                 ));
+            }
+            if !object.key().starts_with(prefix) {
+                continue;
             }
             values.push(json!({
                 "uri": item.uri,
@@ -3192,6 +3202,23 @@ pub(crate) async fn published_release_coordinates(
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
     for key in keys {
         let key = key.as_str();
+        // Residue from an interrupted multipart upload is not a published
+        // object. `stado storage put` stages parts at
+        // `<key>.__stado_upload/<upload id>/<index>` and promotes them on
+        // completion, so a transfer that died leaves those parts and no object
+        // at all.
+        //
+        // `stado/0.13.44/darwin-arm64` is exactly that: four 3 MiB parts of an
+        // archive, written 2026-09-02T05:38, and nothing else -- no binaries,
+        // no `SHA256SUMS`, no manifest, no signed leg. Counting them made the
+        // coordinate appear in this walk, and the channel audit then reported
+        // it PARTIAL and permanently so. That contradicts the audit's own
+        // doctrine, which says a version that published nothing has no keys
+        // here and must never appear: an empty coordinate holds nothing to be
+        // inconsistent with, and the same version can still publish cleanly.
+        if key.contains(".__stado_upload/") {
+            continue;
+        }
         // `<product>/<version>/<platform>/<name>`; anything shorter is not a
         // coordinate and is skipped rather than guessed at.
         let parts: Vec<&str> = key.split('/').collect();

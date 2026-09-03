@@ -64,6 +64,10 @@ pub enum ReleaseCommands {
     /// Install a delivered release archive's binary on this very host.
     #[command(name = "install-local")]
     InstallLocal(ReleaseInstallLocalArgs),
+    /// Bind one immutable coordinate to exactly one source revision before
+    /// anything is published into it.
+    #[command(name = "claim-coordinate")]
+    ClaimCoordinate(ReleaseClaimCoordinateArgs),
 }
 
 #[derive(Args)]
@@ -109,6 +113,24 @@ pub struct ReleaseInstallLocalArgs {
     /// basename.
     #[arg(long, default_value = "")]
     name: String,
+}
+
+/// `stado release claim-coordinate` — the publishers' shared first step.
+///
+/// Exposed as a command because two of the three publishers are workflow
+/// steps: the tag train and the existing-release recovery run in bash, and a
+/// rule re-implemented in bash is a second source of truth for the one thing
+/// that decides whether a version means one build.
+#[derive(Args)]
+pub struct ReleaseClaimCoordinateArgs {
+    pub product: String,
+    pub version: String,
+    pub platform: String,
+    /// The exact commit these bytes were built from.
+    #[arg(long)]
+    source_commit: String,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -288,6 +310,116 @@ async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<()
     .map(|_| ())
 }
 
+/// What claiming a coordinate found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoordinateClaim {
+    /// This publisher wrote the coordinate's revision record.
+    Claimed,
+    /// The record already existed and names this same build.
+    Confirmed,
+}
+
+impl CoordinateClaim {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Confirmed => "confirmed",
+        }
+    }
+}
+
+/// Bind one immutable coordinate to exactly one source revision, before any
+/// artifact is written into it.
+///
+/// Every publisher calls this first: the signed pipeline through
+/// [`publish_pipeline_release`], the tag train and the existing-release
+/// recovery workflow through `stado release claim-coordinate`. The record is
+/// created only if absent, so the first caller states the build and every
+/// later caller either agrees — a republish of the same version from the same
+/// commit, which is legitimate and idempotent — or is refused here, with
+/// nothing published.
+///
+/// The refusal names both commits and says what to do, because the remedy is
+/// not a retry: immutable objects mean a version that already attests one
+/// build cannot be made to attest another.
+pub(crate) async fn claim_release_coordinate(
+    product: &str,
+    version: &str,
+    platform: &str,
+    source_revision: &str,
+) -> Result<CoordinateClaim, CmdError> {
+    let claim =
+        release_control::CoordinateRevision::new(product, version, platform, source_revision)
+            .map_err(CmdError::click)?;
+    let bytes = claim.canonical_bytes().map_err(CmdError::click)?;
+    let base =
+        release_control::release_base(product, version, platform).map_err(CmdError::click)?;
+    let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
+
+    // A read that fails is not a coordinate without a record: the writer may
+    // simply not have answered. That distinction is why nothing is decided on
+    // a failed read here — the create-only put below is what decides, and it
+    // fails loudly against a writer that cannot be reached.
+    if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
+        return judge_existing_claim(&claim, &existing, &uri);
+    }
+
+    let temporary = tempfile::NamedTempFile::new()?;
+    std::fs::write(temporary.path(), &bytes)?;
+    match crate::cli::storage::store_object(
+        &uri,
+        &temporary.path().display().to_string(),
+        "application/json",
+        true,
+    )
+    .await
+    {
+        Ok(_) => Ok(CoordinateClaim::Claimed),
+        Err(error) => {
+            // Two publishers can reach this line at once, and the loser must
+            // read the winner's record rather than report a write conflict:
+            // one of them is about to publish artifacts and the other must
+            // learn why it may not.
+            match crate::cli::storage::fetch_object_from_writer(&uri).await {
+                Ok(existing) => judge_existing_claim(&claim, &existing, &uri),
+                Err(_) => Err(error),
+            }
+        }
+    }
+}
+
+fn judge_existing_claim(
+    claim: &release_control::CoordinateRevision,
+    existing: &[u8],
+    uri: &str,
+) -> Result<CoordinateClaim, CmdError> {
+    let held: release_control::CoordinateRevision =
+        serde_json::from_slice(existing).map_err(|error| {
+            CmdError::click(format!(
+                "{uri} is not a coordinate revision record: {error}"
+            ))
+        })?;
+    if !held.describes(&claim.product, &claim.version, &claim.platform) {
+        return Err(CmdError::click(format!(
+            "{uri} attests {}/{}/{} and not {}/{}/{}",
+            held.product, held.version, held.platform, claim.product, claim.version, claim.platform
+        )));
+    }
+    if held.source_revision != claim.source_revision {
+        return Err(CmdError::click(format!(
+            "{}/{}/{} already attests source revision {}, and this publisher carries {}. \
+             Release objects are immutable, so one version can never mean two builds: publish a \
+             new version instead of writing a second build into this coordinate",
+            claim.product,
+            claim.version,
+            claim.platform,
+            held.source_revision,
+            claim.source_revision
+        )));
+    }
+    Ok(CoordinateClaim::Confirmed)
+}
+
 pub(crate) struct PipelinePublishRequest<'a> {
     pub product: &'a str,
     pub version: &'a str,
@@ -354,6 +486,18 @@ pub(crate) async fn publish_pipeline_release(
     let qualification_uri = format!("{base}/{}", release_control::RELEASE_QUALIFICATION_NAME);
     let signature_uri = format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME);
     let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
+    // The coordinate's identity first, then its bytes. Publishing an archive
+    // into a coordinate another build already owns is the failure this order
+    // removes: the claim is refused while the prefix is still empty of
+    // artifacts, instead of being detected at delivery once both producers
+    // have written and the version is spent.
+    claim_release_coordinate(
+        request.product,
+        request.version,
+        request.platform,
+        request.source_revision,
+    )
+    .await?;
     put_immutable(&archive_uri, request.archive, "application/gzip").await?;
     put_immutable(
         &qualification_uri,
@@ -1230,6 +1374,42 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     );
     Ok(())
 }
+/// Claim one coordinate from the command line and report what was found.
+async fn claim_coordinate(args: &ReleaseClaimCoordinateArgs) -> Result<(), CmdError> {
+    let outcome = claim_release_coordinate(
+        &args.product,
+        &args.version,
+        &args.platform,
+        &args.source_commit,
+    )
+    .await?;
+    let base = release_control::release_base(&args.product, &args.version, &args.platform)
+        .map_err(CmdError::click)?;
+    let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "state": outcome.label(),
+                "uri": uri,
+                "product": args.product,
+                "version": args.version,
+                "platform": args.platform,
+                "source_revision": args.source_commit,
+            }))?
+        );
+    } else {
+        println!(
+            "{} {} {} {} at source revision {}",
+            outcome.label(),
+            args.product,
+            args.version,
+            args.platform,
+            args.source_commit
+        );
+    }
+    Ok(())
+}
 
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
@@ -1253,5 +1433,6 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
+        ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
     }
 }
