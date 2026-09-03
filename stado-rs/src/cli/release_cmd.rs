@@ -363,6 +363,19 @@ pub(crate) async fn claim_release_coordinate(
     if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
         return judge_existing_claim(&claim, &existing, &uri);
     }
+    // One version, one build, across platforms too.
+    //
+    // The record is per platform because that is where the artifacts live, and
+    // on 2026-09-03 that turned out to be one scope too narrow: 0.14.3's linux
+    // leg was claimed by the tag `8cf54ece` while another publisher had already
+    // claimed the darwin leg from `ccc43c5e`, so the version was split across
+    // producers with each platform internally consistent. A sibling that
+    // attests a different commit is the same defect one level up, so it is
+    // refused here — before this platform's first artifact — and named with
+    // both commits.
+    if let Some(conflict) = sibling_revision_conflict(&claim).await {
+        return Err(conflict);
+    }
 
     let temporary = tempfile::NamedTempFile::new()?;
     std::fs::write(temporary.path(), &bytes)?;
@@ -386,6 +399,47 @@ pub(crate) async fn claim_release_coordinate(
             }
         }
     }
+}
+
+/// The first sibling platform of this version that attests a different commit.
+///
+/// `None` when every readable sibling agrees, and also when nothing can be
+/// read: an unreachable store is not evidence of a second build, and the
+/// per-platform record is still the claim that decides. This only ever adds a
+/// refusal that names two commits, never a permission.
+async fn sibling_revision_conflict(
+    claim: &release_control::CoordinateRevision,
+) -> Option<CmdError> {
+    let coordinates = crate::cli::storage::published_release_coordinates(&claim.product)
+        .await
+        .ok()?;
+    for (version, platform) in coordinates {
+        if version != claim.version || platform == claim.platform {
+            continue;
+        }
+        let base = release_control::release_base(&claim.product, &version, &platform).ok()?;
+        let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
+        let Ok(bytes) = crate::cli::storage::fetch_object_from_writer(&uri).await else {
+            continue;
+        };
+        let Ok(held) = serde_json::from_slice::<release_control::CoordinateRevision>(&bytes) else {
+            continue;
+        };
+        if held.source_revision != claim.source_revision {
+            return Some(CmdError::click(format!(
+                "{}/{} already attests source revision {} for platform {}, and this publisher \
+                 carries {} for {}. A version's platforms are one build: publish a new version \
+                 rather than splitting this one across two commits",
+                claim.product,
+                claim.version,
+                held.source_revision,
+                platform,
+                claim.source_revision,
+                claim.platform
+            )));
+        }
+    }
+    None
 }
 
 fn judge_existing_claim(

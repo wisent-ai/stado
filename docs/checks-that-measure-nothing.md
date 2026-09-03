@@ -1,7 +1,7 @@
 # Checks that measure nothing
 
-One defect shape has now been found thirty-two times in this repository, in
-thirty-two different subsystems, inside about two days. The twentieth was
+One defect shape has now been found thirty-three times in this repository, in
+thirty-three different subsystems, inside about two days. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
 every reading of it was true; the twenty-second is the one where the fleet
 could rule out every mechanism it owns and still not name what had happened;
@@ -16,17 +16,19 @@ measuring the thing that mattered about the same name, not who answered but
 where the bytes went; the twenty-ninth is the only one so far whose
 prevention landed in the same change as its diagnosis; the thirtieth is
 the one that had been true for as long as nobody created the sibling that
-made it visible; and the thirty-second is one row for two instances an hour
+made it visible; the thirty-second is one row for two instances an hour
 apart, because they are one design property: the answer existed at the site,
 was dropped there, and was reconstructed downstream by inference — a janitor
 that could not say it had been prevented, and a refusal that reported itself
-as a retryable timeout. Every instance is
+as a retryable timeout; and the thirty-third is instance 29's own remedy read
+one scope too narrow, found because that remedy refused a real second build.
+Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The thirty-two
+## The thirty-three
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -62,6 +64,7 @@ what is actually there.
 | 30 | `/api/object/list`, `ObjectRef::namespace_prefix`, both `authorized_list_prefix` implementations and `StadoObjectBackend::blob_prefix` (#334) | this listing answers for the prefix that was asked for | **the separator that says what a prefix is.** Every one of those layers called `trim_matches('/')`, so `prefix=queue/` became `queue`, and a store scan for `queue` answers with `queue/` **and every sibling whose name begins with those five letters**. Nothing had one until 2026-09-02 at 23:32, when a migration created `queue_priority/`: the next release train read 9026 priority markers as queued jobs, `list_jobs` could not build the terminal-workdir keep-list, and `release-capacity` refused the 0.13.50 train before a single object was published — a disk pass that never looked at a build cache, blocking a release, because of a trailing slash. **Now three things instead of one:** the separator survives from the query string to the store scan; a client filters an over-broad answer instead of refusing a store that holds exactly the right objects, so a fleet still running the old gateway cannot make a new reader wrong; and an unreadable queue costs the one stage that needs it — reported as `SKIPPED`, keeping every workdir — instead of the whole reclamation. The refusal for a genuinely inconsistent item, where `uri`, `namespace` and `key` disagree, is untouched: breadth and integrity were one error message, and they need opposite responses |
 | 31 | `fetch_release_object` in `src/deploy/host_release.rs` (#345) | the target can discover how many bytes it must fetch | **who answers the question.** The size came from a `Range: 0-0` request's `Content-Range`, which the tailnet proxy in front of the object API produces and the dashboard's own release route does not. Every delivery worked as long as the target was a DIFFERENT host from the one serving the store; the host that serves it fetched over its own loopback, got no `Content-Range`, and refused with `fetch no_declared_size` — so `charless-mac-mini` could not be given the release it publishes, and `deploy-fleet` failed 0.13.52 four times on a host whose bytes were already public. The operator side knew the number the whole time: `release_object_size` reads it from the channel and `archive_bytes` is bound into the program, so the target is told rather than left to derive, and the range probe survives only as the fallback for a size nobody could read. The same change stopped asking that host for its own public name: the service directory states the address each host uses to reach a loopback service, and `release_origin_allowed` had always permitted it |
 | 32 | `cleanup_once`'s `lock_busy` branch at `src/providers/local/disk_cleanup/mod.rs:1938` **and** the `DeployError` -> string -> `classify_message` path through `src/deploy/host_exec.rs:400`, `src/cli/host.rs:2728` and `src/failure.rs:109` | this host's janitor has stalled, and this `host exec` timed out | **the answer that was in hand at the site and thrown away, then guessed back downstream.** Two instances, one property, an hour apart. The janitor: a workload holds the run lock in shared mode for its whole job, so a pass that starts meanwhile answers `lock_busy` — the modelled, healthy answer — and `finish` writes state only when `persist` is `Some`, which that one branch passed as `None`. Line 1353 even special-cased `outcome != "lock_busy"` on a path `lock_busy` could never reach: someone intended to record it and the wiring never carried it there. The janitor is in-process in the agent at a ten-second tick, so roughly **40 prevented passes** left no trace during one 42-minute job on `charless-mac-mini`, `interval_noop` never advanced the stamp, `cleanup_success_age_seconds` reached 2311s against a 1200s limit, and `host gates` turned `claiming` off on a host with **17.3 GiB free, a 15 GiB watermark and `disk_pressure_unresolved: false`** — refusing new work because it was doing work. The classifier: `DeployError` carries no code, `CmdError::click(exc.to_string())` discards it into a string, `classify_message` bare-substring-matches `"timeout"`, and the allowlist refusal **prints the allowlist**, three of whose entries contain `--login-timeout-ms` — so every unapproved command on every host reports `error_code=timeout retryable=true` and every caller retries a decision that will never change. Neither site lacked the information; both dropped it and let an inference downstream reconstruct it wrongly. **Fixed:** the prevented outcome is persisted with its timestamp as `last_prevented_at`, a pass prevented within the stall window is not a stall, and the stall blocks admission only under real pressure. The classifier repair is #343's family and is owned elsewhere |
+| 33 | `claim_release_coordinate` in `src/cli/release_cmd.rs` and the claim step inside each publisher of `deploy.yml` (#351, #366) | one coordinate, one build — the remedy written for instance 29 | **the version above the coordinate, and the moment the claim is made.** The record is per `<version>/<platform>`, so each platform was internally consistent while the version was not: `0.14.3/linux-amd64` attests `8cf54ece` with all ten objects published, and `0.14.3/darwin-arm64` attests `ccc43c5e`, claimed minutes earlier by `Submit product release` on an unrelated commit. Each publisher claimed only its own coordinate, and only when it was already holding a built archive — so the Linux leg published everything before the darwin leg learned the version was spent, leaving a half version no attempt can complete. 0.14.2 and 0.14.4 hold exactly one object each, the darwin claim, for the same reason. Two changes close it: the claim now also reads its sibling platforms and refuses a version whose platforms disagree, and the release train claims **every** declared platform in `release-capacity`, before either publisher starts, so a spent version costs one minute instead of one platform's release |
 
 ## The property they share
 
