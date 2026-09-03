@@ -1445,13 +1445,15 @@ const INTEGRITY_VERSIONS: usize = 6;
 /// been answering `probe did not answer within 8s` instead of auditing
 /// anything.
 ///
-/// The nine probes per coordinate now run concurrently, which is what makes
-/// this bound sufficient rather than merely generous: twelve coordinates at
-/// one round trip each, not 120 in series.
+/// The nine probes per coordinate run concurrently, and so do the two manifest
+/// reads that check the coordinate was built from one revision, which is what
+/// makes this bound sufficient rather than merely generous: twelve coordinates
+/// at two round trips each, not 144 in series.
 const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Walk what the channel actually holds and say, per version and platform,
-/// whether the coordinate is whole, empty, or partial.
+/// whether the coordinate is deliverable: every object present, and every
+/// publisher of it naming one build.
 ///
 /// This exists because the only thing that ever audited the channel was the
 /// act of publishing to it or delivering from it. `stado/0.10.0/darwin-arm64`
@@ -1459,19 +1461,27 @@ const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
 /// something else; `stado/0.11.0/darwin-arm64` sat at 4 objects of 9 and
 /// `stado/0.12.1/linux-amd64` at 2 of 9 for the same reason.
 ///
-/// PARTIAL is the only status this reports, and that is deliberate. A version
-/// that published nothing has no keys in the store, so it never appears in
-/// this walk — correctly, because an empty coordinate holds nothing to be
-/// inconsistent with and the same tag can still publish cleanly. A coordinate
-/// that does appear and is short is permanent: release objects are create-only
-/// and the missing bytes can never be added. That distinction between empty
-/// and partial is the whole lesson of the incident this check comes from.
+/// Two failures are reported and both are permanent, because release objects
+/// are create-only. PARTIAL is a coordinate short of objects that can never be
+/// added. The second is a coordinate whose two publishers built different
+/// revisions, which no later publication can reconcile either — 0.13.27 on
+/// 2026-09-01 and 0.13.49 on 2026-09-03, both discovered by a delivery attempt
+/// long after the train had finished writing them.
+///
+/// A version that published nothing has no keys in the store, so it never
+/// appears in this walk — correctly, because an empty coordinate holds nothing
+/// to be inconsistent with and the same tag can still publish cleanly. That
+/// distinction between empty and damaged is the whole lesson of the incidents
+/// this check comes from.
 ///
 /// Presence comes from [`crate::deploy::host_release::missing_release_objects`],
 /// which reads the coordinate's own `SHA256SUMS` and probes every name it
-/// declares through `storage stat`. No second checksum parser, no second
-/// binary list, and an unreachable store propagates as an error instead of
-/// being counted as an absent object.
+/// declares through `storage stat`. Revision agreement comes from
+/// [`crate::deploy::host_release::coordinate_revision_conflict`], the same
+/// comparison `host release` refuses on. No second checksum parser, no second
+/// binary list, no second definition of what one build means, and an
+/// unreachable store propagates as an error instead of being counted as an
+/// absent object.
 async fn check_release_integrity() -> Check {
     let mut findings = Findings::default();
     findings.remedy(INTEGRITY_REMEDY);
@@ -1516,40 +1526,69 @@ async fn check_release_integrity() -> Check {
             continue;
         }
         audited += 1;
-        match crate::deploy::host_release::missing_release_objects(product, version, platform).await
+        let complete =
+            match crate::deploy::host_release::missing_release_objects(product, version, platform)
+                .await
+            {
+                Ok(missing) if missing.is_empty() => true,
+                Ok(missing) => {
+                    // The coordinates come from the store's own listing, so a
+                    // version that published nothing has no keys and never
+                    // appears here at all — which is the right outcome,
+                    // because an empty coordinate holds nothing to be
+                    // inconsistent with and the same tag can still publish
+                    // cleanly. A coordinate that appears and is short has
+                    // bytes that can never be completed: release objects are
+                    // create-only.
+                    //
+                    // `stado/0.11.0/darwin-arm64` is the shape being caught
+                    // here — archive, manifest and SHA256SUMS present, five
+                    // binaries absent, permanently.
+                    findings.note(
+                        Status::Fail,
+                        format!(
+                            "{version}/{platform} is PARTIAL and permanently so; absent: {}",
+                            missing.join(", ")
+                        ),
+                    );
+                    false
+                }
+                Err(error) => {
+                    findings.note(
+                        Status::Warn,
+                        format!("{version}/{platform} could not be audited: {error}"),
+                    );
+                    false
+                }
+            };
+        if !complete {
+            continue;
+        }
+        // Complete is not the same as coherent. Every object a coordinate
+        // needs can be present while two of them were built from different
+        // revisions, because two publishers write one coordinate and
+        // create-only puts mean neither can overwrite the other. That
+        // coordinate counts nine of nine here and is still undeliverable, so
+        // counting only presence is what let 0.13.49 pass this row at 06:14
+        // while `host release --dry-run` refused it at 06:09.
+        match crate::deploy::host_release::coordinate_revision_conflict(product, version, platform)
+            .await
         {
-            Ok(missing) if missing.is_empty() => whole += 1,
-            Ok(missing) => {
-                // Everything this walk can see is partial, and that is not a
-                // simplification. The coordinates come from the store's own
-                // listing, so a version that published nothing has no keys and
-                // never appears here at all — which is the right outcome,
-                // because an empty coordinate holds nothing to be inconsistent
-                // with and the same tag can still publish cleanly. A
-                // coordinate that appears and is short has bytes that can
-                // never be completed: release objects are create-only.
-                //
-                // `stado/0.11.0/darwin-arm64` is the shape being caught here —
-                // archive, manifest and SHA256SUMS present, five binaries
-                // absent, permanently.
-                findings.note(
-                    Status::Fail,
-                    format!(
-                        "{version}/{platform} is PARTIAL and permanently so; absent: {}",
-                        missing.join(", ")
-                    ),
-                );
-            }
+            Ok(None) => whole += 1,
+            Ok(Some(conflict)) => findings.note(Status::Fail, conflict),
             Err(error) => findings.note(
                 Status::Warn,
-                format!("{version}/{platform} could not be audited: {error}"),
+                format!("{version}/{platform} could not be audited for one build: {error}"),
             ),
         }
     }
     if whole == audited {
         findings.note(
             Status::Pass,
-            format!("{whole} of {audited} recent published coordinates are whole"),
+            format!(
+                "{whole} of {audited} recent published coordinates are whole and built from one \
+                 revision"
+            ),
         );
     }
     findings.measure(crate::fleet_shape::Measurement::new(
