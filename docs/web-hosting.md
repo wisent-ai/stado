@@ -396,6 +396,50 @@ its hostname resolves to the edge, rather than asking a host about a unit that
 was never deployable; `stado web remove` retracts the hostname and reports
 `no-unit`.
 
+### A hostname in front of an existing service
+
+`brama.wisent.com` is not a web product. Brama is a Rust binary with its own
+managed unit on the mini, answering `127.0.0.1:18081`, and it is already
+published over public HTTPS — by a Vercel project whose whole content is a
+catch-all rewrite to `https://charless-mac-mini.tail6443b3.ts.net/:path*`.
+Vercel contributes exactly one thing there: a certificate for a `wisent.com`
+name. That is the thing this edge exists to do.
+
+So a product may declare a hostname in front of a service the registry
+already runs:
+
+```console
+stado web declare brama --hostname brama.wisent.com --upstream-service brama
+stado web route brama
+```
+
+No `--host` and no `--port`. The service directory already records which host
+the service is active on and which address it answers, and a copy of either in
+this declaration would point at the old host the day the service moved — so
+the upstream is resolved out of the directory on every render, not snapshotted
+when the command was typed. `--host`, `--port`, `--consumer`, `--readyz`,
+`--env`, `--secret` and `--database` are refused beside it, and so is
+`--redirect-to`: a hostname either answers with a redirect or forwards to a
+service, never both.
+
+The rendered site block is an ordinary `reverse_proxy` at the service's own
+address on its active host, reached over the tailnet:
+
+```
+brama.wisent.com {
+	reverse_proxy http://charless-mac-mini:18081
+}
+```
+
+**Nothing here deploys, installs or stops that service.** `stado web deploy`
+refuses and names `stado service status` and `stado service deploy` as what
+owns the unit; `stado web status` reports `kind: upstream-service` with the
+service's host, state and last beacon time read out of the same fleet-wide
+join every other row uses; `stado web remove` retracts the hostname and
+reports `no-unit`, leaving the service running. A `stado web` command
+stopping Brama because someone removed a hostname in front of it would be
+this plane reaching into a service it does not own.
+
 ## The command sequence
 
 Stand up the edge once for the whole fleet:

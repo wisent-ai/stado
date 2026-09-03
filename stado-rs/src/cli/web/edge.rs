@@ -255,7 +255,7 @@ pub(super) fn declared() -> Result<&'static WebApiEdge, CmdError> {
 /// Only the products that name this edge: a `cloudflare` product's hostname is
 /// terminated by Cloudflare, and writing it here would order a second
 /// certificate for a name this host never answers on.
-pub(super) fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
+pub(super) async fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
     let products = match config::web_api_products() {
         Ok(products) => products,
         // An empty plane is not a broken one; the parser refuses an empty map
@@ -269,13 +269,69 @@ pub(super) fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
         .values()
         .filter(|product| product.edge() == "stado")
     {
-        routes.push(match product.redirect_to() {
-            Some(target) => redirect(product.hostname(), target)?,
-            None => route(product.hostname(), product.host(), product.port())?,
+        routes.push(match (product.redirect_to(), product.upstream_service()) {
+            (Some(target), _) => redirect(product.hostname(), target)?,
+            // Resolved on every render rather than snapshotted at declare
+            // time: the service directory is what says which host a service
+            // is active on, and a copy of that in this declaration would
+            // point at the old host the day the service moved.
+            (None, Some(service)) => upstream_route(product.hostname(), service).await?,
+            (None, None) => route(product.hostname(), product.host(), product.port())?,
         });
     }
     routes.sort();
     Ok(routes)
+}
+
+/// One route to a service the registry already runs: the hostname, and a
+/// `reverse_proxy` at wherever the service directory says that service is
+/// answering now.
+///
+/// The port comes out of the directory's endpoint URL and the host out of its
+/// `active_host`. Neither is in the declaration, because both are facts about
+/// the service rather than about this hostname, and the directory is where
+/// the fleet keeps them.
+///
+/// A loopback endpoint means loopback on the active host, which is exactly
+/// what the edge must forward to over the tailnet — Brama answers
+/// `127.0.0.1:18081` on the mini and nothing outside that machine can reach
+/// it, which is why a public hostname needed the edge in the first place.
+async fn upstream_route(hostname: &str, service: &str) -> Result<(String, String), CmdError> {
+    let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
+    let directory = crate::service_resolution::directory(&document)
+        .map_err(CmdError::click)?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{hostname} is declared in front of service {service:?}, and the registry carries no service directory to resolve it through"
+            ))
+        })?;
+    let declared = directory.services.get(service).ok_or_else(|| {
+        CmdError::click(format!(
+            "{hostname} is declared in front of service {service:?}, which the service directory does not declare; `stado service list` names the ones it does"
+        ))
+    })?;
+    let endpoint = declared
+        .endpoints
+        .get(&declared.active_host)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "service {service:?} declares no endpoint on its active host {:?}, so {hostname} has no upstream the edge can forward to",
+                declared.active_host
+            ))
+        })?;
+    let parsed = url::Url::parse(&endpoint.url).map_err(|error| {
+        CmdError::click(format!(
+            "service {service:?} declares endpoint {:?} on {}, which is not a URL: {error}",
+            endpoint.url, declared.active_host
+        ))
+    })?;
+    let port = parsed.port_or_known_default().ok_or_else(|| {
+        CmdError::click(format!(
+            "service {service:?} declares endpoint {:?}, which names no port the edge could forward to",
+            endpoint.url
+        ))
+    })?;
+    route(hostname, &declared.active_host, port)
 }
 
 /// One redirect: the public hostname the edge terminates, and the `redir`
@@ -1037,7 +1093,7 @@ async fn remove(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let edge = declared()?;
-    let routes = stado_routes().unwrap_or_default();
+    let routes = stado_routes().await.unwrap_or_default();
     if !routes.is_empty() && !orphan_hostnames {
         return Err(CmdError::usage(format!(
             "{} still terminates {} hostname(s) — {} — whose A records point at {}. Retract them \
@@ -1188,7 +1244,7 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
     let edge = declared()?;
     let (http, http_detail) = answers(edge.address(), 80).await;
     let (https, https_detail) = answers(edge.address(), 443).await;
-    let routes = stado_routes()?;
+    let routes = stado_routes().await?;
     let terminating: Vec<&String> = routes.iter().map(|(hostname, _)| hostname).collect();
     let report = json!({
         "target": edge.target(),
@@ -1240,7 +1296,7 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
 /// of reporting both sets rather than just fixing them.
 async fn hostnames(json_output: bool) -> Result<(), CmdError> {
     let edge = declared()?;
-    let routes = stado_routes()?;
+    let routes = stado_routes().await?;
     let report = deliver(edge, &routes, false).await?;
     let reconciled = report["change"].as_str() == Some("unchanged");
     if json_output {
