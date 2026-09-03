@@ -2109,6 +2109,34 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     .about(unreachable.unit.clone()),
             );
         }
+        // The last of the pre-beacon checks, and the one the beacon could
+        // never have answered: which FILE a unit's live process is executing.
+        // The beacon publishes one `state` word per unit and a unit running
+        // an obsolete build is `active` by every measure it takes, so this is
+        // read off the process table and the kernel rather than out of the
+        // store — and therefore only on the host this command runs on.
+        //
+        // `com.wisent.compute.disk-cleanup.disk-cleanup` spent thirteen days
+        // journalling `policy:ValueError` on 8,348 passes from a `--watch`
+        // process that had been alive since 27 August, executing an image the
+        // file underneath it no longer held. Nothing revisited it, because
+        // `self_update::recycle_replaced_units` cycles a unit only inside the
+        // invocation that replaced its bytes; an unrelated restart is what
+        // ended it.
+        for image in service::units_running_replaced_images(
+            target,
+            local_host.as_deref(),
+            now.timestamp(),
+        ) {
+            let mut finding = Finding::new(image.kind(), &target.name, image.sentence());
+            // The row that reports a whole host unread names no unit, and
+            // attaching an empty label to it would let the `missing-plist`
+            // de-duplication downstream match on the empty string.
+            if !image.unit.is_empty() {
+                finding = finding.about(image.unit.clone());
+            }
+            findings.push(finding);
+        }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(
                 "no-heartbeat",
