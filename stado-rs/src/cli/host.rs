@@ -2666,6 +2666,12 @@ pub async fn reclaim(
             println!("  {} {path}", stage.stage);
         }
     }
+    // A stage that could not be judged is not a stage that found nothing.
+    // Printed beside the table, because the table's zero is the same digit a
+    // clean host prints.
+    for (stage, reason) in &reclamation.skipped {
+        println!("{stage}: SKIPPED — {reason}");
+    }
     if let Some(plan) = &reclamation.janitor_plan {
         let cleaners: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
             .iter()

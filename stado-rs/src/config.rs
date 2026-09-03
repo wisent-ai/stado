@@ -1218,8 +1218,14 @@ impl ObjectApiNamespace {
 
     /// Authorize and canonicalize a list prefix under one policy that grants
     /// list. Exact-key policies can never authorize a prefix scan.
+    ///
+    /// The caller's trailing `/` survives: authorization compares paths, and
+    /// the string this returns is what the store will scan. A policy with an
+    /// empty prefix grants the namespace, and returning a trimmed `queue` for
+    /// a requested `queue/` is what let a listing reach `queue_priority/`.
     pub fn authorized_list_prefix(&self, requested: &str, action: &str) -> Option<String> {
-        let requested = requested.trim_matches('/');
+        let requested = requested.trim_start_matches('/');
+        let path = requested.trim_end_matches('/');
         self.prefix_policies.iter().find_map(|policy| {
             if !policy.allows_action(action) {
                 return None;
@@ -1232,9 +1238,9 @@ impl ObjectApiNamespace {
                 return None;
             }
             let root = allowed.strip_suffix('/').unwrap_or(allowed);
-            if requested == root {
+            if path == root {
                 Some(allowed.to_string())
-            } else if requested.starts_with(allowed) {
+            } else if path.starts_with(allowed) {
                 Some(requested.to_string())
             } else {
                 None
@@ -1652,12 +1658,17 @@ impl ReleasePublisher {
         key.starts_with(&self.prefix)
     }
 
+    /// The authorized release listing prefix, with the caller's trailing `/`
+    /// intact for the reason [`ObjectApiNamespace::authorized_list_prefix`]
+    /// gives: the separator decides whether a scan stays inside a coordinate
+    /// or reaches every sibling whose name begins with it.
     pub fn authorized_list_prefix(&self, requested: &str) -> Option<String> {
-        let requested = requested.trim_matches('/');
+        let requested = requested.trim_start_matches('/');
+        let path = requested.trim_end_matches('/');
         let root = self.prefix.strip_suffix('/').unwrap_or(&self.prefix);
-        if requested == root {
+        if path == root {
             Some(self.prefix.clone())
-        } else if requested.starts_with(&self.prefix) {
+        } else if path.starts_with(&self.prefix) {
             Some(requested.to_string())
         } else {
             None

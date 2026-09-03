@@ -87,11 +87,22 @@ impl ObjectRef {
         format!("{ROOT_PREFIX}{}/{}", self.namespace, self.key)
     }
 
+    /// The storage prefix one namespace listing scans.
+    ///
+    /// A trailing `/` is kept, because it is the whole difference between
+    /// "inside this directory" and "every sibling whose name starts with
+    /// these letters". Trimming it here made `prefix=queue/` scan
+    /// `queue_priority/` too: on 2026-09-02 at 23:32 a migration created that
+    /// sibling, and the next release train died in `release-capacity` because
+    /// `list_jobs("queue")` was handed 9026 priority markers to parse as jobs
+    /// and reported the queue store unreadable. Leading slashes are noise and
+    /// are still stripped.
     pub fn namespace_prefix(namespace: &str, prefix: &str) -> Result<String, StorageError> {
         let sentinel = Self::new(namespace, "sentinel")?;
-        let prefix = prefix.trim_matches('/');
-        if (!prefix.is_empty()
-            && prefix
+        let prefix = prefix.trim_start_matches('/');
+        let path = prefix.trim_end_matches('/');
+        if (!path.is_empty()
+            && path
                 .split('/')
                 .any(|part| part.is_empty() || part == "." || part == ".."))
             || prefix.contains('\0')
@@ -99,7 +110,7 @@ impl ObjectRef {
         {
             return Err(StorageError::PathEscape(format!("{namespace}/{prefix}")));
         }
-        Ok(if prefix.is_empty() {
+        Ok(if path.is_empty() {
             format!("{ROOT_PREFIX}{}/", sentinel.namespace)
         } else {
             format!("{ROOT_PREFIX}{}/{prefix}", sentinel.namespace)
