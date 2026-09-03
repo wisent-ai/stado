@@ -2919,7 +2919,18 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(60));
+        .read_timeout(Duration::from_secs(60))
+        // The same pool contract as
+        // `queue::stado_object::StadoObjectBackend::client`, and for the same
+        // reason: the object API holds a reused connection for 120 s
+        // (`Dashboard::KEEP_ALIVE_IDLE`), so this side retires it first at
+        // 90 s and never writes into a socket the server is closing. Eight
+        // warm connections per host bound the idle set, and TCP keepalive
+        // turns a silently dropped connection into a re-dial rather than a
+        // failed object operation.
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(60));
     for host in configured_origin_hosts() {
         // The tailnet states where its own names live. Asking the system
         // resolver about a MagicDNS name is asking a witness that may not have
