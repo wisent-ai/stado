@@ -935,7 +935,24 @@ async fn publish(
             "release job returned mixed or invalid output",
         ));
     }
-    let runtime = m.runtime.as_ref();
+    // The runtime contract belongs to the platforms that stage it. A product
+    // may now publish a platform that ships no binary at all — a web site
+    // beside a CLI — and stamping that coordinate with `bin/<product>` and a
+    // launcher would publish a release manifest whose binary exists in none
+    // of its own bytes. The rollout side never reaches such a platform (a
+    // target names the platform it rolls out, in the product's rollout
+    // policy), so the wrong claim would sit in the published manifest
+    // unread until something believed it.
+    let runtime = m
+        .platforms
+        .get(p)
+        .filter(|recipe| {
+            matches!(
+                release_pipeline::platform_runtime_role(recipe, m.runtime.as_ref()),
+                release_pipeline::RuntimeRole::Runtime
+            )
+        })
+        .and(m.runtime.as_ref());
     let q = ReleaseQualification {
         status: QualificationStatus::Passed,
         evidence_sha256: Some(release_control::sha256_bytes(&rb)),
