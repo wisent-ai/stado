@@ -234,6 +234,25 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
             "/usr/local/bin/cargo",
         ],
     ),
+    // Git, at real installations only. Homebrew first, then the Command Line
+    // Tools' own git INSIDE the developer directory, then a Linux path.
+    //
+    // `/usr/bin/git` is absent on purpose and must stay absent: on macOS that
+    // path is the `xcode-select` shim, and on a host with no Command Line
+    // Tools it opens the installer WINDOW rather than printing a version, so
+    // probing it could raise a consent dialog on an unattended host. The CLT
+    // path below is the real binary the shim would have forwarded to, and it
+    // simply does not exist when the tools are absent — which is the honest
+    // answer this probe wants.
+    (
+        GIT_CLI,
+        &[
+            GIT_CLI,
+            "/usr/local/bin/git",
+            "/Library/Developer/CommandLineTools/usr/bin/git",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+        ],
+    ),
     // The order every Node reader in this repository already probes — the
     // launcher script in `deploy::weles_browser_runtime`, and the host reads in
     // `cli/host.rs` and `cli/seed_freshness.rs` — so a `host exec` answer about
@@ -289,6 +308,13 @@ pub const ADB_PROGRAM: &str = ANDROID_DEBUG_BRIDGE;
 /// being perfectly installed. [`candidate_script`] makes the same argument one
 /// level up, and puts every candidate's directory on `PATH` for that reason.
 pub const NODE_PROGRAM: &str = NODE_RUNTIME;
+
+/// Git's canonical name in [`PROGRAM_CANDIDATES`].
+///
+/// Exposed for the same reason [`APPIUM_PROGRAM`] is: a second reader must
+/// resolve it from this table, not from a list of its own — and in git's case
+/// a hand-written list is how `/usr/bin/git` gets added back.
+pub const GIT_PROGRAM: &str = GIT_CLI;
 
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
@@ -354,6 +380,27 @@ const CUA_DRIVER: &str = "/opt/homebrew/bin/cua-driver";
 /// on the placement host, so "does this host have cargo, and where" is the
 /// precondition of every native, terminal and command-line family.
 const CARGO_CLI: &str = "/opt/homebrew/bin/cargo";
+
+/// Git, at the paths a real installation puts it, and DELIBERATELY NOT at
+/// `/usr/bin/git`.
+///
+/// `/usr/bin/git` on macOS is not git. It is Apple's `xcode-select` shim, and
+/// on a host without the Command Line Tools installed, running it OPENS THE
+/// CLT INSTALLER WINDOW instead of answering. So the obvious probe — ask
+/// `/usr/bin/git --version`, the path every script reaches for — is the one
+/// spelling that can pop a consent dialog on an unattended fleet host, which
+/// is the opposite of what a read-only allowlist is for. The shim is excluded
+/// from the candidates below for exactly that reason, and this paragraph is
+/// the reason written down beside the entry, because it is the kind of thing
+/// that gets "simplified" back in by the next person who notices `/usr/bin`
+/// is missing from a list of git paths.
+///
+/// Spis's terminal (TUI) worker runs `git` to build its fixture repository,
+/// so "does this host have a real git, and where" is that family's
+/// precondition; it is asked here so a host can be refused before it claims
+/// a slot, and the answer is the absolute path the worker's command is then
+/// built from.
+const GIT_CLI: &str = "/opt/homebrew/bin/git";
 /// The Node runtime, at the absolute paths this fleet installs it at.
 ///
 /// A non-interactive ssh login reads no shell profile, and the fleet's Node
@@ -797,6 +844,18 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               one fact decides whether the terminal, command-line, documentation and native \
               families can execute there at all. `--version` compiles nothing, fetches \
               nothing and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[GIT_CLI, "--version"],
+        why: "prints git's version from the paths a real installation puts it at, and \
+              deliberately NOT from `/usr/bin/git`, which on macOS is the `xcode-select` \
+              shim: on a host without the Command Line Tools that path opens the installer \
+              WINDOW instead of answering, so the obvious probe is the one spelling that \
+              could raise a consent dialog on an unattended fleet host. Spis's terminal \
+              family builds its fixture repository with git, so this decides whether that \
+              family can run at all, and the resolved path is what the worker's command is \
+              then built from rather than a bare name a non-login shell cannot find. \
+              `--version` reads no repository, touches no working tree and writes nothing",
     },
     ApprovedCommand {
         argv: &[UV_INSTALLER, "--version"],
@@ -1437,6 +1496,25 @@ pub async fn exec_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/usr/bin/git` is the `xcode-select` shim: on a host with no Command
+    /// Line Tools, running it opens the installer WINDOW instead of printing
+    /// a version. A read-only allowlist must not be able to raise a consent
+    /// dialog on an unattended host, so the shim stays out of the candidates
+    /// and this test is what stops it being helpfully added back.
+    #[test]
+    fn the_git_probe_never_reaches_the_xcode_select_shim() {
+        let candidates = program_candidates(GIT_PROGRAM).expect("git is in the table");
+        assert!(
+            !candidates.contains(&"/usr/bin/git"),
+            "the /usr/bin/git shim must never be probed: {candidates:?}"
+        );
+        assert!(
+            candidates.contains(&"/Library/Developer/CommandLineTools/usr/bin/git"),
+            "the real Command Line Tools git must be probed instead"
+        );
+        assert!(candidates.iter().all(|path| path.starts_with('/')));
+    }
 
     /// Every entry must be reachable by the spelling it advertises.
     ///
