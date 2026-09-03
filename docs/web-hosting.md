@@ -213,11 +213,29 @@ registrar says it is, and Stado does not guess: `stado web declare` records the
 hostname, and `stado web route` resolves its zone, writes the record through
 the edge the product declares, and reports what the record became.
 
-For the Stado edge the record is an A record to the edge host's public address,
-written by `stado dns set` — a whole-zone read, a merge of one name, a
-whole-zone write. The edge is told about the hostname in the same command, so a
-name never resolves to an edge that does not terminate it, and the certificate
-is ordered before the record is written.
+For the Stado edge, `stado web route` does three things in an order that is
+forced rather than chosen.
+
+First the hostname is reconciled into the edge proxy's configuration, which is
+rendered whole from the product declarations, so a second `route` for the same
+product changes nothing. Then the A record is written to the edge's public
+address by `stado dns set` — a whole-zone read, a merge of one name, a
+whole-zone write. Only then can the certificate exist: Let's Encrypt delivers
+its HTTP-01 or TLS-ALPN-01 challenge to whatever the hostname resolves to, so
+Caddy cannot obtain a certificate for a name that does not yet point at it.
+
+That is why the third step is the one that decides the verdict. The command
+polls `https://<hostname>` until it answers over TLS with a 2xx and no
+`x-vercel-id` header, and reports how long that took. Between the record
+moving and the certificate existing there is a real window in which the name
+resolves to an edge that cannot complete a handshake; success is never
+reported on anything less than a completed TLS request, and a hostname that
+still answers from Vercel is reported as unpublished with the `server` and
+`x-vercel-id` values actually observed.
+
+The site block existing before the record moves is what keeps that window
+short: the first request to arrive after the cutover finds a proxy that knows
+the name and can begin an issuance, rather than one that has never heard of it.
 
 For a zone at Cloudflare the record is written by the Cloudflare API as a
 proxied `CNAME` to the tunnel, and the tunnel's ingress rule is written in the
@@ -232,8 +250,33 @@ its DNS record stops pointing there, and that record is the last step of
 Stand up the edge once for the whole fleet:
 
 ```console
-stado web edge provision --name wisent-edge --region westus2 --size Standard_B2pts_v2
+stado web edge provision --name wisent-edge --region westus2 \
+  --size Standard_B2pts_v2 --contact ops@wisent.com
 stado web edge status
+stado web edge hostnames
+```
+
+`provision` goes through Stado's own Azure provider
+(`crate::providers::azure`) and the same subscription, resource group, subnet
+and SSH key every other Stado-provisioned VM uses, so the edge is cloud
+capacity the fleet accounts for like any other — not a machine that exists
+outside the plane. It creates a public address, an edge-only security group
+opening 80 and 443, a NIC and the VM, in that order, and unwinds them in
+reverse if any step fails, naming anything Azure would not release.
+
+`stado web edge remove` is the one command that undoes it. It deletes the VM,
+the NIC, the security group and the public address in reverse creation order,
+waiting for each, because Azure refuses to release an address while an
+interface still references it and an orphaned address is billed while
+belonging to nothing. It refuses while any product still names the `stado`
+edge — those hostnames' A records point at the address it is about to hand
+back — and `--orphan-hostnames` is how an operator overrides that.
+`--keep-resources` forgets the declaration and touches nothing on Azure, which
+is the correct removal for an edge recorded with `stado web edge declare`
+rather than created here.
+
+```console
+stado web edge remove
 ```
 
 Declare a product:
@@ -271,6 +314,11 @@ Publish the hostname:
 ```console
 stado web route preferences-landing
 ```
+
+`route` reconciles the hostname into the edge, writes the record, and then
+waits for `https://<hostname>` to answer over TLS, reporting the elapsed
+seconds. It does not report success on a 2xx that still carries an
+`x-vercel-id` header.
 
 An application with a database and an operator token declares them when it is
 declared:

@@ -2886,8 +2886,7 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
     }
     let contact = entry.get("contact").and_then(Value::as_str).unwrap_or("");
     if !contact.contains('@') || contact.chars().any(char::is_whitespace) {
-        problems
-            .push("web_api.edge.contact is required and must be a mail address".to_string());
+        problems.push("web_api.edge.contact is required and must be a mail address".to_string());
     }
     if problems.is_empty() {
         Ok(WebApiEdge {

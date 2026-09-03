@@ -256,9 +256,8 @@ impl Zone {
 
 static HOST_ELEMENT: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?s)<host\b[^>]*/?>").expect("static regex compiles"));
-static ATTRIBUTE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"([A-Za-z]+)="([^"]*)""#).expect("static regex compiles")
-});
+static ATTRIBUTE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"([A-Za-z]+)="([^"]*)""#).expect("static regex compiles"));
 static ERROR_ELEMENT: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?s)<Error[^>]*>(.*?)</Error>").expect("static regex compiles")
 });
@@ -292,9 +291,7 @@ async fn call(parameters: Vec<(String, String)>) -> Result<String, CmdError> {
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !status.is_success() {
-        return Err(CmdError::click(format!(
-            "Namecheap answered HTTP {status}"
-        )));
+        return Err(CmdError::click(format!("Namecheap answered HTTP {status}")));
     }
     if !body.contains(r#"Status="OK""#) {
         let errors: Vec<String> = ERROR_ELEMENT
@@ -320,10 +317,7 @@ async fn call(parameters: Vec<(String, String)>) -> Result<String, CmdError> {
 /// at the call site: a whole-zone write built from a partial read deletes what
 /// the read missed, so a response with more `<host` elements than parsed
 /// records is a refusal.
-pub(crate) async fn get_hosts(
-    registrar: &Registrar,
-    zone: &Zone,
-) -> Result<Vec<Record>, CmdError> {
+async fn get_hosts(registrar: &Registrar, zone: &Zone) -> Result<Vec<Record>, CmdError> {
     let mut parameters = registrar.base(zone);
     parameters.push((
         "Command".into(),
@@ -374,11 +368,7 @@ pub(crate) async fn get_hosts(
 }
 
 /// Replace the zone's host list with `records`.
-async fn set_hosts(
-    registrar: &Registrar,
-    zone: &Zone,
-    records: &[Record],
-) -> Result<(), CmdError> {
+async fn set_hosts(registrar: &Registrar, zone: &Zone, records: &[Record]) -> Result<(), CmdError> {
     if records.is_empty() {
         return Err(CmdError::click(format!(
             "refusing to write an empty host list to zone {}",
@@ -470,9 +460,7 @@ fn merge(
         .filter(|record| record.host == host && record.record_type == record_type)
         .cloned()
         .collect();
-    let unchanged = replaced.len() == 1
-        && replaced[0].address == address
-        && replaced[0].ttl == ttl;
+    let unchanged = replaced.len() == 1 && replaced[0].address == address && replaced[0].ttl == ttl;
     let mut merged: Vec<Record> = records
         .iter()
         .filter(|record| !(record.host == host && record.record_type == record_type))
@@ -710,10 +698,7 @@ mod tests {
     fn a_name_outside_the_zone_is_refused() {
         let zone = Zone::parse("wisent.com").expect("zone");
         let error = zone.host_of("preferences.wisent.ai").expect_err("refusal");
-        assert!(
-            error.to_string().contains("is not inside zone"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("is not inside zone"), "{error}");
     }
 
     #[test]

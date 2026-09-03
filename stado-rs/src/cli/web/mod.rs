@@ -19,9 +19,13 @@
 //! consumer through `stado database resolve`, so a product that is not a
 //! declared consumer of a database cannot receive its credential.
 //!
-//! The publish half is `stado web route`: a certificate on the edge, then the
-//! DNS record. Never the other way round, because a record that resolves to an
-//! edge with no certificate is an outage with our name on it.
+//! The publish half is `stado web route`: the hostname is reconciled into the
+//! edge proxy's configuration, then its DNS record moves to the edge, then the
+//! hostname is polled until it answers over TLS. That order is forced rather
+//! than chosen — Let's Encrypt delivers its challenge to whatever the name
+//! resolves to, so the certificate cannot exist until after the record moves,
+//! and the site block has to exist before it so the first request after the
+//! cutover finds a proxy that knows the name.
 
 mod build;
 mod deploy;
@@ -130,7 +134,7 @@ pub(crate) enum WebCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Publish a declared hostname: certificate on the edge, then DNS.
+    /// Publish a declared hostname: edge, then DNS, then wait for the certificate.
     Route {
         /// Product name.
         name: String,
