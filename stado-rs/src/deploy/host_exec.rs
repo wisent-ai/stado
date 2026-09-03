@@ -46,6 +46,13 @@
 //! words are compile-time constants of this module too, so barrier three is
 //! unchanged: `$HOME` expands on the far side and nothing the operator typed
 //! reaches the host except the choice of entry.
+//!
+//! An entry whose fixed path ARGUMENTS name something inside that account's
+//! home — rather than its program — is listed once more in
+//! [`HOME_ROOTED_READS`], which runs it from that home. Those paths are
+//! written relative for a reason barrier one imposes: `~` is a character a
+//! shell acts on, so an argument spelled `~/…` would be refused as the
+//! operator's own word and the entry could never be selected at all.
 
 use std::time::Duration;
 
@@ -219,6 +226,84 @@ const UV_INSTALLER: &str = "/opt/homebrew/bin/uv";
 /// The prefix that marks a program, or one of its environment values, as
 /// living under the login user's home rather than at a system path.
 const HOME_RELATIVE: &str = "~/";
+
+/// The managed service directory `com.wisent.weles-admission` runs out of,
+/// relative to the managed account's home.
+///
+/// Written once, so the three entries that read it cannot drift apart about
+/// which directory they are describing. `stado service release` installs
+/// every release for a managed service under `.stado/services/<name>/` in a
+/// directory named for the archive digest and points `current` at it, so this
+/// prefix plus a digest is the whole of that service's installed history.
+const WELES_ADMISSION_SERVICE_DIR: &str = ".stado/services/weles-admission";
+
+/// Which installed release directory the admission unit executes through.
+const WELES_ADMISSION_CURRENT: &[&str] = &[
+    "/usr/bin/readlink",
+    ".stado/services/weles-admission/current",
+];
+
+/// Every installed release directory for that service, with `current`'s own
+/// target rendered beside it.
+const WELES_ADMISSION_VERSIONS: &[&str] = &["/bin/ls", "-l", WELES_ADMISSION_SERVICE_DIR];
+
+/// The compiled worker modules in the runtime tree that service's launcher
+/// resolves — the directory `weles-api-server.mjs` imports `dispatch.js` from.
+const WELES_ADMISSION_WORKER_MODULES: &[&str] = &[
+    "/bin/ls",
+    ".stado/services/weles-admission/current/darwin-arm/runtime/dist/worker",
+];
+
+/// What the launcher itself sees when it decides whether to unpack: the
+/// payload archive, the derived `runtime` tree, and their timestamps.
+const WELES_ADMISSION_RELEASE_TREE: &[&str] = &[
+    "/bin/ls",
+    "-l",
+    ".stado/services/weles-admission/current/darwin-arm",
+];
+
+/// Every entry whose fixed path arguments name something inside the managed
+/// account's home rather than a system path.
+///
+/// Keyed on the entry's whole `argv`, the way [`PROGRAM_CANDIDATES`] and
+/// [`ACCOUNT_PROGRAMS`] are keyed on a program: one more table beside the
+/// allowlist rather than one more field on every entry in it.
+///
+/// Their paths are written RELATIVE and resolved by an explicit `cd "$HOME"`
+/// in [`home_rooted_script`], instead of being spelled `~/…`. Barrier one of
+/// this module refuses any operator word carrying a character a shell would
+/// act on, and `~` is one, so a `~/…` argument would make its own entry
+/// unreachable through [`approve`] — the operator could never type the
+/// spelling that selects it. The remote login shell already starts in the
+/// managed account's home, so standing in it changes nothing about where
+/// these reads land; it only stops the entry from depending on that.
+const HOME_ROOTED_READS: &[&[&str]] = &[
+    WELES_ADMISSION_CURRENT,
+    WELES_ADMISSION_VERSIONS,
+    WELES_ADMISSION_RELEASE_TREE,
+    WELES_ADMISSION_WORKER_MODULES,
+];
+
+/// Is this entry's fixed argv one of the home-rooted reads?
+fn home_rooted(argv: &[&str]) -> bool {
+    HOME_ROOTED_READS.contains(&argv)
+}
+
+/// The remote script for a read inside the managed account's home: stand in
+/// that home, then become the entry's own fixed argv.
+///
+/// Every word is a compile-time constant of this module and is quoted for the
+/// remote shell anyway. The operator's words selected the entry and reach the
+/// host in nothing else, so barrier three holds exactly as it does on the
+/// [`host_channel::run_program`] path.
+fn home_rooted_script(argv: &[&str]) -> String {
+    let fixed = argv
+        .iter()
+        .map(|word| shlex_quote(word))
+        .collect::<Vec<String>>()
+        .join(" ");
+    format!("set -eu\ncd \"$HOME\"\nexec {fixed}\n")
+}
 
 /// What an entry whose program the managed account owns needs on top of its
 /// fixed argv.
@@ -738,6 +823,69 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               to spend exactly one completion; the prompt and the agent are compile-time \
               constants, and the answer carries no credential",
     },
+    // The four reads a release that is installed but not running needs, added
+    // 2026-09-02. On that evening `com.wisent.weles-admission` on
+    // charless-mac-mini crash-looped on `Cannot find module
+    // .../runtime/dist/worker/dispatch.js` while `stado release status
+    // weles-worker` reported 0.5.57 committed and active. Three different
+    // repairs hid behind that: the build had dropped the file, the install had
+    // put it where the launcher does not look, or the launcher was resolving a
+    // tree from an older release. Separating them is four facts about one
+    // directory -- which digest `current` resolves to, which digests are
+    // installed beside it, what the launcher sees inside the one it reaches,
+    // and whether the compiled worker modules the API server imports are
+    // there -- and this table could read none of them: `ls` existed only as
+    // the fixed `ls /Applications`, and there is no `readlink`, `cat`, `find`
+    // or `stat` entry. The whole diagnosis stopped on the symlink evidence
+    // and said so.
+    //
+    // Each entry names the one service, because a path an operator supplies is
+    // a path that can be `~/.ssh/id_ed25519`. `.stado/services` holds the
+    // fleet's own installed release trees and nothing of the account's: no
+    // documents, no keys, no credential files, and a directory name is not a
+    // secret. All four are relative and are resolved by
+    // [`home_rooted_script`] against the managed account's own home.
+    ApprovedCommand {
+        argv: WELES_ADMISSION_CURRENT,
+        why: "prints the release directory `com.wisent.weles-admission` executes through. \
+              The unit's program is that link plus a platform directory, so this name is the \
+              whole answer to which release is running, and it is the fact `release status` \
+              cannot give: that verb reports what a rollout recorded, and on 2026-09-02 the \
+              two disagreed by four releases. `readlink` reads one link and writes nothing; \
+              the path is a compile-time constant naming this one managed service",
+    },
+    ApprovedCommand {
+        argv: WELES_ADMISSION_VERSIONS,
+        why: "lists every release directory installed for that service beside the `current` \
+              link, and, because `-l` renders a symlink with its target, the link and the \
+              directory it names on the same page. This is what separates 'the rollout never \
+              installed the release' from 'it installed it and left the link behind': the \
+              installer keeps the previous version rather than deleting it, so a digest \
+              present but unlinked is a rollback that happened and a digest absent is a \
+              rollout that did not. `-l` is a display flag, the directory is fixed, and `ls` \
+              writes nothing",
+    },
+    ApprovedCommand {
+        argv: WELES_ADMISSION_RELEASE_TREE,
+        why: "lists the inside of the release directory the launcher actually stands in: the \
+              `payload` archive it unpacks from, the `runtime` tree it unpacks into, and the \
+              modification times of both. That launcher unpacks only when the runtime carries \
+              no ready marker, so a runtime older than its own payload is a tree pinned \
+              incomplete, and a payload that is gone means the tree can never be re-derived \
+              at all -- the difference between a release that will heal on the next start and \
+              one that cannot. `-l` is a display flag, the directory is fixed, and `ls` writes \
+              nothing",
+    },
+    ApprovedCommand {
+        argv: WELES_ADMISSION_WORKER_MODULES,
+        why: "lists the compiled worker modules in the runtime tree that service's launcher \
+              actually resolves -- the directory the API server imports `dispatch.js` from, \
+              reached through `current` exactly as the running process reaches it. A payload \
+              proven to contain the file proves nothing about the tree under `current` if the \
+              link points at a different release, which is the mistake this entry exists to \
+              stop. It takes no flag and no operator path, lists names only, and writes \
+              nothing",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
@@ -892,6 +1040,13 @@ pub async fn exec_host(
             )
             .await?
         }
+        // A read whose fixed paths are relative to the managed account's home
+        // stands in that home first. One candidate, one absolute program, so
+        // nothing below has a marker to look for.
+        (Some(_), None) if home_rooted(approved.argv) => {
+            let script = home_rooted_script(approved.argv);
+            host_channel::run_script(&target, &script, runner).await?
+        }
         (Some((_, arguments)), None) if candidates.len() > usize::from(true) => {
             let script = candidate_script(candidates, arguments);
             host_channel::run_script(&target, &script, runner).await?
@@ -949,4 +1104,128 @@ pub async fn exec_host(
         error,
     };
     serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every entry must be reachable by the spelling it advertises.
+    ///
+    /// This is the trap the home-rooted reads were written around: an entry
+    /// carrying a `~/…` argument advertises a spelling barrier one refuses,
+    /// so it would sit in the table forever, listed in every refusal, and
+    /// never run.
+    #[test]
+    fn every_advertised_spelling_selects_its_own_entry() {
+        for entry in APPROVED_COMMANDS {
+            let words: Vec<String> = entry.display().split(' ').map(str::to_string).collect();
+            for word in &words {
+                assert!(
+                    is_shell_safe(word),
+                    "{}: the word {word:?} an operator must type is refused by barrier one",
+                    entry.display()
+                );
+            }
+            let selected = approve(&words).expect("its own spelling selects it");
+            assert_eq!(selected.argv, entry.argv, "{}", entry.display());
+        }
+    }
+
+    #[test]
+    fn every_entry_states_why_it_is_safe() {
+        for entry in APPROVED_COMMANDS {
+            assert!(
+                entry.why.len() > 40,
+                "{}: an entry without a defensible reason does not belong in the table",
+                entry.display()
+            );
+        }
+    }
+
+    /// The three service-tree reads name one service and no operator path.
+    #[test]
+    fn the_service_tree_reads_are_home_rooted_and_carry_no_absolute_path_argument() {
+        for argv in HOME_ROOTED_READS {
+            assert!(
+                APPROVED_COMMANDS.iter().any(|entry| entry.argv == *argv),
+                "{argv:?} is home-rooted but is not in the allowlist"
+            );
+            let (program, arguments) = argv.split_first().expect("a program");
+            assert!(
+                program.starts_with('/'),
+                "{program} must be an absolute system program"
+            );
+            for argument in arguments {
+                assert!(
+                    !argument.starts_with('/') || argument.starts_with("-"),
+                    "{argument} would escape the managed account's home"
+                );
+                assert!(
+                    !argument.contains(".."),
+                    "{argument} would climb out of the service tree"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_home_rooted_read_stands_in_the_account_home_before_it_runs() {
+        let script = home_rooted_script(WELES_ADMISSION_CURRENT);
+        assert_eq!(
+            script,
+            "set -eu\ncd \"$HOME\"\nexec /usr/bin/readlink \
+             .stado/services/weles-admission/current\n"
+        );
+    }
+
+    /// The reads that were unavailable on 2026-09-02 are the reads that now
+    /// exist, addressed the way the running unit addresses the same tree.
+    #[test]
+    fn the_admission_reads_reach_current_the_way_the_unit_does() {
+        assert_eq!(
+            approve(&[
+                "readlink".into(),
+                ".stado/services/weles-admission/current".into()
+            ])
+            .expect("approved")
+            .argv,
+            WELES_ADMISSION_CURRENT
+        );
+        assert_eq!(
+            approve(&[
+                "ls".into(),
+                "-l".into(),
+                ".stado/services/weles-admission".into()
+            ])
+            .expect("approved")
+            .argv,
+            WELES_ADMISSION_VERSIONS
+        );
+        // Through `current`, not through a pinned digest: a read that named
+        // the digest would answer for a tree the unit may not be running.
+        assert!(
+            WELES_ADMISSION_WORKER_MODULES[1]
+                .starts_with(&format!("{WELES_ADMISSION_SERVICE_DIR}/current/")),
+            "{:?}",
+            WELES_ADMISSION_WORKER_MODULES
+        );
+        assert!(WELES_ADMISSION_WORKER_MODULES[1].ends_with("/runtime/dist/worker"));
+    }
+
+    /// A path an operator supplies is a path that can be a private key.
+    #[test]
+    fn no_entry_can_be_pointed_at_a_home_dotfile() {
+        for entry in APPROVED_COMMANDS {
+            for word in entry.argv {
+                assert!(
+                    !word.contains(".ssh"),
+                    "{}: reads inside .ssh are not approvable",
+                    entry.display()
+                );
+            }
+        }
+        assert!(approve(&["cat".into(), ".ssh/id_ed25519".into()]).is_err());
+        assert!(approve(&["readlink".into(), ".stado/services/brama/current".into()]).is_err());
+    }
 }
