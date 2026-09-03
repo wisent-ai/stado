@@ -187,3 +187,49 @@ fn slot_values_that_are_not_numbers_do_not_create_capacity() {
     let verdict = claimability(&publication(Some(json!({"cpu": "one"})), json!({})));
     assert!(!verdict.eligible());
 }
+
+/// What the agent publishes when it has CPU slots but no card to offer.
+///
+/// On 2026-09-03 both darwin-arm64 builders vanished from selection while
+/// idle: an apple-mps host reads ~1 GB of VRAM, the safety buffer zeroes its
+/// card offer, and the slot table went out as `{}` -- which `claimability`
+/// rightly reads as a refusal. The agent's own claim loop was taking CPU work
+/// the whole time; only the publication lied. `with_cpu_capacity` is the
+/// publisher's half of that contract, so the table says what the loop does.
+#[test]
+fn a_host_with_no_card_offer_still_publishes_its_free_cpu_slots() {
+    use stado::providers::local::helpers::with_cpu_capacity;
+
+    // Nothing offered, cap 2, nothing running: the table says two CPU slots.
+    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 2, 0);
+    assert_eq!(offered.get("cpu"), Some(&2));
+    // And the selector agrees that is capacity.
+    let verdict = claimability(&publication(
+        Some(serde_json::to_value(&offered).unwrap()),
+        json!({}),
+    ));
+    assert_eq!(verdict, Claimability::Claimable { free_slots: 2 });
+    assert!(verdict.eligible());
+
+    // One slot busy: the table says one.
+    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 2, 1);
+    assert_eq!(offered.get("cpu"), Some(&1));
+
+    // Both busy: nothing to add, and the table must NOT grow a zero -- a
+    // present-but-exhausted table is the refusal shape above.
+    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 2, 2);
+    assert!(!offered.contains_key("cpu"));
+    assert!(offered.is_empty());
+
+    // No cap configured: the loop would take work without bound, and no
+    // invented number belongs in the table.
+    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 0, 0);
+    assert!(offered.is_empty());
+
+    // A card already offered: the CPU answer never overwrites it.
+    let mut gpu = std::collections::BTreeMap::new();
+    gpu.insert("apple-mps".to_string(), 1);
+    let offered = with_cpu_capacity(gpu, 2, 0);
+    assert_eq!(offered.get("apple-mps"), Some(&1));
+    assert!(!offered.contains_key("cpu"));
+}

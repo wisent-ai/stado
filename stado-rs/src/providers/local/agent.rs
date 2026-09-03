@@ -1698,8 +1698,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     .collect::<Vec<_>>(),
             ),
         );
-        let free_slots =
-            helpers::build_capacity_dict_per_card(&gpu_type, &broadcast_cards, total_vram_gb);
+        let free_slots = helpers::with_cpu_capacity(
+            helpers::build_capacity_dict_per_card(&gpu_type, &broadcast_cards, total_vram_gb),
+            hard_slot_cap,
+            slots.len(),
+        );
         publish_branch(
             &store,
             &consumer_id,
