@@ -463,6 +463,35 @@ pub fn build_capacity_dict_per_card(
     out
 }
 
+/// Add the CPU slots a host is still willing to run to its slot table.
+///
+/// A host with no card to offer still runs CPU work -- release builds,
+/// probierz runs, smoke checks -- and the claim loop takes that work
+/// regardless of what the table says. But the table is not advisory for
+/// everyone: `release submit` reads a present-but-empty map as the host
+/// positively refusing work and never pins it, which is how both darwin
+/// builders disappeared from selection on 2026-09-03 while sitting idle --
+/// an apple-mps host reports ~1 GB of VRAM, the safety buffer then zeroes
+/// its card offer, and `build_capacity_dict_per_card` has nothing to say.
+///
+/// The loop caps itself by `hard_slot_cap` (WC_LOCAL_SLOTS); with no cap
+/// configured the honest answer is the unchanged map, not an invented
+/// number.
+pub fn with_cpu_capacity(
+    mut free_slots: BTreeMap<String, i64>,
+    hard_slot_cap: i64,
+    active_slots: usize,
+) -> BTreeMap<String, i64> {
+    if free_slots.values().any(|free| *free > 0) || hard_slot_cap <= 0 {
+        return free_slots;
+    }
+    let remaining = hard_slot_cap - active_slots as i64;
+    if remaining > 0 {
+        free_slots.insert("cpu".to_string(), remaining);
+    }
+    free_slots
+}
+
 /// Python `_slot_is_exclusive`.
 pub fn slot_is_exclusive(slot: &Slot) -> bool {
     if activation_extraction_must_share_gpu(&slot.job.command) {
