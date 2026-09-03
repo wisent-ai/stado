@@ -234,6 +234,10 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
             "/usr/local/bin/cargo",
         ],
     ),
+    (
+        TMUX_CLI,
+        &[TMUX_CLI, "/usr/local/bin/tmux", "/usr/bin/tmux"],
+    ),
     // Git, at real installations only. Homebrew first, then the Command Line
     // Tools' own git INSIDE the developer directory, then a Linux path.
     //
@@ -315,6 +319,21 @@ pub const NODE_PROGRAM: &str = NODE_RUNTIME;
 /// resolve it from this table, not from a list of its own — and in git's case
 /// a hand-written list is how `/usr/bin/git` gets added back.
 pub const GIT_PROGRAM: &str = GIT_CLI;
+
+/// The tmux multiplexer, at the paths this fleet's hosts install it at.
+///
+/// Spis's terminal families drive the product under test inside a tmux
+/// session, so this is their precondition in the same way cargo is every
+/// worker's. It went unapproved, which meant `stado host exec TARGET --
+/// tmux -V` answered "not an approved host-exec command" and every CLI and
+/// TUI preflight refused every host — a refusal that reads as "this machine
+/// has no tmux" and is really a question the channel was never allowed to
+/// ask. Found on 2026-09-03 by running the terminal preflight against
+/// lukasz-macbook, which does carry tmux.
+const TMUX_CLI: &str = "/opt/homebrew/bin/tmux";
+
+/// tmux's canonical name in [`PROGRAM_CANDIDATES`].
+pub const TMUX_PROGRAM: &str = TMUX_CLI;
 
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
@@ -856,6 +875,16 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               family can run at all, and the resolved path is what the worker's command is \
               then built from rather than a bare name a non-login shell cannot find. \
               `--version` reads no repository, touches no working tree and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[TMUX_CLI, "-V"],
+        why: "prints the tmux version from the absolute paths this fleet installs it at. Spis's \
+              command-line and terminal families drive the product under test inside a tmux \
+              session, so this is their precondition exactly as cargo is every worker's -- and \
+              until this entry existed the question could not be asked at all: `tmux -V` came \
+              back `not an approved host-exec command`, so both families refused every host and \
+              the refusal read as a missing program. `-V` starts no server, attaches to no \
+              session and writes nothing",
     },
     ApprovedCommand {
         argv: &[UV_INSTALLER, "--version"],
