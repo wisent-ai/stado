@@ -187,10 +187,38 @@ impl Kind {
 /// The version in `package.json`, refused when it disagrees with the version
 /// the pipeline is cutting.
 ///
-/// A web product's `version_source` points at this same field, so a mismatch
-/// means the worker is building a checkout other than the one the release was
-/// submitted for — and the artifact would be published under a version its own
-/// `package.json` denies.
+/// Asked only of a product whose `version_source` is that same field. The
+/// check exists to catch a worker building a checkout other than the one the
+/// release was cut from, and it can only do that by comparing two statements
+/// about one version. `jeden` cuts its release from `Cargo.toml` and carries
+/// a `package.json` that versions its npm wrapper separately — 0.1.0 against
+/// the crate's 0.1.1 — so comparing them refused a correct checkout and said
+/// the worker was building the wrong commit.
+///
+/// Whether the two are one statement is not a guess: the manifest says so,
+/// in the `version_source` the release pipeline itself read to decide which
+/// version is being cut.
+fn version_source_is_package_json(source: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(source.join(crate::release_pipeline::PRODUCT_MANIFEST))
+    else {
+        // No manifest, so `product` fell back to `package.json` for the name
+        // and this falls back to it for the version: one document answering
+        // both, which is the only consistent reading left.
+        return true;
+    };
+    let Ok(declared) = serde_json::from_str::<Value>(&text) else {
+        return true;
+    };
+    let Some(source) = declared.get("version_source") else {
+        return true;
+    };
+    source.get("kind").and_then(Value::as_str) == Some("json")
+        && source.get("path").and_then(Value::as_str) == Some("package.json")
+        && source.get("pointer").and_then(Value::as_str) == Some("/version")
+}
+
+/// The version in `package.json` against the version being cut, for a product
+/// where those are two statements about one thing.
 fn require_version(manifest: &Map<String, Value>, version: &str) -> Result<(), CmdError> {
     match manifest.get("version").and_then(Value::as_str) {
         Some(declared) if declared == version => Ok(()),
@@ -787,7 +815,9 @@ pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
     // gate exists to catch a builder building the wrong checkout, and for a
     // product with no package manifest there is no second copy to disagree.
     if let Some(manifest) = &manifest {
-        require_version(manifest, &worker.version)?;
+        if version_source_is_package_json(&worker.source) {
+            require_version(manifest, &worker.version)?;
+        }
     }
     let product = product(&worker.source, manifest.as_ref())?;
     let kind = Kind::of(manifest.as_ref());
@@ -854,6 +884,20 @@ pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
         return Ok(());
     };
 
+    // A static site with no build script has a package.json that the release
+    // does not use: nothing is built from the tree and no node_modules is
+    // staged, so installing it gates the release on dependencies the artifact
+    // never carries. `jeden` is a Rust CLI whose repository root has a
+    // `package.json` for its npm wrapper, with a `file:` dependency on a
+    // vendored tarball; `npm ci` there exits 254 and would fail the release of
+    // a site made of committed HTML.
+    if kind == Kind::Static && !builds {
+        println!(
+            "stado web quality: {product} declares no build script, so its package.json is not part of this release and nothing is installed; the gate is that the site root exists and holds an index.html"
+        );
+        return Ok(());
+    }
+
     install(&worker.source, &variables)?;
 
     // The product's own checks, not Stado's opinion of them. A landing site
@@ -882,7 +926,9 @@ pub(crate) fn build(declared_root: Option<&str>) -> Result<(), CmdError> {
     worker.require_web_platform()?;
     let manifest = manifest_if_present(&worker.source)?;
     if let Some(manifest) = &manifest {
-        require_version(manifest, &worker.version)?;
+        if version_source_is_package_json(&worker.source) {
+            require_version(manifest, &worker.version)?;
+        }
     }
     let product = product(&worker.source, manifest.as_ref())?;
     let kind = Kind::of(manifest.as_ref());
@@ -974,10 +1020,13 @@ const STATIC_SITE_DIR: &str = "site";
 /// `.wisent-release.json` is on the list for the same reason: it names the
 /// Skarbiec items and fields this product's build reads, which is a map of
 /// the vault nobody needs to publish.
-const NOT_PART_OF_A_SITE: [&str; 7] = [
+const NOT_PART_OF_A_SITE: [&str; 10] = [
     ".git",
+    ".gitignore",
     ".github",
     ".vercel",
+    ".vercelignore",
+    "vercel.json",
     ".next",
     "node_modules",
     "release",
@@ -985,7 +1034,15 @@ const NOT_PART_OF_A_SITE: [&str; 7] = [
 ];
 
 /// Every path that goes into a static site's artifact, name-sorted.
-fn static_members(root: &Path, at_checkout_root: bool) -> Result<Vec<PathBuf>, CmdError> {
+///
+/// The exclusions apply to whichever directory the site root is, not only to
+/// the checkout root. `jeden`'s site is its `web` directory and carries a
+/// `.vercelignore` and a `vercel.json`; a `dist/` written by a build can pick
+/// up a `.env.local` the same way. Everything on this list is developer or
+/// platform state rather than part of the site, one entry is a credential,
+/// and a static server publishes whatever is in the directory — so `/.env.local`
+/// would be a request anyone could make.
+fn static_members(root: &Path) -> Result<Vec<PathBuf>, CmdError> {
     // A site with nothing in it installs as a unit that answers 404 to
     // everything, and reports a successful deploy while doing it.
     if !root.join("index.html").is_file() {
@@ -994,22 +1051,20 @@ fn static_members(root: &Path, at_checkout_root: bool) -> Result<Vec<PathBuf>, C
             root.display()
         )));
     }
-    let mut excluded: Vec<PathBuf> = Vec::new();
-    if at_checkout_root {
-        excluded.extend(NOT_PART_OF_A_SITE.iter().map(|name| root.join(name)));
-    }
+    let excluded: Vec<PathBuf> = NOT_PART_OF_A_SITE
+        .iter()
+        .map(|name| root.join(name))
+        .collect();
     let mut members = Vec::new();
     walk(root, &excluded, &mut members)?;
-    if at_checkout_root {
-        // A dotfile carrying environment values is developer state wherever
-        // it sits, and the name is the only thing that identifies it.
-        members.retain(|member| {
-            !member
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".env"))
-        });
-    }
+    // A dotfile carrying environment values is developer state wherever it
+    // sits, and the name is the only thing that identifies it.
+    members.retain(|member| {
+        !member
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".env"))
+    });
     Ok(members)
 }
 
@@ -1155,14 +1210,9 @@ fn stage(
     tarball: &Path,
     root: &str,
 ) -> Result<(), CmdError> {
-    let at_checkout_root = site == source;
     let (members, base, inner) = match kind {
         Kind::Server => (members(source)?, source, None),
-        Kind::Static => (
-            static_members(site, at_checkout_root)?,
-            site,
-            Some(STATIC_SITE_DIR),
-        ),
+        Kind::Static => (static_members(site)?, site, Some(STATIC_SITE_DIR)),
     };
     let file = std::fs::File::create(tarball).map_err(|error| {
         CmdError::click(format!("cannot create {}: {error}", tarball.display()))
@@ -1521,11 +1571,21 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_root_site_leaves_git_and_developer_state_out() {
-        // These four sites are the repository, so the excluded set is what
-        // keeps the git history, the Vercel project link and a developer's
-        // .env.local out of a published artifact.
-        for name in [".git", ".vercel", "node_modules"] {
+    fn a_site_root_never_stages_git_platform_or_developer_state() {
+        // Whatever directory the site root is. Four of these sites are the
+        // repository itself; `jeden`'s is its `web` directory and carries a
+        // .vercelignore and a vercel.json. A static server publishes whatever
+        // is in the directory, so `/.env.local` would be a request anyone
+        // could make.
+        for name in [
+            ".git",
+            ".gitignore",
+            ".vercel",
+            ".vercelignore",
+            "vercel.json",
+            "node_modules",
+            ".wisent-release.json",
+        ] {
             assert!(
                 NOT_PART_OF_A_SITE.contains(&name),
                 "{name} must never be staged"

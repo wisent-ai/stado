@@ -29,7 +29,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -60,6 +60,25 @@ const STATE_NAME: &str = "disk-cleanup-state.json";
 const DEADLINE_SECONDS: f64 = 30.0;
 /// Python `_MAX_ERRORS`.
 const MAX_ERRORS: usize = 16;
+
+/// How long one pass may wait on the queue store for its workdir keep-list.
+///
+/// NO Python original. Every other bound in this module — [`DEADLINE_SECONDS`],
+/// `max_scan_items`, `max_items_per_pass` — governs work done AFTER the lock,
+/// and the keep-list read is the only thing a pass waits on before it. It had
+/// no bound at all, and the store's own HTTP client sets no timeout either
+/// (`queue::gcs` builds a bare `reqwest::Client`), so a stalled listing
+/// stalled the pass for as long as the transport took. On 2026-09-03
+/// charless-mac-mini published `duration_ms: 818021` for a pass that reached
+/// no cleaner.
+///
+/// Half of [`DEADLINE_SECONDS`], because the whole point of the janitor's own
+/// default pass budget is that a pass is a short thing, and a keep-list read
+/// that outlasts the scan it feeds is not a slow read but a broken one. The
+/// expiry is not a failure: `None` is the keep-list's modelled unreadable
+/// answer and [`queue_workdirs`] already refuses to delete on it and records
+/// `queue_store_unreadable`.
+const KEEP_LIST_BUDGET: Duration = Duration::from_secs(DEADLINE_SECONDS as u64 / 2);
 
 /// The janitor's state file relative to `$HOME` — `_STATE_DIR` joined with
 /// `_STATE_NAME` in the Python original.
@@ -281,6 +300,21 @@ pub struct CleanupReport {
     pub check_interval_seconds: Option<i64>,
     pub started_at: String,
     pub duration_ms: i64,
+    /// Of `duration_ms`, how much was spent waiting on the queue store before
+    /// the pass had decided anything — the canonical-registry read and the
+    /// workdir keep-list read, both of which happen before the run lock.
+    ///
+    /// `duration_ms` said 818021 and `outcome` said `healthy_noop`, and
+    /// between those two numbers there was no way to tell a janitor that had
+    /// walked a very large filesystem from one that had waited a quarter of an
+    /// hour on a network read for a keep-list no cleaner on that pass would
+    /// ever consult. Those call for opposite responses — one is the host, the
+    /// other is ours — and every consumer of this report was being handed the
+    /// verdict without the cost's shape. `scanned`/`cleaners: null` already
+    /// says a pass reached no cleaner; this says where such a pass spent its
+    /// time, so `healthy_noop` can never again hide a wait inside a word that
+    /// means "nothing needed doing".
+    pub store_wait_ms: i64,
     pub outcome: String,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,
@@ -338,6 +372,7 @@ impl CleanupReport {
             check_interval_seconds: None,
             started_at: utc_now(),
             duration_ms: 0,
+            store_wait_ms: 0,
             outcome: "invalid_or_unavailable_policy".to_string(),
             free_bytes_before: None,
             free_bytes_after: None,
@@ -448,6 +483,7 @@ impl CleanupReport {
             "check_interval_seconds": self.check_interval_seconds,
             "started_at": self.started_at,
             "duration_ms": self.duration_ms,
+            "store_wait_ms": self.store_wait_ms,
             "outcome": self.outcome,
             "free_bytes_before": self.free_bytes_before,
             "free_bytes_after": self.free_bytes_after,
@@ -1031,6 +1067,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
         "started_at": public_timestamp(get("started_at")),
         "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
+        "store_wait_ms": public_nonnegative(get("store_wait_ms")).unwrap_or(0),
         "outcome": outcome,
         "free_bytes_before": public_nonnegative(get("free_bytes_before")),
         "free_bytes_after": public_nonnegative(get("free_bytes_after")),
@@ -1417,8 +1454,8 @@ fn finish(
     value
 }
 
-/// Every job id currently in `queue` or `running`, or `None` when the queue
-/// store could not be read.
+/// Every job id currently in `queue` or `running` from an already-open store,
+/// or `None` when the keep-list could not be built inside `budget`.
 ///
 /// The keep-list for [`queue_workdirs`]. Read best-effort, exactly as
 /// [`crate::deploy::host_reclaim`] reads it for the same directories, and for
@@ -1426,20 +1463,34 @@ fn finish(
 /// outage. A partial read is discarded rather than narrowed, because a
 /// keep-list missing the running job's id authorizes deleting the tree that
 /// job is writing into.
+///
+/// [`crate::queue::JobStorage::list_job_ids`] and NOT `list_jobs`: this wants
+/// ids, the ids are in the object names, and downloading every job document to
+/// read a field out of it is what cost charless-mac-mini 818 seconds — see
+/// that function for the measurement. The `budget` is the same defect's other
+/// half: the read had no bound at all, so however long the transport took was
+/// how long the pass took.
+///
+/// Public as the test seam for both properties; `fetch_live_job_ids` is this
+/// at the real store with [`KEEP_LIST_BUDGET`].
+pub async fn live_job_ids_within(
+    store: &crate::queue::JobStorage,
+    budget: Duration,
+) -> Option<Vec<String>> {
+    let read = async {
+        let mut ids = Vec::new();
+        for state in ["queue", "running"] {
+            ids.extend(store.list_job_ids(state).await.ok()?);
+        }
+        Some(ids)
+    };
+    tokio::time::timeout(budget, read).await.ok().flatten()
+}
+
+/// [`live_job_ids_within`] against the configured queue store.
 async fn fetch_live_job_ids() -> Option<Vec<String>> {
     let store = crate::queue::JobStorage::new().await.ok()?;
-    let mut ids = Vec::new();
-    for state in ["queue", "running"] {
-        ids.extend(
-            store
-                .list_jobs(state, 0)
-                .await
-                .ok()?
-                .into_iter()
-                .map(|job| job.job_id),
-        );
-    }
-    Some(ids)
+    live_job_ids_within(&store, KEEP_LIST_BUDGET).await
 }
 
 /// The post-lock half of `run_cleanup_once` (policy resolution through
@@ -1979,8 +2030,15 @@ async fn cleanup_once(
     // side effects. Resolve them before taking the exclusive janitor lock: one
     // stalled store request must not prevent every other agent and cleanup
     // process on this host from reading policy or reclaiming disk.
+    //
+    // Timed, and the total recorded on the report: these two reads are the only
+    // thing a pass waits on before it has decided whether to do anything, so
+    // they are the only way a `healthy_noop` can cost 818 seconds. See
+    // [`CleanupReport::store_wait_ms`].
+    let store_wait = Instant::now();
     let registry = fetch_canonical_registry().await;
     let live_jobs = fetch_live_job_ids().await;
+    report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
     let lock = match acquire_lock(&state_dir) {
         Ok(lock) => lock,
         Err(exc) => {

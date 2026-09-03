@@ -2518,6 +2518,12 @@ pub const WEB_API_EDGES: &[&str] = &["stado", "cloudflare"];
 /// Skarbiec item and one of its fields; the value travels only through
 /// `stado service secret-sync`, which reads it over the host channel and puts
 /// it in the unit's env file without it ever reaching a command line.
+///
+/// A product that declares `redirect_to` is a hostname and nothing else: the
+/// edge answers it with a redirect, and there is no unit, no release and no
+/// host. Five of the fleet's Vercel projects are exactly that — one rewrite
+/// each to `https://wisent-app.com` — and expressing them as a product with a
+/// port and a consumer would mean declaring a unit nobody runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WebApiProduct {
     host: String,
@@ -2529,6 +2535,7 @@ pub struct WebApiProduct {
     env: BTreeMap<String, String>,
     secrets: BTreeMap<String, String>,
     database: Option<WebApiDatabase>,
+    redirect_to: Option<String>,
 }
 
 /// The one database a web product reads, and how its credential reaches the
@@ -2578,6 +2585,19 @@ impl WebApiProduct {
 
     pub fn database(&self) -> Option<&WebApiDatabase> {
         self.database.as_ref()
+    }
+
+    /// Where this hostname redirects, for a product that is a redirect and
+    /// nothing else.
+    pub fn redirect_to(&self) -> Option<&str> {
+        self.redirect_to.as_deref()
+    }
+
+    /// Whether this declaration describes a running unit. A redirect lives
+    /// entirely in the edge's configuration, so `deploy`, `status` and the
+    /// release pipeline have nothing to do with it.
+    pub fn is_redirect(&self) -> bool {
+        self.redirect_to.is_some()
     }
 }
 
@@ -2630,6 +2650,43 @@ pub fn is_public_hostname(value: &str) -> bool {
         })
 }
 
+/// Whether one string can be the target of a declared redirect.
+///
+/// `https://` only: a redirect Stado publishes on its own edge must not send
+/// a browser from a hostname it holds a certificate for to one it does not.
+/// A path prefix is allowed, because a redirect to a section of a site is a
+/// real thing to want; a query or a fragment is not, because the rendered
+/// Caddy directive appends the incoming URI and the result would carry two
+/// query strings. Braces and whitespace are refused for the reason every
+/// other value written into the generated Caddyfile is: `{uri}` is the one
+/// placeholder in that file, and it belongs to Stado.
+pub fn is_redirect_target(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    if rest.contains('?') || rest.contains('#') {
+        return false;
+    }
+    if value
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+        || value.contains('{')
+        || value.contains('}')
+    {
+        return false;
+    }
+    let (host, path) = match rest.split_once('/') {
+        Some((host, path)) => (host, Some(path)),
+        None => (rest, None),
+    };
+    // A trailing slash would make the appended `{uri}` a double slash, which
+    // is a different path to most servers and to every cache in between.
+    if !is_public_hostname(host) || path.is_some_and(|path| path.is_empty()) {
+        return false;
+    }
+    true
+}
+
 /// Whether one string can name an environment variable.
 pub fn is_env_name(value: &str) -> bool {
     !value.is_empty()
@@ -2680,10 +2737,37 @@ pub(crate) fn parse_web_api_products(
                     | "env"
                     | "secrets"
                     | "database"
+                    | "redirect_to"
             ) {
                 problems.push(format!(
                     "web_api.products.{name} contains unsupported key {key:?}"
                 ));
+            }
+        }
+        // A redirect is a hostname and a target. Every other key describes a
+        // unit — where it runs, as whom, on which port, with what environment
+        // — and a declaration carrying both says two different things about
+        // what this product is. Refusing the combination is how the reader of
+        // this section never has to guess which half won.
+        let redirect_to = match entry.get("redirect_to") {
+            Some(Value::String(target)) if is_redirect_target(target) => Some(target.clone()),
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.redirect_to {other} must be an https URL with a host and no query or fragment"
+                ));
+                None
+            }
+            None => None,
+        };
+        if redirect_to.is_some() {
+            for key in [
+                "host", "port", "consumer", "readyz", "env", "secrets", "database",
+            ] {
+                if entry.contains_key(key) {
+                    problems.push(format!(
+                        "web_api.products.{name} declares redirect_to and {key}: a redirect has no unit, so it has no {key}"
+                    ));
+                }
             }
         }
         let host = match entry.get("host").and_then(Value::as_str) {
@@ -2694,6 +2778,10 @@ pub(crate) fn parse_web_api_products(
                 ));
                 String::new()
             }
+            // A redirect runs nowhere, so it names no host. The keys are
+            // refused above when both are present, so this arm only ever
+            // sees a declaration that is a redirect and says so.
+            None if redirect_to.is_some() => String::new(),
             None => {
                 problems.push(format!("web_api.products.{name}.host is required"));
                 String::new()
@@ -2710,6 +2798,7 @@ pub(crate) fn parse_web_api_products(
                 ));
                 0
             }
+            None if redirect_to.is_some() => 0,
             None => {
                 problems.push(format!("web_api.products.{name}.port is required"));
                 0
@@ -2743,6 +2832,9 @@ pub(crate) fn parse_web_api_products(
                 ));
                 String::new()
             }
+            // A redirect declares no consumer, and asking for one would be
+            // asking for a vault identity nothing authenticates as.
+            None if redirect_to.is_some() => String::new(),
             None => {
                 problems.push(format!("web_api.products.{name}.consumer is required"));
                 String::new()
@@ -2867,6 +2959,7 @@ pub(crate) fn parse_web_api_products(
                     env,
                     secrets,
                     database,
+                    redirect_to,
                 },
             );
         }

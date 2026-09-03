@@ -56,23 +56,44 @@ pub(crate) const LAUNCHER: &str = "bin/start-web";
 #[derive(Debug, Subcommand)]
 pub(crate) enum WebCommands {
     /// Declare a web product: where it runs, as whom, and on which hostname.
+    ///
+    /// With `--redirect-to` the product is a hostname and a target and
+    /// nothing else: the edge answers it with a 308 and there is no unit, no
+    /// release and no host, so `--host`, `--port` and `--consumer` are
+    /// refused beside it.
     Declare {
         /// Product name, matching `product` in its `.wisent-release.json`.
         name: String,
         /// Registry target the unit runs on.
-        #[arg(long)]
-        host: String,
+        #[arg(
+            long,
+            required_unless_present = "redirect_to",
+            conflicts_with = "redirect_to"
+        )]
+        host: Option<String>,
         /// Loopback port the unit listens on.
-        #[arg(long)]
-        port: u16,
+        #[arg(
+            long,
+            required_unless_present = "redirect_to",
+            conflicts_with = "redirect_to"
+        )]
+        port: Option<u16>,
         /// Public hostname the product answers on.
         #[arg(long)]
         hostname: String,
         /// Skarbiec consumer identity the unit runs as.
-        #[arg(long)]
-        consumer: String,
+        #[arg(
+            long,
+            required_unless_present = "redirect_to",
+            conflicts_with = "redirect_to"
+        )]
+        consumer: Option<String>,
+        /// Where this hostname redirects, instead of running a unit:
+        /// an https URL with a host and no query or fragment.
+        #[arg(long = "redirect-to")]
+        redirect_to: Option<String>,
         /// Request path that proves the unit is ready.
-        #[arg(long, default_value = "/")]
+        #[arg(long, default_value = "/", conflicts_with = "redirect_to")]
         readyz: String,
         /// Which edge terminates TLS for the hostname.
         #[arg(
@@ -82,19 +103,19 @@ pub(crate) enum WebCommands {
         )]
         edge: String,
         /// Plain environment entry, `NAME=value`; repeatable.
-        #[arg(long = "env")]
+        #[arg(long = "env", conflicts_with = "redirect_to")]
         env: Vec<String>,
         /// Secret environment entry, `NAME=item#field`; repeatable.
-        #[arg(long = "secret")]
+        #[arg(long = "secret", conflicts_with = "redirect_to")]
         secrets: Vec<String>,
         /// Declared database the product reads.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "redirect_to")]
         database: Option<String>,
         /// Field of the database's Skarbiec item to deliver.
-        #[arg(long, default_value = "pooler_url")]
+        #[arg(long, default_value = "pooler_url", conflicts_with = "redirect_to")]
         database_field: String,
         /// Variable the database field is delivered as.
-        #[arg(long, default_value = "DATABASE_URL")]
+        #[arg(long, default_value = "DATABASE_URL", conflicts_with = "redirect_to")]
         database_variable: String,
         /// Emit machine-readable output.
         #[arg(long)]
@@ -184,6 +205,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             port,
             hostname,
             consumer,
+            redirect_to,
             readyz,
             edge,
             env,
@@ -194,10 +216,14 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             json,
         } => declare(DeclareRequest {
             name: &name,
-            host: &host,
-            port,
+            // clap guarantees the three unit arguments are present unless
+            // this is a redirect, so the defaults here are only ever reached
+            // by a redirect, which has no unit to describe.
+            host: host.as_deref().unwrap_or_default(),
+            port: port.unwrap_or_default(),
             hostname: &hostname,
-            consumer: &consumer,
+            consumer: consumer.as_deref().unwrap_or_default(),
+            redirect_to: redirect_to.as_deref(),
             readyz: &readyz,
             edge: &edge,
             env: &env,
@@ -315,6 +341,7 @@ struct DeclareRequest<'a> {
     port: u16,
     hostname: &'a str,
     consumer: &'a str,
+    redirect_to: Option<&'a str>,
     readyz: &'a str,
     edge: &'a str,
     env: &'a [String],
@@ -381,12 +408,26 @@ fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
     }
 
     let mut entry = Map::new();
-    entry.insert("host".into(), json!(request.host));
-    entry.insert("port".into(), json!(request.port));
     entry.insert("hostname".into(), json!(request.hostname));
-    entry.insert("consumer".into(), json!(request.consumer));
-    entry.insert("readyz".into(), json!(request.readyz));
     entry.insert("edge".into(), json!(request.edge));
+    // A redirect declares a hostname, a target and the edge that answers it.
+    // Writing a host, a port, a consumer and a readiness path beside it would
+    // put a unit in the configuration that nothing ever installs, and the
+    // parser refuses that combination anyway.
+    if let Some(target) = request.redirect_to {
+        if !crate::config::is_redirect_target(target) {
+            return Err(CmdError::usage(format!(
+                "--redirect-to {target:?} must be an https URL with a host, no query or fragment, \
+                 and no trailing slash"
+            )));
+        }
+        entry.insert("redirect_to".into(), json!(target));
+    } else {
+        entry.insert("host".into(), json!(request.host));
+        entry.insert("port".into(), json!(request.port));
+        entry.insert("consumer".into(), json!(request.consumer));
+        entry.insert("readyz".into(), json!(request.readyz));
+    }
     if !env.is_empty() {
         entry.insert("env".into(), Value::Object(env));
     }

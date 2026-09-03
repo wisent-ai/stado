@@ -1327,6 +1327,13 @@ impl JobStorage {
         listing::list_jobs(self, prefix, oldest_first).await
     }
 
+    /// Every job id under `{prefix}/`, without downloading one document.
+    /// See [`listing::list_job_ids`] for why a keep-list must use this and
+    /// not [`Self::list_jobs`].
+    pub async fn list_job_ids(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        listing::list_job_ids(self, prefix).await
+    }
+
     /// Priority markers first, then oldest-first, counting only jobs the
     /// caller's own admission rule accepts. See [`listing::JobScan`] for why
     /// the window and the scanning cost are separate quantities.

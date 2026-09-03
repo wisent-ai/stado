@@ -280,6 +280,31 @@ apart. When the site root is the checkout root, `.git`, `.github`, `.vercel`,
 `.next`, `node_modules`, `release/` and any `.env*` file are left out: they are
 not part of the site, and one of them is a credential.
 
+### A web platform beside a binary platform
+
+A product can host a site and ship a binary from one repository. `jeden` is a
+Rust CLI whose documentation site is its `web` directory, and its
+`.wisent-release.json` declares a `runtime` contract — the binary, its
+launcher and the schema versions the rollout state machine reads.
+
+That contract is declared once for the product, and it applies to the
+platforms it describes. A platform whose stage map contains both the
+runtime's `binary` and its `launcher` ships the runtime and is held to the
+contract; a platform whose stage map contains neither ships something else,
+like a site tarball, and the contract says nothing about it. A platform with
+exactly one of the two is still refused, because that is the half-staged case
+the check exists for: a rollout would install something the host cannot
+start. A `runtime` that no platform stages at all is refused too — it is a
+declaration nothing checks against the world, and the first rollout would be
+what discovered it.
+
+`stado release submit` reads the same rule when it publishes: a platform that
+ships no runtime publishes no binary path, no launcher and no schema
+versions, rather than inheriting the product's and claiming a binary that
+exists in none of its own bytes. Rollout is unaffected either way — a rollout
+target names the platform it rolls out, in the product's rollout policy, so a
+web platform is only ever rolled out if someone declared it there.
+
 ## The hostname and DNS model
 
 One web product owns one hostname. The hostname's zone is whatever the
@@ -318,6 +343,58 @@ same command.
 Nothing removes a Vercel project. A hostname stops being served by Vercel when
 its DNS record stops pointing there, and that record is the last step of
 `stado web route`.
+
+### A redirect is a product with no unit
+
+Five of the fleet's Vercel projects are one rewrite each: `aiwisent.com`,
+`getwisent.com`, `trywisent.com`, `wisentai.com` and `wisentplatform.com` all
+answer `https://wisent-app.com/:path*` and nothing else. Their repositories
+carry a `vercel.json` with a single redirect, no framework and no build. There
+is no application to host, and expressing one as a web product with a port and
+a consumer would mean declaring a unit nobody runs.
+
+So a product may declare a hostname and a target instead:
+
+```console
+stado web declare aiwisent-com \
+  --hostname aiwisent.com \
+  --redirect-to https://wisent-app.com
+stado web route aiwisent-com
+```
+
+`--host`, `--port`, `--consumer`, `--readyz`, `--env`, `--secret` and
+`--database` are refused beside `--redirect-to`, and the configuration parser
+refuses the same combination: a declaration carrying both says two different
+things about what the product is. The edge renders a `redir` block rather than
+a `reverse_proxy`, and the rest of the path is unchanged — the hostname is
+reconciled into the edge, the record is written by `stado dns`, and the
+certificate is ordered for it like any other:
+
+```
+aiwisent.com {
+	redir https://wisent-app.com{uri} 308
+}
+```
+
+`{uri}` carries the path and the query across, which is exactly what the
+Vercel rewrite's `/:path*` did. The status is 308 rather than 301 because 308
+preserves the method and the body: a `POST` to the old hostname arrives at the
+new one as a `POST`, where 301 lets a client turn it into a `GET` and a form
+submission silently becomes a page load. Permanent either way — these
+hostnames are not coming back.
+
+The target must be `https://` with a public host name, no query, no fragment
+and no trailing slash. A redirect Stado publishes on its own edge must not
+send a browser to a hostname it holds no certificate for, a query would
+collide with the appended `{uri}`, and a trailing slash would make every
+redirected path a double slash. A path prefix is allowed:
+`--redirect-to https://wisent-app.com/pricing`.
+
+`stado web deploy` refuses a redirect and says which command publishes it;
+`stado web status` reports it as `kind: redirect` with its target and whether
+its hostname resolves to the edge, rather than asking a host about a unit that
+was never deployable; `stado web remove` retracts the hostname and reports
+`no-unit`.
 
 ## The command sequence
 
