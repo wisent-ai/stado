@@ -208,13 +208,43 @@ fn product_name(package_name: &str) -> Result<&str, CmdError> {
 }
 
 /// The product name of the checkout being built.
-fn product(manifest: &Map<String, Value>) -> Result<&str, CmdError> {
-    let declared = manifest.get("name").and_then(Value::as_str).ok_or_else(|| {
-        CmdError::click(
-            "package.json declares no name: the staged artifact and the managed unit are both named after it",
+///
+/// `.wisent-release.json`'s `product` first, and `package.json`'s `name` only
+/// when the checkout carries no manifest. The two disagree in practice and the
+/// manifest is the one that matters: `preferences-landing`'s `package.json` is
+/// named `preferences`, so naming the artifact after the package staged
+/// `dist/preferences-web.tar.gz` while the recipe's stage map named
+/// `dist/preferences-landing-web.tar.gz` — a build that succeeds and collects
+/// nothing, which is the worst shape a release step can have. The stage map
+/// and this name are two statements about one file, so both are read from the
+/// document the release pipeline itself parses.
+fn product(source: &Path, manifest: &Map<String, Value>) -> Result<String, CmdError> {
+    let release_manifest = source.join(crate::release_pipeline::PRODUCT_MANIFEST);
+    if let Ok(text) = std::fs::read_to_string(&release_manifest) {
+        let declared: Value = serde_json::from_str(&text).map_err(|error| {
+            CmdError::click(format!(
+                "{} is not valid JSON: {error}",
+                release_manifest.display()
+            ))
+        })?;
+        if let Some(name) = declared.get("product").and_then(Value::as_str) {
+            return product_name(name).map(str::to_string);
+        }
+        return Err(CmdError::click(format!(
+            "{} declares no product, and the staged artifact is named after it",
+            release_manifest.display()
+        )));
+    }
+    let declared = manifest
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CmdError::click(
+            "the checkout carries no .wisent-release.json and package.json declares no name, so \
+             the staged artifact has nothing to be named after",
         )
-    })?;
-    product_name(declared)
+        })?;
+    product_name(declared).map(str::to_string)
 }
 
 /// The archive's single top-level directory, so an extraction cannot scatter
@@ -450,7 +480,7 @@ pub(crate) fn quality() -> Result<(), CmdError> {
     worker.require_web_platform()?;
     let manifest = manifest(&worker.source)?;
     require_version(&manifest, &worker.version)?;
-    let product = product(&manifest)?.to_string();
+    let product = product(&worker.source, &manifest)?;
     println!(
         "stado web quality: {product} {} in {} ({})",
         worker.version,
@@ -507,7 +537,7 @@ pub(crate) fn build() -> Result<(), CmdError> {
     worker.require_web_platform()?;
     let manifest = manifest(&worker.source)?;
     require_version(&manifest, &worker.version)?;
-    let product = product(&manifest)?.to_string();
+    let product = product(&worker.source, &manifest)?;
     println!(
         "stado web build: {product} {} in {} ({})",
         worker.version,
