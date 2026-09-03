@@ -35,7 +35,7 @@ use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -2718,7 +2718,35 @@ impl RemoteObjectApi {
 /// loopback to a tailnet HTTPS origin they failed with "error sending
 /// request" -- which reads like the host is down rather than like this
 /// process was never told whom to trust.
+///
+/// Built once per process and shared, because a `reqwest::Client` *is* the
+/// connection pool: cloning one shares its keep-alive connections, while
+/// building a second one starts empty and can only dial again.
+///
+/// Every object operation used to call this, so every `get`, `put`, `stat`,
+/// `list` and `delete` dialed its own TCP connection and dropped it on the
+/// way out. On 2026-09-03 charless-mac-mini's object API held 1388 sockets
+/// in TIME_WAIT against 96 established ones on 127.0.0.1:8765 -- all of them
+/// from the one forwarded session the fleet reaches it through -- while the
+/// service pinned 95.9% of a core. At that churn the handshake, not the
+/// payload, is what a request pays for, which is how single stored reads
+/// reached 639 s and 2178 s and starved the agent tick that issues them.
+/// The bound the loop grew for those reads is a defence; this is the cause.
+///
+/// The outcome is cached whichever way it went: the certificate and the
+/// tailnet routes it pins are process-static, so a rebuild would re-read the
+/// same PEM to reach the same verdict.
+static FLEET_HTTPS_CLIENT: LazyLock<Result<reqwest::Client, String>> =
+    LazyLock::new(|| build_fleet_https_client().map_err(|error| error.to_string()));
+
 pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
+    match &*FLEET_HTTPS_CLIENT {
+        Ok(client) => Ok(client.clone()),
+        Err(error) => Err(CmdError::click(error.clone())),
+    }
+}
+
+fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
     // Bound DNS/TCP establishment and an actually stalled body, not the total
     // lifetime of an active immutable transfer. The former total 60-second
     // timeout cut healthy 70 MB writer read-backs off at 42–56 MB; retries
@@ -2728,7 +2756,14 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(60));
+        .read_timeout(Duration::from_secs(60))
+        // Keep established connections warm between operations. Without an
+        // explicit idle pool the client still pools, but nothing states the
+        // intent that makes sharing it worthwhile, and nothing keeps a link
+        // the fleet reuses every few seconds from being reaped between ticks.
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(60));
     for host in configured_origin_hosts() {
         // The tailnet states where its own names live. Asking the system
         // resolver about a MagicDNS name is asking a witness that may not have
