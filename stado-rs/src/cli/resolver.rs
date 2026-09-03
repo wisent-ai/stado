@@ -173,21 +173,44 @@ fn ssh_command(control_master: &'static str) -> Command {
     }
     command
 }
-/// SSH transport for high-volume adapter traffic.
+/// SSH transport for the forwards that carry adapter traffic.
 ///
-/// Adapter requests share one authenticated connection; authority snapshots do
-/// not. Sharing the request path prevents a queue poll burst from creating one
-/// SSH process and one remote session per object read, while isolating snapshot
-/// reads prevents a stuck control master from freezing registry refresh.
+/// This used to say that adapter requests "share one authenticated connection",
+/// and that sharing "prevents one SSH process and one remote session per object
+/// read". Only the second half was ever true: multiplexing shares the session,
+/// while `ssh -W` still forked a client process for every request. The forwards
+/// this command now starts are one per destination, so the first half is true
+/// as well. Authority snapshots still run outside this path, so a stuck control
+/// master cannot freeze registry refresh.
+/// A unix socket path is capped by the kernel: 104 bytes on macOS, 108 on
+/// Linux. `ssh` checks the path it was handed against that cap and refuses the
+/// whole invocation with `ControlPath too long (... >= 104 bytes)`, exiting 255
+/// before it attempts any connection. Nothing here ever checked, so a host
+/// whose `HOME` is long enough -- a service started under
+/// `$HOME/.stado/services/<label>/current/<platform>` is exactly that -- could
+/// not open a transport at all, and the reason appeared only on ssh's stderr.
+const CONTROL_PATH_LIMIT: usize = 104;
+/// What `%C` expands to: ssh's connection hash, 40 hex characters.
+const CONTROL_PATH_HASH: usize = 40;
+
 fn ssh_proxy_command() -> Command {
-    let mut command = ssh_command("ControlMaster=auto");
-    command.args(["-o", "ControlPersist=60"]);
-    if let Ok(home) = std::env::var("HOME") {
-        command
-            .arg("-o")
-            .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
+    let prefix = std::env::var("HOME")
+        .ok()
+        .map(|home| format!("{home}/.stado/resolver-ssh-"));
+    // Multiplexing was load-bearing while every request opened its own
+    // session. A forward is one per destination, so a control master is now an
+    // optimisation: when its socket path cannot fit, serve without one rather
+    // than refuse to serve.
+    match prefix.filter(|prefix| prefix.len() + CONTROL_PATH_HASH <= CONTROL_PATH_LIMIT) {
+        Some(prefix) => {
+            let mut command = ssh_command("ControlMaster=auto");
+            command
+                .args(["-o", "ControlPersist=60", "-o"])
+                .arg(format!("ControlPath={prefix}%C"));
+            command
+        }
+        None => ssh_command("ControlMaster=no"),
     }
-    command
 }
 
 fn target_ssh_paths(target: &targets::ComputeTarget) -> Vec<targets::SshConnectionPath> {
@@ -550,6 +573,92 @@ struct Snapshot {
     loaded_at_iso: String,
 }
 
+/// How long a freshly opened forward may take to accept its first connection.
+const TUNNEL_OPEN_BUDGET: Duration = Duration::from_secs(30);
+/// How often the opening forward is probed inside that budget.
+const TUNNEL_OPEN_POLL: Duration = Duration::from_millis(100);
+
+/// One long-lived SSH forward to one `host:port` behind one destination, shared
+/// by every connection that needs it.
+///
+/// The transport used to be `ssh -W` per request: one operating-system process,
+/// with a pipe pair, for every object read. Multiplexing made those share a
+/// remote session, which is what the old comment claimed, but not a process --
+/// a resolver up for thirty minutes held 178 descriptors, 122 of them pipes,
+/// for about sixty requests in flight. Under a release the fan-out is unbounded,
+/// so the process walked into its own descriptor budget: `accept failed: Too
+/// many open files`, launchd counted 166 restarts, and every death dropped the
+/// connections in flight -- four publications died mid-run and every fleet agent
+/// hung on its next object read, which froze the capacity heartbeats the
+/// release pipeline picks builders from.
+///
+/// A forward costs one process for as long as the destination is in use, and a
+/// request costs the two sockets it would cost anyway. Fan-out stops being a
+/// function of traffic, so there is nothing to bound and nothing to refuse.
+struct Tunnel {
+    local: u16,
+    child: tokio::process::Child,
+}
+
+impl Tunnel {
+    /// Open a forward and wait, bounded, until it accepts.
+    async fn open(destination: &str, host: &str, port: u16) -> Result<Self, String> {
+        // Ask the OS for a free loopback port and release it: `ssh -L` needs a
+        // number before it starts, and this is the only way to learn one that
+        // is free. A racing binder is handled by the caller, which drops the
+        // forward and opens another.
+        let probe = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .map_err(|error| format!("no free loopback port for an SSH forward: {error}"))?;
+        let local = probe
+            .local_addr()
+            .map_err(|error| format!("loopback probe has no address: {error}"))?
+            .port();
+        drop(probe);
+        let mut child = ssh_proxy_command()
+            .args([
+                "-N",
+                "-L",
+                &format!("127.0.0.1:{local}:{host}:{port}"),
+                destination,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("could not start the SSH forward: {error}"))?;
+        let deadline = tokio::time::Instant::now() + TUNNEL_OPEN_BUDGET;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return Err(format!(
+                        "the SSH forward to {destination} exited before it accepted: {status}"
+                    ))
+                }
+                Ok(None) => {}
+                Err(error) => return Err(format!("SSH forward wait failed: {error}")),
+            }
+            if let Ok(open) = TcpStream::connect(("127.0.0.1", local)).await {
+                drop(open);
+                return Ok(Self { local, child });
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "the SSH forward to {destination} did not accept within {}s",
+                    TUNNEL_OPEN_BUDGET.as_secs()
+                ));
+            }
+            tokio::time::sleep(TUNNEL_OPEN_POLL).await;
+        }
+    }
+
+    /// Whether the forwarding process is still there to carry traffic.
+    fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
 struct ResolverState {
     local_store: Option<Arc<RegistryStore>>,
     source: RwLock<SnapshotSource>,
@@ -558,9 +667,61 @@ struct ResolverState {
     local_target: String,
     adapters: Vec<ResolverAdapter>,
     config: ResolverConfig,
+    /// One forward per `destination|host:port`, opened on first use.
+    tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Tunnel>>,
 }
 
 impl ResolverState {
+    /// A connection to `host:port` behind `destination`, over the forward this
+    /// resolver keeps for that pair, opening it if this is its first use.
+    ///
+    /// Opening holds the pool lock, so two requests for a cold destination
+    /// cannot race into two forwards. Openings are rare; a warm destination
+    /// only reads the port.
+    async fn tunnel_connect(
+        &self,
+        destination: &str,
+        host: &str,
+        port: u16,
+    ) -> Result<TcpStream, String> {
+        let key = format!("{destination}|{host}:{port}");
+        // Two attempts: a forward that died between the liveness check and the
+        // dial, or a local port some other process took, is retried once
+        // against a freshly opened one. A second failure is the answer.
+        for attempt in 0..2 {
+            let local = {
+                let mut tunnels = self.tunnels.lock().await;
+                let live = tunnels
+                    .get_mut(&key)
+                    .and_then(|tunnel| tunnel.alive().then_some(tunnel.local));
+                match live {
+                    Some(local) => local,
+                    None => {
+                        // Dropping the entry kills the dead child.
+                        tunnels.remove(&key);
+                        let tunnel = Tunnel::open(destination, host, port).await?;
+                        let local = tunnel.local;
+                        tunnels.insert(key.clone(), tunnel);
+                        local
+                    }
+                }
+            };
+            match TcpStream::connect(("127.0.0.1", local)).await {
+                Ok(stream) => return Ok(stream),
+                Err(error) => {
+                    self.tunnels.lock().await.remove(&key);
+                    if attempt == 1 {
+                        return Err(format!(
+                            "the SSH forward to {destination} for {host}:{port} refused a \
+                             connection on 127.0.0.1:{local}: {error}"
+                        ));
+                    }
+                }
+            }
+        }
+        unreachable!("the loop returns on its last attempt")
+    }
+
     async fn refresh(&self) -> Result<bool, String> {
         let source = self.source.read().await.clone();
         let (document, store_version, generation) =
@@ -1056,6 +1217,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         local_target: target.to_string(),
         adapters: config.adapters.clone(),
         config: config.clone(),
+        tunnels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     // A resolver that must serve the very address it reads the registry through
@@ -1405,171 +1567,43 @@ async fn proxy_connection(
             adapter.service, adapter.bind
         ));
     }
-    if resolved.active_host == state.local_target {
-        let (mut client_read, mut client_write) = client.into_split();
-        let upstream = match TcpStream::connect((host, port)).await {
-            Ok(upstream) => upstream,
-            Err(error) => {
-                refuse_connection(
-                    &mut client_read,
-                    &mut client_write,
-                    adapter,
-                    &format!("{host}:{port}"),
-                    &format!("local upstream connect failed: {error}"),
-                    None,
-                )
-                .await;
-                return Ok(());
-            }
-        };
-        let (mut upstream_read, mut upstream_write) = upstream.into_split();
-        let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
-        let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
-        tokio::try_join!(upload, download)
-            .map_err(|error| format!("local proxy failed: {error}"))?;
-        return Ok(());
-    }
-
-    let paths = resolved_ssh_paths(&resolved);
-    let ssh = select_resolver_ssh_path(&paths)
-        .await
-        .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))?;
-    let destination = format!("{host}:{port}");
-    let mut child = ssh_proxy_command()
-        .args(["-W", destination.as_str(), ssh.destination.as_str()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("could not start registry SSH transport: {error}"))?;
-    let mut ssh_stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "SSH transport has no stdin".to_string())?;
-    let mut ssh_stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "SSH transport has no stdout".to_string())?;
+    // Both halves of the fleet reach the upstream over a plain socket: the host
+    // that holds the store dials it directly, every other host dials the
+    // forward this resolver keeps to it. One code path, and no process per
+    // request on either.
     let (mut client_read, mut client_write) = client.into_split();
-    // Ten seconds is enough for a direct TCP dial, not for a cold SSH control
-    // connection on a busy GUI host. Keep the configured value when it is
-    // larger, but never turn transient host pressure into an immediate 502.
-    let connect = Duration::from_secs(adapter.connect_seconds.max(30));
-    // Establishment is the one window `idle_seconds` cannot bound: nothing has
-    // flowed yet, so a dead backend would otherwise hold the client for the
-    // whole idle window. Forward whatever the client sends so the upstream has
-    // a request to answer, then wait -- bounded by the connect budget -- for
-    // the first upstream byte, or for the SSH child's early exit: `ssh -W`
-    // opens its channel at startup, so a dead backend fails the channel open
-    // and the child is gone within moments.
-    let mut upstream_head = [0_u8; 16 * 1024];
-    let mut client_head: Option<Vec<u8>> = None;
-    let establishment = async {
-        // A large request can legitimately produce no response bytes until
-        // its complete body reaches the service. Bound silence, not total
-        // upload time: every client byte proves the channel is still making
-        // progress and renews the establishment budget.
-        let silence = tokio::time::sleep(connect);
-        tokio::pin!(silence);
-        let mut buffer = [0_u8; 16 * 1024];
-        loop {
-            tokio::select! {
-                _ = &mut silence => {
-                    return Err(format!(
-                        "no channel progress within the {}s connect budget",
-                        connect.as_secs()
-                    ));
-                }
-                status = child.wait() => {
-                    let status = status
-                        .map_err(|error| format!("SSH transport wait failed: {error}"))?;
-                    if !status.success() {
-                        return Err(format!(
-                            "SSH transport exited before the upstream answered: {status}"
-                        ));
-                    }
-                    // A short HTTP response can be fully written while the SSH
-                    // child exits. In that case both wait() and stdout are ready,
-                    // and select! may observe the clean exit first. Drain the
-                    // buffered response before calling that successful transport
-                    // a refusal.
-                    return match ssh_stdout.read(&mut upstream_head).await {
-                        Ok(0) => Err(
-                            "SSH transport closed before the upstream answered".to_string()
-                        ),
-                        Ok(read) => Ok(read),
-                        Err(error) => Err(format!("SSH transport read failed: {error}")),
-                    };
-                }
-                read = ssh_stdout.read(&mut upstream_head) => {
-                    return match read {
-                        Ok(0) => Err(
-                            "SSH transport closed before the upstream answered".to_string()
-                        ),
-                        Ok(read) => Ok(read),
-                        Err(error) => Err(format!("SSH transport read failed: {error}")),
-                    };
-                }
-                read = client_read.read(&mut buffer) => {
-                    match read {
-                        Ok(0) => {
-                            return Err(
-                                "client closed before the upstream answered".to_string()
-                            )
-                        }
-                        Ok(read) => {
-                            if client_head.is_none() {
-                                client_head = Some(buffer[..read].to_vec());
-                            }
-                            ssh_stdin.write_all(&buffer[..read]).await.map_err(|error| {
-                                format!("SSH transport write failed: {error}")
-                            })?;
-                            silence.as_mut().reset(tokio::time::Instant::now() + connect);
-                        }
-                        Err(error) => return Err(format!("client read failed: {error}")),
-                    }
-                }
-            }
+    let upstream = if resolved.active_host == state.local_target {
+        TcpStream::connect((host, port))
+            .await
+            .map_err(|error| format!("local upstream connect failed: {error}"))
+    } else {
+        let paths = resolved_ssh_paths(&resolved);
+        match select_resolver_ssh_path(&paths).await {
+            Ok(ssh) => state.tunnel_connect(&ssh.destination, host, port).await,
+            Err(error) => Err(format!("active host {:?}: {error}", resolved.active_host)),
         }
     };
-    let established = match establishment.await {
-        Ok(read) => read,
+    // A refusal is written to the client before anything is read from it, so
+    // the sentence names the reason instead of a socket that closed silently.
+    let upstream = match upstream {
+        Ok(upstream) => upstream,
         Err(cause) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
             refuse_connection(
                 &mut client_read,
                 &mut client_write,
                 adapter,
-                &destination,
+                &format!("{host}:{port}"),
                 &cause,
-                client_head.as_deref(),
+                None,
             )
             .await;
             return Ok(());
         }
     };
-    client_write
-        .write_all(&upstream_head[..established])
-        .await
-        .map_err(|error| format!("client write failed: {error}"))?;
-    let upload = copy_until_idle(&mut client_read, &mut ssh_stdin, idle);
-    let download = copy_until_idle(&mut ssh_stdout, &mut client_write, idle);
-    let (upload_idle, download_idle) =
-        tokio::try_join!(upload, download).map_err(|error| format!("SSH proxy failed: {error}"))?;
-    if upload_idle || download_idle {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        return Ok(());
-    }
-    let status = child
-        .wait()
-        .await
-        .map_err(|error| format!("SSH transport wait failed: {error}"))?;
-    if !status.success() {
-        return Err(format!("SSH transport exited with {status}"));
-    }
+    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
+    let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
+    tokio::try_join!(upload, download).map_err(|error| format!("proxy failed: {error}"))?;
     Ok(())
 }
 
