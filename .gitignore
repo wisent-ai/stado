@@ -19,6 +19,21 @@ stado-rs/target-*/
 # untracked it would otherwise be swept into history by the first `git add`
 # of everything, which in this repository happens often.
 .proof-store/
+# The intermediate files a conditional registry write forces an operator to
+# materialize. `stado registry push --if-generation` takes the document as a
+# file and the fence token as a separate argument, and `registry pull
+# --with-generation` prints both wrapped in one envelope, so applying one key
+# to the canonical registry means writing out the pull, the unwrapped
+# document, the edited document and the token -- four files, all of them a
+# verbatim copy of the fleet's own configuration, and none of them source.
+# Ignored rather than kept: they name every host, its ssh destination and its
+# declared services, and the first `git add` of everything would put that in
+# the history of a repository that has no business holding it. Regenerate
+# them with `stado registry pull` whenever they are wanted again.
+.registry-snapshot.json
+.registry-with-gen.json
+.registry-next.json
+.registry-generation
 migration/
 .stado-precheck-release/
 .wisent-output/
