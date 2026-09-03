@@ -444,11 +444,11 @@ enum Commands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect or change stado configuration: show | validate | init | set.
+    /// Inspect or change stado configuration: show | validate | init | set | unset.
     Config {
         #[arg(default_value = "show")]
         sub: String,
-        /// `set`: dotted key, e.g. `alerts.channels`.
+        /// `set` and `unset`: dotted key, e.g. `alerts.channels`.
         key: Option<String>,
         /// `set`: JSON value; a bare word is stored as a string.
         value: Option<String>,
