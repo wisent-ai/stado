@@ -181,9 +181,40 @@ impl From<std::io::Error> for CmdError {
     }
 }
 
+/// The whole cause chain of one HTTP failure, joined, with the URL it was
+/// asking for.
+///
+/// `reqwest::Error`'s own `Display` is frequently one unattributable word, and
+/// `builder error` is the worst of them: it names no URL, no header and no
+/// field. On 2026-09-03 it was the only thing `stado storage stat
+/// stado://system/release-catalog/preferences-landing.json` said, while the
+/// same command for two other products answered an honest HTTP 401 — so the
+/// operator's only signal that the fault was in a credential rather than in
+/// the network was that one product differed from the others. The answer was
+/// one layer down, in a source chain nothing printed: a header value that
+/// could not be built. Every reqwest failure that reaches an operator now
+/// carries that chain, because the layer that knows the cause is never the one
+/// whose message gets shown.
+pub fn http_failure(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(current) = cause {
+        let text = current.to_string();
+        if !text.is_empty() && !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        cause = current.source();
+    }
+    if let Some(url) = error.url() {
+        message.push_str(&format!(" (requesting {url})"));
+    }
+    message
+}
+
 impl From<reqwest::Error> for CmdError {
     fn from(exc: reqwest::Error) -> Self {
-        Self::click(exc.to_string())
+        Self::click(http_failure(&exc))
     }
 }
 

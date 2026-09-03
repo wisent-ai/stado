@@ -1685,6 +1685,22 @@ impl RemoteObjectApi {
                 "release_api.publishers declares no publisher for {policy_key}"
             ))
         })?;
+        // A newly declared product's publisher item is readable by nobody:
+        // writing an item grants nothing, because a Skarbiec grant is per item
+        // and per field. `stado host reconcile-release-verifier --product P T`
+        // settles the release verifier's own grant, and this settles the
+        // consumer a store-routed read authenticates as, which is the other of
+        // the two identities this read can travel under. Both are needed and
+        // neither implies the other, which is why declaring a product used to
+        // take one command plus a hand-run `skarbiec token-mint`.
+        crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"]).map_err(
+            |error| {
+                CmdError::click(format!(
+                    "cannot make release publisher item {} readable: {error}",
+                    publisher.item()
+                ))
+            },
+        )?;
         let token = crate::skarbiec::read_release_token(publisher.item(), "token")
             .await
             .map_err(|error| {
@@ -1699,6 +1715,26 @@ impl RemoteObjectApi {
                     publisher.item()
                 ))
             })?;
+        // A token that cannot become a header value is refused here, by name.
+        // reqwest reports that case as the bare string `builder error`, with no
+        // item, no field and no failure point that means anything: on
+        // 2026-09-03 `stado storage stat
+        // stado://system/release-catalog/preferences-landing.json` answered
+        // exactly that, and the same command for two other products answered
+        // an honest HTTP 401, so the operator's only signal that the fault was
+        // in a credential and not in the network was that one product differed
+        // from the others. A bearer is header material; whether one is usable
+        // is knowable before the request, and the answer names the item.
+        if reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
+            return Err(CmdError::click(format!(
+                "release publisher item {}'s token field cannot form an Authorization header: it \
+                 is {} bytes and carries a character a header value may not (a newline or a \
+                 control byte, most often a trailing newline stored with the value). Rewrite the \
+                 field with the value alone",
+                publisher.item(),
+                token.len()
+            )));
+        }
         Ok(Some(token))
     }
 
@@ -2028,8 +2064,9 @@ impl RemoteObjectApi {
                 Ok(response) => response,
                 Err(error) => {
                     last_read_error = Some(format!(
-                        "error sending authenticated object GET after {} bytes: {error}",
-                        body.len()
+                        "error sending authenticated object GET after {} bytes: {}",
+                        body.len(),
+                        super::http_failure(&error)
                     ));
                     if recovery == 3 {
                         break;
