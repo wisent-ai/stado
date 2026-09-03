@@ -1423,7 +1423,9 @@ pub async fn exec_host(
             // A failed run may never have reached any candidate.
             None if !output.ok() => None,
             None => {
-                return Err(DeployError("host returned no resolved executable marker".into()).into())
+                return Err(
+                    DeployError("host returned no resolved executable marker".into()).into(),
+                )
             }
         }
     } else {
