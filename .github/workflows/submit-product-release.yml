@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       repository:
-        description: Public wisent-ai repository name
+        description: wisent-ai repository name, public or private
         required: true
         type: string
       revision:
@@ -46,11 +46,25 @@ jobs:
           case "$REVISION" in *[!0-9a-f]*|'') exit 2;; esac
           test "${#REVISION}" = 40
           case "$VERSION" in ''|*[!0-9A-Za-z.+-]*) exit 2;; esac
+      # Most Wisent products are private repositories, and the workflow's own
+      # GITHUB_TOKEN is scoped to this repository alone: with it, checking out
+      # a sibling answers `repository
+      # 'https://github.com/wisent-ai/preferences-landing/' not found`, which
+      # reads as a typo and is a permission. PRODUCT_SOURCE_TOKEN carries the
+      # organization-read credential the fleet already holds as the Skarbiec
+      # item GITHUB_TOKEN, the same one `deploy::host_precheck_runner` reads
+      # for wisent-ai; set it with
+      # `skarbiec get GITHUB_TOKEN --field value | gh secret set PRODUCT_SOURCE_TOKEN`.
+      #
+      # `persist-credentials: false` stays: the token reads the revision and is
+      # not left in the checkout for the release steps that follow, which
+      # authenticate as the product's own publisher and nothing else.
       - uses: actions/checkout@v4
         with:
           repository: wisent-ai/${{ inputs.repository }}
           ref: ${{ inputs.revision }}
           path: product-source
+          token: ${{ secrets.PRODUCT_SOURCE_TOKEN || secrets.GITHUB_TOKEN }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Build Stado release client
