@@ -10,6 +10,15 @@ wisent_compute/targets/registry.json
 .alert-watcher-*
 stado-rs/target/
 stado-rs/target-*/
+# A filesystem-backed queue store root, written by a local run rather than by
+# a build: `queue/storage.rs` creates `system/storage-layout.json` beside a
+# `.metadata` file and a `.locks/` directory under whatever root the run is
+# pointed at, so it lands wherever the command was launched from -- commonly
+# `stado-rs/.proof-store/`. It is regenerated state describing one machine's
+# objects and locks, never source, and it belongs to no other checkout. Left
+# untracked it would otherwise be swept into history by the first `git add`
+# of everything, which in this repository happens often.
+.proof-store/
 migration/
 .stado-precheck-release/
 .wisent-output/
