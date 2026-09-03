@@ -44,7 +44,7 @@ use serde_json::{json, Value};
 
 use stado::cli::seed_freshness::{
     attempts_of, build_report, classify, Attempt, Verdict, SEED_DECLARED_EMPTY, SEED_FIELD_ABSENT,
-    SEED_PRESENT, SEED_UNREADABLE,
+    SEED_PRESENT, SEED_READ_UNSUPPORTED, SEED_UNREADABLE,
 };
 
 /// The account the six-day loop locked out.
@@ -412,4 +412,60 @@ fn no_secret_material_reaches_the_report() {
             "the report must never carry {forbidden}: {rendered}"
         );
     }
+}
+
+/// Degrading honestly is a property to rely on, not a note.
+///
+/// A host whose released Skarbiec predates `totp-seed-state` cannot answer the
+/// vault half at all — charless-mac-mini is in exactly that state. The check
+/// must then still report the run-history half, keep every account's recorded
+/// attempts, and say plainly that seed presence is unknown rather than either
+/// dying or guessing "present". Guessing would be the worse failure: it would
+/// let a row be called `seed_last_known_good` on a host that never read a
+/// vault.
+#[test]
+fn a_host_that_cannot_answer_the_vault_half_still_reports_the_history_half() {
+    let vault = json!({"rows": [
+        {"item": LOCKED_ITEM, "kind": "login", "seed_state": SEED_READ_UNSUPPORTED},
+    ]});
+    let evidence = json!({
+        "attempts": [{
+            "login_item": LOCKED_ITEM,
+            "at": "2026-08-27T12:00:00Z",
+            "at_ms": 1_756_296_000_000_i64,
+            "result": "failed",
+            "code_submitted": true,
+            "code_rejected": true,
+            "locked_out": true,
+            "authenticator_unreached": false,
+            "markers": ["code_submitted", "google_said_too_many_failed_attempts"],
+        }]
+    });
+
+    // The verdict never claims a seed state the host could not read.
+    assert_eq!(
+        classify(SEED_READ_UNSUPPORTED, &attempts_of(&evidence, LOCKED_ITEM)),
+        Verdict::VaultReadUnsupported
+    );
+    let unsupported = Verdict::VaultReadUnsupported;
+    assert!(!unsupported.needs_reenrolment());
+    let repair = unsupported.repair(LOCKED_ITEM);
+    assert!(repair.contains("no `totp-seed-state`"), "{repair}");
+    assert!(
+        !repair.contains("store-login-totp-seed.sh"),
+        "a host that cannot read the vault must not be told to re-enrol: {repair}"
+    );
+
+    // The recorded history survives the degradation: the row is still reported
+    // and still carries its evidence.
+    let report = build_report("charless-mac-mini", &vault, &evidence);
+    let findings = report["findings"].as_array().expect("findings is a list");
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0]["verdict"], json!("vault_read_unsupported"));
+    assert_eq!(findings[0]["attempts_recorded"], json!(1));
+    assert_eq!(findings[0]["code_submitting_attempts"], json!(1));
+    assert!(findings[0]["markers"]
+        .as_array()
+        .expect("markers is a list")
+        .contains(&json!("google_said_too_many_failed_attempts")));
 }
