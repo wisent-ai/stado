@@ -537,6 +537,51 @@ struct Snapshot {
     loaded_at_iso: String,
 }
 
+/// Descriptors this process keeps for itself: the adapter and API listeners,
+/// the log and state files, the registry reads, and the control sockets.
+const RESOLVER_FD_RESERVE: u64 = 128;
+/// What one proxied connection costs this process: the client socket plus the
+/// SSH child's stdin and stdout pipes. Measured, not assumed — a resolver up
+/// for thirty minutes held 178 descriptors, 122 of them pipes and 63 sockets,
+/// for roughly sixty connections in flight.
+const RESOLVER_FD_PER_TRANSPORT: u64 = 3;
+/// Never fewer than this, so a host with a small budget still serves.
+const RESOLVER_MIN_TRANSPORTS: usize = 16;
+
+/// How many connections this process may proxy at once, derived from the
+/// descriptor budget it was actually given.
+///
+/// Every proxied request spawns its own `ssh -W` child, and nothing bounded how
+/// many. Under a release the fan-out is unbounded, so the process walked into
+/// its own limit: `accept failed: Too many open files (os error 24)`, launchd
+/// counted 166 restarts, and each death dropped every connection in flight —
+/// four publications died mid-run and every fleet agent hung on its next
+/// object read, which froze the capacity heartbeats the release pipeline picks
+/// builders from. Tolerating the error was not enough: a limit you can walk
+/// into is a limit you will walk into. This makes the exhaustion unreachable
+/// instead, by refusing to allocate past what the declared budget affords, and
+/// the ceiling follows the declaration rather than a number typed here.
+fn transport_ceiling() -> usize {
+    let soft = match nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE) {
+        Ok((soft, _)) => soft,
+        Err(_) => 0,
+    };
+    let affordable = soft
+        .saturating_sub(RESOLVER_FD_RESERVE)
+        .saturating_div(RESOLVER_FD_PER_TRANSPORT);
+    let ceiling = usize::try_from(affordable)
+        .unwrap_or(usize::MAX)
+        .max(RESOLVER_MIN_TRANSPORTS);
+    eprintln!(
+        "stado resolver descriptor budget {soft}: proxying at most {ceiling} connection(s) at once"
+    );
+    ceiling
+}
+
+/// Computed once, so the refusal can name the same ceiling the permits were
+/// built from.
+static TRANSPORT_CEILING: std::sync::LazyLock<usize> = std::sync::LazyLock::new(transport_ceiling);
+
 struct ResolverState {
     local_store: Option<Arc<RegistryStore>>,
     source: RwLock<SnapshotSource>,
@@ -545,6 +590,8 @@ struct ResolverState {
     local_target: String,
     adapters: Vec<ResolverAdapter>,
     config: ResolverConfig,
+    /// One permit per connection this process may hold open at once.
+    transports: tokio::sync::Semaphore,
 }
 
 impl ResolverState {
@@ -1043,6 +1090,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         local_target: target.to_string(),
         adapters: config.adapters.clone(),
         config: config.clone(),
+        transports: tokio::sync::Semaphore::new(*TRANSPORT_CEILING),
     });
 
     // A resolver that must serve the very address it reads the registry through
@@ -1392,6 +1440,23 @@ async fn proxy_connection(
             adapter.service, adapter.bind
         ));
     }
+    // Take a permit before anything is allocated for this connection. A
+    // saturated resolver refuses this one connection with a sentence; it does
+    // not spend the descriptor whose absence kills every other connection and
+    // the process with them.
+    let wait = Duration::from_secs(adapter.connect_seconds.max(30));
+    let _permit = match tokio::time::timeout(wait, state.transports.acquire()).await {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) => return Err("resolver transport permits are closed".to_string()),
+        Err(_) => {
+            return Err(format!(
+                "all {} proxy slot(s) this descriptor budget affords are in use; this \
+                 connection waited {}s for one",
+                *TRANSPORT_CEILING,
+                wait.as_secs()
+            ))
+        }
+    };
     if resolved.active_host == state.local_target {
         let (mut client_read, mut client_write) = client.into_split();
         let upstream = match TcpStream::connect((host, port)).await {
