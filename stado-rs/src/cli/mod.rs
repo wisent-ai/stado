@@ -1683,9 +1683,18 @@ enum HostCommands {
     },
     /// Pull TARGET's Skarbiec mirror into its live vault without discarding
     /// local-only items.
+    ///
+    /// This replaces the live vault file with the mirror rather than merging
+    /// the two; run `--check` first, which names every item that would be
+    /// replaced and every one that would be lost, and exits non-zero when
+    /// either set is not empty.
     #[command(name = "sync-vault")]
     SyncVault {
         target: String,
+        /// Report what a pull would change and exit non-zero on any conflict
+        /// or loss, applying nothing.
+        #[arg(long)]
+        check: bool,
         /// Emit the Skarbiec pull report as JSON.
         #[arg(long)]
         json: bool,
@@ -3081,7 +3090,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
-            HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::SyncVault {
+                target,
+                check,
+                json,
+            } => host::sync_vault(&target, check, json).await,
             HostCommands::VaultItemPut {
                 target,
                 item,
