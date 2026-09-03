@@ -669,6 +669,15 @@ struct ResolverState {
     config: ResolverConfig,
     /// One forward per `destination|host:port`, opened on first use.
     tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Tunnel>>,
+    /// Why this host last refused to refresh its last-known-good registry
+    /// copy, as [`targets::LastGoodRefusal::kind`].
+    ///
+    /// Published, not just logged. This process reads the authority every
+    /// few seconds and is the one thing on the host that would notice the
+    /// fallback going stale; a refusal that only reached stderr left the
+    /// operator's `resolver status` vouching for a host whose recovery copy
+    /// had stopped advancing.
+    last_good_refusal: RwLock<Option<&'static str>>,
 }
 
 impl ResolverState {
@@ -728,7 +737,13 @@ impl ResolverState {
             source.fetch(host_silence::READER_RESOLVER).await?;
         let serialized = serde_json::to_string(&document)
             .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
-        targets::store_last_good(&serialized, &store_version);
+        // A refused cache does not fail the refresh: the document this
+        // process just read is good and serving it is the job. It does get
+        // recorded, so `publish_serving` carries it to `resolver status`.
+        match targets::store_last_good(&serialized, &store_version) {
+            Ok(()) => *self.last_good_refusal.write().await = None,
+            Err(refusal) => *self.last_good_refusal.write().await = Some(refusal.kind()),
+        }
         let next_source = snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
         if next_config != self.config {
@@ -802,6 +817,7 @@ impl ResolverState {
             current.directory_generation,
             &current.store_version,
             &current.loaded_at_iso,
+            *self.last_good_refusal.read().await,
         ));
     }
 }
@@ -944,6 +960,13 @@ struct PublishedState {
     attempt: u32,
     /// When the next upstream read is due.
     next_attempt_at: Option<String>,
+    /// Why this host last refused to refresh its last-known-good registry
+    /// copy ([`targets::LastGoodRefusal::kind`]), absent while the copy is
+    /// being kept current.
+    ///
+    /// The slug only: the underlying sentence names a path and the
+    /// authority's own words, and this file is read by another process.
+    last_good_refusal: Option<String>,
 }
 
 impl PublishedState {
@@ -957,7 +980,13 @@ impl PublishedState {
         }
     }
 
-    fn serving(target: &str, generation: u64, store_version: &str, loaded_at: &str) -> Self {
+    fn serving(
+        target: &str,
+        generation: u64,
+        store_version: &str,
+        loaded_at: &str,
+        last_good_refusal: Option<&str>,
+    ) -> Self {
         Self {
             updated_at: now_iso(),
             target: target.to_string(),
@@ -966,6 +995,7 @@ impl PublishedState {
             generation: Some(generation),
             store_version: Some(store_version.to_string()),
             loaded_at: Some(loaded_at.to_string()),
+            last_good_refusal: last_good_refusal.map(str::to_string),
             ..Self::default()
         }
     }
@@ -1218,6 +1248,9 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         adapters: config.adapters.clone(),
         config: config.clone(),
         tunnels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        // Startup has not written a copy yet; the first `refresh` sets this
+        // either way.
+        last_good_refusal: RwLock::new(None),
     });
 
     // A resolver that must serve the very address it reads the registry through
@@ -1998,6 +2031,20 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
     if let Some(seconds) = registry_staleness {
         blockers.push(format!(
             "this answer read a registry copy {seconds}s old rather than the authority"
+        ));
+    }
+    // The recovery copy is not advancing. Nothing is down yet, which is
+    // exactly why it belongs here: the host looks healthy right up to the
+    // outage the copy exists for, and then answers from whatever generation
+    // it last accepted.
+    if let Some(refusal) = published
+        .as_ref()
+        .and_then(|state| state.last_good_refusal.as_deref())
+        .filter(|refusal| !refusal.is_empty())
+    {
+        blockers.push(format!(
+            "the resolver is not refreshing this host's last-known-good registry copy \
+             ({refusal}), so the fallback stays at the generation it last accepted"
         ));
     }
 

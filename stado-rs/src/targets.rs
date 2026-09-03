@@ -2896,6 +2896,107 @@ pub(crate) fn may_replace_last_good(
     Ok(())
 }
 
+/// Why the last-known-good copy was not refreshed.
+///
+/// The cache refused documents silently until 2026-09-03: every refusal
+/// printed one stderr line and [`store_last_good`] returned `()`, so neither
+/// caller could know the host had stopped taking new copies. A host can sit a
+/// registry generation behind indefinitely that way, with the only evidence
+/// on a stream nobody keeps.
+///
+/// The variants are separate because the operator's next step is: fix the
+/// document the authority is serving, upgrade this build, look at what the
+/// authority just published, or look at the disk. "Not recorded" answers none
+/// of those.
+///
+/// None of this changes WHEN the copy is written. Every document refused
+/// before is refused now, for the same reason, and the older copy on disk is
+/// still left exactly as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LastGoodRefusal {
+    /// This process has no `HOME`, so there is no cache location to write to
+    /// and no path to name in a diagnostic either. The only refusal that
+    /// prints nothing, because the sentence every other one prints is built
+    /// around the document's path.
+    NoCacheLocation,
+    /// The authority served something that is not JSON. The document is
+    /// broken and no build would take it.
+    Unparseable { detail: String },
+    /// Well-formed, and refused anyway: this build does not accept what the
+    /// document declares. The registry is not the fault — the age of this
+    /// binary is. Same class as the janitor's `policy:NotImplementedError`.
+    RejectedByThisBuild { detail: String },
+    /// Valid, and still not an improvement: it names no hosts while the
+    /// recorded copy names some. A deliberate safeguard
+    /// ([`may_replace_last_good`]) rather than a fault — an empty fleet is
+    /// what an outage looks like from here — and it must be visible for that
+    /// exact reason: the authority is publishing something the fallback will
+    /// not take.
+    WouldLoseRecordedHosts { held: usize, detail: String },
+    /// Nothing judged the document; the filesystem refused the write.
+    NotWritten { detail: String },
+}
+
+impl LastGoodRefusal {
+    /// A stable slug for a log line, a published state file, or a check.
+    /// Bounded and free of paths, values and credentials, so it may be
+    /// recorded anywhere the detail sentence may not.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoCacheLocation => "no-cache-location",
+            Self::Unparseable { .. } => "unparseable-document",
+            Self::RejectedByThisBuild { .. } => "rejected-by-this-build",
+            Self::WouldLoseRecordedHosts { .. } => "would-lose-recorded-hosts",
+            Self::NotWritten { .. } => "not-written",
+        }
+    }
+
+    /// The underlying sentence, which names paths and declared values and so
+    /// belongs on stderr and in an operator's terminal, not in the slug.
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::NoCacheLocation => "no HOME, so this process has no registry cache location",
+            Self::Unparseable { detail }
+            | Self::RejectedByThisBuild { detail }
+            | Self::NotWritten { detail } => detail,
+            Self::WouldLoseRecordedHosts { detail, .. } => detail,
+        }
+    }
+}
+
+impl std::fmt::Display for LastGoodRefusal {
+    /// The historical text. The stderr line this crate has always printed is
+    /// built from it verbatim, so an operator's existing grep still matches.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.detail())
+    }
+}
+
+/// The last refusal this process saw, for a surface that reads the cache
+/// later and has to say why what it is reading is old.
+///
+/// A refusal may NOT be written down: the whole point is that the cache is
+/// left untouched. So the record is process-local, and its reader is
+/// [`fetch_registry_or_last_good_detail`], which names it in the notice it
+/// already puts in front of an operator when a copy is being served instead
+/// of the authority.
+static LAST_GOOD_REFUSAL: Mutex<Option<LastGoodRefusal>> = Mutex::new(None);
+
+/// Record a refusal for this process.
+pub(crate) fn note_last_good_refusal(refusal: &LastGoodRefusal) {
+    *LAST_GOOD_REFUSAL
+        .lock()
+        .expect("last-known-good refusal lock") = Some(refusal.clone());
+}
+
+/// The last refusal this process saw, if any.
+pub fn last_good_refusal() -> Option<LastGoodRefusal> {
+    LAST_GOOD_REFUSAL
+        .lock()
+        .expect("last-known-good refusal lock")
+        .clone()
+}
+
 /// Record a document the authority served AND this build validated.
 ///
 /// The gate is the registry-v2 contract ([`validate_registry`]), not the
@@ -2908,16 +3009,21 @@ pub(crate) fn may_replace_last_good(
 ///
 /// A document that fails the contract is reported and not recorded: the copy
 /// already on disk is worth more than the newest thing the store happened to
-/// hold, and a cache nobody can trust is a cache nobody may use.
+/// hold, and a cache nobody can trust is a cache nobody may use. The refusal
+/// is RETURNED as well as printed ([`LastGoodRefusal`]): a caller that cannot
+/// see it cannot tell an operator the host stopped taking copies, which is
+/// how a host sits a generation behind with one stderr line as the evidence.
 ///
 /// Document first, sidecar second. A crash between the two leaves a new
 /// document dated by the older sidecar, which OVERSTATES the age; the other
 /// order understates it, and a registry that reads fresher than it is, is
 /// the exact lie this cache exists to prevent.
-pub(crate) fn store_last_good(text: &str, generation: &str) {
+pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefusal> {
     let (Some(document), Some(meta)) = (registry_last_good_path(), registry_last_good_meta_path())
     else {
-        return;
+        // Nothing to name in a sentence, so nothing is printed — the caller
+        // gets the outcome instead.
+        return Err(LastGoodRefusal::NoCacheLocation);
     };
     let report = |error: &dyn std::fmt::Display| {
         eprintln!(
@@ -2925,11 +3031,18 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
             document.display()
         );
     };
+    // Every arm below builds the refusal, prints the same sentence it always
+    // printed (`Display` is the underlying detail verbatim), and returns it.
+    let refuse = |refusal: LastGoodRefusal| -> Result<(), LastGoodRefusal> {
+        report(&refusal);
+        Err(refusal)
+    };
     match serde_json::from_str::<Value>(text) {
         Ok(data) => {
             if let Err(error) = validate_registry(&data) {
-                report(&error);
-                return;
+                return refuse(LastGoodRefusal::RejectedByThisBuild {
+                    detail: error.to_string(),
+                });
             }
             // Valid is not the same as better. A document naming no hosts
             // never replaces one that names some.
@@ -2949,19 +3062,23 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
                 .ok()
                 .and_then(|held| serde_json::from_str::<Value>(&held).ok());
             if let Err(error) = may_replace_last_good(&data, recorded.as_ref()) {
-                report(&error);
-                return;
+                return refuse(LastGoodRefusal::WouldLoseRecordedHosts {
+                    held: recorded.as_ref().map_or(0, declared_target_count),
+                    detail: error,
+                });
             }
         }
         Err(error) => {
-            report(&error);
-            return;
+            return refuse(LastGoodRefusal::Unparseable {
+                detail: error.to_string(),
+            });
         }
     }
     if let Some(directory) = document.parent() {
         if let Err(error) = std::fs::create_dir_all(directory) {
-            report(&error);
-            return;
+            return refuse(LastGoodRefusal::NotWritten {
+                detail: error.to_string(),
+            });
         }
     }
     let sidecar = serde_json::to_string(&RegistryCacheMeta {
@@ -2970,12 +3087,19 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
     })
     .expect("registry cache metadata serialization is infallible");
     if let Err(error) = write_atomic(&document, text) {
-        report(&error);
-        return;
+        return refuse(LastGoodRefusal::NotWritten {
+            detail: error.to_string(),
+        });
     }
+    // The document landed and the sidecar did not: a copy nobody can date,
+    // which `load_last_good` skips. Still a refusal to the caller, and the
+    // policy is untouched — this was already the last statement.
     if let Err(error) = write_atomic(&meta, &sidecar) {
-        report(&error);
+        return refuse(LastGoodRefusal::NotWritten {
+            detail: error.to_string(),
+        });
     }
+    Ok(())
 }
 
 /// The cached document with the age of what it is, or `None` when there is
@@ -3063,12 +3187,22 @@ pub async fn fetch_registry_or_last_good_detail(
     };
     match load_last_good() {
         Some((registry, meta, age)) => {
-            let notice = format!(
+            let mut notice = format!(
                 "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {authority}",
                 registry_last_good_path().unwrap_or_default().display(),
                 meta.read_at,
                 meta.generation,
             );
+            // Why the copy is as old as it is, when this process already
+            // knows. Without it the age looks like the authority's fault,
+            // and an operator chasing an unreachable store never learns
+            // that the last refresh reached this host and was refused.
+            if let Some(refusal) = last_good_refusal() {
+                notice.push_str(&format!(
+                    "; this process refused to refresh that copy ({}): {refusal}",
+                    refusal.kind()
+                ));
+            }
             Ok((
                 registry,
                 Some(RegistryCopyNotice {
@@ -3113,7 +3247,15 @@ async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError
     match download_registry().await {
         Ok(Some(document)) => match load_registry_from_str(&document.content) {
             Ok(registry) => {
-                store_last_good(&document.content, &document.version);
+                // The authority answered, so this read is not degraded and
+                // the refusal must not fail it. What it must not do is
+                // vanish: the copy on disk is now older than the document
+                // just served, and the sentence this process prints when it
+                // later falls back to that copy is the one place an operator
+                // sees the consequence.
+                if let Err(refusal) = store_last_good(&document.content, &document.version) {
+                    note_last_good_refusal(&refusal);
+                }
                 Ok(registry)
             }
             // The `[_load_from_gcs]` prefix is Python's function name, kept
