@@ -2725,11 +2725,26 @@ fn gib(blocks: i64) -> f64 {
 
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
 /// command (`docs/missing-commands.md` item six).
+///
+/// The failure keeps whatever
+/// [`crate::deploy::host_exec::ExecRefusal`] already knew about itself:
+/// an allowlist refusal reaches the operator as the code it stated, its
+/// approved spellings as help beside it, and — when `--json` was asked
+/// for — as a document rather than as prose the caller cannot parse.
 pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_exec::exec_host(target, &words, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(|exc| {
+            let mut error = CmdError::click(exc.message).machine_readable(json);
+            if let Some(code) = exc.code {
+                error = error.stating(code);
+            }
+            if let Some(help) = exc.help {
+                error = error.helping(help);
+            }
+            error
+        })?;
     let expected = crate::deploy::host_exec::OK_STATUS;
     if json {
         print_json(&report);

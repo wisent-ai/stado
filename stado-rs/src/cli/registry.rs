@@ -134,6 +134,7 @@ impl RegistryConflict {
                 self.expected
             )),
             code: REGISTRY_CONFLICT_EXIT,
+            ..CmdError::default()
         }
     }
 }
