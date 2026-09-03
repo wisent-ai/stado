@@ -32,6 +32,7 @@ pub mod dashboard;
 pub mod database;
 pub mod directory;
 pub mod disk_cleanup;
+pub mod dns;
 pub mod doctor;
 pub mod egress;
 pub mod fleet;
@@ -71,6 +72,7 @@ pub mod stream;
 pub mod submit;
 pub mod table;
 pub mod vast;
+pub mod web;
 
 /// Command failure with a click-matching exit code. A `Some` message is
 /// printed as `Error: {msg}` on stderr (click `ClickException`, code 1)
@@ -552,6 +554,12 @@ enum Commands {
     /// Resolve fleet databases: placement endpoint and credential coordinate.
     #[command(subcommand)]
     Database(database::DatabaseCommands),
+    /// Host a web product on the fleet: build it, run it, publish its hostname.
+    #[command(subcommand)]
+    Web(web::WebCommands),
+    /// Own the records of a DNS zone Stado manages at its registrar.
+    #[command(subcommand)]
+    Dns(dns::DnsCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     ///
     /// Being replaced by the service declaration contract: a model server is
@@ -3184,6 +3192,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Database(sub) => database::dispatch(sub).await,
+        Commands::Web(sub) => web::dispatch(sub).await,
+        Commands::Dns(sub) => dns::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
