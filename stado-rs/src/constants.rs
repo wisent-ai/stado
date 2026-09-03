@@ -50,25 +50,33 @@ pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STA
     CAPACITY_STALE_SECONDS / 3
 };
 
-/// Wall-clock budget for ONE of the janitor's pre-lock store reads.
+/// Wall-clock budget for ONE store read an agent performs on a path where a
+/// capacity broadcast is waiting behind it.
 ///
-/// `disk_cleanup::run_cleanup_once` runs inline in the agent's main loop, and
-/// the capacity broadcast the fleet judges liveness by is published later in
-/// that SAME iteration. So an unbounded store read there does not merely delay
-/// a cleanup: it spends the broadcast's entire freshness budget, and it stalls
-/// claiming, which lives in the same loop.
+/// Two such paths exist, and both were unbounded.
 ///
-/// That is not hypothetical. On 2026-09-03 the janitor's two reads took 639 s
-/// and 2,178 s against a slow object-store route, so one loop iteration lasted
-/// 10 and 36 minutes against a [`CAPACITY_STALE_SECONDS`] window of 180. All
-/// three fleet hosts sat at `capacity_publication_stale` with live agents, and
-/// 17 jobs went unclaimed for 264 hours.
+/// `disk_cleanup::run_cleanup_once` resolves the canonical registry and the
+/// live job ids before it takes the janitor lock. It no longer runs inside the
+/// agent tick (see [`crate::providers::local::agent_janitor`]), but unbounded
+/// it still wedges the pass that owns disk reclamation while holding the
+/// cross-process janitor lock, and disk pressure is what closes claiming.
 ///
-/// Two reads at this budget are 40 s worst case: inside one
-/// [`CAPACITY_HEARTBEAT_INTERVAL_S`], and well inside the window that judges
-/// it. Both reads already have a defined fail-safe degradation, so a store too
-/// slow to answer costs the janitor one pass, never the agent's liveness.
-pub const CLEANUP_INPUT_TIMEOUT_S: u64 = 20;
+/// The agent tick itself then refreshes the model policy and re-reads its own
+/// canonical registry target BEFORE its keep-alive capacity publication, on
+/// the same store route.
+///
+/// That route is measurably slow, not hypothetically: on 2026-09-03 the
+/// janitor's two reads took 639 s and 2,178 s, and this host's own publish log
+/// shows gaps of 96 minutes (18:18 -> 19:54) against a
+/// [`CAPACITY_STALE_SECONDS`] window of 180. All three fleet hosts sat at
+/// `capacity_publication_stale` with live agents and 14 jobs went unclaimed
+/// for 267 hours.
+///
+/// Every read bounded by this budget has a defined fail-safe degradation, so
+/// a store too slow to answer costs one cleanup pass or one tick's worth of
+/// policy freshness — never the host's liveness. At two reads per tick the
+/// worst case is 40 s, inside one [`CAPACITY_HEARTBEAT_INTERVAL_S`].
+pub const AGENT_STORE_READ_TIMEOUT_S: u64 = 20;
 
 /// Per-job heartbeat interval (derived from the 15-min staleness threshold).
 pub const SLOT_HEARTBEAT_INTERVAL_S: u64 = 60;

@@ -1928,25 +1928,26 @@ async fn cleanup_once(
     // process on this host from reading policy or reclaiming disk.
     //
     // And bound them, because moving them off the lock was only half the
-    // problem. This function runs INLINE in the agent's main loop, and the
-    // capacity broadcast the fleet judges liveness by is published later in
-    // that same iteration -- as is claiming. Unbounded, these two reads spend
-    // the broadcast's whole freshness budget: measured at 639 s and 2,178 s on
-    // 2026-09-03 against a slow object-store route, which put all three fleet
-    // hosts on `capacity_publication_stale` with live agents and left 17 jobs
-    // unclaimed for 264 hours. A janitor input is not worth a host's liveness.
+    // problem. This pass no longer runs inside the agent tick (see
+    // `super::super::agent_janitor`), so an unbounded read here can no longer
+    // hold a capacity broadcast directly -- but it still wedges the only pass
+    // that reclaims disk on this host, for as long as the store takes, while
+    // holding the cross-process janitor lock; and disk pressure is what
+    // closes claiming. Measured at 639 s and 2,178 s on 2026-09-03 against a
+    // slow object-store route. A janitor input is not worth a host's ability
+    // to reclaim its own disk.
     //
     // Both timeouts degrade the way this pass already degrades when a store
     // answers badly, so nothing new can be deleted because of one: an
     // unresolved registry yields `invalid_or_unavailable_policy` and no
     // cleaner runs, and `live_jobs: None` makes `queue_workdirs` remove
     // nothing rather than risk a live job's tree.
-    let input_budget = Duration::from_secs(constants::CLEANUP_INPUT_TIMEOUT_S);
+    let input_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
     let registry = match tokio::time::timeout(input_budget, fetch_canonical_registry()).await {
         Ok(result) => result,
         Err(_) => Err(JanitorError::timeout(&format!(
             "canonical registry did not answer within {}s",
-            constants::CLEANUP_INPUT_TIMEOUT_S
+            constants::AGENT_STORE_READ_TIMEOUT_S
         ))),
     };
     let live_jobs = tokio::time::timeout(input_budget, fetch_live_job_ids())

@@ -905,10 +905,30 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                  host; the queue it reads is not the fleet queue"
             ));
         }
-        if let Err(exc) = crate::config::refresh_model_policy(&store).await {
-            log_fn(&format!(
+        // Every store read this tick performs BEFORE its capacity publication
+        // is bounded by the same budget, for the reason spelled out on
+        // [`constants::AGENT_STORE_READ_TIMEOUT_S`]: this loop is what
+        // publishes the broadcast the fleet judges liveness by AND what claims
+        // queued work, so a store that answers in 639 s does not delay a
+        // policy refresh, it takes the host off the fleet. Both reads below
+        // already have a "keep what we last knew" degradation, so the budget
+        // costs a tick's freshness and nothing else.
+        let store_read_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
+        match tokio::time::timeout(
+            store_read_budget,
+            crate::config::refresh_model_policy(&store),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(exc)) => log_fn(&format!(
                 "model policy refresh failed; retaining last good policy: {exc}"
-            ));
+            )),
+            Err(_) => log_fn(&format!(
+                "model policy refresh exceeded its {}s budget; retaining last good policy so this \
+                 tick still publishes capacity and claims",
+                constants::AGENT_STORE_READ_TIMEOUT_S
+            )),
         }
         // DEVIATION: the wisent upload_worker sweep is not ported (the
         // wisent Python package owns it); the fleet-flush subprocess path
@@ -972,7 +992,32 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // janitor report. Cleanup deliberately uses a cross-process lock; a
         // busy lock or an older writer's invalid report must not erase a
         // perfectly readable low watermark and close the queue forever.
-        let registry_target = lookup_self_auto(&hostname).await?;
+        //
+        // Bounded on the same budget, and a lapsed budget is NOT an error: the
+        // registry states the watermark, the pinned-only flag and the VRAM
+        // override, and this tick keeps whatever it last knew of all three
+        // (`disk_low_bytes` from the janitor's state file, `pinned_only` from
+        // the previous tick) rather than spending the broadcast's freshness
+        // window waiting for a restatement. `?` still propagates a real
+        // refusal, which is a different fact from a slow route: the registry
+        // fetch already falls back to its last-known-good copy and to the
+        // bundled snapshot before it errors at all.
+        let registry_target = match tokio::time::timeout(
+            store_read_budget,
+            lookup_self_auto(&hostname),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                log_fn(&format!(
+                    "loop: canonical registry target did not answer within {}s; keeping the last \
+                     known disk watermark and pinned-only state for this tick",
+                    constants::AGENT_STORE_READ_TIMEOUT_S
+                ));
+                None
+            }
+        };
         if let Some(declared_low) = registry_target
             .as_ref()
             .and_then(|target| target.disk_cleanup.as_ref())
