@@ -586,7 +586,9 @@ pub fn render(report: &Value) -> String {
     ));
     if let Some(detail) = report.get("vault_half_unavailable").and_then(Value::as_str) {
         out.push_str(&format!(
-            "  the vault half is unavailable on this host: {detail}\n  seed presence is unknown;              what follows is the recorded sign-in history only\n"
+            "  the vault half is unavailable on this host: {detail}\n  \
+             seed presence is unknown; what follows is the recorded sign-in \
+             history only\n"
         ));
     }
     let empty = Vec::new();
@@ -607,7 +609,20 @@ pub fn render(report: &Value) -> String {
             .get("verdict")
             .and_then(Value::as_str)
             .unwrap_or("?");
-        out.push_str(&format!("  {verdict:<32} {item}\n"));
+        // The counts belong on every row, not only on a rejection: they are how
+        // a reader tells "no evidence" apart from "evidence that says nothing
+        // about the seed".
+        let recorded = finding
+            .get("attempts_recorded")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let submitting = finding
+            .get("code_submitting_attempts")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "  {verdict:<32} {item}\n    {recorded} recorded attempt(s), {submitting} of them submitted a code\n"
+        ));
         if let Some(since) = finding.get("rejected_since").and_then(Value::as_str) {
             let attempts = finding
                 .get("code_submitting_attempts")
