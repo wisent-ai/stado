@@ -93,6 +93,30 @@ pub const AGENT_STORE_READ_TIMEOUT_S: u64 = 20;
 /// allowance still publishes twice inside the window that judges it.
 pub const AGENT_TICK_STORE_BUDGET_S: u64 = CAPACITY_STALE_SECONDS / 2;
 
+/// Wall-clock the ADMISSION half of a tick may spend on the store: the
+/// queue-control read, the claimable-job listing and its per-job re-reads, and
+/// the sizing reads that judge one candidate.
+///
+/// Larger than [`AGENT_TICK_STORE_BUDGET_S`] on purpose, and only safe because
+/// [`crate::providers::local::agent_heartbeat`] keeps publishing while this
+/// half runs. Before that existed the two shared one budget and claiming lost:
+/// the listing lapsed on every tick against a saturated store while the cheap
+/// reads never came close to theirs, so the host was fresh and took no work.
+/// Asking for work is allowed to be slow; saying "I am here" is not.
+pub const AGENT_CLAIM_STORE_BUDGET_S: u64 = 300;
+
+/// How long the capacity heartbeat will speak for a tick that has not started
+/// a new iteration.
+///
+/// This is the line between "slow" and "wedged", and it is the reason the
+/// heartbeat is not a formality: past it the republish stops, the capacity row
+/// ages out of [`CAPACITY_STALE_SECONDS`], and the fleet refuses to dispatch
+/// to this host exactly as it did before any of this existed. Set at twice
+/// [`AGENT_CLAIM_STORE_BUDGET_S`], so a tick that spends its entire admission
+/// allowance twice over is still spoken for, and a tick that is not returning
+/// at all is not.
+pub const AGENT_TICK_PROGRESS_TTL_S: u64 = AGENT_CLAIM_STORE_BUDGET_S * 2;
+
 /// Ceiling on ONE text object read out of the store.
 ///
 /// The timeout above bounds how long a read may wait. It does not bound how
