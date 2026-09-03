@@ -208,6 +208,44 @@ pub async fn list_jobs(
     Ok(jobs)
 }
 
+/// Every job id under `{prefix}/`, from the LISTING ALONE.
+///
+/// A job blob is written at exactly `{prefix}/{job_id}.json` (`storage.rs`
+/// spells that key at every transition), so the id a caller wants is already
+/// in the name and downloading the document to read it back out is a round
+/// trip per job for a field the listing handed over for free.
+///
+/// That is not a micro-optimisation. The janitor's workdir keep-list used
+/// [`list_jobs`] for this, and on 2026-09-03 charless-mac-mini spent
+/// `duration_ms: 818021` — 13.6 minutes — on a cleanup pass whose own verdict
+/// was `healthy_noop` on a host with 19.8 GB free, because the pass downloaded
+/// every object the `queue` listing returned before it had decided whether any
+/// cleaner would run. The keep-list needs a set of ids, and this returns one
+/// for one listing per 1000 names instead of one GET per name.
+///
+/// DELIBERATELY a superset of [`list_jobs`]: a job whose blob currently holds
+/// a transition sentinel keeps its id here, where `list_jobs` drops it. For a
+/// keep-list that is the only safe direction — an id present too often keeps a
+/// directory alive one pass longer, an id missing authorizes deleting the tree
+/// a mid-transition job is writing into — and a caller that wants job DOCUMENTS
+/// still has [`list_jobs`].
+pub async fn list_job_ids(store: &JobStorage, prefix: &str) -> Result<Vec<String>, StorageError> {
+    // Matched at the delimiter for the reason [`list_jobs`] states: `queue/`
+    // is a string prefix of `queue_priority/`, and a listing that answers
+    // `starts_with` hands over both.
+    let directory = format!("{prefix}/");
+    Ok(store
+        .list_paths(&directory, 0)
+        .await?
+        .into_iter()
+        .filter_map(|path| {
+            let name = path.strip_prefix(&directory)?.strip_suffix(".json")?;
+            // Job blobs sit flat under the prefix; anything nested is not one.
+            (!name.is_empty() && !name.contains('/')).then(|| name.to_string())
+        })
+        .collect())
+}
+
 /// Python `_download_or_none` fanned out over `paths` with `workers`
 /// concurrent fetches. `ThreadPoolExecutor(max_workers=...)` + `pool.map`
 /// becomes `buffered(workers)`, which preserves the path order in the

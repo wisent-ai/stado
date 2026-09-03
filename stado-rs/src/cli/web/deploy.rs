@@ -707,6 +707,15 @@ async fn record_declaration(
 
 pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Result<(), CmdError> {
     let declared = super::product(name)?;
+    // A redirect lives entirely in the edge's configuration: no release, no
+    // tarball, no unit. Refusing here names that, rather than failing later
+    // on a host name the declaration does not carry.
+    if declared.is_redirect() {
+        return Err(CmdError::click(format!(
+            "web product {name} is a redirect to {}, so there is nothing to deploy: `stado web route {name}` is what publishes it",
+            declared.redirect_to().unwrap_or_default()
+        )));
+    }
     let host = declared.host();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let runner = production_runner();
@@ -950,6 +959,19 @@ fn now() -> String {
 /// anything else. The publication counter advances with the directory change
 /// for the same reason it advances on the way in.
 pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value, CmdError> {
+    // A redirect never had a unit, so there is nothing on any host to stop
+    // and no host name in the declaration to reach for. `stado web remove`
+    // still retracts its hostname from the edge; that is the caller's half.
+    if declared.is_redirect() {
+        return Ok(json!({
+            "unit": Value::Null,
+            "state": "no-unit",
+            "detail": format!(
+                "{name} is a redirect to {}, which runs nothing",
+                declared.redirect_to().unwrap_or_default()
+            ),
+        }));
+    }
     let host = declared.host();
     let label = super::unit_label(name);
     let target = host_channel::canonical_target(host).await.map_err(click)?;

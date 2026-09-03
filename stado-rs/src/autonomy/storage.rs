@@ -459,8 +459,44 @@ pub async fn write_feedback(
     write_json(store, &path, feedback, true).await
 }
 
-pub async fn list_feedback(store: &JobStorage) -> Result<Vec<PlacementFeedback>, StorageError> {
-    load_records(store, &format!("{FEEDBACK_PREFIX}/")).await
+/// The most recently written feedback records, newest first, at most `cap` of
+/// them.
+///
+/// The reader this replaces listed the whole prefix and downloaded every body,
+/// one request each. That cost is linear in everything ever written and it was
+/// paid on every planning pass: on 2026-09-03 the prefix held 3,642 records,
+/// so a pass issued 3,642 sequential object reads and the object API stayed
+/// pinned near a full core serving them, back to back, forever. The population
+/// only grows, so the pass could never get cheaper on its own.
+///
+/// One list call carries `updated` for every record, so the newest `cap` are
+/// chosen without reading a single body, and only those bodies are fetched.
+/// The bound is on the read, not on the index: nothing is skipped over and no
+/// cursor is kept, so there is no position to lose and a pass never has to
+/// resume where another left off.
+///
+/// Newest-first is also the better statistic. The only consumers are a
+/// per-target median startup time and a per-target failure ratio, and a
+/// target's behaviour last week describes it better than the same target
+/// averaged over a month of records that a 30-day retention was always meant
+/// to have deleted.
+pub async fn list_recent_feedback(
+    store: &JobStorage,
+    cap: usize,
+) -> Result<Vec<PlacementFeedback>, StorageError> {
+    let mut blobs = store
+        .list_blobs_with_meta(&format!("{FEEDBACK_PREFIX}/"))
+        .await?;
+    blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
+    blobs.truncate(cap);
+    let mut records = Vec::with_capacity(blobs.len());
+    for blob in blobs {
+        let Some(raw) = store.download_text(&blob.name).await? else {
+            continue;
+        };
+        records.push(serde_json::from_str(&raw)?);
+    }
+    Ok(records)
 }
 
 pub async fn write_savings(

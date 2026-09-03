@@ -418,6 +418,15 @@ define_capabilities! {
             ProviderId::Local => (External, "deployment environment", "Reverse proxy and local routing are managed outside Stado"),
         ]
     },
+    MobileAppCapture => {
+        id: "mobile-app-capture",
+        summary: "Drive and capture installed iOS and Android applications on a declared host.",
+        providers: [
+            ProviderId::Macos => (Implemented, "deploy::mobile_runtime", "Appium with the XCUITest driver for iOS and UiAutomator2 for Android, declared per host under targets[].mobile_runtime and verified at its declared absolute paths"),
+            ProviderId::Local => (Partial, "deploy::mobile_runtime", "A registry host carries the runtime only where it declares one; iOS additionally requires Xcode, which no fleet host installs on demand"),
+            ProviderId::Linux => (Planned, "", "Android would work through platform-tools; iOS cannot be driven from Linux at all"),
+        ]
+    },
     IdentityAccess => {
         id: "identity-access",
         summary: "Authenticate workloads and authorize provider operations.",

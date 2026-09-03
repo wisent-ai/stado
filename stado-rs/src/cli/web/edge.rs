@@ -269,14 +269,50 @@ pub(super) fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
         .values()
         .filter(|product| product.edge() == "stado")
     {
-        routes.push(route(product.hostname(), product.host(), product.port())?);
+        routes.push(match product.redirect_to() {
+            Some(target) => redirect(product.hostname(), target)?,
+            None => route(product.hostname(), product.host(), product.port())?,
+        });
     }
     routes.sort();
     Ok(routes)
 }
 
-/// One route: the public hostname the edge terminates, and the upstream behind
-/// it.
+/// One redirect: the public hostname the edge terminates, and the `redir`
+/// directive that answers every request on it.
+///
+/// 308 rather than 301: it preserves the method and the body, so a `POST` to
+/// the old hostname arrives at the new one as a `POST`. 301 lets a client turn
+/// it into a `GET`, which is how a form submission silently becomes a page
+/// load. Permanent either way, because these hostnames are not coming back.
+///
+/// `{uri}` is Caddy's placeholder for the request's path and query, so
+/// `https://aiwisent.com/pricing?a=1` lands on
+/// `https://wisent-app.com/pricing?a=1` — the same thing the Vercel rewrite
+/// these replace did with `/:path*`.
+pub(super) fn redirect(hostname: &str, target: &str) -> Result<(String, String), CmdError> {
+    if !config::is_public_hostname(hostname) {
+        return Err(CmdError::click(format!(
+            "{hostname:?} is not a public host name, so no certificate can be ordered for it \
+             and it is not written into the edge's configuration"
+        )));
+    }
+    if !config::is_redirect_target(target) {
+        return Err(CmdError::click(format!(
+            "{target:?} is not a redirect target: an https URL with a host, no query or fragment, \
+             and no trailing slash"
+        )));
+    }
+    Ok((hostname.to_string(), format!("redir {target}{{uri}} 308")))
+}
+
+/// One route: the public hostname the edge terminates, and the directive that
+/// answers it — a `reverse_proxy` at the upstream behind it.
+///
+/// The second half of the pair is the rendered directive rather than the bare
+/// upstream, because a site block is not always a proxy: a redirect product
+/// renders `redir` instead, and one shape for both keeps the renderer from
+/// having to know which kind it is looking at.
 ///
 /// The upstream is reached over the tailnet by the host's own tailnet name —
 /// the registry target name, which MagicDNS resolves through the search domain
@@ -313,18 +349,23 @@ pub(super) fn route(hostname: &str, host: &str, port: u16) -> Result<(String, St
             "{hostname} declares port 0, which nothing listens on"
         )));
     }
-    Ok((hostname.to_string(), format!("http://{host}:{port}")))
+    Ok((
+        hostname.to_string(),
+        format!("reverse_proxy http://{host}:{port}"),
+    ))
 }
 
-/// The whole reverse-proxy configuration, rendered from the declarations.
+/// The whole edge configuration, rendered from the declarations.
 ///
 /// Pure, and the only thing that produces a Caddyfile for this fleet. The
 /// global block carries the ACME contact so Let's Encrypt has somewhere to
-/// send an expiry warning; every site block is one hostname and one upstream,
-/// and Caddy obtains and renews that hostname's certificate from the site
-/// address alone. Nothing declares a log destination: the proxy runs as a
-/// managed unit, so its output is already where `stado service logs` reads it,
-/// and a second log file on the host would be one nothing rotates.
+/// send an expiry warning; every site block is one hostname and the one
+/// directive that answers it — `reverse_proxy` for a product with a unit,
+/// `redir` for a product that is only a redirect — and Caddy obtains and
+/// renews that hostname's certificate from the site address alone. Nothing
+/// declares a log destination: the proxy runs as a managed unit, so its
+/// output is already where `stado service logs` reads it, and a second log
+/// file on the host would be one nothing rotates.
 pub(super) fn caddyfile(edge: &WebApiEdge, routes: &[(String, String)]) -> String {
     let mut text = String::with_capacity(320 + routes.len() * 96);
     text.push_str(
@@ -342,11 +383,11 @@ pub(super) fn caddyfile(edge: &WebApiEdge, routes: &[(String, String)]) -> Strin
         );
         return text;
     }
-    for (hostname, upstream) in routes {
+    for (hostname, directive) in routes {
         text.push('\n');
         text.push_str(hostname);
-        text.push_str(" {\n\treverse_proxy ");
-        text.push_str(upstream);
+        text.push_str(" {\n\t");
+        text.push_str(directive);
         text.push_str("\n}\n");
     }
     text
@@ -1261,6 +1302,69 @@ mod tests {
             terminated_hostnames(&rendered),
             vec!["preferences.wisent.com".to_string()]
         );
+    }
+
+    #[test]
+    fn a_redirect_product_becomes_a_redir_block_and_no_proxy() {
+        let routes = vec![redirect("aiwisent.com", "https://wisent-app.com").unwrap()];
+        let rendered = caddyfile(&edge(), &routes);
+        // `{uri}` carries the path and the query across, which is what the
+        // Vercel rewrite these replace did with `/:path*`. 308 keeps the
+        // method, so a POST does not silently become a GET.
+        assert!(
+            rendered.contains("\naiwisent.com {\n\tredir https://wisent-app.com{uri} 308\n}\n"),
+            "{rendered}"
+        );
+        // No unit is involved, so nothing is proxied anywhere.
+        assert!(!rendered.contains("reverse_proxy"), "{rendered}");
+        // The edge still terminates the hostname, so it still orders the
+        // certificate for it.
+        assert_eq!(
+            terminated_hostnames(&rendered),
+            vec!["aiwisent.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn redirects_and_proxies_share_one_configuration() {
+        let mut routes = vec![
+            redirect("wisentai.com", "https://wisent-app.com").unwrap(),
+            route("preferences.wisent.com", "charless-mac-mini", 3210).unwrap(),
+        ];
+        routes.sort();
+        let rendered = caddyfile(&edge(), &routes);
+        assert_eq!(
+            rendered.matches("\treverse_proxy ").count(),
+            1,
+            "{rendered}"
+        );
+        assert_eq!(rendered.matches("\tredir ").count(), 1, "{rendered}");
+        assert_eq!(terminated_hostnames(&rendered).len(), 2, "{rendered}");
+    }
+
+    #[test]
+    fn a_redirect_target_that_could_break_the_generated_file_is_refused() {
+        // http would send a browser from a hostname this edge holds a
+        // certificate for to one it does not. A query or a fragment would
+        // collide with the appended `{uri}`. A brace is the one placeholder
+        // syntax in the generated file and it belongs to Stado. A trailing
+        // slash would make every redirected path a double slash.
+        for target in [
+            "http://wisent-app.com",
+            "https://wisent-app.com?a=1",
+            "https://wisent-app.com#top",
+            "https://wisent-app.com/",
+            "https://wisent-app.com{uri}",
+            "https://wisent app.com",
+            "wisent-app.com",
+            "",
+        ] {
+            let refused = redirect("aiwisent.com", target)
+                .expect_err(&format!("{target:?} must not reach the Caddyfile"));
+            assert!(refused.message.is_some_and(|message| !message.is_empty()));
+        }
+        // A path prefix is a real thing to want and is allowed.
+        redirect("aiwisent.com", "https://wisent-app.com/pricing").unwrap();
     }
 
     #[test]

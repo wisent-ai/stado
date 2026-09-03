@@ -308,6 +308,7 @@ async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> CmdError {
                 error, save_error
             )),
             code: error.code,
+            ..CmdError::default()
         };
     }
     error
@@ -558,6 +559,124 @@ fn identity(
     )[..32]
         .into()
 }
+/// What one capacity publication says about its host's ability to TAKE work,
+/// as opposed to its ability to talk.
+///
+/// # Why this exists
+///
+/// [`builder`] used to select purely on the presence of a live capacity
+/// publication, and the pin it writes into `pinned_host` is fixed for the
+/// job's lifetime. On 2026-09-03 that pinned release run 987591db to
+/// charless-mac-mini at 16:59Z: the host was publishing every ~21 seconds and
+/// well inside the 180s staleness cutoff, while its gates refused every job
+/// with `charless-mac-mini is claiming nothing: disk_cleanup_stalled`. The
+/// queue does not re-choose -- it honours a pin already written -- so the
+/// build job sat unclaimed indefinitely and the submit reported nothing at
+/// all. Publishing and claiming are two different facts and only one of them
+/// was being checked.
+///
+/// # Why it is read from the publication and not from the host
+///
+/// `deploy::host_gates::read_host_gates` gives the fuller verdict, but it
+/// reaches the host over the managed channel: it costs an SSH round trip per
+/// candidate and it fails when the host is unreachable -- and a selector that
+/// refuses every candidate whose gates it cannot read would take the whole
+/// fleet offline exactly as thoroughly as the old one let jobs queue forever.
+/// The publication [`builder`] already holds carries the same decisive number
+/// the gates print, `free_slots`, and it is already filtered to the freshness
+/// window, so the cheap read is also the safe one. `host_gates` is CALLED for
+/// its blocker vocabulary and never edited here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Claimability {
+    /// The host publishes at least one free slot: it can take work now.
+    Claimable { free_slots: i64 },
+    /// The host published a slot table and every slot is taken or withheld.
+    /// This is a positive statement by the host that it will accept nothing,
+    /// which is what a gate-blocked agent broadcasts.
+    Refusing { blockers: Vec<String> },
+    /// The publication carries no readable slot table at all.
+    ///
+    /// Deliberately NOT a refusal. A missing field is the host failing to say,
+    /// not the host saying no, and inventing a refusal from silence is how a
+    /// selector takes a fleet offline. Such a candidate stays eligible and the
+    /// receipt records that it was chosen without a claimability statement.
+    Unstated,
+}
+
+impl Claimability {
+    /// Whether [`builder`] may pin a job here.
+    pub fn eligible(&self) -> bool {
+        !matches!(self, Self::Refusing { .. })
+    }
+
+    /// One phrase for the refusal message, so a caller reads the same words
+    /// `host gates` would have shown them.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Claimable { free_slots } => format!("{free_slots} free slot(s)"),
+            Self::Refusing { blockers } if blockers.is_empty() => {
+                "0 free slot(s), no blocker declared".to_string()
+            }
+            Self::Refusing { blockers } => {
+                format!("0 free slot(s), blockers: {}", blockers.join(", "))
+            }
+            Self::Unstated => "published no slot table".to_string(),
+        }
+    }
+}
+
+/// Judge one publication. Never reaches the host and never fails.
+pub fn claimability(publication: &Value) -> Claimability {
+    let Some(slots) = publication.get("free_slots").and_then(Value::as_object) else {
+        return Claimability::Unstated;
+    };
+    let free: i64 = slots.values().filter_map(Value::as_i64).sum();
+    if free > 0 {
+        return Claimability::Claimable { free_slots: free };
+    }
+    Claimability::Refusing {
+        blockers: publication_blockers(publication),
+    }
+}
+
+/// The blockers a publication itself declares, named exactly as
+/// `deploy::host_gates` names them so one host reads the same way in both
+/// commands. Those constants are imported, not redefined, and nothing in
+/// `host_gates` is modified.
+fn publication_blockers(publication: &Value) -> Vec<String> {
+    use crate::deploy::host_gates::{
+        DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
+    };
+    let diag = publication.get("diag");
+    let flag = |name: &str| {
+        diag.and_then(|diag| diag.get(name))
+            .and_then(Value::as_bool)
+    };
+    let mut blockers = Vec::new();
+    if flag("disk_pressure_unresolved") == Some(true) {
+        blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
+    }
+    if flag("disk_cleanup_policy_known") == Some(false) {
+        blockers.push(DISK_CLEANUP_POLICY_UNKNOWN.to_string());
+    }
+    if flag("queue_paused") == Some(true) {
+        blockers.push(QUEUE_PAUSED.to_string());
+    }
+    // A janitor whose pass cannot start is the condition that closed both
+    // darwin-arm64 builders on 2026-09-03 with ample free disk on each. The
+    // publication cannot compute the gate's staleness arithmetic -- that reads
+    // the janitor state file on the host -- but it does carry the outcome, and
+    // `lock_busy` is the outcome that never advances `last_success_at`.
+    if diag
+        .and_then(|diag| diag.get("disk_cleanup"))
+        .and_then(|cleanup| cleanup.get("outcome"))
+        .and_then(Value::as_str)
+        == Some("lock_busy")
+    {
+        blockers.push(format!("{DISK_CLEANUP_STALLED} (janitor pass lock_busy)"));
+    }
+    blockers
+}
 async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -568,8 +687,11 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
     let capacity = crate::queue::capacity::read_consumer_capacity(&store)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
+    // Keep each live consumer's own publication, not merely its name: the
+    // claimability judgement below is made from it, so no extra host read is
+    // needed to know whether a candidate can take the work it would be pinned.
     let mut live_consumers = BTreeMap::new();
-    for consumer in capacity.keys() {
+    for (consumer, publication) in &capacity {
         let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
         if let Some(target) = registry
             .lookup_self(identity)
@@ -577,7 +699,7 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
         {
             live_consumers
                 .entry(target.name.clone())
-                .or_insert_with(|| consumer.clone());
+                .or_insert_with(|| (consumer.clone(), publication.clone()));
         }
     }
     let declared_for_platform = registry
@@ -585,6 +707,7 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
         .iter()
         .filter(|target| target.release_platform == platform)
         .count();
+    let mut considered: Vec<(String, Claimability)> = Vec::new();
     let mut candidates: Vec<_> = registry
         .targets
         .into_iter()
@@ -592,8 +715,13 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
             if target.release_platform != platform {
                 return None;
             }
-            let consumer = live_consumers.get(&target.name)?.clone();
-            Some((target, consumer))
+            let (consumer, publication) = live_consumers.get(&target.name)?.clone();
+            let verdict = claimability(&publication);
+            considered.push((target.name.clone(), verdict.clone()));
+            // A host that says it will take nothing must not be pinned. The
+            // pin is irrevocable for the job's lifetime, so selecting one is
+            // not a slow path -- it is a job that can never run.
+            verdict.eligible().then_some((target, consumer))
         })
         .collect();
     candidates.sort_by(|left, right| left.0.name.cmp(&right.0.name));
@@ -611,10 +739,24 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
         } else {
             store.to_string()
         };
+        // Every host that was considered and what its own publication said,
+        // because "no builder is available" without a reason cost an hour of
+        // nobody knowing why a pinned job never started.
+        let verdicts = if considered.is_empty() {
+            String::from("no declared target of that platform is publishing capacity")
+        } else {
+            considered
+                .iter()
+                .map(|(host, verdict)| format!("{host} {}", verdict.describe()))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
         CmdError::click(format!(
-            "no live fleet builder is broadcasting verified release_platform \
-             {platform}; capacity read from {store} namespace {:?} listed {} live \
-             consumer(s) and the registry declares {} target(s) for that platform",
+            "no live fleet builder can CLAIM release_platform {platform}; capacity read \
+             from {store} namespace {:?} listed {} live consumer(s) and the registry \
+             declares {} target(s) for that platform. Considered: {verdicts}. A host that \
+             publishes capacity but claims nothing cannot build: read \
+             `stado host gates <host>` for the full verdict.",
             crate::config::wc_stado_storage_namespace(),
             live_consumers.len(),
             declared_for_platform,
@@ -935,7 +1077,24 @@ async fn publish(
             "release job returned mixed or invalid output",
         ));
     }
-    let runtime = m.runtime.as_ref();
+    // The runtime contract belongs to the platforms that stage it. A product
+    // may now publish a platform that ships no binary at all — a web site
+    // beside a CLI — and stamping that coordinate with `bin/<product>` and a
+    // launcher would publish a release manifest whose binary exists in none
+    // of its own bytes. The rollout side never reaches such a platform (a
+    // target names the platform it rolls out, in the product's rollout
+    // policy), so the wrong claim would sit in the published manifest
+    // unread until something believed it.
+    let runtime = m
+        .platforms
+        .get(p)
+        .filter(|recipe| {
+            matches!(
+                release_pipeline::platform_runtime_role(recipe, m.runtime.as_ref()),
+                release_pipeline::RuntimeRole::Runtime
+            )
+        })
+        .and(m.runtime.as_ref());
     let q = ReleaseQualification {
         status: QualificationStatus::Passed,
         evidence_sha256: Some(release_control::sha256_bytes(&rb)),

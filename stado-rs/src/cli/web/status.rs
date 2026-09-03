@@ -145,6 +145,34 @@ async fn examine(
     managed: Option<&ServiceStatus>,
     runner: &Runner,
 ) -> Verdict {
+    // A redirect has no unit, no port and no host to ask. Its whole state is
+    // whether the hostname resolves to the edge that answers it, and running
+    // the unit questions against it would report `not-deployed` for something
+    // that was never deployable.
+    if declared.is_redirect() {
+        let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
+        let expected = expected_address(declared);
+        let published = expected
+            .as_ref()
+            .is_some_and(|address| addresses.iter().any(|found| found == address));
+        return Verdict {
+            row: json!({
+                "product": name,
+                "kind": "redirect",
+                "redirect_to": declared.redirect_to(),
+                "hostname": declared.hostname(),
+                "edge": declared.edge(),
+                "dns": dns_state,
+                "addresses": addresses,
+                "expected_address": expected,
+            }),
+            word: if published {
+                VERDICT_SERVING
+            } else {
+                VERDICT_NOT_DEPLOYED
+            },
+        };
+    }
     let unit = super::unit_label(name);
     let port = declared.port();
     let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
