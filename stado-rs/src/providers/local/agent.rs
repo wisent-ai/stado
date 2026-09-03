@@ -815,40 +815,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
 
     let hostname = crate::providers::vast::system_hostname();
     log_fn("init: legacy workdir reaping disabled; cleanup is policy-owned");
-    // One agent per host, and a second one says so instead of competing.
-    //
-    // On 2026-09-03 `charless-mac-mini` carried several live
-    // `~/.stado/bin/stado` processes with `ppid = 1` and ten hours of uptime,
-    // none of them holding a launchd label -- orphans that outlived a day of
-    // service switches and binary swaps. They contend for the janitor's
-    // exclusive run lock, so the host reported `lock_busy` on every tick,
-    // never recorded a completed pass, and the fleet refused claiming on all
-    // three hosts for hours. Nothing in the product said two agents were
-    // running: they simply took turns losing a lock.
-    //
-    // The guard is the same flock discipline the janitor already uses, on its
-    // own file, so an orphan that still holds it keeps the newcomer out rather
-    // than the other way round: a live agent is not displaced by a restart it
-    // did not ask for, and the operator gets a named refusal instead of a
-    // silent fight. Held for the process's whole life through `_singleton`.
-    let _singleton = match super::agent_singleton::hold(log_fn) {
-        Ok(Some(lock)) => lock,
-        Ok(None) => {
-            return Err(anyhow::anyhow!(
-                "another stado agent already holds this host's agent lock; refusing to start a \
-                 second one, because two agents on one host contend for the janitor run lock and \
-                 the loser reports this host as never having cleaned"
-            ))
-        }
-        Err(exc) => {
-            // A guard that cannot be taken must not silently become no guard.
-            return Err(anyhow::anyhow!(
-                "cannot take this host's agent lock, so single-agent operation cannot be \
-                 guaranteed: {exc}"
-            ));
-        }
-    };
-
     let initial_gpu = gpu_type.clone();
 
     let store = JobStorage::new().await?;
