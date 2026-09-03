@@ -248,23 +248,38 @@ fn exit_report(status: ExitStatus) -> String {
 /// the release log carries the tool's own diagnostics rather than a Stado
 /// paraphrase of them. stdin is closed: a builder has no operator to answer a
 /// prompt, and a release that hangs on one holds the worker forever.
-fn run(source: &Path, program: &str, arguments: &[&str], toolchain: &str) -> Result<(), CmdError> {
+///
+/// `path` replaces the inherited `PATH`, and exists for one reason: a program
+/// that is itself a script needs its interpreter findable, and the only caller
+/// that knows where that interpreter is, is the one that just resolved the
+/// script.
+fn run_with_path(
+    source: &Path,
+    program: &str,
+    arguments: &[&str],
+    toolchain: &str,
+    path: Option<&str>,
+) -> Result<(), CmdError> {
     let rendered = format!("{program} {}", arguments.join(" "));
     println!("stado web: {rendered}");
-    let status = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(arguments)
         .current_dir(source)
-        .stdin(Stdio::null())
-        .status()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                CmdError::click(format!(
-                    "`{program}` is not on PATH: the builder running the `{PLATFORM}` platform has no {toolchain}, so give that platform a `runner_platform` whose host carries one"
-                ))
-            } else {
-                CmdError::click(format!("cannot run `{rendered}`: {error}"))
-            }
-        })?;
+        .stdin(Stdio::null());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let status = command.status().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            CmdError::click(format!(
+                "`{program}` is not there: the builder running the `{PLATFORM}` platform has no \
+                 {toolchain}, so give that platform a `runner_platform` whose host carries one"
+            ))
+        } else {
+            CmdError::click(format!("cannot run `{rendered}`: {error}"))
+        }
+    })?;
     if !status.success() {
         return Err(CmdError::click(format!(
             "`{rendered}` failed with {}",
@@ -274,8 +289,52 @@ fn run(source: &Path, program: &str, arguments: &[&str], toolchain: &str) -> Res
     Ok(())
 }
 
+/// Where a fleet host installs the Node toolchain, in probe order.
+///
+/// The same order `host_exec`'s candidate table probes, so a release step and
+/// a `stado host exec node --version` on the same host cannot name different
+/// binaries. The list exists because a release worker is a launchd job, and a
+/// launchd job's `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin` unless something
+/// set it — Homebrew is not on it. `charless-mac-mini` carries node v25.9.0
+/// and npm 11.12.1 under `/opt/homebrew/bin`, and a build that trusted `PATH`
+/// would have reported that host as having no Node toolchain at all.
+const NODE_TOOLCHAIN_DIRECTORIES: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+
+/// The absolute path of one Node toolchain program, or its bare name.
+///
+/// Falling back to the bare name rather than refusing keeps a builder that
+/// installs Node somewhere else working: `PATH` is then the answer, and
+/// [`run`]'s own refusal names the toolchain if that fails too.
+fn toolchain_program(name: &str) -> String {
+    NODE_TOOLCHAIN_DIRECTORIES
+        .iter()
+        .map(|directory| PathBuf::from(directory).join(name))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// Run one `npm` verb with the interpreter its shim needs.
+///
+/// `npm` is a JavaScript shim whose first line is `#!/usr/bin/env node`, so
+/// running it with a `PATH` that does not carry `node` fails with
+/// `env: node: No such file or directory` and says nothing about npm. The
+/// directory the resolved `npm` came from is prepended to `PATH`, because the
+/// interpreter a shim needs is always its sibling.
 fn npm(source: &Path, arguments: &[&str]) -> Result<(), CmdError> {
-    run(source, "npm", arguments, "Node toolchain")
+    let program = toolchain_program("npm");
+    let mut path = std::env::var("PATH").unwrap_or_default();
+    if let Some(directory) = PathBuf::from(&program).parent() {
+        let directory = directory.to_string_lossy().into_owned();
+        if !directory.is_empty() && !directory.starts_with("npm") {
+            path = if path.is_empty() {
+                directory
+            } else {
+                format!("{directory}:{path}")
+            };
+        }
+    }
+    run_with_path(source, &program, arguments, "Node toolchain", Some(&path))
 }
 
 /// Install exactly the tree the lockfile pins.

@@ -1073,6 +1073,18 @@ pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, DeployError
 /// than a shell's `No such file or directory` against whichever path happened
 /// to be listed first, because the second reads as "the fleet installed this
 /// wrongly" when the truth is "this program is not on this machine".
+///
+/// Every candidate's directory goes on `PATH` before the exec, and that is not
+/// convenience. `/opt/homebrew/bin/npm` is a JavaScript shim whose first line
+/// is `#!/usr/bin/env node`, so executing it on a channel whose `PATH` does
+/// not carry Homebrew answers `env: node: No such file or directory` — which
+/// is what `stado host exec charless-mac-mini -- npm --version` answered on
+/// 2026-09-03 while `node --version` on the same host answered `v25.9.0` from
+/// the directory beside it. The interpreter a shim needs is always a sibling
+/// of the shim, so the directories this table already names are exactly the
+/// ones that make it runnable. They are prepended, not appended: a host with
+/// two Node installations must resolve the shim against the one whose path
+/// this entry selected, not against whatever the login shell prefers.
 fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
     let fixed = arguments
         .iter()
@@ -1080,6 +1092,21 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
         .collect::<Vec<String>>()
         .join(" ");
     let mut script = String::from("set -eu\n");
+    // Reversed, because each line prepends: emitting the candidates back to
+    // front leaves the first candidate's directory first on PATH, which is the
+    // same precedence the exec loop below applies.
+    for candidate in candidates.iter().rev() {
+        if let Some(directory) = std::path::Path::new(candidate).parent() {
+            let directory = directory.to_string_lossy();
+            if !directory.is_empty() {
+                script.push_str(&format!(
+                    "PATH={}:\"$PATH\"\n",
+                    shlex_quote(directory.as_ref())
+                ));
+            }
+        }
+    }
+    script.push_str("export PATH\n");
     for candidate in candidates {
         let path = shlex_quote(candidate);
         let marker = shlex_quote(&format!("{RESOLVED_EXECUTABLE_MARKER}{candidate}"));
