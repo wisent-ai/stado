@@ -1551,7 +1551,9 @@ const QUEUE_OBJECT_ACTIONS: [&str; 5] = ["get", "put", "list", "stat", "delete"]
 /// API host's config and the consumer lives in the binary, so the check
 /// belongs where the two meet: `stado config validate` and `config set` on
 /// the host, and `stado doctor` there.
-pub fn queue_prefixes_missing(namespaces: &BTreeMap<String, ObjectApiNamespace>) -> Vec<&'static str> {
+pub fn queue_prefixes_missing(
+    namespaces: &BTreeMap<String, ObjectApiNamespace>,
+) -> Vec<&'static str> {
     let Some(policy) = namespaces.get(QUEUE_OBJECT_NAMESPACE) else {
         return Vec::new();
     };
