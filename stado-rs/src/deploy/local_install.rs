@@ -571,6 +571,22 @@ fn plist_document(
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- launchd hands a job the system's soft `maxfiles`, which is 256 on
+         macOS. `com.wisent.stado-resolver` multiplexes one SSH master per
+         registry connection path and holds a socket per in-flight adapter
+         request; on 2026-09-02 it crossed that ceiling and every registry
+         read for the next hours failed with `no registry SSH connection
+         path answered (primary: Too many open files (os error 24))`, the
+         job exited 1, launchd restarted it, and the cycle repeated. Release
+         submits, promotions and `service directory show` failed at random
+         inside that window. A resolver that reuses connections still needs
+         more than 256 descriptors, so the unit says so rather than
+         inheriting a desktop default. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
     <key>StandardOutPath</key>
     <string>{log}</string>
     <key>StandardErrorPath</key>
@@ -597,7 +613,10 @@ pub fn systemd_user_unit(
         .collect();
     let cmd = exec_args.join(" ");
     format!(
-        "[Unit]\nDescription={description}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\n{env_lines}ExecStart={cmd}\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n"
+        // `LimitNOFILE` mirrors the plist's `SoftResourceLimits` above, for
+        // the same reason and with the same number: a Linux member of this
+        // fleet runs the same resolver against the same registry.
+        "[Unit]\nDescription={description}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nLimitNOFILE=4096\n{env_lines}ExecStart={cmd}\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 

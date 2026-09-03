@@ -87,22 +87,33 @@ impl ObjectRef {
         format!("{ROOT_PREFIX}{}/{}", self.namespace, self.key)
     }
 
-    /// The storage prefix one namespace listing scans.
+    /// The storage prefix one namespace listing walks.
     ///
-    /// A trailing `/` is kept, because it is the whole difference between
-    /// "inside this directory" and "every sibling whose name starts with
-    /// these letters". Trimming it here made `prefix=queue/` scan
-    /// `queue_priority/` too: on 2026-09-02 at 23:32 a migration created that
-    /// sibling, and the next release train died in `release-capacity` because
-    /// `list_jobs("queue")` was handed 9026 priority markers to parse as jobs
-    /// and reported the queue store unreadable. Leading slashes are noise and
-    /// are still stripped.
+    /// A trailing `/` is part of the question. It used to be trimmed off, so
+    /// `prefix=queue/` asked the store for `…/probierz/queue` and every
+    /// backend answered with a plain `starts_with`: `queue_priority/` and
+    /// `queue_workdirs/` came back inside a listing of `queue/`. The client
+    /// then refused the whole answer — "Stado object API returned an
+    /// inconsistent object-list item", correctly, because those keys are not
+    /// under the prefix it asked for — and `JobStorage::list_jobs("queue")`
+    /// became permanently unreadable against this fleet's 9,026-object store.
+    ///
+    /// That is what stopped the release trains on 2026-09-03: `stado host
+    /// reclaim` builds its keep-list from `queue/` and `running/`, refuses to
+    /// reclaim workdirs blind when the store cannot be read, and every
+    /// `release-capacity` barrier failed on it — 0.13.49 and 0.13.50 both died
+    /// there with publication never attempted.
+    ///
+    /// So the boundary the caller wrote is the boundary the store is asked
+    /// about, and a caller that deliberately passes a partial name still gets
+    /// the stem match it asked for.
     pub fn namespace_prefix(namespace: &str, prefix: &str) -> Result<String, StorageError> {
         let sentinel = Self::new(namespace, "sentinel")?;
         let prefix = prefix.trim_start_matches('/');
-        let path = prefix.trim_end_matches('/');
-        if (!path.is_empty()
-            && path
+        let bounded = prefix.ends_with('/');
+        let inner = prefix.trim_end_matches('/');
+        if (!inner.is_empty()
+            && inner
                 .split('/')
                 .any(|part| part.is_empty() || part == "." || part == ".."))
             || prefix.contains('\0')
@@ -110,10 +121,12 @@ impl ObjectRef {
         {
             return Err(StorageError::PathEscape(format!("{namespace}/{prefix}")));
         }
-        Ok(if path.is_empty() {
+        Ok(if inner.is_empty() {
             format!("{ROOT_PREFIX}{}/", sentinel.namespace)
+        } else if bounded {
+            format!("{ROOT_PREFIX}{}/{inner}/", sentinel.namespace)
         } else {
-            format!("{ROOT_PREFIX}{}/{prefix}", sentinel.namespace)
+            format!("{ROOT_PREFIX}{}/{inner}", sentinel.namespace)
         })
     }
 

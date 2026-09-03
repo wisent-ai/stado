@@ -15,11 +15,15 @@ private enum RegistryFacet: String, Hashable {
 private enum PolicyDecision: Identifiable {
     case mode(target: String, mode: FleetCleanupMode, current: String)
     case pinned(target: String, value: Bool)
+    case number(target: String, field: FleetCleanupNumericField, value: Int, current: Int?)
+    case clearNumber(target: String, field: FleetCleanupNumericField)
 
     var id: String {
         switch self {
         case let .mode(target, mode, _): "mode-\(target)-\(mode.rawValue)"
         case let .pinned(target, value): "pinned-\(target)-\(value)"
+        case let .number(target, field, value, _): "number-\(target)-\(field.rawValue)-\(value)"
+        case let .clearNumber(target, field): "clear-\(target)-\(field.rawValue)"
         }
     }
 
@@ -27,6 +31,8 @@ private enum PolicyDecision: Identifiable {
         switch self {
         case let .mode(target, _, _): target
         case let .pinned(target, _): target
+        case let .number(target, _, _, _): target
+        case let .clearNumber(target, _): target
         }
     }
 }
@@ -38,6 +44,8 @@ struct RegistryView: View {
     @State private var facet: RegistryFacet = .all
     @State private var selection: String?
     @State private var decision: PolicyDecision?
+    /// Typed values per target and field, kept until the write is confirmed.
+    @State private var drafts: [String: String] = [:]
 
     var body: some View {
         WisentScreen(
@@ -291,28 +299,36 @@ struct RegistryView: View {
         }
     }
 
-    @ViewBuilder
     private func policyActions(for target: FleetPolicyTarget) -> some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+        let declared = target.cleanup?.mode
+        return VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
             Text("Change policy")
                 .font(WisentTypeScale.panelTitle())
                 .foregroundStyle(WisentDesign.ink)
-            if let current = target.cleanup?.mode {
-                ForEach(FleetCleanupMode.allCases.filter { $0.rawValue != current }) { mode in
-                    WisentActionButton(
-                        action: WisentAction(
-                            "Set cleanup to \(mode.title)…",
-                            symbol: mode == .enforce ? "trash" : "pause.circle",
-                            isEnabled: !fleetStore.mutation.isWorking
-                        ) {
-                            decision = .mode(target: target.name, mode: mode, current: current)
-                        }
-                    )
-                }
-            } else {
-                Text("This target declares no disk_cleanup policy, so the dashboard refuses a cleanup patch for it.")
-                    .font(WisentTypeScale.caption())
-                    .foregroundStyle(WisentDesign.secondary)
+            if declared == nil {
+                Text(
+                    "This target declares no disk_cleanup policy. Setting a mode writes one, seeded from the fleet's reporting default."
+                )
+                .font(WisentTypeScale.caption())
+                .foregroundStyle(WisentDesign.secondary)
+            }
+            ForEach(FleetCleanupMode.allCases.filter { $0.rawValue != declared }) { mode in
+                WisentActionButton(
+                    action: WisentAction(
+                        "Set cleanup to \(mode.title)…",
+                        symbol: mode == .enforce ? "trash" : "pause.circle",
+                        isEnabled: !fleetStore.mutation.isWorking
+                    ) {
+                        decision = .mode(
+                            target: target.name,
+                            mode: mode,
+                            current: declared ?? "none declared"
+                        )
+                    }
+                )
+            }
+            ForEach(FleetCleanupNumericField.allCases) { field in
+                numericRow(for: target, field: field)
             }
             WisentActionButton(
                 action: WisentAction(
@@ -325,6 +341,65 @@ struct RegistryView: View {
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One numeric field: what the registry says now, and one write for it.
+    ///
+    /// The value is typed rather than stepped because these span four orders
+    /// of magnitude — 8 GB free and 274 877 906 944 bytes per pass are both
+    /// live on this fleet.
+    @ViewBuilder
+    private func numericRow(for target: FleetPolicyTarget, field: FleetCleanupNumericField) -> some View {
+        let key = "\(target.name)/\(field.rawValue)"
+        let live = target.cleanup?.value(of: field)
+        let typed = Int(drafts[key]?.trimmingCharacters(in: .whitespaces) ?? "")
+        HStack(alignment: .firstTextBaseline, spacing: WisentDesign.Space.x2) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(field.title)
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.ink)
+                Text(live.map(String.init) ?? "not declared")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
+            }
+            .frame(width: 210, alignment: .leading)
+            TextField(
+                live.map(String.init) ?? "default",
+                text: Binding(
+                    get: { drafts[key] ?? "" },
+                    set: { drafts[key] = $0 }
+                )
+            )
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 140)
+            WisentActionButton(
+                action: WisentAction(
+                    "Set…",
+                    symbol: "arrow.right.circle",
+                    isEnabled: !fleetStore.mutation.isWorking
+                        && typed.map { $0 > 0 && $0 != live } == true
+                ) {
+                    guard let value = typed else { return }
+                    decision = .number(
+                        target: target.name,
+                        field: field,
+                        value: value,
+                        current: live
+                    )
+                }
+            )
+            if field.isClearable, live != nil {
+                WisentActionButton(
+                    action: WisentAction(
+                        "Use default…",
+                        symbol: "arrow.uturn.backward",
+                        isEnabled: !fleetStore.mutation.isWorking
+                    ) {
+                        decision = .clearNumber(target: target.name, field: field)
+                    }
+                )
+            }
+        }
     }
 
     // MARK: Decisions
@@ -391,6 +466,64 @@ struct RegistryView: View {
                                 describedAs: value
                                     ? "Restricted \(target) to routed jobs only."
                                     : "Allowed \(target) to claim queued backlog."
+                            )
+                        }
+                    },
+                ]
+            )
+        case let .number(target, field, value, current):
+            WisentDecisionDialog(
+                tone: field == .lowFreeGB || field == .targetFreeGB ? .warning : .neutral,
+                title: "Set \(field.title) to \(value) on \(target)?",
+                lines: [
+                    field.effect,
+                    "The write is a compare-and-swap on the canonical registry, and the host reads it on its next pass. A concurrent registry change makes the dashboard refuse this write rather than overwrite it.",
+                ],
+                reasonCode: current.map { "current value: \($0)" } ?? "not declared",
+                listing: [
+                    "POST /api/registry/policy",
+                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"\(field.rawValue)\": \(value)}}",
+                ],
+                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
+                actions: [
+                    WisentAction("Leave policy unchanged", kind: .secondary) { decision = nil },
+                    WisentAction("Write \(value)", kind: .primary) {
+                        decision = nil
+                        drafts["\(target)/\(field.rawValue)"] = nil
+                        Task {
+                            await fleetStore.apply(
+                                .cleanupNumber(field, value),
+                                to: target,
+                                describedAs: "Set \(field.rawValue) to \(value) on \(target)."
+                            )
+                        }
+                    },
+                ]
+            )
+        case let .clearNumber(target, field):
+            WisentDecisionDialog(
+                tone: .warning,
+                title: "Return \(field.title) to the default on \(target)?",
+                lines: [
+                    field.effect,
+                    "Removing the key leaves the janitor's own built-in limit in force, and the registry then declares nothing about it.",
+                ],
+                reasonCode: "clears \(field.rawValue)",
+                listing: [
+                    "POST /api/registry/policy",
+                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"\(field.rawValue)\": null}}",
+                ],
+                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
+                actions: [
+                    WisentAction("Keep the declared value", kind: .secondary) { decision = nil },
+                    WisentAction("Use the default", kind: .destructive) {
+                        decision = nil
+                        drafts["\(target)/\(field.rawValue)"] = nil
+                        Task {
+                            await fleetStore.apply(
+                                .clearCleanupNumber(field),
+                                to: target,
+                                describedAs: "Cleared \(field.rawValue) on \(target)."
                             )
                         }
                     },
