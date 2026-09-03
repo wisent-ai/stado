@@ -2612,6 +2612,24 @@ pub async fn reclaim(
     let (target, reclamation) = crate::deploy::host_reclaim::reclaim_host(host, apply, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
+    // A skipped stage is an infrastructure failure that the command survived,
+    // so the classification line `main_entry` emits on the error path never
+    // fires for it — and a stage nobody could judge, reported only as a row
+    // in a human table, is the silence that cost the release train three
+    // attempts. The store's own sentence rides in the reason, so `HTTP 502`
+    // classes as `infra_down`, `retryable=true` here instead of the
+    // `unknown`, `retryable=false` a discarded error used to produce. The
+    // point and service are the two `cli/mod.rs` would derive for this
+    // command: `failure_point` walks the subcommand names, `failure_service`
+    // maps `host` to `fleet`.
+    for (stage, reason) in &reclamation.skipped {
+        crate::failure::log_failure(
+            "cli.host.reclaim",
+            "fleet",
+            crate::failure::classify_message(reason),
+            &format!("{stage}: {reason}"),
+        );
+    }
     let audited = match reason {
         Some(reason) if apply => Some(
             crate::deploy::host_reclaim::record_audit(
@@ -2665,6 +2683,12 @@ pub async fn reclaim(
         for path in &stage.paths {
             println!("  {} {path}", stage.stage);
         }
+    }
+    // A stage that could not be judged is not a stage that found nothing.
+    // Printed beside the table, because the table's zero is the same digit a
+    // clean host prints.
+    for (stage, reason) in &reclamation.skipped {
+        println!("{stage}: SKIPPED — {reason}");
     }
     if let Some(plan) = &reclamation.janitor_plan {
         let cleaners: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)

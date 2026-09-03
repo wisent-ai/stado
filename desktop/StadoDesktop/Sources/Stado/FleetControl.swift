@@ -62,6 +62,10 @@ struct FleetCleanupPolicy: Decodable, Sendable {
     let maxItemsPerPass: Int?
     let maxBytesPerPass: Int?
     let maxScanItems: Int?
+    /// Seconds one pass may spend. Optional in the registry schema; absent
+    /// means the janitor's own 30, which is what a host that has never
+    /// declared it runs.
+    let maxPassSeconds: Int?
 
     enum CodingKeys: String, CodingKey {
         case mode
@@ -71,7 +75,72 @@ struct FleetCleanupPolicy: Decodable, Sendable {
         case maxItemsPerPass = "max_items_per_pass"
         case maxBytesPerPass = "max_bytes_per_pass"
         case maxScanItems = "max_scan_items"
+        case maxPassSeconds = "max_pass_seconds"
     }
+
+    func value(of field: FleetCleanupNumericField) -> Int? {
+        switch field {
+        case .lowFreeGB: lowFreeGB
+        case .targetFreeGB: targetFreeGB
+        case .checkIntervalSeconds: checkIntervalSeconds
+        case .maxItemsPerPass: maxItemsPerPass
+        case .maxBytesPerPass: maxBytesPerPass
+        case .maxScanItems: maxScanItems
+        case .maxPassSeconds: maxPassSeconds
+        }
+    }
+}
+
+/// One numeric `disk_cleanup` field an operator client may rewrite.
+///
+/// The same set the dashboard whitelists and `stado host disk-cleanup` sets,
+/// because a field the app can display and cannot change is a control an
+/// operator will try to use, and one it can change and cannot display is a
+/// write nobody can verify.
+enum FleetCleanupNumericField: String, CaseIterable, Identifiable, Sendable {
+    case lowFreeGB = "low_free_gb"
+    case targetFreeGB = "target_free_gb"
+    case checkIntervalSeconds = "check_interval_seconds"
+    case maxItemsPerPass = "max_items_per_pass"
+    case maxBytesPerPass = "max_bytes_per_pass"
+    case maxScanItems = "max_scan_items"
+    case maxPassSeconds = "max_pass_seconds"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .lowFreeGB: "Start below (GB free)"
+        case .targetFreeGB: "Stop at (GB free)"
+        case .checkIntervalSeconds: "Interval (seconds)"
+        case .maxItemsPerPass: "Directories per pass"
+        case .maxBytesPerPass: "Bytes per pass"
+        case .maxScanItems: "Directories crossed per pass"
+        case .maxPassSeconds: "Seconds per pass"
+        }
+    }
+
+    var effect: String {
+        switch self {
+        case .lowFreeGB:
+            "A pass does nothing while more than this many GB are free."
+        case .targetFreeGB:
+            "A pass stops as soon as this many GB are free, mid-walk."
+        case .checkIntervalSeconds:
+            "The shortest gap between two passes on this host."
+        case .maxItemsPerPass:
+            "The most directories one pass may delete."
+        case .maxBytesPerPass:
+            "The most bytes one pass may delete."
+        case .maxScanItems:
+            "The most directories one pass may examine before it stops and hands its cursor on."
+        case .maxPassSeconds:
+            "The wall clock one pass may spend. Absent means the janitor's own 30 seconds, which is the limit that binds on a large tree."
+        }
+    }
+
+    /// Only the optional field can be returned to its default.
+    var isClearable: Bool { self == .maxPassSeconds }
 }
 
 /// The three modes the registry schema accepts for `disk_cleanup.mode`.
@@ -104,6 +173,10 @@ enum FleetCleanupMode: String, CaseIterable, Identifiable, Sendable {
 enum FleetPolicyPatch: Sendable {
     case pinnedOnly(Bool)
     case cleanupMode(FleetCleanupMode)
+    case cleanupNumber(FleetCleanupNumericField, Int)
+    /// Drop an optional field and return the host to the janitor's default.
+    /// `null` is how the dashboard is told to remove a key rather than set it.
+    case clearCleanupNumber(FleetCleanupNumericField)
 
     var body: [String: Any] {
         switch self {
@@ -111,6 +184,10 @@ enum FleetPolicyPatch: Sendable {
             ["pinned_only": value]
         case let .cleanupMode(mode):
             ["disk_cleanup": ["mode": mode.rawValue]]
+        case let .cleanupNumber(field, value):
+            ["disk_cleanup": [field.rawValue: value]]
+        case let .clearCleanupNumber(field):
+            ["disk_cleanup": [field.rawValue: NSNull()]]
         }
     }
 }

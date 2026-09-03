@@ -46,12 +46,12 @@
 //! service deployed remotely is byte-identical to one installed locally.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -963,8 +963,19 @@ pub struct LocalUnitFile {
     /// finding is about which variables reach the unit, and a diagnostic has
     /// no business printing the values of the ones that do.
     pub carries: Vec<String>,
-    /// The first `ProgramArguments` entry, or the systemd `ExecStart`.
+    /// The first [`LocalUnitFile::arguments`] entry: the file the unit
+    /// declares it starts. Empty for a systemd unit, whose `ExecStart` this
+    /// reader does not parse.
     pub program: String,
+    /// The whole `ProgramArguments` vector, empty for a systemd unit.
+    ///
+    /// The whole vector and not just the program, because that is what
+    /// launchd execs and therefore what a process table shows: every stado
+    /// unit on a host runs the same binary, so `argv[0]` alone cannot tell
+    /// the coordinator's process from the agent's from the janitor's, and
+    /// [`units_running_replaced_images`] joins on the vector for exactly
+    /// that reason.
+    pub arguments: Vec<String>,
 }
 
 /// Read one unit file off the local filesystem, when it is there to read.
@@ -976,24 +987,39 @@ pub fn local_unit_file(path: &str, kind: &str) -> Option<LocalUnitFile> {
     let text = std::fs::read_to_string(path).ok()?;
     if kind == KIND_LAUNCHD {
         let document = parse_plist(&text).ok()?;
+        // `Program` as well as `ProgramArguments`: a plist may carry either,
+        // and `self_update::launchd_argv` already falls back the same way.
+        let arguments: Vec<String> = document
+            .get("ProgramArguments")
+            .and_then(Value::as_array)
+            .map(|argv| {
+                argv.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .filter(|argv: &Vec<String>| !argv.is_empty())
+            .or_else(|| {
+                document
+                    .get("Program")
+                    .and_then(Value::as_str)
+                    .map(|program| vec![program.to_string()])
+            })
+            .unwrap_or_default();
         Some(LocalUnitFile {
             carries: plist_env(&document)
                 .into_iter()
                 .map(|(name, _)| name)
                 .collect(),
-            program: document
-                .get("ProgramArguments")
-                .and_then(Value::as_array)
-                .and_then(|argv| argv.first())
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            program: arguments.first().cloned().unwrap_or_default(),
+            arguments,
         })
     } else {
         let parsed = parse_systemd_unit(&text);
         Some(LocalUnitFile {
             carries: parsed.env.into_iter().map(|(name, _)| name).collect(),
             program: String::new(),
+            arguments: Vec::new(),
         })
     }
 }
@@ -5226,6 +5252,813 @@ fn parse_process(stdout: &str) -> RunningProgram {
         }
     }
     program
+}
+
+// ---------------------------------------------------------------------------
+// Which image a unit's live process is executing, on this machine
+// ---------------------------------------------------------------------------
+
+/// The three directories this fleet installs launchd units into, in the
+/// order [`LOADED_LABELS_SCRIPT`] walks them.
+///
+/// Same list and same order deliberately: a unit one enumeration can see and
+/// the other cannot is how a label ends up in nobody's set, which is the
+/// defect `service list --undeclared` was built for.
+const LAUNCHD_UNIT_DIRECTORIES: [&str; 3] = [
+    "/Library/LaunchDaemons",
+    "$HOME/Library/LaunchAgents",
+    "/Library/LaunchAgents",
+];
+
+/// How long the file a unit declares must have been in place before a
+/// process executing some other image counts as stale.
+///
+/// The tolerance exists because replacement and restart are two steps of one
+/// invocation: [`crate::self_update::recycle_replaced_units`] writes the new
+/// bytes and only afterwards walks the units to cycle them, so between those
+/// two moments every managed process is legitimately still on the image it
+/// started with. Firing there would report the installer's own working state
+/// as a fault.
+///
+/// 300 seconds, from the only measurement of that window this fleet has.
+/// `com.wisent.compute.disk-cleanup.disk-cleanup` journalled its last pass on
+/// the superseded image at `2026-09-02T17:50:40Z` and its first pass on the
+/// new one at `2026-09-02T17:51:35Z`: 55 seconds, and that figure already
+/// contains a whole janitor pass rather than just the restart. Five times it
+/// is a grace no legitimate replacement exhausts, and it is four orders of
+/// magnitude short of the thirteen days that unit spent unnoticed, so the
+/// tolerance costs this check nothing it was built to catch.
+///
+/// It is keyed on the age of the INSTALLED FILE and never on the age of the
+/// process, which is the part that is easy to get backwards. A stale process
+/// is old by construction — six days old, in the case this check exists for —
+/// so suppressing young processes would suppress nothing and suppressing old
+/// ones would suppress the finding. What is genuinely short-lived is the
+/// replacement, and that is what this measures.
+pub const IMAGE_SETTLE_SECONDS: i64 = 300;
+
+/// One executable file, as the kernel identifies it rather than as a path
+/// spells it.
+///
+/// A path is not an identity, and that gap is the whole condition this type
+/// exists to express: two different files answering to one name. Every field
+/// here is here because a path comparison cannot see it — which is why
+/// [`RunningProgram::matches_process`], which compares paths and then
+/// timestamps, reports a unit whose binary was swapped underneath it as
+/// matching, and why `recycle_launchd` decides what to restart by string
+/// equality on `argv[0]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageIdentity {
+    /// Where the identity was read: the declared path for an installed file,
+    /// and whatever the kernel still calls the mapping for a running one.
+    pub path: String,
+    /// `st_dev`. Inode numbers repeat across volumes, so the pair is the
+    /// identity and the inode on its own is not.
+    pub device: u64,
+    pub inode: u64,
+    pub bytes: u64,
+    /// Directory entries pointing at this inode. Zero means the file has been
+    /// unlinked and the running process holds the last reference to the bytes
+    /// it is executing — a different operator problem from a process running
+    /// some other file that still exists, so the two are never merged.
+    pub links: u64,
+}
+
+impl ImageIdentity {
+    /// The same file, by the only test that answers it.
+    pub fn is_same_file(&self, other: &Self) -> bool {
+        self.device == other.device && self.inode == other.inode
+    }
+
+    /// The identity in one clause, so a report can print both sides and be
+    /// believed without anybody going back to `lsof`.
+    pub fn describe(&self) -> String {
+        format!(
+            "inode {} on device {:#x}, {} bytes, {} link(s)",
+            self.inode, self.device, self.bytes, self.links
+        )
+    }
+}
+
+/// What a managed unit's live process turned out to be executing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageState {
+    /// The executing file has no name left. The directory entry now points at
+    /// other bytes and the running process holds the only remaining reference
+    /// to the ones it is executing.
+    ///
+    /// This is the case that actually happened: on 2026-09-02 the janitor's
+    /// six-day-old `--watch` process was executing an inode with zero links
+    /// while `~/.stado/bin/stado` had been replaced more than once underneath
+    /// it. It is a variant of its own because it is the one where no copy of
+    /// the running build survives anywhere to be diffed.
+    Unlinked {
+        running: ImageIdentity,
+        installed: ImageIdentity,
+    },
+    /// The executing file still exists and is not the one the unit declares —
+    /// an artefact tree a `current` link no longer points at, or a second copy
+    /// of the same program elsewhere on the disk.
+    Replaced {
+        running: ImageIdentity,
+        installed: ImageIdentity,
+    },
+    /// The identity could not be established.
+    ///
+    /// A finding and never a silence. The defect this check exists to remove
+    /// is an unread state rendered as a passing one, and `registry doctor`
+    /// already applies the same rule to unit files it cannot open:
+    /// [`EnvironmentGap::UnrecordedDeclaration`] carries `observed: None` and
+    /// says the file was not read rather than printing an empty environment.
+    Unread {
+        /// What could not be read, named the way an operator would name it.
+        subject: String,
+        /// The reader's own words for why, never a paraphrase.
+        reason: String,
+    },
+}
+
+/// One managed unit whose live process is not executing the file the unit's
+/// own `ProgramArguments` name — or one the question could not be asked about.
+///
+/// Measured on `lukasz-macbook` on 2026-09-02, and the measurement is why this
+/// exists. `com.wisent.transcript-lake-stream` had been running pid 99986
+/// since the previous afternoon on inode 125374164, 3,058,288 bytes, zero
+/// links; the `/Users/lukaszbartoszcze/.local/bin/transcript-lake` its plist
+/// names resolved to inode 181713431 at 2,958,720 bytes, written that morning.
+/// Nothing in the fleet reported it and nothing could have:
+/// `self_update::recycle_replaced_units` cycles a unit only as a side effect
+/// of the invocation that replaced its bytes, matches by string equality on
+/// `argv[0]`, compares no identity at all, and never revisits a unit it missed
+/// or that a failed `kickstart` left behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleUnitImage {
+    pub host: String,
+    /// launchd label. Empty on the row that reports a whole host unread,
+    /// which is about no single unit.
+    pub unit: String,
+    /// The unit file the declaration was read from.
+    pub unit_path: String,
+    /// `ProgramArguments[0]`: the file the unit says it starts.
+    pub program: String,
+    pub pid: Option<u32>,
+    /// How long the process has been alive.
+    pub process_age_seconds: Option<i64>,
+    /// How long ago the declared program was last written.
+    pub installed_age_seconds: Option<i64>,
+    pub state: ImageState,
+}
+
+impl StaleUnitImage {
+    /// Stable machine-readable category, in `registry doctor`'s vocabulary.
+    pub fn kind(&self) -> &'static str {
+        match self.state {
+            ImageState::Unlinked { .. } | ImageState::Replaced { .. } => "stale-unit-image",
+            ImageState::Unread { .. } => "unread-unit-image",
+        }
+    }
+
+    /// An age in the spelling every other `registry doctor` row uses.
+    fn age(seconds: Option<i64>) -> String {
+        seconds.map_or_else(
+            || "an unread time".to_string(),
+            |seconds| crate::cli::registry::human_age(TimeDelta::seconds(seconds)),
+        )
+    }
+
+    /// The row an operator reads. It names the unit, the path and BOTH
+    /// identities, because "stale" on its own sends somebody back to `lsof` to
+    /// re-derive the two facts the check already holds.
+    pub fn sentence(&self) -> String {
+        let pid = self
+            .pid
+            .map_or_else(|| "no pid".to_string(), |pid| format!("pid {pid}"));
+        match &self.state {
+            ImageState::Unlinked { running, installed } => format!(
+                "{} is running {pid}, started {} ago, and the executable that process is running \
+                 has been unlinked: {}. Its ProgramArguments name {}, which now holds {}, written \
+                 {} ago. No copy of the running build is left on disk, so the process is serving \
+                 bytes nothing on this host can reproduce. Restarting the unit is what puts it on \
+                 the installed file, and nothing does that on its own: \
+                 self_update::recycle_replaced_units cycles units only inside the invocation that \
+                 replaced them and never revisits one it missed",
+                self.unit,
+                Self::age(self.process_age_seconds),
+                running.describe(),
+                self.program,
+                installed.describe(),
+                Self::age(self.installed_age_seconds),
+            ),
+            ImageState::Replaced { running, installed } => format!(
+                "{} is running {pid}, started {} ago, and the executable that process is running \
+                 is not the file its unit declares: it is {} at {}. Its ProgramArguments name {}, \
+                 which holds {}, written {} ago. Both files still exist, so the running one can be \
+                 compared against the installed one before the unit is restarted",
+                self.unit,
+                Self::age(self.process_age_seconds),
+                running.describe(),
+                running.path,
+                self.program,
+                installed.describe(),
+                Self::age(self.installed_age_seconds),
+            ),
+            ImageState::Unread { subject, reason } => format!(
+                "{subject} could not be read, so whether the live process is executing the file \
+                 its unit declares is unknown here and is NOT reported as agreement: {reason}"
+            ),
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        let identity = |image: &ImageIdentity| {
+            json!({
+                "path": image.path,
+                "device": image.device,
+                "inode": image.inode,
+                "bytes": image.bytes,
+                "links": image.links,
+            })
+        };
+        let (state, running, installed, unread) = match &self.state {
+            ImageState::Unlinked { running, installed } => (
+                "unlinked",
+                Some(identity(running)),
+                Some(identity(installed)),
+                None,
+            ),
+            ImageState::Replaced { running, installed } => (
+                "replaced",
+                Some(identity(running)),
+                Some(identity(installed)),
+                None,
+            ),
+            ImageState::Unread { subject, reason } => {
+                ("unread", None, None, Some(format!("{subject}: {reason}")))
+            }
+        };
+        json!({
+            "host": self.host,
+            "unit": self.unit,
+            "unit_path": self.unit_path,
+            "program": self.program,
+            "pid": self.pid,
+            "process_age_seconds": self.process_age_seconds,
+            "installed_age_seconds": self.installed_age_seconds,
+            "state": state,
+            "running": running,
+            "installed": installed,
+            "unread_reason": unread,
+        })
+    }
+}
+
+/// The identity of the file at `path` right now, and when it was last written.
+///
+/// Symlinks are followed, which is the point and not a convenience: a declared
+/// program is routinely a link — `~/.local/bin/transcript-lake` is one, and
+/// every staged release reaches its binary through a `current` link — and the
+/// identity that matters is the one an `exec` of that path would land on
+/// today.
+pub fn installed_image(path: &Path) -> Result<(ImageIdentity, i64), String> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    Ok((
+        ImageIdentity {
+            path: path.to_string_lossy().into_owned(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            bytes: metadata.size(),
+            links: metadata.nlink(),
+        },
+        metadata.mtime(),
+    ))
+}
+
+/// The image each of `pids` is executing, keyed by pid.
+///
+/// A pid absent from the returned map is one whose image this account could
+/// not read — it exited, or it belongs to another user — and the caller
+/// reports that as unknown rather than dropping it. `Err` is the reader itself
+/// failing, which is one cause for every pid and is reported once.
+pub fn running_images(pids: &[u32]) -> Result<BTreeMap<u32, ImageIdentity>, String> {
+    if pids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    if cfg!(target_os = "linux") {
+        Ok(proc_exe_images(pids))
+    } else {
+        lsof_images(pids)
+    }
+}
+
+/// Linux: `/proc/<pid>/exe`. `read_link` names the image and appends
+/// ` (deleted)` once it has been unlinked; `metadata` follows the magic link
+/// to the inode itself, so it answers for a file with no directory entry left
+/// exactly as it does for one that has one.
+fn proc_exe_images(pids: &[u32]) -> BTreeMap<u32, ImageIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    const DELETED: &str = " (deleted)";
+    let mut images = BTreeMap::new();
+    for &pid in pids {
+        let link = PathBuf::from(format!("/proc/{pid}/exe"));
+        let Ok(metadata) = std::fs::metadata(&link) else {
+            continue;
+        };
+        let path = std::fs::read_link(&link).map_or_else(
+            |_| format!("/proc/{pid}/exe"),
+            |target| {
+                let rendered = target.to_string_lossy().into_owned();
+                rendered
+                    .strip_suffix(DELETED)
+                    .map_or_else(|| rendered.clone(), str::to_string)
+            },
+        );
+        images.insert(
+            pid,
+            ImageIdentity {
+                path,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                bytes: metadata.size(),
+                links: metadata.nlink(),
+            },
+        );
+    }
+    images
+}
+
+/// macOS: one `lsof` over every pid at once.
+///
+/// `-d txt` restricts the listing to text mappings and the FIRST of them is
+/// the process's own executable; the rest are `dyld` and the frameworks it
+/// pulled in. Some of those are routinely unlinked too — a `.plist-cache`
+/// under `/Library/Preferences/Logging` is, on this machine — so "any unlinked
+/// text mapping" is not the question and is not asked.
+///
+/// One invocation rather than one per pid: this runs inside a diagnostic that
+/// already walks every unit on the host, and `host_disk` records what a
+/// per-item `lsof` costs there.
+fn lsof_images(pids: &[u32]) -> Result<BTreeMap<u32, ImageIdentity>, String> {
+    let list = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<String>>()
+        .join(",");
+    // A pid that has exited makes lsof exit non-zero while still reporting
+    // every pid that has not, so the status is deliberately not consulted: the
+    // map is the answer, and an absent pid is already the unknown.
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", &list, "-d", "txt", "-F", "pDsikn"])
+        .output()
+        .map_err(|error| format!("/usr/sbin/lsof did not run: {error}"))?;
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    let mut images: BTreeMap<u32, ImageIdentity> = BTreeMap::new();
+    let mut pid: Option<u32> = None;
+    let mut current = ImageIdentity {
+        path: String::new(),
+        device: 0,
+        inode: 0,
+        bytes: 0,
+        links: 0,
+    };
+    for line in rendered.lines() {
+        let Some((tag, value)) = line.split_at_checked(1) else {
+            continue;
+        };
+        match tag {
+            "p" => pid = value.trim().parse().ok(),
+            // lsof prints the device as `0x`-prefixed hex; the number is the
+            // same `st_dev` `installed_image` reads, so the two sides compare
+            // without a second convention.
+            "D" => {
+                current.device = value
+                    .trim()
+                    .strip_prefix("0x")
+                    .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+                    .or_else(|| value.trim().parse().ok())
+                    .unwrap_or_default();
+            }
+            "s" => current.bytes = value.trim().parse().unwrap_or_default(),
+            "i" => current.inode = value.trim().parse().unwrap_or_default(),
+            "k" => current.links = value.trim().parse().unwrap_or_default(),
+            "n" => {
+                current.path = value.to_string();
+                if let Some(pid) = pid {
+                    images.entry(pid).or_insert_with(|| current.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(images)
+}
+
+/// Every process this account can see: pid, how long it has been alive, and
+/// the argument vector, which is what joins a process back to the unit that
+/// declares it.
+///
+/// `etime` and not `etimes`: macOS `ps` has no `etimes` keyword at all, and
+/// asking for one makes it reject the entire format string and print an
+/// unlabelled table instead of failing.
+pub fn process_table() -> Result<Vec<(u32, Option<i64>, String)>, String> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-axo", "pid=,etime=,args="])
+        .output()
+        .map_err(|error| format!("/bin/ps did not run: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "/bin/ps exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    let mut rows = Vec::new();
+    for line in rendered.lines() {
+        let Some((pid, rest)) = line.trim_start().split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        let Some((elapsed, argv)) = rest.trim_start().split_once(char::is_whitespace) else {
+            continue;
+        };
+        rows.push((pid, parse_etime(elapsed), argv.trim().to_string()));
+    }
+    Ok(rows)
+}
+
+/// `ps` elapsed time — `[[dd-]hh:]mm:ss` — in seconds.
+fn parse_etime(elapsed: &str) -> Option<i64> {
+    let (days, clock) = elapsed
+        .split_once('-')
+        .map_or((0i64, elapsed), |(days, clock)| {
+            (days.trim().parse().unwrap_or_default(), clock)
+        });
+    let mut seconds = 0i64;
+    for field in clock.split(':') {
+        seconds = seconds * 60 + field.trim().parse::<i64>().ok()?;
+    }
+    Some(days * 86_400 + seconds)
+}
+
+/// Every launchd unit on THIS machine that this fleet is answerable for,
+/// keyed by label and valued by the unit file to read.
+///
+/// Two sources, because either alone has a blind spot this check cannot
+/// afford. The registry's own `services` array is the declared set — and
+/// `com.wisent.compute.disk-cleanup.disk-cleanup`, the unit the whole incident
+/// happened to, is not in it on `lukasz-macbook`. The three unit directories
+/// carry every label this fleet installed whether the document adopted it or
+/// not, which is the class [`UndeclaredUnit::fleet_affiliated`] was widened to
+/// see, and they miss a declared unit whose file has been deleted. The union
+/// is what the fleet is answerable for.
+fn local_launchd_units(target: &ComputeTarget, home: &str) -> BTreeMap<String, String> {
+    let mut units: BTreeMap<String, String> = BTreeMap::new();
+    for service in declared_services(target) {
+        if service.kind != KIND_LAUNCHD || service.path.is_empty() {
+            continue;
+        }
+        units.insert(
+            service.unit_id().to_string(),
+            service.path.replace("$HOME", home),
+        );
+    }
+    for directory in LAUNCHD_UNIT_DIRECTORIES {
+        let Ok(entries) = std::fs::read_dir(PathBuf::from(directory.replace("$HOME", home))) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Exactly `<label>.plist`. The disabled, retired and dated
+            // siblings beside them — `.plist.stado-disabled`,
+            // `.plist.retired-20260818` — are not units launchd loads, and
+            // reporting on them would be reporting on files nobody runs.
+            let Some(label) = name.strip_suffix(".plist") else {
+                continue;
+            };
+            if !label.starts_with(FLEET_LABEL_PREFIX) {
+                continue;
+            }
+            units
+                .entry(label.to_string())
+                .or_insert_with(|| entry.path().to_string_lossy().into_owned());
+        }
+    }
+    units
+}
+
+/// Whether a running image is a finding, given the file the unit declares.
+///
+/// `None` for the two states that are not: the same file, and a replacement
+/// young enough to still be mid-flight. Pure, so the boundary can be exercised
+/// without a process to point it at.
+pub fn classify_image(
+    running: &ImageIdentity,
+    installed: &ImageIdentity,
+    installed_age_seconds: i64,
+) -> Option<ImageState> {
+    if running.is_same_file(installed) || installed_age_seconds < IMAGE_SETTLE_SECONDS {
+        return None;
+    }
+    let (running, installed) = (running.clone(), installed.clone());
+    if running.links == 0 {
+        return Some(ImageState::Unlinked { running, installed });
+    }
+    Some(ImageState::Replaced { running, installed })
+}
+
+/// One managed unit's image, as read on the machine holding its process —
+/// including the units that turned out to be fine.
+///
+/// Two callers need this and they must never disagree: `registry doctor`
+/// reports the units that are stale, and `service refresh-image` refuses to
+/// act on a unit that is not. A refusal has to name the identity it found, so
+/// the clean answer is a value here rather than an absence, and the finding is
+/// derived from it by [`UnitImageObservation::finding`] instead of being
+/// produced by a second pass that could drift from the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitImageObservation {
+    pub host: String,
+    /// launchd label. Empty on the observation that covers a whole host.
+    pub unit: String,
+    pub unit_path: String,
+    /// `ProgramArguments[0]`: the file the unit says it starts.
+    pub program: String,
+    pub pid: Option<u32>,
+    pub process_age_seconds: Option<i64>,
+    pub installed_age_seconds: Option<i64>,
+    /// The image the live process is executing, when it was read.
+    pub running: Option<ImageIdentity>,
+    /// The file the unit declares, as it stands now.
+    pub installed: Option<ImageIdentity>,
+    /// `None` when the process is executing the file the unit declares, or
+    /// when the replacement is still inside [`IMAGE_SETTLE_SECONDS`].
+    pub state: Option<ImageState>,
+}
+
+impl UnitImageObservation {
+    /// The `registry doctor` row for this observation, or `None` when there is
+    /// nothing to report.
+    pub fn finding(&self) -> Option<StaleUnitImage> {
+        Some(StaleUnitImage {
+            host: self.host.clone(),
+            unit: self.unit.clone(),
+            unit_path: self.unit_path.clone(),
+            program: self.program.clone(),
+            pid: self.pid,
+            process_age_seconds: self.process_age_seconds,
+            installed_age_seconds: self.installed_age_seconds,
+            state: self.state.clone()?,
+        })
+    }
+
+    /// Whether the running image and the declared file are the same file.
+    ///
+    /// `None` while either identity is unread, which is the answer this whole
+    /// module exists to keep apart from `true`.
+    pub fn agrees(&self) -> Option<bool> {
+        Some(
+            self.running
+                .as_ref()?
+                .is_same_file(self.installed.as_ref()?),
+        )
+    }
+}
+
+/// Every managed unit on one host with the image its live process is
+/// executing.
+///
+/// LOCAL ONLY, and the signature says so. Which image a pid is executing is a
+/// question only the kernel holding that pid can answer: nothing in the store
+/// carries it, the beacon publishes one `state` word per unit, and
+/// [`ManagedService`] records a path rather than an identity. So `local_units`
+/// is the name of the host this process is running on, exactly as
+/// [`unreachable_product_environments`] uses it, and every other host gets one
+/// observation saying its units were not measured. That row is deliberate: the
+/// state this check exists to remove is an unread one rendered as passing, and
+/// a remote host silently omitted would be that same defect wearing this
+/// check's name.
+///
+/// A unit with no matching process yields nothing. That is not a silence but
+/// the honest answer — a job that is loaded and not running holds no image,
+/// the reasoning `recycle_launchd` already states — and the process table is
+/// joined on the WHOLE argument vector rather than on `argv[0]`, because every
+/// stado unit on a host runs the same binary and the subcommand is the entire
+/// difference between them.
+pub fn observe_unit_images(
+    target: &ComputeTarget,
+    local_units: Option<&str>,
+    now_epoch: i64,
+) -> Vec<UnitImageObservation> {
+    let blank = |unit: &str, unit_path: &str, state: Option<ImageState>| UnitImageObservation {
+        host: target.name.clone(),
+        unit: unit.to_string(),
+        unit_path: unit_path.to_string(),
+        program: String::new(),
+        pid: None,
+        process_age_seconds: None,
+        installed_age_seconds: None,
+        running: None,
+        installed: None,
+        state,
+    };
+    let whole_host = |reason: String| {
+        blank(
+            "",
+            "",
+            Some(ImageState::Unread {
+                subject: format!("the executing image of every unit on {}", target.name),
+                reason,
+            }),
+        )
+    };
+    if local_units != Some(target.name.as_str()) {
+        let declared = declared_services(target).len();
+        if declared == 0 {
+            return Vec::new();
+        }
+        return vec![whole_host(format!(
+            "which image a process is executing is readable only on the machine holding that \
+             process, and this command is running on {}; {declared} declared unit(s) on {} are \
+             unmeasured until `stado registry doctor` runs there",
+            local_units.unwrap_or("a host no registry target names"),
+            target.name
+        ))];
+    }
+    let Some(home) = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned())
+    else {
+        return vec![whole_host(
+            "this process has no HOME, so the launchd unit directories could not be named"
+                .to_string(),
+        )];
+    };
+    let processes = match process_table() {
+        Ok(processes) => processes,
+        Err(reason) => return vec![whole_host(reason)],
+    };
+
+    // One pass over the unit files, then one image read for every pid they
+    // name.
+    let mut rows: Vec<UnitImageObservation> = Vec::new();
+    let mut pending: Vec<(String, String, String, u32, Option<i64>)> = Vec::new();
+    for (label, unit_path) in local_launchd_units(target, &home) {
+        let unread = |subject: String, reason: String| {
+            blank(
+                &label,
+                &unit_path,
+                Some(ImageState::Unread { subject, reason }),
+            )
+        };
+        let Some(unit) = local_unit_file(&unit_path, KIND_LAUNCHD) else {
+            rows.push(unread(
+                format!("{label}'s unit file {unit_path}"),
+                "it is absent, unreadable, or not a plist this build can parse".to_string(),
+            ));
+            continue;
+        };
+        if unit.arguments.is_empty() {
+            rows.push(unread(
+                format!("{label}'s declared program"),
+                format!(
+                    "{unit_path} carries neither ProgramArguments nor Program, so there is no \
+                     declared file for a running image to be compared against"
+                ),
+            ));
+            continue;
+        }
+        let declared = unit.arguments.join(" ");
+        for (pid, age, argv) in &processes {
+            if argv == &declared {
+                pending.push((
+                    label.clone(),
+                    unit_path.clone(),
+                    unit.program.clone(),
+                    *pid,
+                    *age,
+                ));
+            }
+        }
+    }
+
+    let pids: Vec<u32> = pending.iter().map(|(_, _, _, pid, _)| *pid).collect();
+    let images = match running_images(&pids) {
+        Ok(images) => images,
+        Err(reason) => {
+            // One row, not one per pid: the cause is a reader that would not
+            // answer, and it is the same cause for every process.
+            rows.push(whole_host(reason));
+            rows.sort_by(|left, right| left.unit.cmp(&right.unit));
+            return rows;
+        }
+    };
+
+    for (label, unit_path, program, pid, age) in pending {
+        let mut row = UnitImageObservation {
+            host: target.name.clone(),
+            unit: label.clone(),
+            unit_path: unit_path.clone(),
+            program: program.clone(),
+            pid: Some(pid),
+            process_age_seconds: age,
+            installed_age_seconds: None,
+            running: images.get(&pid).cloned(),
+            installed: None,
+            state: None,
+        };
+        let (installed, written_epoch) = match installed_image(Path::new(&program)) {
+            Ok(read) => read,
+            Err(reason) => {
+                row.state = Some(ImageState::Unread {
+                    subject: format!("{label}'s declared program {program}"),
+                    reason,
+                });
+                rows.push(row);
+                continue;
+            }
+        };
+        let installed_age = now_epoch - written_epoch;
+        row.installed_age_seconds = Some(installed_age);
+        row.installed = Some(installed.clone());
+        let Some(running) = row.running.clone() else {
+            row.state = Some(ImageState::Unread {
+                subject: format!("the image pid {pid} is executing for {label}"),
+                reason: "no text mapping was readable for that pid: it exited between the \
+                         process listing and this read, or it belongs to another account"
+                    .to_string(),
+            });
+            rows.push(row);
+            continue;
+        };
+        row.state = classify_image(&running, &installed, installed_age);
+        rows.push(row);
+    }
+    rows.sort_by(|left, right| left.unit.cmp(&right.unit).then(left.pid.cmp(&right.pid)));
+    rows
+}
+
+/// Managed units on one host whose live process is executing an image that is
+/// not the file their `ProgramArguments` name.
+///
+/// The `registry doctor` view of [`observe_unit_images`]: the same pass, with
+/// the units that are fine dropped.
+pub fn units_running_replaced_images(
+    target: &ComputeTarget,
+    local_units: Option<&str>,
+    now_epoch: i64,
+) -> Vec<StaleUnitImage> {
+    observe_unit_images(target, local_units, now_epoch)
+        .iter()
+        .filter_map(UnitImageObservation::finding)
+        .collect()
+}
+
+/// Restart one launchd unit on THIS machine, in place.
+///
+/// `kickstart -k`, the same verb `self_update::recycle_launchd` uses, so the
+/// remediation and the delivery path stop a unit the same way. The domain
+/// comes off the unit-file path through [`UnitDomain`]: a system LaunchDaemon
+/// belongs to `system` and needs root, and a LaunchAgent belongs to a login.
+/// `gui/<uid>` is tried first and `user/<uid>` second, because a host with no
+/// graphical session has only the latter and `recycle_launchd`'s gui-only
+/// spelling is exactly why a unit there can be left behind.
+///
+/// Returns the service target that answered, so a report can name the domain
+/// the restart actually happened in rather than the one it assumed.
+pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, String> {
+    use std::os::unix::fs::MetadataExt;
+    let domain = UnitDomain::from_path(unit_path);
+    if matches!(domain, UnitDomain::Unknown) {
+        return Err(format!(
+            "{unit_path} is in none of launchd's three unit directories, so no domain places it"
+        ));
+    }
+    let candidates: Vec<String> = if domain.requires_privileged_bootstrap() {
+        vec!["system".to_string()]
+    } else {
+        let home = std::env::var_os("HOME").ok_or("this process has no HOME")?;
+        let uid = std::fs::metadata(&home)
+            .map_err(|error| format!("this account's uid is unreadable: {error}"))?
+            .uid();
+        vec![format!("gui/{uid}"), format!("user/{uid}")]
+    };
+    let mut refusals = Vec::new();
+    for domain in candidates {
+        let service = format!("{domain}/{label}");
+        let output = std::process::Command::new("/bin/launchctl")
+            .args(["kickstart", "-k", &service])
+            .output()
+            .map_err(|error| format!("/bin/launchctl did not run: {error}"))?;
+        if output.status.success() {
+            return Ok(service);
+        }
+        refusals.push(format!(
+            "{service}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Err(refusals.join("; "))
 }
 
 // ---------------------------------------------------------------------------

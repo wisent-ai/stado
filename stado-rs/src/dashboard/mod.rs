@@ -46,6 +46,7 @@
 
 mod fleet_join;
 mod integration;
+mod registry_policy;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::BTreeMap;
@@ -99,13 +100,22 @@ enum Boundary {
     RateLimitVerifier,
     RateLimitState,
     Integration,
+    /// The registry-policy and cleanup routes the desktop app calls.
+    ///
+    /// Added on 2026-09-02, when all four of those routes answered 404 and
+    /// the Swift client that calls them had been written against them for
+    /// some time. Its verifier is ready even when nothing is declared: an
+    /// undeclared boundary refuses every request with `401`, which is what
+    /// "nobody has been granted this" means, and reporting it as unavailable
+    /// would send an operator looking for a broken vault.
+    Registry,
 }
 
 impl Boundary {
     /// Every boundary, in the deterministic order startup validates them.
     /// Also the order the served documents list them in, so an operator
     /// comparing a health document with a startup log reads one sequence.
-    const ALL: [Boundary; 7] = [
+    const ALL: [Boundary; 8] = [
         Boundary::Object,
         Boundary::Release,
         Boundary::Machine,
@@ -113,6 +123,7 @@ impl Boundary {
         Boundary::RateLimitVerifier,
         Boundary::RateLimitState,
         Boundary::Integration,
+        Boundary::Registry,
     ];
 
     /// Which route requires this boundary. Every entry here was verified by
@@ -145,6 +156,9 @@ impl Boundary {
             Boundary::Service => "/api/service/status, /api/service/restart",
             Boundary::RateLimitVerifier | Boundary::RateLimitState => "/api/rate-limit/consume",
             Boundary::Integration => "the integration routes",
+            Boundary::Registry => {
+                "/api/registry.json, /api/registry/policy, /api/cleanup.json, /api/cleanup/run"
+            }
         }
     }
 
@@ -159,6 +173,7 @@ impl Boundary {
             Boundary::RateLimitVerifier => "rate_limit_verifier",
             Boundary::RateLimitState => "rate_limit_state",
             Boundary::Integration => "integration",
+            Boundary::Registry => "registry",
         }
     }
 
@@ -172,6 +187,7 @@ impl Boundary {
             Boundary::RateLimitVerifier => "rate-limit authorization",
             Boundary::RateLimitState => "rate-limit state",
             Boundary::Integration => "integration authorization",
+            Boundary::Registry => "registry authorization",
         }
     }
 }
@@ -216,7 +232,7 @@ struct BoundaryVerdict {
 
 #[derive(Clone, Default)]
 struct BoundaryAvailability {
-    verdicts: [BoundaryVerdict; 7],
+    verdicts: [BoundaryVerdict; 8],
 }
 
 impl BoundaryAvailability {
@@ -376,6 +392,9 @@ fn boundary_timeout(boundary: Boundary) -> Duration {
         }
         Boundary::Service => {
             crate::config::service_api_deployers().map_or(usize::MIN, |items| items.len())
+        }
+        Boundary::Registry => {
+            crate::config::registry_api_clients().map_or(usize::MIN, |items| items.len())
         }
         // These read a fixed, small set of material rather than one item per
         // declaration, so they keep the flat allowance.
@@ -839,6 +858,7 @@ impl Dashboard {
             Boundary::RateLimitVerifier => bounded!(rate_limit::validate_verifier()),
             Boundary::RateLimitState => bounded!(self.rate_limiter.restore()),
             Boundary::Integration => bounded!(integration::validate_startup()),
+            Boundary::Registry => bounded!(crate::skarbiec::validate_registry_verifier()),
         }
     }
 
@@ -1485,6 +1505,33 @@ impl Dashboard {
         }
         if path == "/api/service/status" {
             return Ok(self.get_service_status(request, query).await);
+        }
+        // The registry-policy boundary gates both of these. Its verifier is
+        // ready even when nothing is declared, so an undeclared deployment
+        // refuses here with 401 rather than reporting an outage.
+        if path == "/api/registry.json" {
+            if !self.boundaries_available(&[Boundary::Registry]).await {
+                return Ok(send_json(
+                    http_status("503"),
+                    &json!({"error": "registry authorization unavailable"}),
+                ));
+            }
+            if let Err(response) = registry_policy::authorized(request, "policy-read").await {
+                return Ok(response);
+            }
+            return Ok(registry_policy::get_policy().await);
+        }
+        if path == "/api/cleanup.json" {
+            if !self.boundaries_available(&[Boundary::Registry]).await {
+                return Ok(send_json(
+                    http_status("503"),
+                    &json!({"error": "registry authorization unavailable"}),
+                ));
+            }
+            if let Err(response) = registry_policy::authorized(request, "cleanup-read").await {
+                return Ok(response);
+            }
+            return Ok(registry_policy::get_cleanup());
         }
 
         Ok(empty_response(404, "Not Found"))
@@ -2469,6 +2516,30 @@ impl Dashboard {
         if path == "/api/rate-limit/consume" {
             return self.post_rate_limit_consume(request).await;
         }
+        // Registry-policy writes and janitor runs. Gated on their own
+        // boundary, so a deployment that has declared no client refuses them
+        // with 401 while every other route on this listener is unaffected.
+        if matches!(path, "/api/registry/policy" | "/api/cleanup/run") {
+            if !self.boundaries_available(&[Boundary::Registry]).await {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "registry authorization unavailable"}),
+                );
+            }
+            let action = if path == "/api/registry/policy" {
+                "policy-write"
+            } else {
+                "cleanup-run"
+            };
+            if let Err(response) = registry_policy::authorized(request, action).await {
+                return response;
+            }
+            return if path == "/api/registry/policy" {
+                registry_policy::set_policy(request).await
+            } else {
+                registry_policy::run_cleanup().await
+            };
+        }
         if control_route {
             if path == "/api/service/restart" {
                 let service = match service_name(query) {
@@ -3173,9 +3244,12 @@ fn object_list_from_query(query: &str) -> Result<(String, String), Response> {
     let sentinel = crate::object_store::ObjectRef::new(&raw_namespace, "sentinel")
         .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))?;
     let namespace = sentinel.namespace().to_string();
+    // Leading slashes are noise; a trailing one is the request. See
+    // `ObjectRef::namespace_prefix`: trimming it turned `prefix=queue/` into a
+    // scan of every `queue*` sibling.
     let prefix = query_value(&values, "prefix")
         .unwrap_or_default()
-        .trim_matches('/')
+        .trim_start_matches('/')
         .to_string();
     crate::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)
         .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))?;

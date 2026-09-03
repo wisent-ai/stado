@@ -297,6 +297,27 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Put one unit back on the file its `ProgramArguments` name, and prove
+    /// it landed.
+    ///
+    /// The verb behind `registry doctor`'s `stale-unit-image` row. It refuses
+    /// a unit that is not stale, naming the identity it found, because a
+    /// command that restarts whatever it is pointed at is a restart button.
+    /// It re-reads the image afterwards and exits non-zero if the restart did
+    /// not change it: launchd re-execs the declared path, and on 2026-09-03
+    /// pid 49727 respawned under `KeepAlive` straight back onto the same
+    /// unlinked inode it had just left.
+    ///
+    /// One unit per invocation. There is no `--all`: three stale units is
+    /// three deliberate commands. Local only — which image a process is
+    /// executing is readable only on the machine holding that process.
+    RefreshImage {
+        /// The host's own name for the unit: the launchd label.
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Restart one managed unit, without a full host-recovery pass.
     Restart {
         /// Service name, or the host's own name for the unit.
@@ -1081,6 +1102,9 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
+        ServiceCommands::RefreshImage { name, json } => {
+            crate::cli::service_refresh_image::refresh_image(&name, json).await
+        }
         ServiceCommands::Update {
             name,
             host,

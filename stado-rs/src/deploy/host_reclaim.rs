@@ -176,6 +176,9 @@ const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
 const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
 const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
+/// Whether the operator side could read the queue, and therefore whether the
+/// workdir sweep may run at all.
+const KEEP_LIST_MARK: &str = "@KEEP_LIST@";
 const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
 /// Where queue workdirs live in production: the fixed POSIX temp root plus
 /// whatever the login shell's TMPDIR names (the macOS per-user container).
@@ -269,18 +272,20 @@ before=$(free_kb)
 # scratch (stado-bootstrap-*) is one-off provisioning debris by definition.
 # On 2026-08-19 these trees filled the linux builder to 0 GiB free and the
 # fleet starved on a host that looked merely busy.
-for workroot in @WORK_ROOTS@; do
-  [ -n "$workroot" ] && [ -d "$workroot" ] || continue
-  for entry in "$workroot"/wc-* "$workroot"/stado-bootstrap-*; do
-    [ -d "$entry" ] || continue
-    id=$(basename "$entry")
-    id="${id#wc-}"
-    case " @LIVE_JOBS@ " in
-      *" $id "*) continue ;;
-    esac
-    reclaim "$entry" queue_workdirs
+if [ "@KEEP_LIST@" = yes ]; then
+  for workroot in @WORK_ROOTS@; do
+    [ -n "$workroot" ] && [ -d "$workroot" ] || continue
+    for entry in "$workroot"/wc-* "$workroot"/stado-bootstrap-*; do
+      [ -d "$entry" ] || continue
+      id=$(basename "$entry")
+      id="${id#wc-}"
+      case " @LIVE_JOBS@ " in
+        *" $id "*) continue ;;
+      esac
+      reclaim "$entry" queue_workdirs
+    done
   done
-done
+fi
 printf 'STADO_RECLAIM_STAGE\tqueue_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
@@ -547,7 +552,7 @@ fn superseded_words() -> String {
 /// directory so an executed apply can never leave the fixture.
 pub fn remote_script(
     apply: bool,
-    live_jobs: &[String],
+    live_jobs: Option<&[String]>,
     work_roots: &str,
     target_free_gb: Option<i64>,
 ) -> String {
@@ -556,7 +561,12 @@ pub fn remote_script(
         .map(|value| format!("\"{value}\""))
         .collect::<Vec<String>>()
         .join(" ");
+    // `None` is "nobody could read the queue", and the workdir sweep is then
+    // not run at all. An empty keep-list would mean the opposite — no job is
+    // live, so every workdir is terminal — and that is how a fail-closed
+    // stage becomes a delete-everything stage.
     let live_words = live_jobs
+        .unwrap_or_default()
         .iter()
         .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'))
         .cloned()
@@ -569,6 +579,10 @@ pub fn remote_script(
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
         .replace(AGE_DAYS_MARK, MIN_AGE_DAYS)
         .replace(LIVE_JOBS_MARK, &live_words)
+        .replace(
+            KEEP_LIST_MARK,
+            if live_jobs.is_some() { "yes" } else { "no" },
+        )
         .replace(CLONE_AGE_MINUTES_MARK, CLONE_MIN_AGE_MINUTES)
         .replace(WORK_ROOTS_MARK, work_roots)
         .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
@@ -614,6 +628,10 @@ pub struct Reclamation {
     pub free_kb_after: Option<i64>,
     /// The janitor's canonical report, kept for the per-cleaner rendering.
     pub janitor_plan: Option<Value>,
+    /// Stages that did not run, and why. A stage nobody could judge must say
+    /// so; reporting it as a stage that removed nothing is the same sentence
+    /// as a clean host.
+    pub skipped: Vec<(String, String)>,
 }
 
 /// A marker field that has to be a `df` block count.
@@ -758,6 +776,19 @@ pub fn to_report(target: &ComputeTarget, reclamation: &Reclamation) -> Map<Strin
                 .collect(),
         ),
     );
+    // Named in the receipt, not only on the terminal: a consumer that reads
+    // `stages` alone cannot tell a stage that ran and found nothing from a
+    // stage nobody could judge.
+    report.insert(
+        "skipped".to_string(),
+        Value::Array(
+            reclamation
+                .skipped
+                .iter()
+                .map(|(stage, reason)| json!({"stage": stage, "reason": reason}))
+                .collect(),
+        ),
+    );
     report.insert(
         "free_gb_before".to_string(),
         free(reclamation.free_kb_before),
@@ -851,20 +882,31 @@ pub async fn reclaim_host(
 ) -> Result<(ComputeTarget, Reclamation), DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     // The keep-list for the queue_workdirs stage: jobs still queued or
-    // running are the only ones that may return to their workdirs. Read
-    // best-effort — an unreadable queue store must not turn a disk repair
-    // into an outage — but a read failure keeps EVERY workdir (empty
-    // keep-list would keep none), so the stage fails closed.
+    // running are the only ones that may return to their workdirs.
     //
-    // The store's own sentence travels into the refusal. It used to be
-    // discarded (`Err(_)`), and on 2026-09-03 that cost the release train an
-    // hour and three attempts: `release-capacity` refused with "the queue
-    // store is unreadable" and nothing anywhere said which read failed or
-    // why. The queue held 13 parseable records and `running/` was empty, both
-    // verified object by object through the same CLI, so the sentence was the
-    // only thing that could have named the real failure — and it had been
-    // thrown away at the only place that saw it. A refusal an operator cannot
-    // act on is the defect this fleet keeps paying for.
+    // An unreadable queue store costs exactly that one stage. It used to
+    // refuse the whole reclamation, and on 2026-09-03 that turned a listing
+    // defect into a release outage: a migration created `queue_priority/`
+    // beside `queue/`, the gateway answered `prefix=queue/` with both, the
+    // keep-list could not be built, and `release-capacity` failed the
+    // 0.13.50 train before a single object was published — while the build
+    // caches and superseded trees the pass exists to free were never even
+    // looked at. Skipping the stage keeps every workdir, which is the
+    // fail-closed behaviour this comment always claimed, and says so in the
+    // report instead of deleting blind or refusing everything.
+    //
+    // A stage that skips silently is the other half of that same outage, so
+    // the store's own sentence travels into the skip. It used to be
+    // discarded (`Err(_)`) at the only place that saw it, and that is why the
+    // release train spent an hour and three attempts: nothing anywhere said
+    // which read failed or why. The queue held 13 parseable records and
+    // `running/` was empty, both verified object by object through the same
+    // CLI, so the sentence was the only thing that could have named the real
+    // failure. Carried through, `HTTP 502: upstream unavailable` classes as
+    // `infra_down`, `retryable=true` — which is the truth about a status
+    // `deploy.yml` retries three times — where a discarded error left
+    // `error_code="unknown"`, `retryable=false`. A refusal, or a skip, an
+    // operator cannot act on is the defect this fleet keeps paying for.
     let mut unreadable: Vec<String> = Vec::new();
     let live_jobs = match crate::queue::JobStorage::new().await {
         Ok(store) => {
@@ -886,20 +928,18 @@ pub async fn reclaim_host(
             None
         }
     };
-    let Some(live_jobs) = live_jobs else {
-        return Err(DeployError(format!(
-            "the queue store is unreadable, so the terminal-workdir keep-list cannot be built; \
-             refusing to reclaim workdirs blind — {}",
-            unreadable.join("; ")
-        )));
-    };
     let target_free_gb = target
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.target_free_gb);
     let output = host_channel::run_script(
         &target,
-        &remote_script(apply, &live_jobs, DEFAULT_WORK_ROOTS, target_free_gb),
+        &remote_script(
+            apply,
+            live_jobs.as_deref(),
+            DEFAULT_WORK_ROOTS,
+            target_free_gb,
+        ),
         runner,
     )
     .await?;
@@ -909,5 +949,16 @@ pub async fn reclaim_host(
             "the reclamation did not run",
         )));
     }
-    Ok((target, parse_output(&output.stdout, apply)))
+    let mut reclamation = parse_output(&output.stdout, apply);
+    if live_jobs.is_none() {
+        reclamation.skipped.push((
+            "queue_workdirs".to_string(),
+            format!(
+                "the queue store did not answer, so no workdir could be shown to be terminal; \
+                 every workdir was kept — {}",
+                unreadable.join("; ")
+            ),
+        ));
+    }
+    Ok((target, reclamation))
 }

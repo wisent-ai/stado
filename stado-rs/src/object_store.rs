@@ -87,11 +87,35 @@ impl ObjectRef {
         format!("{ROOT_PREFIX}{}/{}", self.namespace, self.key)
     }
 
+    /// The storage prefix one namespace listing walks.
+    ///
+    /// A trailing `/` is part of the question. It used to be trimmed off, so
+    /// `prefix=queue/` asked the store for `…/probierz/queue` and every
+    /// backend answered with a plain `starts_with`: `queue_priority/` and
+    /// `queue_workdirs/` came back inside a listing of `queue/`. The client
+    /// then refused the whole answer — "Stado object API returned an
+    /// inconsistent object-list item", correctly, because those keys are not
+    /// under the prefix it asked for — and `JobStorage::list_jobs("queue")`
+    /// became permanently unreadable against this fleet's 9,026-object store.
+    ///
+    /// That is what stopped the release trains on 2026-09-03: `stado host
+    /// reclaim` builds its keep-list from `queue/` and `running/`, and back
+    /// then it refused the whole reclamation when the store could not be
+    /// read, so every `release-capacity` barrier failed on it — 0.13.49 and
+    /// 0.13.50 both died there with publication never attempted. Today an
+    /// unreadable store costs only the `queue_workdirs` stage, which skips
+    /// and names the store's own error.
+    ///
+    /// So the boundary the caller wrote is the boundary the store is asked
+    /// about, and a caller that deliberately passes a partial name still gets
+    /// the stem match it asked for.
     pub fn namespace_prefix(namespace: &str, prefix: &str) -> Result<String, StorageError> {
         let sentinel = Self::new(namespace, "sentinel")?;
-        let prefix = prefix.trim_matches('/');
-        if (!prefix.is_empty()
-            && prefix
+        let prefix = prefix.trim_start_matches('/');
+        let bounded = prefix.ends_with('/');
+        let inner = prefix.trim_end_matches('/');
+        if (!inner.is_empty()
+            && inner
                 .split('/')
                 .any(|part| part.is_empty() || part == "." || part == ".."))
             || prefix.contains('\0')
@@ -99,10 +123,12 @@ impl ObjectRef {
         {
             return Err(StorageError::PathEscape(format!("{namespace}/{prefix}")));
         }
-        Ok(if prefix.is_empty() {
+        Ok(if inner.is_empty() {
             format!("{ROOT_PREFIX}{}/", sentinel.namespace)
+        } else if bounded {
+            format!("{ROOT_PREFIX}{}/{inner}/", sentinel.namespace)
         } else {
-            format!("{ROOT_PREFIX}{}/{prefix}", sentinel.namespace)
+            format!("{ROOT_PREFIX}{}/{inner}", sentinel.namespace)
         })
     }
 
