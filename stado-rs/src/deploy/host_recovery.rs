@@ -221,12 +221,144 @@ report_system_agent() {
   printf 'STADO_AGENT\\t%s\\tneeds_privileged_bootstrap\\n' \"$label\"
 }
 
+# The serving port every consumer's configuration names, and the one thing in
+# this pass that takes root. It is guarded by the declaration and by a probe,
+# in that order: a port that is already answering is left completely alone, so
+# this can never collide with a live release-agent proxy. Only a declared
+# stable bind that nothing holds gets its legacy daemon bootstrapped, which is
+# the same `launchctl bootstrap system <plist>` the release agent's own
+# `restore_legacy` runs when it hands the port back.
+recover_stable_bind() {
+  product=\"$1\"
+  bind=\"$2\"
+  plist=\"$3\"
+  label=\"$4\"
+  candidates=\"$5\"
+  port=\"${bind##*:}\"
+  if /usr/sbin/lsof -nP -iTCP:\"$port\" -sTCP:LISTEN >/dev/null 2>&1; then
+    printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'already_bound'
+    return
+  fi
+  # A live candidate means a blue-green rollout is mid-flight or settled with
+  # the legacy label AS the candidate: on this host, kickstarting that label
+  # restarted the running Skarbiec (pid 15554 -> 83485) and moved nothing,
+  # because the port it binds is the candidate. The actor that publishes a
+  # stable bind is the release agent and only the release agent, so when a
+  # candidate answers this stage says so and stops.
+  for candidate in $candidates; do
+    if /usr/sbin/lsof -nP -iTCP:\"$candidate\" -sTCP:LISTEN >/dev/null 2>&1; then
+      printf 'STADO_STABLE_BIND\\t%s\\t%s\\tcandidate_live:%s\\n' \"$product\" \"$bind\" \"$candidate\"
+      return
+    fi
+  done
+  if [ ! -f \"$plist\" ]; then
+    printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'refused:missing_plist'
+    return
+  fi
+  # bootstrap, enable, kickstart — the same order `recover_agent` uses above,
+  # and every step is tried regardless of the previous one's status. launchd
+  # answers `Bootstrap failed: 5: Input/output error` both for a plist it
+  # cannot read and for a job it already holds, and `release_agent`'s own
+  # `restore_legacy` treats 5 as success for exactly that reason. A job that is
+  # already bootstrapped but not running is started by `kickstart -k` and by
+  # nothing else, so a stage that stopped at the bootstrap status would report
+  # a refusal for the case it can actually fix.
+  detail=$(/usr/bin/sudo -n /bin/launchctl bootstrap system \"$plist\" 2>&1)
+  rc=$?
+  /usr/bin/sudo -n /bin/launchctl enable \"system/$label\" >/dev/null 2>&1 || true
+  kick=$(/usr/bin/sudo -n /bin/launchctl kickstart -k \"system/$label\" 2>&1)
+  kick_rc=$?
+  if [ \"$rc\" -ne 0 ] && [ \"$kick_rc\" -eq 0 ]; then
+    rc=0
+    detail=\"$kick\"
+  fi
+  /bin/sleep 5
+  if /usr/sbin/lsof -nP -iTCP:\"$port\" -sTCP:LISTEN >/dev/null 2>&1; then
+    printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'restored'
+    return
+  fi
+  detail=$(printf '%s' \"$detail\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  printf 'STADO_STABLE_BIND\\t%s\\t%s\\trefused:bootstrap_%s:%s\\n' \"$product\" \"$bind\" \"$rc\" \"${detail:-launchctl said nothing and the port is still unbound}\"
+}
+
+@STABLE_BIND_ROWS@
+
 @AGENT_ROWS@
 /bin/sleep 5
 disk_after=$(/bin/df -k / 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}')
 printf 'STADO_RECOVER\\tok\\t%s\\t%s\\t%s\\t%s\\n' \"$host\" \"${disk_before:-0}\" \"${disk_after:-0}\" \"$cleanup_status\"
 if [ -n \"$cleanup_json\" ]; then printf 'STADO_CLEANUP\\t%s\\n' \"$cleanup_json\"; fi
 ";
+
+/// One product's stable serving port on this host, and the legacy launchd
+/// daemon that can hold it when nothing else does.
+///
+/// `release_control.products.<product>.targets.<host>` declares both:
+/// `stable_bind` is the port every consumer's configuration names, and
+/// `legacy_launchd_plist` is the unit that served it before the release
+/// agent's blue-green proxy took it over. The pair exists for exactly that
+/// handoff — `release_agent::stop_legacy` boots the label out on the way in
+/// and `restore_legacy` bootstraps it back on the way out — and this is the
+/// operator side of the same handoff, for the case where the agent cannot
+/// come in at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StableBindPlan {
+    /// The product the port belongs to, for the report.
+    pub product: String,
+    /// `host:port`, as the registry declares it.
+    pub bind: String,
+    /// The system LaunchDaemon that binds it directly.
+    pub plist: String,
+    /// That daemon's label, for `launchctl enable`.
+    pub label: String,
+    /// The blue-green candidate ports this product may be serving on instead.
+    /// A live one means the release agent owns the handoff and this pass must
+    /// keep its hands off the label.
+    pub candidate_ports: Vec<u16>,
+}
+
+/// The stable bind is already served; the pass touched nothing.
+pub const STABLE_BIND_ALREADY_BOUND: &str = "already_bound";
+/// The legacy daemon was bootstrapped and the port answers now.
+pub const STABLE_BIND_RESTORED: &str = "restored";
+/// A blue-green candidate is serving, so the release agent owns the handoff
+/// and this pass touched nothing. Carries the candidate port after a colon.
+pub const STABLE_BIND_CANDIDATE_LIVE: &str = "candidate_live";
+
+/// Every stable bind this host's `release_control` declares together with a
+/// legacy daemon that can hold it.
+///
+/// A product that declares no `stable_bind` (a `replace` target) and one whose
+/// target names no `legacy_launchd_plist` are both skipped: there is nothing
+/// this pass could bootstrap for them, and a port it has no way to restore
+/// reported beside the one it can is noise in front of the answer.
+pub fn plan_stable_binds(document: &Value, target: &ComputeTarget) -> Vec<StableBindPlan> {
+    let Ok(Some(control)) = crate::release_control::control(document) else {
+        return Vec::new();
+    };
+    let mut plans: Vec<StableBindPlan> = control
+        .products
+        .iter()
+        .filter_map(|(product, policy)| {
+            let policy_target = policy.targets.get(&target.name)?;
+            let bind = policy_target.stable_bind.as_deref()?;
+            let plist = policy_target.legacy_launchd_plist.as_deref()?;
+            let label = policy_target.legacy_launchd_label.as_deref()?;
+            Some(StableBindPlan {
+                product: product.clone(),
+                bind: bind.to_string(),
+                plist: plist.to_string(),
+                label: label.to_string(),
+                candidate_ports: policy_target
+                    .candidate_ports
+                    .map(|ports| ports.to_vec())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+    plans.sort_by(|left, right| left.product.cmp(&right.product));
+    plans
+}
 
 /// Python `_identity_values`: normalized names, hostname aliases, and the
 /// host part of the SSH destination; empty values dropped, sorted.
@@ -254,6 +386,20 @@ pub fn identity_values(target: &ComputeTarget) -> Vec<String> {
 /// no business running `bootout` against a system daemon on the way to
 /// reporting a success it did not have.
 pub fn remote_script(target: &ComputeTarget) -> String {
+    remote_script_with_stable_binds(target, &[])
+}
+
+/// [`remote_script`] with the stable-bind rows this host's `release_control`
+/// declares.
+///
+/// Separate because those rows come from the registry document while every
+/// other substitution comes from the target alone: a caller holding only the
+/// target still gets a correct pass, and one holding the document also gets
+/// the stage that can put a serving port back.
+pub fn remote_script_with_stable_binds(
+    target: &ComputeTarget,
+    stable_binds: &[StableBindPlan],
+) -> String {
     let identity_words = identity_values(target)
         .iter()
         .map(|value| shlex_quote(value))
@@ -276,8 +422,30 @@ pub fn remote_script(target: &ComputeTarget) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let stable_bind_rows = stable_binds
+        .iter()
+        .map(|plan| {
+            format!(
+                "recover_stable_bind {} {} {} {} {}",
+                shlex_quote(&plan.product),
+                shlex_quote(&plan.bind),
+                shlex_quote(&plan.plist),
+                shlex_quote(&plan.label),
+                shlex_quote(
+                    &plan
+                        .candidate_ports
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     REMOTE_SCRIPT_TEMPLATE
         .replace("@DOMAIN_RESOLVER@", crate::deploy::service::DOMAIN_RESOLVER)
+        .replace("@STABLE_BIND_ROWS@", &stable_bind_rows)
         .replace("@IDENTITY_WORDS@", &identity_words)
         .replace("@WC_WORDS@", &wc_words)
         .replace("@AGENT_ROWS@", &agent_rows)
@@ -318,10 +486,16 @@ pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, Deplo
     );
     report.insert("status".to_string(), json!("failed"));
     report.insert("agents".to_string(), json!(Map::new()));
+    report.insert("stable_binds".to_string(), json!(Map::new()));
     for line in stdout.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.first() == Some(&"STADO_AGENT") && fields.len() == 3 {
             report["agents"][fields[1]] = json!(fields[2]);
+        } else if fields.first() == Some(&"STADO_STABLE_BIND") && fields.len() == 4 {
+            // Keyed by the bind, not the product: the port is what every
+            // consumer's configuration names and what an operator greps for
+            // after reading a 503.
+            report["stable_binds"][fields[2]] = json!({"product": fields[1], "verdict": fields[3]});
         } else if fields.first() == Some(&"STADO_DOMAIN") && fields.len() == 4 {
             report.insert(
                 "launchd_domain".to_string(),
@@ -527,9 +701,13 @@ pub async fn recover_host_with_registry(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let target = resolve_target(registry, target_name)?;
+    // The stable-bind stage is the one part of this pass that needs the
+    // registry document rather than the target, and it is the part that can
+    // put a serving port back after a roll left it unbound.
+    let stable_binds = plan_stable_binds(&registry.to_document(), target);
     let output = host_channel::run_script_with_timeout(
         target,
-        &remote_script(target),
+        &remote_script_with_stable_binds(target, &stable_binds),
         Duration::from_secs(TIMEOUT_SECONDS),
         runner,
     )
