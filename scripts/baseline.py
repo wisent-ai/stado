@@ -9,6 +9,7 @@ import json
 import platform
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -212,6 +213,10 @@ def best(stado: Path, output: Path | None) -> str:
     # platform here made the Linux publisher depend on the later Darwin
     # control-plane job, while that job depends on this publisher succeeding.
     required_platforms = (release_platform,)
+    # Coordinates that carry a manifest and not the archive it names. Kept so
+    # the skip is reported as a fact rather than leaving a half-published
+    # version to surface as a 404 in somebody else's pull request.
+    partial: list[str] = []
     for version in sorted(versions, key=lambda value: version_key(f"v{value}"), reverse=True):
         states = {
             candidate: state(
@@ -227,6 +232,50 @@ def best(stado: Path, output: Path | None) -> str:
             raise SystemExit(f"release channel returned unknown platform states for {version}: {unexpected}")
         if any(verdict != "present" for verdict in states.values()):
             continue
+        # A manifest is not a publication.
+        #
+        # This loop used to select on the manifest alone and fetch the archive
+        # afterwards, which meant the highest version with a manifest won even
+        # when its bytes were missing. On 2026-09-03 `0.14.0` published a
+        # linux-amd64 manifest whose archive was absent, `--best` chose it, and
+        # EVERY `version-check` run in the repository died on
+        # `HTTP 404 Not Found: {"state":"absent","uri":".../stado-v0.14.0-linux-amd64.tar.gz"}`
+        # — on this branch and on `main` alike, so nothing could merge at all.
+        # The gate still measures exactly what it measured before; the
+        # difference is that the baseline it measures against exists.
+        #
+        # Release objects are immutable, so a partial coordinate can never be
+        # completed. Skipping to the next whole version is the only thing that
+        # can be done with one, and it has to be said out loud.
+        archives = {
+            candidate: state(
+                stado,
+                f"{release_base(version, candidate)}/stado-v{version}-{candidate}.tar.gz",
+            )
+            for candidate in required_platforms
+        }
+        unknown = {
+            name: verdict for name, verdict in archives.items() if verdict not in {"present", "absent"}
+        }
+        if unknown:
+            raise SystemExit(f"release channel returned unknown archive states for {version}: {unknown}")
+        missing = sorted(name for name, verdict in archives.items() if verdict != "present")
+        if missing:
+            partial.extend(f"{version}/{name}" for name in missing)
+            print(
+                f"{version} is half published, skipping: the release manifest is present and the "
+                f"archive it names is absent for {', '.join(missing)}. Release objects are "
+                f"immutable, so this coordinate cannot be completed; looking for an older whole "
+                f"release to build the baseline from.",
+                file=sys.stderr,
+            )
+            continue
+        if partial:
+            print(
+                f"baseline built from {version}; skipped {len(partial)} half-published "
+                f"coordinate(s): {', '.join(partial)}",
+                file=sys.stderr,
+            )
         if output is None:
             return f"stado:{version}"
         with tempfile.TemporaryDirectory(prefix="stado-baseline-") as temporary:
@@ -241,6 +290,33 @@ def best(stado: Path, output: Path | None) -> str:
             baseline = surface_from_release(stado, version, release_platform, root)
         output.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
         return f"stado:{version}"
+
+    # A coordinate whose archive is absent has published nothing this can be
+    # built from, and never will: release objects are immutable. So it counts
+    # as absent here and the channel is still empty, which is exactly the
+    # state the gate was in when it last passed — `main` at b6695579 printed
+    # `bootstrap:0.14.0`, "The release channel is empty", at 05:27, before the
+    # 0.14.0 linux-amd64 manifest appeared without its archive.
+    #
+    # The skipped coordinates are named on stderr rather than spliced into the
+    # baseline document, because `scripts/version_check.sh` asserts the
+    # bootstrap `source` string byte for byte. "The channel was empty" and
+    # "the channel held a version nobody can fetch" are different facts, and
+    # the log is where the second one has to be readable.
+    partial_note = (
+        ""
+        if not partial
+        else (
+            f"; skipped {len(partial)} half-published coordinate(s) whose manifest is present and "
+            f"archive absent, which immutability makes permanent: {', '.join(partial)}"
+        )
+    )
+    if partial:
+        print(
+            f"release channel holds no whole release{partial_note}. Bootstrapping the baseline "
+            "from the candidate binary, as it does on an empty channel.",
+            file=sys.stderr,
+        )
 
     # Bootstrap exactly once when the channel has no verified release. There
     # is no older immutable artifact to compare against; the binary compiled
@@ -259,6 +335,10 @@ def best(stado: Path, output: Path | None) -> str:
             json.dumps(
                 {
                     "version": current,
+                    # Byte-exact: `scripts/version_check.sh` asserts this
+                    # string literally, and a bootstrap baseline whose source
+                    # is anything else is refused. The skipped coordinates are
+                    # reported on stderr instead of being spliced in here.
                     "source": "bootstrap from the candidate binary; release channel was empty",
                     "surface": commands,
                 },
@@ -268,7 +348,9 @@ def best(stado: Path, output: Path | None) -> str:
             encoding="utf-8",
         )
         return f"bootstrap:{current}"
-    raise SystemExit("release channel contains no complete verified Stado release")
+    raise SystemExit(
+        f"release channel contains no complete verified Stado release{partial_note}"
+    )
 
 
 def main() -> None:
