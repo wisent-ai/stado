@@ -474,6 +474,24 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
     },
     ApprovedCommand {
         argv: &[
+            "/bin/ps", "ax", "-o", "pid", "-o", "rss", "-o", "pcpu", "-o", "comm",
+        ],
+        why: "reports resident memory per process, by executable name only. The two `ps` \
+              entries around it show identity, parentage and elapsed time but never a byte \
+              count, so the one question a thrashing host forces - which process ate the \
+              memory - had no answer in this table at all. Added 2026-09-03: \
+              charless-mac-mini was holding ~2.9 GB in the compressor with ~88 MB free and \
+              3,277,146 swapouts, which stalled every fresh ssh session on it for 12-25 s \
+              and tripped an unrelated preflight's hard timeout; `vm_stat` proved the \
+              pressure was real but could not name a single owner of it. `-o rss` is a \
+              kernel counter and `-o comm` is the executable's name; `-o command` - the \
+              full argv, where tokens and passwords are passed - is deliberately NOT in \
+              this table and cannot be reached through it. The selector is fixed to `ax` \
+              and takes no pid, user, or file argument, so it cannot be pointed at \
+              anything narrower or anywhere else",
+    },
+    ApprovedCommand {
+        argv: &[
             "/bin/ps",
             "axww",
             "-o",
