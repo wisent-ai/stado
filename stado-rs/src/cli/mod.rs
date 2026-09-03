@@ -2266,6 +2266,18 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Verify, and with --repair install, the mobile automation runtime
+    /// TARGET's registry entry declares it needs: the Appium server at its
+    /// declared version, each declared driver, and Android platform-tools.
+    #[command(name = "mobile-runtime")]
+    MobileRuntime {
+        target: String,
+        /// Install what the declaration asks for, then verify again.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's effective Stado configuration through its fleet channel.
     ConfigShow { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
@@ -3160,6 +3172,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 repair,
                 json,
             } => host::weles_browser_runtime(&target, &components, repair, json).await,
+            HostCommands::MobileRuntime {
+                target,
+                repair,
+                json,
+            } => host::mobile_runtime(&target, repair, json).await,
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,

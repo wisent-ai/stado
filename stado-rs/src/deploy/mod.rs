@@ -114,6 +114,7 @@ pub mod inference;
 pub mod inference_process;
 pub mod inference_routes;
 pub mod local_install;
+pub mod mobile_runtime;
 pub mod products;
 pub mod reconcile;
 pub mod service;

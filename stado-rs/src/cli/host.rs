@@ -6701,6 +6701,89 @@ pub async fn weles_browser_runtime(
     }
 }
 
+/// `stado host mobile-runtime TARGET [--repair] [--json]` — verify, and
+/// optionally install, the mobile automation runtime a host declares.
+///
+/// A host that declares no runtime exits zero after saying so. That is not a
+/// pass rounded out of silence: `mobile_runtime` absent means the host is not
+/// a mobile placement, and the alternative — failing every host in the fleet
+/// against a runtime two of them need — is how an operator learns to write
+/// `|| true` after the command, which is the argument
+/// [`crate::host_software`] makes about programs nothing declares.
+pub async fn mobile_runtime(target: &str, repair: bool, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let Some(declared) = crate::deploy::mobile_runtime::requirement(&resolved).cloned() else {
+        if json {
+            print_json(&json!({
+                "status": crate::deploy::mobile_runtime::OK_STATUS,
+                "target": resolved.name,
+                "runtime": "undeclared",
+                "components": [],
+            }));
+        } else {
+            println!(
+                "{}: declares no mobile_runtime, so nothing is required of it here. Declare one \
+                 in the registry target to place a mobile capture family on this host",
+                resolved.name
+            );
+        }
+        return Ok(());
+    };
+    let mut report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let mut installed: Vec<String> = Vec::new();
+    if repair {
+        installed = crate::deploy::mobile_runtime::repair(&resolved, &declared, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // Re-verify: the host's own answer decides, not the installer's.
+        report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+
+    if json {
+        let mut object = report.to_report(&resolved.name);
+        object.insert("repaired".to_string(), json!(installed));
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+    } else {
+        println!("host:     {}", resolved.name);
+        println!("runtime:  {}", report.verdict());
+        for line in &installed {
+            println!("repair:   {line}");
+        }
+        super::table::print(
+            &["COMPONENT", "DECLARED", "OBSERVED", "STATE", "RESOLVED AT"],
+            &report
+                .components
+                .iter()
+                .map(|component| {
+                    vec![
+                        component.name.clone(),
+                        component.declared.clone(),
+                        if component.observed.is_empty() {
+                            "-".to_string()
+                        } else {
+                            component.observed.clone()
+                        },
+                        component.state.clone(),
+                        component.path.clone(),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    match report.failure(&resolved.name) {
+        Some(reason) => Err(CmdError::click(reason)),
+        None => Ok(()),
+    }
+}
+
 /// What one `host capability-route` invocation asks for.
 pub struct CapabilityRouteRequest<'a> {
     pub target: &'a str,
