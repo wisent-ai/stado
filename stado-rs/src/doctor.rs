@@ -439,6 +439,22 @@ fn storage_round_trip_deadline() -> Duration {
     PROBE_TIMEOUT * 4
 }
 
+/// The registry read crosses the resolver's forward, and a forward that has
+/// gone cold is declared to need [`crate::cli::resolver::TUNNEL_OPEN_BUDGET`]
+/// before it accepts its first connection. Bounding this probe at the flat
+/// allowance measured the channel's cold start instead of the registry: on
+/// 2026-09-03 `stado registry pull` answered in 5.4s on a warm channel and
+/// 35.9s after seventy seconds of idling, so `registry FAIL probe did not
+/// answer within 8s` was the verdict on a registry that was answering, and it
+/// failed the 0.13.52 deployment preflight and with it the release.
+///
+/// So the budget is the transport's declared establishment allowance plus one
+/// ordinary probe allowance for the read itself, and the numbers come from the
+/// two declarations rather than from a third one written here.
+fn registry_probe_deadline() -> Duration {
+    crate::cli::resolver::TUNNEL_OPEN_BUDGET.saturating_add(PROBE_TIMEOUT)
+}
+
 /// Per-item allowance for the gateway-auth sweep, multiplied by the number of
 /// items the four verifier mappings actually declare.
 fn object_auth_deadline() -> Duration {
@@ -573,8 +589,9 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
             check_vm_identity()
         },),
-        selected(
+        selected_within(
             scope,
+            registry_probe_deadline(),
             REGISTRY_ID,
             REGISTRY_TITLE,
             REGISTRY_REMEDY,
