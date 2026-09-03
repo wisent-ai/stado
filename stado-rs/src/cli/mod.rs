@@ -1326,6 +1326,20 @@ enum HostCommands {
         #[arg(long)]
         print: bool,
     },
+    /// The unit ids the registry declares for THIS host, one per line.
+    ///
+    /// What the health beacon must ask about. The collector's list was an
+    /// operator-typed `WC_HEALTH_UNITS`, so a service the registry declared
+    /// and the beacon never watched read as a unit that does not exist:
+    /// `registry doctor` reported `missing-plist` for
+    /// `com.wisent.compute.service.stado-resolver.service.service` on
+    /// ubuntu-server-rtx-pro-6000 while that unit was active with a live pid.
+    ///
+    /// Prints nothing and succeeds when this machine is not in the registry or
+    /// the registry cannot be read: a beacon that fails to collect reports
+    /// nothing at all, which is worse than reporting the operator's own list.
+    #[command(name = "beacon-units")]
+    BeaconUnits,
     /// Recover a registry-managed macOS host through its approved channel.
     Recover {
         target: String,
@@ -2734,6 +2748,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::PublishBeacon { source, print } => {
                 host::publish_beacon(&source, print).await
             }
+            HostCommands::BeaconUnits => host::beacon_units().await,
             HostCommands::Recover {
                 target,
                 bundled_registry,

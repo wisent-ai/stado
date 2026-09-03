@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::deploy::{host_channel, host_disk, service, Runner};
+use crate::deploy::{host_channel, host_disk, local_install, service, Runner};
 use crate::queue::copy::Endpoint;
 use crate::targets::{ComputeTarget, Registry};
 
@@ -176,6 +176,9 @@ pub const ORPHAN_CHECK: &str = "loaded-job-has-a-unit-file";
 pub const RESTART_CHECK: &str = "job-runs-are-work-not-a-loop";
 pub const SHADOW_CHECK: &str = "path-resolves-the-delivered-binary";
 pub const UNIT_ENV_CHECK: &str = "unit-declares-the-environment-its-program-reads";
+/// The declared half of [`PREFIX_CHECK`]: a systemd unit name carries its
+/// `.service` suffix once, or it names a unit nobody wrote.
+pub const SUFFIX_CHECK: &str = "unit-name-carries-its-suffix-once";
 
 /// The label prefix this fleet's own installer mints.
 ///
@@ -221,6 +224,15 @@ pub async fn sweep(runner: &Runner) -> Sweep {
     // The store-addressing check is answered from configuration alone, so it
     // runs even when every host is unreachable.
     replica_addressing(&mut result);
+    // Declared-name checks are answered from the registry alone, so they run
+    // for every target: hosts with no slots, and hosts that answer nothing.
+    // Deliberately not inside `host_findings`, which returns before any of its
+    // checks when the host's loaded-unit read fails — and a host carrying a
+    // doubled unit name is exactly the host whose units cannot be read, so
+    // placing it there measured zero subjects on the two hosts that had the
+    // defect. A check that only runs where the defect is absent is the shape
+    // this module exists to refuse.
+    declared_names(&registry, &mut result);
     for target in registry.targets.iter().filter(|target| target.slots > 0) {
         sweep_host(&registry, target, runner, &mut result).await;
     }
@@ -248,6 +260,37 @@ async fn sweep_host(
             target.name.clone(),
             format!("did not answer within {}s", HOST_TIMEOUT.as_secs()),
         )),
+    }
+}
+
+/// Every check answered from the registry document alone.
+fn declared_names(registry: &Registry, result: &mut Sweep) {
+    let mut findings = Vec::new();
+    let mut suffixes = 0_usize;
+    let mut labels = 0_usize;
+    for target in &registry.targets {
+        doubled_suffix(target, &mut findings, &mut suffixes);
+        declared_doubled_prefix(target, &mut findings, &mut labels);
+    }
+    result.measured += 1;
+    for finding in findings.drain(..) {
+        result.record(finding);
+    }
+    for (check, measured, population) in [
+        (SUFFIX_CHECK, suffixes, "declared systemd unit(s)"),
+        (PREFIX_CHECK, labels, "declared launchd label(s)"),
+    ] {
+        result.notes.push(format!(
+            "measured {check} across the registry: {measured} {population}{}",
+            if measured == 0 {
+                " — ZERO, so this check proved nothing"
+            } else {
+                ""
+            }
+        ));
+        result
+            .measurements
+            .push(Measurement::new(check, None, measured as u64));
     }
 }
 
@@ -361,6 +404,95 @@ fn doubled_prefix(
             command: format!(
                 "stado service label-print {} --host {} to see what it holds, then stado service bootout {} --host {} --domain <the domain it is loaded in>",
                 unit.label, target.name, unit.label, target.name
+            ),
+        });
+    }
+}
+
+/// A systemd unit name carries its `.service` suffix once.
+///
+/// [`doubled_prefix`] reads what launchd HOLDS; this reads what the registry
+/// DECLARES, because the population that matters here is the declaration: a
+/// doubled name is written once and then read by everything.
+///
+/// On 2026-09-03 a resolver deploy recorded
+/// `com.wisent.compute.service.stado-resolver.service.service` on
+/// ubuntu-server-rtx-pro-6000. The unit is real and active — `systemctl --user
+/// is-active` answers yes and `service ensure` restarts it in place — so the
+/// cost is not a dead service; it is that the fleet now carries a name nothing
+/// else in it agrees with, and the registry's `services` array validated only
+/// that a service's `host_heuristic` matched its target's, so the name itself
+/// was never checked by anything.
+///
+/// The remediation is deliberately not `retire`: that command refuses a unit
+/// that is still running, correctly, and this unit is running. What closes it
+/// is asserting the correct name and then removing the old one.
+fn doubled_suffix(target: &ComputeTarget, out: &mut Vec<Finding>, measured: &mut usize) {
+    for service in service::declared_services(target) {
+        if service.kind != service::KIND_SYSTEMD {
+            continue;
+        }
+        *measured += 1;
+        let Some(stem) = service.unit.strip_suffix(local_install::SYSTEMD_SUFFIX) else {
+            continue;
+        };
+        if !stem.ends_with(local_install::SYSTEMD_SUFFIX) {
+            continue;
+        }
+        out.push(Finding {
+            check: SUFFIX_CHECK,
+            subject: format!("{}:{}", target.name, service.unit),
+            declared: format!(
+                "one {} suffix per unit name",
+                local_install::SYSTEMD_SUFFIX
+            ),
+            observed: format!(
+                "the name already ended in the suffix, so it was appended twice: the real unit is {stem}"
+            ),
+            command: format!(
+                "stado service ensure {name} --host {host} --reason 'name the unit once' installs the correct name and starts it, then stado service remove {unit} --host {host} drops the doubled one; retire refuses it while it runs",
+                name = service.name,
+                host = target.name,
+                unit = service.unit
+            ),
+        });
+    }
+}
+
+/// The prefix rule, on what the registry DECLARES.
+///
+/// [`doubled_prefix`] reads the labels launchd has LOADED and that the registry
+/// does not declare, which is the population the #286 respawner lived in. A
+/// label the registry DOES declare is in neither that population nor any
+/// other, so `com.wisent.compute.service.com.wisent.stado-host-health-api` and
+/// its `-forward` sibling sat declared, loaded and unmeasured on lukasz-macbook
+/// while the rule that forbids them was already written down. Same comparison,
+/// same check id: it is one rule, and which list a name came from does not
+/// change whether it carries the prefix twice.
+fn declared_doubled_prefix(target: &ComputeTarget, out: &mut Vec<Finding>, measured: &mut usize) {
+    for service in service::declared_services(target) {
+        if service.label.is_empty() {
+            continue;
+        }
+        *measured += 1;
+        let Some(rest) = service.label.strip_prefix(MINTED_PREFIX) else {
+            continue;
+        };
+        if !rest.starts_with("com.wisent.") {
+            continue;
+        }
+        out.push(Finding {
+            check: PREFIX_CHECK,
+            subject: format!("{}:{}", target.name, service.label),
+            declared: format!("one {MINTED_PREFIX} prefix per label"),
+            observed: format!(
+                "the registry declares it with the prefix minted onto a name that already carried one: the real name is {rest}"
+            ),
+            command: format!(
+                "stado service ensure {name} --host {host} --reason 'name the unit once' installs the correct label, then stado service remove {label} --host {host} drops the doubled one",
+                name = service.name,
+                host = target.name,
+                label = service.label
             ),
         });
     }
