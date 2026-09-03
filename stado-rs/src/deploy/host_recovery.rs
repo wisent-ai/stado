@@ -233,11 +233,24 @@ recover_stable_bind() {
   bind=\"$2\"
   plist=\"$3\"
   label=\"$4\"
+  candidates=\"$5\"
   port=\"${bind##*:}\"
   if /usr/sbin/lsof -nP -iTCP:\"$port\" -sTCP:LISTEN >/dev/null 2>&1; then
     printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'already_bound'
     return
   fi
+  # A live candidate means a blue-green rollout is mid-flight or settled with
+  # the legacy label AS the candidate: on this host, kickstarting that label
+  # restarted the running Skarbiec (pid 15554 -> 83485) and moved nothing,
+  # because the port it binds is the candidate. The actor that publishes a
+  # stable bind is the release agent and only the release agent, so when a
+  # candidate answers this stage says so and stops.
+  for candidate in $candidates; do
+    if /usr/sbin/lsof -nP -iTCP:\"$candidate\" -sTCP:LISTEN >/dev/null 2>&1; then
+      printf 'STADO_STABLE_BIND\\t%s\\t%s\\tcandidate_live:%s\\n' \"$product\" \"$bind\" \"$candidate\"
+      return
+    fi
+  done
   if [ ! -f \"$plist\" ]; then
     printf 'STADO_STABLE_BIND\\t%s\\t%s\\t%s\\n' \"$product\" \"$bind\" 'refused:missing_plist'
     return
@@ -298,12 +311,19 @@ pub struct StableBindPlan {
     pub plist: String,
     /// That daemon's label, for `launchctl enable`.
     pub label: String,
+    /// The blue-green candidate ports this product may be serving on instead.
+    /// A live one means the release agent owns the handoff and this pass must
+    /// keep its hands off the label.
+    pub candidate_ports: Vec<u16>,
 }
 
 /// The stable bind is already served; the pass touched nothing.
 pub const STABLE_BIND_ALREADY_BOUND: &str = "already_bound";
 /// The legacy daemon was bootstrapped and the port answers now.
 pub const STABLE_BIND_RESTORED: &str = "restored";
+/// A blue-green candidate is serving, so the release agent owns the handoff
+/// and this pass touched nothing. Carries the candidate port after a colon.
+pub const STABLE_BIND_CANDIDATE_LIVE: &str = "candidate_live";
 
 /// Every stable bind this host's `release_control` declares together with a
 /// legacy daemon that can hold it.
@@ -329,6 +349,10 @@ pub fn plan_stable_binds(document: &Value, target: &ComputeTarget) -> Vec<Stable
                 bind: bind.to_string(),
                 plist: plist.to_string(),
                 label: label.to_string(),
+                candidate_ports: policy_target
+                    .candidate_ports
+                    .map(|ports| ports.to_vec())
+                    .unwrap_or_default(),
             })
         })
         .collect();
@@ -402,11 +426,19 @@ pub fn remote_script_with_stable_binds(
         .iter()
         .map(|plan| {
             format!(
-                "recover_stable_bind {} {} {} {}",
+                "recover_stable_bind {} {} {} {} {}",
                 shlex_quote(&plan.product),
                 shlex_quote(&plan.bind),
                 shlex_quote(&plan.plist),
-                shlex_quote(&plan.label)
+                shlex_quote(&plan.label),
+                shlex_quote(
+                    &plan
+                        .candidate_ports
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
             )
         })
         .collect::<Vec<_>>()
