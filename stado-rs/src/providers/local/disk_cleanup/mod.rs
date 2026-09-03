@@ -146,6 +146,41 @@ impl JanitorError {
             message: message.to_string(),
         }
     }
+    /// This build refused a WELL-FORMED registry: the document parsed, and
+    /// declares something this binary has no implementation for.
+    ///
+    /// Distinct from [`JanitorError::value`] because the journal entry is the
+    /// operator's only signal, and `policy:ValueError` says "the registry is
+    /// invalid" — which was false for all 8348 refusals between
+    /// 2026-08-20 and 2026-09-02. The registry was valid; the running process
+    /// was older than it. Three build eras refused today's document for three
+    /// different reasons (an unknown cleaner name, then a changed required
+    /// field set), each indistinguishable in the journal from a corrupt file,
+    /// and each cleared only by an unrelated restart onto a newer build.
+    ///
+    /// `NotImplementedError` keeps the file's convention — codes are Python
+    /// exception TYPE NAMES, and this is the builtin Python raises for an
+    /// operation the running code does not implement. It is also strictly
+    /// more specific than the `RuntimeError` it derives from, which this
+    /// crate already spends on HTTP and state-machine failures elsewhere.
+    ///
+    /// The distinction is the CODE, not the area. The area is the janitor's
+    /// coarse lifecycle stage (`runtime` before policy resolves, `policy`
+    /// once it is being resolved) and a refusal happens squarely inside
+    /// policy resolution; the code is this file's "what kind of failure" axis
+    /// throughout. Nothing but this error crosses the boundary out of
+    /// [`resolve_canonical_policy`], so a new area would have to be carried
+    /// on the error anyway — the same field, spelled less accurately.
+    ///
+    /// The message stays private, as it does for every other constructor:
+    /// [`JanitorError::error_code`] records the type name alone, and a
+    /// rejection sentence names field paths.
+    pub fn unsupported(message: &str) -> Self {
+        Self {
+            code: "NotImplementedError",
+            message: message.to_string(),
+        }
+    }
     /// Python `_error_code`: bounded diagnostics without paths, values,
     /// or credentials.
     pub fn error_code(&self) -> String {
@@ -1198,6 +1233,14 @@ fn raw_identities(target: &Map<String, Value>) -> Vec<String> {
 /// No package registry fallback is permitted. Any fetch, schema, identity, or
 /// typing failure is propagated to the caller, which must fail closed.
 ///
+/// A refusal by [`targets::validate_registry`] is NOT a malformed document
+/// and is not journalled as one. The parse already succeeded — `data` is a
+/// `Value` — so what this rejects is a well-formed registry declaring
+/// something this build does not implement, and it carries
+/// [`JanitorError::unsupported`]: the entry reads
+/// `policy:NotImplementedError` instead of the `policy:ValueError` a corrupt
+/// document produces in [`fetch_canonical_registry`].
+///
 /// The fourth element is true when the host declared no policy and
 /// [`DiskCleanupPolicy::reporting_default`] is in force, so a report can say
 /// which of the two an operator is looking at. Python
@@ -1206,7 +1249,7 @@ pub fn resolve_canonical_policy(
     data: &Value,
     hostname: &str,
 ) -> Result<(ComputeTarget, DiskCleanupPolicy, String, bool), JanitorError> {
-    targets::validate_registry(data).map_err(|exc| JanitorError::value(&exc.to_string()))?;
+    targets::validate_registry(data).map_err(|exc| JanitorError::unsupported(&exc.to_string()))?;
     let identity = targets::normalize_hostname(hostname);
     let targets_arr = data
         .get("targets")
