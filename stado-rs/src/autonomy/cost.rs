@@ -24,6 +24,46 @@ const PRICING_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
     crate::monitor::billing::SECONDS_PER_MINUTE / (u16::BITS / u8::BITS) as u64,
 );
 
+/// How many outstanding decisions one outcome pass downloads.
+///
+/// The cost bound on a set that does not drain: a decision whose subject job
+/// never reaches a terminal prefix can never be given feedback, so it stays
+/// outstanding for good, and every tick re-read the whole backlog.
+const OUTSTANDING_PER_TICK: usize = 256;
+
+/// Where the outcome pass records the last decision id it examined, so the
+/// next one continues instead of repeating the front of the set.
+const OUTCOME_CURSOR_PATH: &str = "state/autonomy/outcome-scan-cursor.json";
+
+#[derive(Serialize, Deserialize)]
+struct OutcomeCursor {
+    /// The last decision id this pass looked at, in the set's own order.
+    last_decision_id: String,
+}
+
+async fn read_outcome_cursor(store: &JobStorage) -> Result<Option<String>, StorageError> {
+    let Some(raw) = store.download_text(OUTCOME_CURSOR_PATH).await? else {
+        return Ok(None);
+    };
+    // A cursor that cannot be read is a cursor that has not been written yet:
+    // the walk restarts at the head, which costs one pass and loses nothing.
+    Ok(serde_json::from_str::<OutcomeCursor>(&raw)
+        .ok()
+        .map(|cursor| cursor.last_decision_id))
+}
+
+async fn write_outcome_cursor(store: &JobStorage, last: &str) -> Result<(), StorageError> {
+    super::storage::write_json(
+        store,
+        OUTCOME_CURSOR_PATH,
+        &OutcomeCursor {
+            last_decision_id: last.to_string(),
+        },
+        false,
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PriceState {
@@ -1290,12 +1330,47 @@ pub async fn measure_outcomes(
     if outstanding.is_empty() {
         return Ok(summary);
     }
+    // One pass resolves at most `OUTSTANDING_PER_TICK` of them, continuing
+    // after the id the previous pass stopped at.
+    //
+    // The set does not drain on its own. Feedback is written only for a
+    // decision whose subject job has reached `completed/` or `failed/`; a
+    // decision whose job never gets there stays outstanding forever, and the
+    // whole backlog was downloaded again on every tick. Measured on
+    // 2026-09-03 after the planner's own read was bounded: the object API was
+    // still serving 362 GETs against `state/autonomy/decisions/` in a
+    // thirty-second window out of 9,580 records, and nothing else in the mix
+    // came close.
+    //
+    // The cap rotates rather than truncating, which is the difference between
+    // a bound and a blind spot: a fixed "first N" would re-read the same N
+    // forever and never reach the rest, precisely because the unresolvable
+    // ones sit at the front. The cursor is the last id examined, so the walk
+    // is ordered, resumable and wraps to the head when it runs out -- no
+    // position is dropped and no pass restarts another's walk.
+    let cursor = read_outcome_cursor(store).await?;
+    let ordered: Vec<String> = outstanding.into_iter().collect();
+    let start = match &cursor {
+        Some(last) => ordered.partition_point(|id| id <= last),
+        None => usize::default(),
+    };
+    let window: Vec<String> = ordered
+        .iter()
+        .skip(start)
+        .chain(ordered.iter())
+        .take(OUTSTANDING_PER_TICK.min(ordered.len()))
+        .cloned()
+        .collect();
+    let stopped_at = window.last().cloned();
     let costs = crate::scheduler::cost::collect_completed_dynamic(store).await?;
-    let mut decisions = Vec::with_capacity(outstanding.len());
-    for decision_id in outstanding {
+    let mut decisions = Vec::with_capacity(window.len());
+    for decision_id in window {
         if let Some(decision) = super::storage::load_decision(store, &decision_id).await? {
             decisions.push(decision);
         }
+    }
+    if let Some(stopped_at) = stopped_at {
+        write_outcome_cursor(store, &stopped_at).await?;
     }
     for decision in decisions
         .iter()
