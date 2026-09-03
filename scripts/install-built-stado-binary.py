@@ -12,9 +12,12 @@ read-only commands that traverse the whole control plane must answer
 byte-identically. Where the OLD binary fails a probe the new one passes, that is
 recorded as a repair and allowed: agreement with a broken binary is not a safety
 property, and a gate that demanded it could never replace the broken binary at
-all. The previous binary is kept beside the new one under its version and the
-date, which is the convention the vault binary already uses, and one `cp` puts it
-back.
+all. The previous binary is kept under the product's backup directory, at
+`~/.stado/products/<program>/backups/<date>/`, which is where `wisent-products`
+writes the rollback copy of anything it replaces. It is deliberately not kept
+beside the installed binary: a 70MB copy carrying a program's name in a bin
+directory is a second answer to that name, which is the divergence this script
+exists to prevent. One `cp` from there puts it back.
 
 The program is the first argument, defaulting to `stado` so the no-argument
 `stado host run-helper` invocation keeps its meaning. `stado_fleet` is here
@@ -51,6 +54,10 @@ PROGRAMS = {
 NAME = sys.argv[len("a")] if len(sys.argv) > len("a") else "stado"
 INSTALLED = HOME / ".stado" / "bin" / NAME
 LINK = HOME / ".local" / "bin" / NAME
+# Rollbacks live with the product, not with the program: the same directory
+# `wisent-products` backs up into, so one place holds every outgoing copy of a
+# product's files and no bin directory grows a second file named after a program.
+BACKUPS = HOME / ".stado" / "products" / NAME / "backups"
 # Where the candidate comes from: an explicit override, this host's own build,
 # or an artifact delivered by `stado host install-file`. A host with no Rust
 # toolchain still has to be able to receive a checked binary.
@@ -171,7 +178,8 @@ def main():
     restore = NONE
     if prior:
         stamp = datetime.datetime.now().strftime("%Y%m%d")
-        backup = INSTALLED.with_name(f"{NAME}.{running}-backup-{stamp}")
+        backup = BACKUPS / stamp / f"{NAME}.{running}"
+        backup.parent.mkdir(parents=True, exist_ok=True)
         if not backup.exists():
             shutil.copy2(INSTALLED, backup)
         print(f"backup     {backup} sha256 {digest(backup)}")
