@@ -306,6 +306,29 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
             "/usr/local/bin/cargo",
         ],
     ),
+    (
+        TMUX_CLI,
+        &[TMUX_CLI, "/usr/local/bin/tmux", "/usr/bin/tmux"],
+    ),
+    // Git, at real installations only. Homebrew first, then the Command Line
+    // Tools' own git INSIDE the developer directory, then a Linux path.
+    //
+    // `/usr/bin/git` is absent on purpose and must stay absent: on macOS that
+    // path is the `xcode-select` shim, and on a host with no Command Line
+    // Tools it opens the installer WINDOW rather than printing a version, so
+    // probing it could raise a consent dialog on an unattended host. The CLT
+    // path below is the real binary the shim would have forwarded to, and it
+    // simply does not exist when the tools are absent — which is the honest
+    // answer this probe wants.
+    (
+        GIT_CLI,
+        &[
+            GIT_CLI,
+            "/usr/local/bin/git",
+            "/Library/Developer/CommandLineTools/usr/bin/git",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+        ],
+    ),
     // The order every Node reader in this repository already probes — the
     // launcher script in `deploy::weles_browser_runtime`, and the host reads in
     // `cli/host.rs` and `cli/seed_freshness.rs` — so a `host exec` answer about
@@ -321,6 +344,68 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
         &[CADDY_PROXY, "/usr/local/bin/caddy", "/usr/bin/caddy"],
     ),
 ];
+
+/// Every absolute path this fleet installs one program at, in probe order, or
+/// `None` for a program whose only path is its own `argv[0]`.
+///
+/// Exposed because a second reader appeared and copying the list into it would
+/// have created exactly the disagreement [`PROGRAM_CANDIDATES`] exists to
+/// prevent: `deploy::mobile_runtime` verifies and installs the mobile runtime
+/// and has to resolve `appium` and `adb` the same way this allowlist's probe
+/// does, or `stado host exec TARGET -- appium --version` and
+/// `stado host mobile-runtime TARGET` could name different binaries on one
+/// machine and disagree about whether the host is ready. One table, two
+/// readers.
+///
+/// It is also the answer to "which path should a placement use": the fleet's
+/// hosts do not carry these directories on a non-interactive `PATH`, so a
+/// consumer resolves a declared absolute path from here and never searches the
+/// environment.
+pub fn program_candidates(program: &str) -> Option<&'static [&'static str]> {
+    PROGRAM_CANDIDATES
+        .iter()
+        .find(|(name, _)| *name == program)
+        .map(|(_, candidates)| *candidates)
+}
+
+/// The Appium server CLI's canonical name in [`PROGRAM_CANDIDATES`].
+pub const APPIUM_PROGRAM: &str = APPIUM_CLI;
+
+/// The Android platform-tools bridge's canonical name in
+/// [`PROGRAM_CANDIDATES`].
+pub const ADB_PROGRAM: &str = ANDROID_DEBUG_BRIDGE;
+
+/// The Node runtime's canonical name in [`PROGRAM_CANDIDATES`].
+///
+/// Needed by any reader that runs a Node shim rather than a compiled binary:
+/// `appium` starts `#!/usr/bin/env node`, and a non-interactive ssh session on
+/// a Homebrew host carries none of Node's directories on `PATH`, so the shim
+/// answers `env: node: No such file or directory` and reads as broken while
+/// being perfectly installed. [`candidate_script`] makes the same argument one
+/// level up, and puts every candidate's directory on `PATH` for that reason.
+pub const NODE_PROGRAM: &str = NODE_RUNTIME;
+
+/// Git's canonical name in [`PROGRAM_CANDIDATES`].
+///
+/// Exposed for the same reason [`APPIUM_PROGRAM`] is: a second reader must
+/// resolve it from this table, not from a list of its own — and in git's case
+/// a hand-written list is how `/usr/bin/git` gets added back.
+pub const GIT_PROGRAM: &str = GIT_CLI;
+
+/// The tmux multiplexer, at the paths this fleet's hosts install it at.
+///
+/// Spis's terminal families drive the product under test inside a tmux
+/// session, so this is their precondition in the same way cargo is every
+/// worker's. It went unapproved, which meant `stado host exec TARGET --
+/// tmux -V` answered "not an approved host-exec command" and every CLI and
+/// TUI preflight refused every host — a refusal that reads as "this machine
+/// has no tmux" and is really a question the channel was never allowed to
+/// ask. Found on 2026-09-03 by running the terminal preflight against
+/// lukasz-macbook, which does carry tmux.
+const TMUX_CLI: &str = "/opt/homebrew/bin/tmux";
+
+/// tmux's canonical name in [`PROGRAM_CANDIDATES`].
+pub const TMUX_PROGRAM: &str = TMUX_CLI;
 
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
@@ -386,6 +471,27 @@ const CUA_DRIVER: &str = "/opt/homebrew/bin/cua-driver";
 /// on the placement host, so "does this host have cargo, and where" is the
 /// precondition of every native, terminal and command-line family.
 const CARGO_CLI: &str = "/opt/homebrew/bin/cargo";
+
+/// Git, at the paths a real installation puts it, and DELIBERATELY NOT at
+/// `/usr/bin/git`.
+///
+/// `/usr/bin/git` on macOS is not git. It is Apple's `xcode-select` shim, and
+/// on a host without the Command Line Tools installed, running it OPENS THE
+/// CLT INSTALLER WINDOW instead of answering. So the obvious probe — ask
+/// `/usr/bin/git --version`, the path every script reaches for — is the one
+/// spelling that can pop a consent dialog on an unattended fleet host, which
+/// is the opposite of what a read-only allowlist is for. The shim is excluded
+/// from the candidates below for exactly that reason, and this paragraph is
+/// the reason written down beside the entry, because it is the kind of thing
+/// that gets "simplified" back in by the next person who notices `/usr/bin`
+/// is missing from a list of git paths.
+///
+/// Spis's terminal (TUI) worker runs `git` to build its fixture repository,
+/// so "does this host have a real git, and where" is that family's
+/// precondition; it is asked here so a host can be refused before it claims
+/// a slot, and the answer is the absolute path the worker's command is then
+/// built from.
+const GIT_CLI: &str = "/opt/homebrew/bin/git";
 /// The Node runtime, at the absolute paths this fleet installs it at.
 ///
 /// A non-interactive ssh login reads no shell profile, and the fleet's Node
@@ -661,6 +767,24 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
     },
     ApprovedCommand {
         argv: &[
+            "/bin/ps", "ax", "-o", "pid", "-o", "rss", "-o", "pcpu", "-o", "comm",
+        ],
+        why: "reports resident memory per process, by executable name only. The two `ps` \
+              entries around it show identity, parentage and elapsed time but never a byte \
+              count, so the one question a thrashing host forces - which process ate the \
+              memory - had no answer in this table at all. Added 2026-09-03: \
+              charless-mac-mini was holding ~2.9 GB in the compressor with ~88 MB free and \
+              3,277,146 swapouts, which stalled every fresh ssh session on it for 12-25 s \
+              and tripped an unrelated preflight's hard timeout; `vm_stat` proved the \
+              pressure was real but could not name a single owner of it. `-o rss` is a \
+              kernel counter and `-o comm` is the executable's name; `-o command` - the \
+              full argv, where tokens and passwords are passed - is deliberately NOT in \
+              this table and cannot be reached through it. The selector is fixed to `ax` \
+              and takes no pid, user, or file argument, so it cannot be pointed at \
+              anything narrower or anywhere else",
+    },
+    ApprovedCommand {
+        argv: &[
             "/bin/ps",
             "axww",
             "-o",
@@ -829,6 +953,28 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               one fact decides whether the terminal, command-line, documentation and native \
               families can execute there at all. `--version` compiles nothing, fetches \
               nothing and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[GIT_CLI, "--version"],
+        why: "prints git's version from the paths a real installation puts it at, and \
+              deliberately NOT from `/usr/bin/git`, which on macOS is the `xcode-select` \
+              shim: on a host without the Command Line Tools that path opens the installer \
+              WINDOW instead of answering, so the obvious probe is the one spelling that \
+              could raise a consent dialog on an unattended fleet host. Spis's terminal \
+              family builds its fixture repository with git, so this decides whether that \
+              family can run at all, and the resolved path is what the worker's command is \
+              then built from rather than a bare name a non-login shell cannot find. \
+              `--version` reads no repository, touches no working tree and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[TMUX_CLI, "-V"],
+        why: "prints the tmux version from the absolute paths this fleet installs it at. Spis's \
+              command-line and terminal families drive the product under test inside a tmux \
+              session, so this is their precondition exactly as cargo is every worker's -- and \
+              until this entry existed the question could not be asked at all: `tmux -V` came \
+              back `not an approved host-exec command`, so both families refused every host and \
+              the refusal read as a missing program. `-V` starts no server, attaches to no \
+              session and writes nothing",
     },
     ApprovedCommand {
         argv: &[UV_INSTALLER, "--version"],
@@ -1474,6 +1620,25 @@ pub async fn exec_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/usr/bin/git` is the `xcode-select` shim: on a host with no Command
+    /// Line Tools, running it opens the installer WINDOW instead of printing
+    /// a version. A read-only allowlist must not be able to raise a consent
+    /// dialog on an unattended host, so the shim stays out of the candidates
+    /// and this test is what stops it being helpfully added back.
+    #[test]
+    fn the_git_probe_never_reaches_the_xcode_select_shim() {
+        let candidates = program_candidates(GIT_PROGRAM).expect("git is in the table");
+        assert!(
+            !candidates.contains(&"/usr/bin/git"),
+            "the /usr/bin/git shim must never be probed: {candidates:?}"
+        );
+        assert!(
+            candidates.contains(&"/Library/Developer/CommandLineTools/usr/bin/git"),
+            "the real Command Line Tools git must be probed instead"
+        );
+        assert!(candidates.iter().all(|path| path.starts_with('/')));
+    }
 
     /// Every entry must be reachable by the spelling it advertises.
     ///

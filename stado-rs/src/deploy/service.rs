@@ -2766,13 +2766,28 @@ say 'restart_failed' \"ended pid(s) $daemon_before and launchd started nothing i
 /// the reason, and nothing started outside launchd.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
-    detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
-    rc=$?
-    if [ \"$rc\" -eq 0 ]; then
-      say 'restarted' \"$domain in place\"
-      exit 0
+    # An in-place kick re-execs the argv launchd already holds. It cannot
+    # apply a unit file whose program or arguments have changed, and it
+    # reports success either way -- which is how two restarts and an ensure
+    # of com.wisent.compute.service.stado-local-control-plane on 2026-09-03
+    # all said `restarted` while the job kept executing the shared global
+    # binary the plist no longer named. A silent no-op is the worst available
+    # answer, so the two vectors are compared first and a job whose argv has
+    # drifted from its file goes to the unload-and-bootstrap path below, which
+    # is the only one that can carry the change.
+    loaded_argv=$($launch print \"$domain/$unit\" 2>/dev/null | /usr/bin/awk '
+      /^[ \\t]*arguments[ \\t]*=[ \\t]*\\{/ { collecting=1; argv=\"\"; next }
+      collecting && /^[ \\t]*\\}/ { collecting=0; sub(/^ /, \"\", argv); print argv; exit }
+      collecting { line=$0; sub(/^[ \\t]+/, \"\", line); argv=argv \" \" line }
+    ')
+    file_argv=\"\"
+    if [ -f \"$unit_path\" ]; then
+      file_argv=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/sed -e '1d' -e '$d' -e 's/^ *//' | /usr/bin/grep -v '^$' | /usr/bin/tr '\\n' ' ')
+      file_argv=$(printf '%s' \"$file_argv\" | /usr/bin/sed -e 's/ *$//')
+      [ -n \"$file_argv\" ] || file_argv=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null)
     fi
-  fi
+    loaded_argv=$(printf '%s' \"$loaded_argv\" | /usr/bin/sed -e 's/^ *//' -e 's/ *$//')
+    if [ -z \"$file_argv\" ] || [ \"$loaded_argv\" = \"$file_argv\" ]; then\n      detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)\n      rc=$?\n      if [ \"$rc\" -eq 0 ]; then\n        say 'restarted' \"$domain in place\"\n        exit 0\n      fi\n    fi\n  fi
   if [ ! -f \"$unit_path\" ]; then
     $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
     detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
@@ -3207,7 +3222,7 @@ if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
 fi
 if [ \"$declared_argv\" != \"$argv\" ]; then
   if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
-    say 'conflict' \"$domain/$unit is loaded and runs [$declared_argv], not [$argv]; retire it first\"
+    say 'conflict' \"$domain/$unit is loaded running [$declared_argv] and the declaration says [$argv]; launchd holds its own copy of the argv and an in-place kick re-execs that copy, so neither restart nor ensure can carry this change: run 'stado service stop' then 'stado service ensure' to unload the job and bootstrap it from the file\"
     exit 0
   fi
   if [ \"$os\" = \"Darwin\" ]; then

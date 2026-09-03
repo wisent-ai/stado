@@ -1683,9 +1683,18 @@ enum HostCommands {
     },
     /// Pull TARGET's Skarbiec mirror into its live vault without discarding
     /// local-only items.
+    ///
+    /// This replaces the live vault file with the mirror rather than merging
+    /// the two; run `--check` first, which names every item that would be
+    /// replaced and every one that would be lost, and exits non-zero when
+    /// either set is not empty.
     #[command(name = "sync-vault")]
     SyncVault {
         target: String,
+        /// Report what a pull would change and exit non-zero on any conflict
+        /// or loss, applying nothing.
+        #[arg(long)]
+        check: bool,
         /// Emit the Skarbiec pull report as JSON.
         #[arg(long)]
         json: bool,
@@ -2353,6 +2362,30 @@ enum HostCommands {
         /// Install the missing components, then verify again.
         #[arg(long)]
         repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify, and with --repair install, the mobile automation runtime
+    /// TARGET's registry entry declares it needs: the Appium server at its
+    /// declared version, each declared driver, and Android platform-tools.
+    #[command(name = "mobile-runtime")]
+    MobileRuntime {
+        target: String,
+        /// Install what the declaration asks for, then verify again.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Which hosts a mobile capture family may be placed on, out of the
+    /// registry's declarations alone. Read-only, contacts no host: a host that
+    /// declares no runtime for the family is absent from the answer and is
+    /// never probed for it.
+    #[command(name = "mobile-placement")]
+    MobilePlacement {
+        /// `ios` or `android`; omit for every family.
+        #[arg(long)]
+        family: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -3057,7 +3090,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
-            HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::SyncVault {
+                target,
+                check,
+                json,
+            } => host::sync_vault(&target, check, json).await,
             HostCommands::VaultItemPut {
                 target,
                 item,
@@ -3279,6 +3316,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 repair,
                 json,
             } => host::weles_browser_runtime(&target, &components, repair, json).await,
+            HostCommands::MobileRuntime {
+                target,
+                repair,
+                json,
+            } => host::mobile_runtime(&target, repair, json).await,
+            HostCommands::MobilePlacement { family, json } => {
+                host::mobile_placement(family.as_deref(), json).await
+            }
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,

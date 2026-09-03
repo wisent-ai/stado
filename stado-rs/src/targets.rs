@@ -1333,6 +1333,50 @@ pub struct SshConnectionPath {
 /// named fallback paths.
 pub const PRIMARY_SSH_CONNECTION: &str = "primary";
 
+/// The mobile automation runtime one host must carry.
+///
+/// This is the per-host statement of required software the fleet did not
+/// have. `managed_versions` covers stado-managed release binaries under
+/// `~/.stado/bin`; `placement_profiles` moves services between hosts and says
+/// nothing about software; `capabilities` names capability families and their
+/// providers, not host programs. So the requirement behind the iOS and
+/// Android capture families lived nowhere, and the only trace of it in the
+/// repository was the probe side: `deploy::host_exec` approved
+/// `appium --version`, `appium driver list --installed`, `which adb` and
+/// `adb devices -l` on 2026-09-03 so a placement could be asked whether it
+/// can run, with nothing anywhere stating what the answer ought to be.
+///
+/// Declared here rather than hardcoded in the verifier for the reason
+/// [`crate::deploy::weles_browser_runtime`] reads Playwright's revisions out
+/// of the installed release instead of pinning them in Rust: a constant in
+/// the checkout drifts from the fleet and then verifies the wrong thing.
+// `Map<String, Value>` blocks `Eq`, for the reason spelled out at
+// [`VerifyDescriptor`]: `serde_json` will not promise reflexivity for floats.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobileRuntime {
+    /// Exact Appium server version, bare (`3.2.1`), never a range and never
+    /// `latest`: a coordinate, for the reason
+    /// [`crate::deploy::host_release`] refuses to resolve one.
+    pub appium: String,
+    /// Appium drivers this host must have installed, by their Appium driver
+    /// name (`xcuitest`, `uiautomator2`). A version cannot answer for these:
+    /// each is a separate install, and a placement fails at its first
+    /// command without the one its platform needs.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub drivers: Vec<String>,
+    /// Whether this host must carry Android platform-tools, the package
+    /// `adb` lives in. Declared as a requirement and not as a version: the
+    /// vendor publishes one rolling `latest` archive per platform and stamps
+    /// the build into `adb version`, so a pinned number here would be a
+    /// promise the source cannot keep.
+    #[serde(default)]
+    pub platform_tools: bool,
+    /// Keys this build does not model, kept verbatim, for the reason
+    /// [`VerifyDescriptor::extra`] keeps them.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 /// One routable box. Unknown registry keys land in
 /// [`ComputeTarget::extra`] (Python's `extra` dict), via `#[serde(flatten)]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1421,6 +1465,24 @@ pub struct ComputeTarget {
     /// shared workstations from picking up stray queue backlog.
     #[serde(default)]
     pub pinned_only: bool,
+    /// The mobile automation runtime this host must carry, when it is a host
+    /// the mobile capture families are placed on. Absent means the host is
+    /// not a mobile placement, which is what every host is until somebody
+    /// declares otherwise — the same default as [`Self::display_stream`].
+    ///
+    /// Separate from [`Self::managed_versions`] on purpose, and the
+    /// separation is the whole reason this field exists. `managed_versions`
+    /// declares stado-managed binaries under `~/.stado/bin`, delivered by
+    /// `host release` out of a release Stado published and verified by
+    /// digest; every version diagnostic in the fleet
+    /// (`deploy::service_converge`, `host reconcile`) enumerates it and looks
+    /// for `$HOME/.stado/bin/<name>`. Appium is an npm package and `adb` is
+    /// Google's, neither is a Stado release artefact, and neither lives
+    /// there, so declaring them under `managed_versions` would have produced
+    /// drift rows nothing could ever deliver against — a declaration with no
+    /// reader, the exact shape `host_software` was written to remove.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_runtime: Option<MobileRuntime>,
     /// Required version of each stado-managed binary under `~/.stado/bin`,
     /// keyed by binary name (`stado`, `skarbiec`) and holding the bare
     /// version number (`0.5.1`), never a prefixed banner like

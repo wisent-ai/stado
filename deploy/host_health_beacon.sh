@@ -150,32 +150,92 @@ unit_manager() {
         printf 'user\n'
     fi
 }
-# systemctl unit states (one entry per UNITS_TO_WATCH item, comma-sep).
+
+# Which launchd domain holds the label: `system`, `gui/<uid>`, or nothing.
+#
+# `launchctl print` is read-only, needs no privilege on Darwin, and is the ONLY
+# reader that can answer for the system domain -- `launchctl list` cannot print
+# it at all. That gap is not theoretical: `com.wisent.always-on.brama` and
+# `com.wisent.always-on.skarbiec` are declared as system LaunchDaemons on
+# charless-mac-mini, and the beacon there reported both `inactive` while
+# `brama serve` and `skarbiec serve` were listening. The system domain is asked
+# first, in the order `service bootout` acts in.
+launchd_domain() {
+    for domain in "system" "gui/$(/usr/bin/id -u)"; do
+        if /bin/launchctl print "$domain/$1" >/dev/null 2>&1; then
+            printf '%s\n' "$domain"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# One scalar out of `launchctl print`, or empty.
+#
+# Only `pid`, `state`, `last exit code` and `runs` are ever taken: the same
+# fixed set `stado service label-print` restricts itself to, because
+# `launchctl print` also dumps the job's whole environment and this fleet's
+# units carry tokens there. A beacon that published those would put
+# credentials into an object every host can read.
+launchd_field() {
+    printf '%s\n' "$2" | /usr/bin/awk -v key="$1" '
+        $0 ~ "^[[:space:]]*" key " = " {
+            sub("^[[:space:]]*" key " = ", "")
+            gsub(/^"|"$/, "")
+            print
+            exit
+        }' 2>/dev/null
+}
+# Per-unit state, from whichever manager on this host actually holds the unit.
+#
+# Branched on the OS because until 2026-09-03 it was not: the loop asked
+# `/usr/bin/systemctl` on every host, so on the macOS boxes -- where every
+# managed unit is a launchd job -- it asked a binary that does not exist and
+# recorded `inactive` for all of them.
+os=$(/usr/bin/uname -s 2>/dev/null || printf 'unknown')
 units_json=""
 for unit in ${UNITS_TO_WATCH//,/ }; do
     case "$unit" in
         *weles*) echo "host_health_beacon: raw Weles unit lifecycle is forbidden"; false ;;
     esac
-    manager=$(unit_manager "$unit")
-    if [ -z "$manager" ]; then
-        # Neither manager has this unit loaded, so no state was observed.
-        # Reported as `unknown` and NOT as `inactive`: "I could not see it"
-        # and "it is stopped" are different facts, and merging them is what
-        # let a running unit be reported as one that does not exist.
-        state="unknown"
-        n_restarts="?"
-        since="?"
-    else
-        if systemctl_in "$manager" is-active "$unit" >/dev/null 2>&1; then
-            state="active"
-        elif systemctl_in "$manager" is-failed "$unit" >/dev/null 2>&1; then
-            state="failed"
-        else
-            state="inactive"
+    manager=""
+    state="unknown"
+    n_restarts="?"
+    since="?"
+    if [ "$os" = "Darwin" ]; then
+        manager=$(launchd_domain "$unit")
+        if [ -n "$manager" ]; then
+            printed=$(/bin/launchctl print "$manager/$unit" 2>/dev/null || printf '')
+            pid=$(launchd_field pid "$printed")
+            last_exit=$(launchd_field 'last exit code' "$printed")
+            runs=$(launchd_field runs "$printed")
+            if [ -n "$pid" ]; then
+                state="active"
+            elif [ -n "$last_exit" ] && [ "$last_exit" != 0 ]; then
+                state="failed"
+            else
+                state="inactive"
+            fi
+            n_restarts="${runs:-?}"
         fi
-        n_restarts=$(systemctl_in "$manager" show -p NRestarts --value "$unit" 2>/dev/null || echo "?")
-        since=$(systemctl_in "$manager" show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null || echo "?")
+    else
+        manager=$(unit_manager "$unit")
+        if [ -n "$manager" ]; then
+            if systemctl_in "$manager" is-active "$unit" >/dev/null 2>&1; then
+                state="active"
+            elif systemctl_in "$manager" is-failed "$unit" >/dev/null 2>&1; then
+                state="failed"
+            else
+                state="inactive"
+            fi
+            n_restarts=$(systemctl_in "$manager" show -p NRestarts --value "$unit" 2>/dev/null || echo "?")
+            since=$(systemctl_in "$manager" show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null || echo "?")
+        fi
     fi
+    # An empty manager means no manager on this host has the unit loaded, so
+    # nothing was observed. Reported as `unknown` and NOT as `inactive`: "I
+    # could not see it" and "it is stopped" are different facts, and merging
+    # them is what let running units be reported as ones that do not exist.
     if [ -n "$units_json" ]; then units_json="$units_json,"; fi
     units_json="$units_json\"$unit\":{\"state\":\"$state\",\"manager\":\"${manager:-none}\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
 done

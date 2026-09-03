@@ -1120,54 +1120,91 @@ impl Dashboard {
         }
     }
 
+    /// How long this side waits for a request head before it closes the socket.
+    ///
+    /// It bounds the first request as much as a reused one: a connection that
+    /// is opened and then abandoned holds a task and a file descriptor exactly
+    /// like an idle reused one, and the accept loop puts no bound on how many
+    /// of those may exist. Only the head is bounded, never the body -- one
+    /// object PUT may declare up to `max_object_bytes`, and a slow upload is
+    /// progress rather than idleness.
+    ///
+    /// It must stay strictly LONGER than the object client's pool idle timeout
+    /// (90 s: reqwest's default, made explicit alongside the keyed client).
+    /// Equal timers race -- the client takes a warm connection out of its pool
+    /// in the same instant this side sends FIN, and the request written into it
+    /// then fails or re-dials, which is the cost this change exists to remove.
+    /// With the client retiring first, the socket is always closed by the side
+    /// that is not about to write to it.
+    const KEEP_ALIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
+
     async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
         // The peer is the reverse proxy's loopback address behind an HTTPS
         // ingress; the invite routes only ever use it as a rate-limit bucket.
         let peer = stream.peer_addr().ok().map(|address| address.ip());
-        let Some(mut request) = read_request(&mut stream).await? else {
-            return Ok(());
-        };
-        request.peer = peer;
-        // The mode gate is the FIRST thing that looks at the request, ahead of
-        // the object PUT preflight, ahead of the remainder of the body, ahead
-        // of every Host check and authorization, and ahead of any store or
-        // vault access. A refused request costs one method/path comparison and
-        // this listener never reads anything on its behalf; the rest of the
-        // declared body is deliberately left unread, since the connection
-        // closes anyway.
-        if self.enrollment_only && !enrollment_route_allowed(&request.method, &request.path) {
-            let response = Response::new(
-                http_status("404"),
-                "Not Found",
-                "text/plain; charset=utf-8",
-                ENROLLMENT_REFUSAL,
-            );
-            eprintln!(
-                "[dashboard] \"{} {} HTTP/1.1\" {} enrollment-only",
-                request.method, request.path, response.status
-            );
-            stream.write_all(&response.bytes).await?;
-            return stream.shutdown().await;
-        }
-        let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
-        if is_object_put {
-            if let Some(response) = self.object_put_preflight(&request).await {
+        // Bytes already buffered past the request just served. Reusing one
+        // connection is the whole point of this loop, so they have to survive
+        // into the next read rather than be dropped with the buffer.
+        let mut carry: Vec<u8> = Vec::new();
+        loop {
+            let Some(mut request) =
+                read_request(&mut stream, &mut carry, Self::KEEP_ALIVE_IDLE).await?
+            else {
+                return Ok(());
+            };
+            request.peer = peer;
+            // The mode gate is the FIRST thing that looks at the request, ahead
+            // of the object PUT preflight, ahead of every Host check and
+            // authorization, and ahead of any store or vault access. A refused
+            // request costs one method/path comparison, and this listener has
+            // nothing further to offer it, so the connection closes rather than
+            // being held warm for more of the same.
+            if self.enrollment_only && !enrollment_route_allowed(&request.method, &request.path) {
+                let mut response = Response::new(
+                    http_status("404"),
+                    "Not Found",
+                    "text/plain; charset=utf-8",
+                    ENROLLMENT_REFUSAL,
+                );
+                eprintln!(
+                    "[dashboard] \"{} {} HTTP/1.1\" {} enrollment-only",
+                    request.method, request.path, response.status
+                );
+                response.close_connection();
                 stream.write_all(&response.bytes).await?;
                 return stream.shutdown().await;
             }
+            if request.method == "PUT" && request.path.starts_with("/api/object?") {
+                // A preflight answer refuses the write outright, so this
+                // connection has nothing left to serve either.
+                if let Some(mut response) = self.object_put_preflight(&request).await {
+                    response.close_connection();
+                    stream.write_all(&response.bytes).await?;
+                    return stream.shutdown().await;
+                }
+            }
+            // `read_request` hands over a body of exactly `content_length`, so
+            // no request can leave a byte behind to be read as the head of the
+            // next one; the carried remainder is the next request already.
+            //
+            // No route serves HEAD, so a HEAD would be answered with the body a
+            // GET returns. A client that correctly reads no body after a HEAD
+            // would parse those bytes as its next response, so HEAD ends the
+            // connection instead of poisoning it.
+            let keep_alive = request.wants_keep_alive() && request.method != "HEAD";
+            let mut response = self.route(&request).await;
+            eprintln!(
+                "[dashboard] \"{} {} HTTP/1.1\" {} -",
+                request.method, request.path, response.status
+            );
+            if !keep_alive {
+                response.close_connection();
+            }
+            stream.write_all(&response.bytes).await?;
+            if !keep_alive {
+                return stream.shutdown().await;
+            }
         }
-        if request.body.len() < request.content_length {
-            let received = request.body.len();
-            request.body.resize(request.content_length, u8::default());
-            stream.read_exact(&mut request.body[received..]).await?;
-        }
-        let response = self.route(&request).await;
-        eprintln!(
-            "[dashboard] \"{} {} HTTP/1.1\" {} -",
-            request.method, request.path, response.status
-        );
-        stream.write_all(&response.bytes).await?;
-        stream.shutdown().await
     }
 
     async fn route(&self, request: &Request) -> Response {
@@ -2837,6 +2874,9 @@ struct Request {
     method: String,
     /// Raw request target including the query string (Python `self.path`).
     path: String,
+    /// Exactly as it appeared on the request line, because it decides whether
+    /// this connection may be reused when the request says nothing.
+    version: String,
     /// Lowercased names with trimmed values.
     headers: Vec<(String, String)>,
     content_length: usize,
@@ -2853,6 +2893,20 @@ impl Request {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
     }
+
+    /// HTTP/1.1 keeps a connection open unless the request asks otherwise;
+    /// HTTP/1.0 keeps it only when the request asks for it by name.
+    fn wants_keep_alive(&self) -> bool {
+        let connection = self
+            .header("connection")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let mut tokens = connection.split(',').map(str::trim);
+        if tokens.clone().any(|token| token == "close") {
+            return false;
+        }
+        self.version == "HTTP/1.1" || tokens.any(|token| token == "keep-alive")
+    }
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -2863,11 +2917,44 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Read one request with a bounded head and body. Body framing is deliberately
 /// limited to Content-Length; mutating routes reject Transfer-Encoding.
-async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>> {
-    let mut buf: Vec<u8> = Vec::new();
+///
+/// `head_idle` bounds the wait for a complete head, and nothing else: the head
+/// is what an idle or abandoned connection is failing to send, while a body
+/// still arriving is a transfer that may legitimately outlast any idle limit.
+/// A connection that goes quiet before saying anything reads as a clean close,
+/// the same as an EOF between requests.
+async fn read_request(
+    stream: &mut TcpStream,
+    carry: &mut Vec<u8>,
+    head_idle: std::time::Duration,
+) -> std::io::Result<Option<Request>> {
+    // Whatever the previous request on this connection read past its own body.
+    let mut buf: Vec<u8> = std::mem::take(carry);
     let mut tmp = [0u8; 8192];
+    let head_deadline = tokio::time::Instant::now() + head_idle;
     let head_end = loop {
-        let n = stream.read(&mut tmp).await?;
+        // Check before reading: a pipelined head may already be complete in
+        // the bytes carried over, and blocking on the socket would deadlock
+        // against a client waiting for its answer.
+        if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+            break pos;
+        }
+        if buf.len() > MAX_HEAD_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "HTTP request head too large",
+            ));
+        }
+        let n = match tokio::time::timeout_at(head_deadline, stream.read(&mut tmp)).await {
+            Ok(read) => read?,
+            Err(_) if buf.is_empty() => return Ok(None),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "HTTP request head timed out",
+                ));
+            }
+        };
         if n == 0 {
             if buf.is_empty() {
                 return Ok(None);
@@ -2878,25 +2965,16 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
             ));
         }
         buf.extend_from_slice(&tmp[..n]);
-        if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
-            break pos;
-        }
-        if buf.len() > MAX_HEAD_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "HTTP request head too large",
-            ));
-        }
     };
     let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or("");
     let mut parts = request_line.split_whitespace();
-    let (method, path) = match (parts.next(), parts.next(), parts.next()) {
+    let (method, path, version) = match (parts.next(), parts.next(), parts.next()) {
         (Some(method), Some(path), Some(version)) if version.starts_with("HTTP/") => {
-            (method.to_string(), path.to_string())
+            (method.to_string(), path.to_string(), version.to_string())
         }
-        _ => (String::new(), String::new()),
+        _ => (String::new(), String::new(), String::new()),
     };
     let mut headers = Vec::new();
     for line in lines {
@@ -2954,9 +3032,16 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         body.resize(content_length, 0);
         stream.read_exact(&mut body[received..]).await?;
     }
+    // Anything beyond this request's body belongs to the next one on this
+    // connection, not to this buffer.
+    let consumed = body_start.saturating_add(content_length);
+    if buf.len() > consumed {
+        carry.extend_from_slice(&buf[consumed..]);
+    }
     Ok(Some(Request {
         method,
         path,
+        version,
         headers,
         content_length,
         body,
@@ -2991,10 +3076,26 @@ impl Response {
             head.push_str(value);
             head.push_str("\r\n");
         }
-        head.push_str("Connection: close\r\n\r\n");
+        head.push_str("Connection: keep-alive\r\n\r\n");
         let mut bytes = head.into_bytes();
         bytes.extend_from_slice(body);
         Self { status, bytes }
+    }
+
+    /// Rewrite this already-serialized response to announce a close.
+    ///
+    /// Responses are built with the reusable form because that is now the
+    /// common case; the refusal paths that answer without draining the
+    /// declared body cannot be followed by another request on the same
+    /// connection and say so here. The literal replaced is the one written
+    /// directly above, so this can only match what this type produced.
+    fn close_connection(&mut self) {
+        const REUSE: &[u8] = b"Connection: keep-alive\r\n";
+        const CLOSE: &[u8] = b"Connection: close\r\n";
+        if let Some(at) = find_subslice(&self.bytes, REUSE) {
+            self.bytes
+                .splice(at..at + REUSE.len(), CLOSE.iter().copied());
+        }
     }
 
     fn json(status: u16, body: &str) -> Self {
