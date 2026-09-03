@@ -413,7 +413,8 @@ async fn sibling_revision_conflict(
     let coordinates = crate::cli::storage::published_release_coordinates(&claim.product)
         .await
         .ok()?;
-    for (version, platform) in coordinates {
+    for coordinate in coordinates {
+        let (version, platform) = (coordinate.version, coordinate.platform);
         if version != claim.version || platform == claim.platform {
             continue;
         }

@@ -1451,6 +1451,122 @@ const INTEGRITY_VERSIONS: usize = 6;
 /// at two round trips each, not 144 in series.
 const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
 
+/// How long a claim may stand with no artifact behind it before the
+/// coordinate is called burnt rather than in flight.
+///
+/// Both publishers write the claim immediately before their uploads, in the
+/// same job: `deploy.yml` calls `release claim-coordinate` and then copies the
+/// objects, in `publish-linux` for `linux-amd64` and in
+/// `deploy-control-plane` for `darwin-arm64`. So the honest budget is one
+/// publishing job's wall clock, not the whole train's — a train can wait
+/// hours for release capacity, but it has not claimed anything while it
+/// waits.
+///
+/// Measured, not guessed: in run 33693066772, the tag train for 0.13.49,
+/// `publish-linux` took 21m29s (05:19:07 to 05:40:36) and
+/// `deploy-control-plane` 20m08s (04:58:56 to 05:19:04), each of those
+/// including the build that precedes the claim. Sixty minutes is roughly
+/// three times the longest of them, so a slow but working publication is
+/// never called burnt, while a claim older than that has outlived every
+/// publication this channel has recorded.
+///
+/// It errs late on purpose. The cost of firing early is a false alarm on
+/// every release, which is how a check gets turned off; the cost of firing
+/// late is a report an hour after the number was already spent, and the
+/// number stays spent either way. The train's own
+/// `cancel-in-progress: true` concurrency group means a superseded
+/// publication dies at once rather than finishing slowly, so most burnt
+/// claims are already permanent long before this bound.
+const CLAIM_WITHOUT_ARTIFACT: chrono::Duration = chrono::Duration::minutes(60);
+
+/// What a coordinate holding only its claim is: a publication in flight, or a
+/// version number permanently spent.
+///
+/// The claim is create-only and so is every artifact, so a claim with nothing
+/// behind it cannot be completed by a later train: the second publisher is
+/// refused at the claim if it names another revision, and a rebuild of the
+/// same revision can never reproduce byte-identical artifacts. The number is
+/// gone, and the only remedy is a new version.
+///
+/// This is deliberately NOT part of
+/// [`crate::deploy::host_release::coordinate_revision_conflict`], which
+/// answers a different question about a different subject: that one compares
+/// two publishers' manifests at a coordinate that HAS artifacts and reports a
+/// coordinate built twice. This reports a coordinate built never. Folding
+/// them together would make one sentence answer for both, and the remedies
+/// are the same only by coincidence.
+///
+/// The claim's own body names the revision, which is the fact an operator
+/// needs: it says which commit spent the number, and therefore whether the
+/// version in `Cargo.toml` still has a train that can publish it.
+async fn claim_only_verdict(
+    product: &crate::deploy::products::Product,
+    coordinate: &crate::cli::storage::PublishedCoordinate,
+) -> (Status, String) {
+    let (version, platform) = (&coordinate.version, &coordinate.platform);
+    let uri = format!(
+        "stado://releases/{}/{version}/{platform}/{}",
+        product.source.product,
+        crate::release_control::RELEASE_REVISION_NAME
+    );
+    let revision = match crate::cli::storage::fetch_object(&uri).await {
+        Ok(bytes) => serde_json::from_slice::<crate::release_control::CoordinateRevision>(&bytes)
+            .map(|claim| claim.source_revision)
+            .unwrap_or_else(|error| format!("an unreadable claim record ({error})")),
+        Err(error) => format!("a claim this audit could not read ({error})"),
+    };
+    let Some(written) = coordinate.claim_written_at else {
+        // No timestamp means the age cannot be judged, and guessing either
+        // way is what this row exists to stop: calling a live publication
+        // burnt is a false alarm on a release, calling a spent number healthy
+        // is the silence itself.
+        return (
+            Status::Unmeasured,
+            format!(
+                "{version}/{platform} holds only its claim, bound to {revision}, and the store \
+                 reported no write time for it, so whether the publication is in flight or \
+                 permanently spent could not be decided"
+            ),
+        );
+    };
+    let age = Utc::now() - written;
+    let stamp = written.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    if age < CLAIM_WITHOUT_ARTIFACT {
+        return (
+            Status::Unmeasured,
+            format!(
+                "{version}/{platform} is publishing now: its claim was written {stamp}, binding \
+                 it to {revision}, and no artifact has followed within the {} minute budget yet",
+                CLAIM_WITHOUT_ARTIFACT.num_minutes()
+            ),
+        );
+    }
+    (
+        Status::Fail,
+        format!(
+            "{version}/{platform} is BURNT and permanently so: its claim was written {stamp}, \
+             binding it to {revision}, and no artifact followed within {} minutes. Claim and \
+             artifacts are create-only, so no later train can publish this version — the number \
+             is spent and a publication of it must use a new one",
+            CLAIM_WITHOUT_ARTIFACT.num_minutes()
+        ),
+    )
+}
+
+/// Whether this coordinate's publication is still inside the budget its claim
+/// started.
+///
+/// One clock for both shapes of an unfinished publication — no artifacts at
+/// all, and some artifacts — because they are the same event observed at
+/// different moments, and two thresholds would eventually disagree about the
+/// same release. A coordinate with no claim timestamp is not in flight: this
+/// answers "provably still running", and absent evidence is not proof.
+fn in_flight(coordinate: &crate::cli::storage::PublishedCoordinate) -> bool {
+    coordinate
+        .claim_written_at
+        .is_some_and(|written| Utc::now() - written < CLAIM_WITHOUT_ARTIFACT)
+}
+
 /// Walk what the channel actually holds and say, per version and platform,
 /// whether the coordinate is deliverable: every object present, and every
 /// publisher of it naming one build.
@@ -1512,20 +1628,34 @@ async fn check_release_integrity() -> Check {
     }
 
     let mut versions: Vec<String> = Vec::new();
-    for (version, _) in &coordinates {
-        if !versions.contains(version) {
-            versions.push(version.clone());
+    for coordinate in &coordinates {
+        if !versions.contains(&coordinate.version) {
+            versions.push(coordinate.version.clone());
         }
     }
     versions.truncate(INTEGRITY_VERSIONS);
 
     let mut whole = 0usize;
     let mut audited = 0usize;
-    for (version, platform) in &coordinates {
+    for coordinate in &coordinates {
+        let (version, platform) = (&coordinate.version, &coordinate.platform);
         if !versions.contains(version) {
             continue;
         }
         audited += 1;
+        // A coordinate holding its claim and nothing else is not a partial
+        // one, and the object audit below cannot tell the difference: the
+        // claim carries no list of what a complete coordinate holds, so
+        // `missing_release_objects` can only answer `absent: SHA256SUMS` —
+        // the same sentence it gives a coordinate that published eight
+        // objects of nine. `stado/0.14.4/darwin-arm64` read exactly that on
+        // 2026-09-03 while holding one 144-byte object, and the number was
+        // already spent.
+        if coordinate.claim_only() {
+            let (status, sentence) = claim_only_verdict(product, coordinate).await;
+            findings.note(status, sentence);
+            continue;
+        }
         let complete =
             match crate::deploy::host_release::missing_release_objects(product, version, platform)
                 .await
@@ -1544,14 +1674,36 @@ async fn check_release_integrity() -> Check {
                     // `stado/0.11.0/darwin-arm64` is the shape being caught
                     // here — archive, manifest and SHA256SUMS present, five
                     // binaries absent, permanently.
-                    findings.note(
-                        Status::Fail,
-                        format!(
-                            "{version}/{platform} is PARTIAL and permanently so; absent: {}",
-                            missing.join(", ")
-                        ),
-                    );
-                    false
+                    //
+                    // Unless it is happening right now. A publisher writes
+                    // its objects one at a time, so every release passes
+                    // through "short of objects" on the way to whole, and the
+                    // claim it wrote first says when that began. Reading
+                    // 0.14.5 as PARTIAL at 18:23 while its train was still
+                    // uploading is the same false alarm the claim-only branch
+                    // above exists to avoid, and the same clock answers both.
+                    if in_flight(coordinate) {
+                        findings.note(
+                            Status::Unmeasured,
+                            format!(
+                                "{version}/{platform} is publishing now: {} object(s) not written \
+                                 yet ({}), within the {} minute budget its claim started",
+                                missing.len(),
+                                missing.join(", "),
+                                CLAIM_WITHOUT_ARTIFACT.num_minutes()
+                            ),
+                        );
+                        false
+                    } else {
+                        findings.note(
+                            Status::Fail,
+                            format!(
+                                "{version}/{platform} is PARTIAL and permanently so; absent: {}",
+                                missing.join(", ")
+                            ),
+                        );
+                        false
+                    }
                 }
                 Err(error) => {
                     findings.note(
