@@ -1992,10 +1992,30 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         .map_err(CmdError::click)?
         .ok_or_else(|| CmdError::click("registry.service_directory is required"))?;
 
-    let api_listening = bind_listening(&config.api_bind).await;
-    let mut probed: Vec<(&ResolverAdapter, bool)> = Vec::with_capacity(config.adapters.len());
+    // A declared bind is a loopback address *on the target*. Connecting to it
+    // from here answers a different question: what this machine holds on that
+    // number. The two answers were reported as one, and on a control-plane
+    // host that runs its own resolver the numbers collide -- asking about
+    // charless-mac-mini returned `listening: false` for three adapters that
+    // one pid was holding there, and would have returned `listening: true`
+    // for the four whose numbers this laptop happens to serve itself. So the
+    // probe runs only where the binds live, and elsewhere reports that it did
+    // not run rather than a measurement of the wrong socket.
+    let local_target = current_target(&document).ok();
+    let binds_are_local = local_target.as_deref() == Some(target.as_str());
+    let api_listening = if binds_are_local {
+        Some(bind_listening(&config.api_bind).await)
+    } else {
+        None
+    };
+    let mut probed: Vec<(&ResolverAdapter, Option<bool>)> =
+        Vec::with_capacity(config.adapters.len());
     for adapter in &config.adapters {
-        let listening = bind_listening(&adapter.bind).await;
+        let listening = if binds_are_local {
+            Some(bind_listening(&adapter.bind).await)
+        } else {
+            None
+        };
         probed.push((adapter, listening));
     }
     let authority = probe_authority(&registry, &directory, &target, notice.as_deref()).await;
@@ -2046,14 +2066,14 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         }
         Some(_) => {}
     }
-    if !api_listening {
+    if api_listening == Some(false) {
         blockers.push(format!(
             "nothing is listening on the resolution API at {}",
             config.api_bind
         ));
     }
     for (adapter, listening) in &probed {
-        if !listening {
+        if *listening == Some(false) {
             blockers.push(format!(
                 "nothing is listening on the {} adapter for consumer {} at {}",
                 adapter.service, adapter.consumer, adapter.bind
@@ -2110,7 +2130,7 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
     // its upstream still serves the services whose upstream is up.
     let verdict = if blockers.is_empty() {
         "ready"
-    } else if !api_listening && resolver_state != RESOLVER_SERVING {
+    } else if api_listening == Some(false) && resolver_state != RESOLVER_SERVING {
         "down"
     } else {
         "degraded"
@@ -2122,6 +2142,18 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         "pid": published.as_ref().map(|state| state.pid).filter(|pid| *pid != 0),
         "updated_at": published.as_ref().map(|state| state.updated_at.clone()),
         "api": {"bind": config.api_bind, "listening": api_listening},
+        // A null `listening` is a measurement that did not happen, not a
+        // socket that is down. Say which, so nobody reads the absence as
+        // health or as an outage.
+        "bind_probe": if binds_are_local {
+            format!("probed: these binds are loopback addresses on {target}, which is this host")
+        } else {
+            format!(
+                "not probed: these binds are loopback addresses on {target}, and this command \
+                 ran on {}; ask that host with `stado host inventory {target}`",
+                local_target.as_deref().unwrap_or("a host with no registry identity")
+            )
+        },
         "adapters": probed
             .iter()
             .map(|(adapter, listening)| json!({
@@ -2161,10 +2193,10 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         println!(
             "api {} {}",
             config.api_bind,
-            if api_listening {
-                "listening"
-            } else {
-                "not-listening"
+            match api_listening {
+                Some(true) => "listening",
+                Some(false) => "not-listening",
+                None => "not-probed",
             }
         );
         for (adapter, listening) in &probed {
@@ -2173,10 +2205,10 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
                 adapter.service,
                 adapter.consumer,
                 adapter.bind,
-                if *listening {
-                    "listening"
-                } else {
-                    "not-listening"
+                match listening {
+                    Some(true) => "listening",
+                    Some(false) => "not-listening",
+                    None => "not-probed",
                 }
             );
         }

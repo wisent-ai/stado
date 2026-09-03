@@ -1259,3 +1259,68 @@ fn a_fallback_path_is_probed_once_per_forward_not_once_per_request() {
     );
     assert!(resolver.running(), "the resolver died under 8 reads");
 }
+
+/// `resolver status --target` never reports this machine's sockets as another
+/// host's.
+///
+/// Every declared bind is a loopback address *on the target*, and the probe
+/// dialled it from wherever the command happened to run. Asking about
+/// charless-mac-mini from this laptop on 2026-09-03 returned
+/// `listening: false` for three adapters that one pid was holding there, and
+/// the verdict `degraded` with it -- while for the adapter numbers this laptop
+/// serves itself it would have answered `listening: true` about its own
+/// sockets. Both answers describe the wrong machine, and the second is the
+/// dangerous one: a reassuring reading of a host nobody measured.
+///
+/// The fixture reproduces exactly that collision: the ports are held here and
+/// declared there.
+#[test]
+fn resolver_status_never_probes_another_hosts_binds() {
+    let (api, api_port) = held_port();
+    let (adapter, adapter_port) = held_port();
+    // Same document, with this machine's name taken out of it: the registry
+    // then describes a host that is not this one, which is what asking about
+    // any other target means.
+    let document = registry_document(7, api_port, adapter_port).replace(&this_host(), "w9.local");
+    let (home, storage) = fixture(&document);
+    let (home, storage) = (home.path(), storage.path());
+
+    let out = stado(
+        home,
+        storage,
+        &["resolver", "status", "--target", "w1", "--json"],
+    );
+    let document = report(&out);
+    assert_eq!(
+        document["api"]["listening"],
+        serde_json::Value::Null,
+        "the API bind was reported from a socket this test holds: {}",
+        stdout(&out)
+    );
+    assert_eq!(
+        document["adapters"][0]["listening"],
+        serde_json::Value::Null,
+        "the adapter bind was reported from a socket this test holds: {}",
+        stdout(&out)
+    );
+    let probe = document["bind_probe"]
+        .as_str()
+        .expect("the report says whether the binds were probed");
+    assert!(
+        probe.starts_with("not probed:"),
+        "the report does not say the probe was skipped: {probe}"
+    );
+    assert!(
+        probe.contains("stado host inventory w1"),
+        "the report does not name what would answer instead: {probe}"
+    );
+    // A measurement that did not happen is not an outage either.
+    assert_ne!(
+        document["verdict"],
+        "down",
+        "an unprobed bind was read as a dead resolver: {}",
+        stdout(&out)
+    );
+
+    drop((api, adapter));
+}
