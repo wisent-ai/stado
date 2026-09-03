@@ -438,3 +438,45 @@ fn a_shut_object_boundary_recovers_without_a_restart() {
         "the recovered verdict carries its own timestamp"
     );
 }
+
+/// No boundary may be its own precondition for reopening.
+///
+/// A boundary revalidates only when a request asks about it, so a boundary no
+/// request asks about is frozen at its boot verdict for the life of the
+/// process. `Boundary::Release` was in that state twice: first required by no
+/// route at all, then "fixed" by requiring it on the release-coordinate object
+/// routes — which are exactly the routes excluded from the boundary check
+/// because the key is a release key. Measured on a live resolver on
+/// 2026-09-03: a successful release stat and a rejected release object read,
+/// `release` still `false` after both.
+///
+/// This is provable from the routing table, so it is proved here rather than
+/// discovered on a host at the moment a release needs the boundary.
+#[test]
+fn every_boundary_has_a_route_that_can_reopen_it() {
+    let unreachable = stado::dashboard::boundaries_without_a_reopening_route();
+    assert!(
+        unreachable.is_empty(),
+        "these boundaries can never reopen, because no request revalidates them: {unreachable:?}"
+    );
+}
+
+/// The release split is deliberate: revalidated, not enforced.
+///
+/// Enforcing it in the same change would have answered `503` to every
+/// release-coordinate read on a process whose `release` boundary is already
+/// shut — which is the state of the resolver every host reaches objects
+/// through. Asking is not enforcing, and this pins that this is a decision
+/// rather than an oversight of the same shape as the one it repairs.
+#[test]
+fn a_release_coordinate_asks_about_its_boundary_without_being_gated_by_it() {
+    let (enforced, revalidated) = stado::dashboard::release_coordinate_boundary_split();
+    assert!(
+        revalidated.contains(&"release"),
+        "a release coordinate must revalidate the release boundary: {revalidated:?}"
+    );
+    assert!(
+        !enforced.contains(&"release"),
+        "enforcement is a separate decision and is not on: {enforced:?}"
+    );
+}
