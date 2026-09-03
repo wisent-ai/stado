@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.13.51"
+version = "0.13.52"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
