@@ -1722,10 +1722,100 @@ pub async fn release_target(
         }
     }
 
+    // Every stable bind this host declares, proven listening before this
+    // reports `ok`.
+    //
+    // A roll restarts the release agent, and the agent is the only thing that
+    // publishes a stable bind. On 2026-09-03 two rolls reported `ok` with
+    // every step `ok`, and Skarbiec's 127.0.0.1:8895 and Brama's
+    // 127.0.0.1:8080 were both unbound behind them: the agent could not read
+    // `release_control` through a closed object boundary, so it published
+    // nothing, and `brama.wisent.com/health` answered 502 for hours while two
+    // release reports said the roll had succeeded. A roll that restarts the
+    // publisher of a serving port and does not look at the port is a roll
+    // that cannot tell success from an outage.
+    let (verdicts, missing) = verify_stable_binds(target, runner).await;
+    if !verdicts.is_empty() {
+        report.insert("stable_binds".to_string(), json!(verdicts));
+    }
     report.insert("steps".to_string(), json!(steps));
+    if !missing.is_empty() {
+        report.insert("activated".to_string(), json!(true));
+        return Ok(fail(
+            &mut report,
+            1,
+            format!(
+                "the release is active and the units restarted, but {} declared stable bind(s) are                  not listening after {STABLE_BIND_BUDGET_SECONDS}s: {}. The release agent                  publishes these ports; read its log with `stado host unit-log {}                  com.wisent.stado.release-agent` before rolling anything else",
+                missing.len(),
+                missing.join(", "),
+                target.name
+            ),
+        ));
+    }
     report.insert("exit_code".to_string(), json!(0));
     report.insert("status".to_string(), json!(RELEASED_STATUS));
     Ok(Value::Object(report))
+}
+
+/// How long a restarted agent is given to publish its stable binds.
+const STABLE_BIND_BUDGET_SECONDS: u64 = 120;
+
+/// Poll every stable bind this host declares until it listens, and report
+/// each one.
+///
+/// The registry comes through the reader that falls back to this host's
+/// last-known-good copy, because the outage this guard exists to catch is one
+/// in which the authority cannot be read: a verification that needed the
+/// authority would go blind at exactly the moment it matters. A host whose
+/// registry cannot be read at all reports no verdicts rather than a false
+/// failure — the roll's own steps already carry that.
+async fn verify_stable_binds(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> (serde_json::Map<String, Value>, Vec<String>) {
+    let mut verdicts = serde_json::Map::new();
+    let mut missing = Vec::new();
+    let Ok((registry, _)) = crate::targets::fetch_registry_or_last_good().await else {
+        return (verdicts, missing);
+    };
+    let plans = crate::deploy::host_recovery::plan_stable_binds(&registry.to_document(), target);
+    if plans.is_empty() {
+        return (verdicts, missing);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(STABLE_BIND_BUDGET_SECONDS);
+    for plan in plans {
+        let port = plan.bind.rsplit(':').next().unwrap_or_default().to_string();
+        let listening = loop {
+            if stable_bind_listening(target, &port, runner).await {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        };
+        verdicts.insert(
+            plan.bind.clone(),
+            json!({
+                "product": plan.product,
+                "verdict": if listening { "listening" } else { "absent" },
+            }),
+        );
+        if !listening {
+            missing.push(format!("{} ({})", plan.bind, plan.product));
+        }
+    }
+    (verdicts, missing)
+}
+
+/// Whether one loopback port has a listener on the target, read with the same
+/// `lsof` spelling every other reader of "what is listening" uses.
+async fn stable_bind_listening(target: &ComputeTarget, port: &str, runner: &Runner) -> bool {
+    let selector = format!("-iTCP:{port}");
+    let words = ["/usr/sbin/lsof", "-nP", selector.as_str(), "-sTCP:LISTEN"];
+    host_channel::run_program(target, &words, runner)
+        .await
+        .is_ok_and(|output| output.ok() && !output.stdout.trim().is_empty())
 }
 
 /// What a `--dry-run` says it would do, in the order it would do it.

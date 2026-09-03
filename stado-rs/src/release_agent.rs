@@ -1856,7 +1856,7 @@ pub async fn reconcile_once(
     target_name: &str,
     product_filter: Option<&str>,
 ) -> Result<Vec<HostReleaseState>, String> {
-    let document = crate::cli::resolver::canonical_document(target_name)
+    let document = crate::cli::resolver::canonical_document_or_last_good(target_name)
         .await
         .map_err(|error| error.to_string())?;
     crate::release_control::validate_registry_contract(&document)?;
