@@ -150,16 +150,23 @@ pub struct ExecRefusal {
 }
 
 impl ExecRefusal {
-    /// A refusal this module states outright: the words name nothing this
-    /// channel offers.
+    /// A refusal this module states outright: the words are understood, and
+    /// the allowlist does not admit them.
     ///
-    /// [`crate::failure::FailureCode::NotFound`] is the fleet vocabulary's
-    /// word for "what the command asked for is not there", which is exactly
-    /// what an unmatched allowlist lookup found. It is not retryable, and its
-    /// exit code is the one the caller already chose.
+    /// [`crate::failure::FailureCode::Refused`] — "an explicit policy refused
+    /// this command" — is the whole of what happened. Nothing is missing, no
+    /// credential was presented, nothing is down, and waiting changes
+    /// nothing: only the words or the table can change. It is not retryable,
+    /// and its exit code is the one the caller already chose.
+    ///
+    /// The code was added to `wisent-errors` for this call site rather than
+    /// picked from the seven that were there. `not_found` reads as a missing
+    /// path and would have sent an operator to check paths and permissions
+    /// until they disbelieved the error, which is the cost the `timeout`
+    /// misclassification was already imposing, only quieter.
     fn unapproved(message: String) -> Self {
         Self {
-            code: Some(crate::failure::FailureCode::NotFound),
+            code: Some(crate::failure::FailureCode::Refused),
             message,
             help: Some(format!("approved commands: {}", allowlist())),
         }
