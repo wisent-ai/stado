@@ -1423,6 +1423,26 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
                  than the state of the host"
             );
         }
+        // Which declared cleaners the pass never reached. `cap_reached` above
+        // says a budget stopped the pass and cannot say whom it stopped, and
+        // the per-cleaner table prints the same three zeros for a cleaner that
+        // never got a turn as for one that looked and found nothing. On
+        // charless-mac-mini `backup_twins` sat at zeros under real pressure
+        // for as long as anyone had looked, behind a `build_caches` walk of
+        // the whole of `$HOME`, while the host refused every ordinary job.
+        let unscanned: Vec<&str> = state
+            .and_then(|value| value.get("unscanned_cleaners"))
+            .and_then(Value::as_array)
+            .map(|names| names.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !unscanned.is_empty() {
+            println!(
+                "the pass ended before these declared cleaner(s) scanned anything: {} — raise \
+                 `max_pass_seconds` or `max_scan_items` with `stado host disk-cleanup`, or narrow \
+                 an earlier cleaner's root, or their zeros mean nobody looked",
+                unscanned.join(", ")
+            );
+        }
     } else {
         println!(
             "\ncleanup state: no state file at {} — the janitor has never \
