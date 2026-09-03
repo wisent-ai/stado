@@ -5819,7 +5819,11 @@ impl UnitImageObservation {
     /// `None` while either identity is unread, which is the answer this whole
     /// module exists to keep apart from `true`.
     pub fn agrees(&self) -> Option<bool> {
-        Some(self.running.as_ref()?.is_same_file(self.installed.as_ref()?))
+        Some(
+            self.running
+                .as_ref()?
+                .is_same_file(self.installed.as_ref()?),
+        )
     }
 }
 

@@ -74,8 +74,10 @@ pub async fn refresh_image(name: &str, json_output: bool) -> Result<(), CmdError
     let before = observe(local, &host, name)?;
     let (running, installed) = actionable(&before)?;
 
-    let service = service::kickstart_local_unit(&before.unit, &before.unit_path)
-        .map_err(|reason| CmdError::click(format!("{} was not restarted: {reason}", before.unit)))?;
+    let service =
+        service::kickstart_local_unit(&before.unit, &before.unit_path).map_err(|reason| {
+            CmdError::click(format!("{} was not restarted: {reason}", before.unit))
+        })?;
 
     let after = settle(local, &host, name, before.pid);
     emit(&before, after.as_ref(), &service, json_output);
@@ -108,9 +110,10 @@ fn observe(
 /// refusal is checkable rather than a bare "no".
 fn actionable(row: &UnitImageObservation) -> Result<(ImageIdentity, ImageIdentity), CmdError> {
     match &row.state {
-        Some(ImageState::Unlinked { running, installed } | ImageState::Replaced { running, installed }) => {
-            Ok((running.clone(), installed.clone()))
-        }
+        Some(
+            ImageState::Unlinked { running, installed }
+            | ImageState::Replaced { running, installed },
+        ) => Ok((running.clone(), installed.clone())),
         Some(ImageState::Unread { subject, reason }) => Err(CmdError::click(format!(
             "{} was not restarted, because whether it is stale is unknown: {subject} could not be \
              read — {reason}. An unread state is not a reason to act any more than it is a reason \

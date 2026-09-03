@@ -275,7 +275,10 @@ fn a_unit_that_is_not_stale_is_refused_and_left_running() {
 
     let out = harness.refresh(UNIT);
     let said = said(&out);
-    assert!(!out.status.success(), "a healthy unit must exit non-zero to refuse: {said}");
+    assert!(
+        !out.status.success(),
+        "a healthy unit must exit non-zero to refuse: {said}"
+    );
     assert!(
         said.contains("is not stale and was not restarted"),
         "the refusal must say it refused: {said}"
@@ -305,7 +308,10 @@ fn a_replacement_still_in_flight_is_refused() {
 
     let out = harness.refresh(UNIT);
     let said = said(&out);
-    assert!(!out.status.success(), "mid-flight must exit non-zero: {said}");
+    assert!(
+        !out.status.success(),
+        "mid-flight must exit non-zero: {said}"
+    );
     assert!(
         said.contains(&format!("less than {IMAGE_SETTLE_SECONDS}s ago")),
         "the refusal must say the replacement is too young: {said}"
@@ -342,7 +348,10 @@ fn a_unit_with_no_live_process_is_refused_with_the_reason() {
 
     let out = harness.refresh(UNIT);
     let said = said(&out);
-    assert!(!out.status.success(), "an unknown unit must exit non-zero: {said}");
+    assert!(
+        !out.status.success(),
+        "an unknown unit must exit non-zero: {said}"
+    );
     assert!(
         said.contains("holds no launchd unit named"),
         "the refusal must say what it looked for: {said}"
@@ -413,7 +422,10 @@ fn only_a_process_on_the_declared_file_counts_as_fixed() {
 #[test]
 fn a_respawn_onto_the_same_image_is_not_success() {
     let was = identity(182_274_754, 0);
-    let unchanged = after(Some(identity(182_274_754, 0)), Some(identity(183_456_547, 1)));
+    let unchanged = after(
+        Some(identity(182_274_754, 0)),
+        Some(identity(183_456_547, 1)),
+    );
     let outcome = refresh_outcome(&was, Some(&unchanged));
     assert_eq!(outcome, RefreshOutcome::Unchanged);
     assert!(
