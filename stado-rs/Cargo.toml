@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.13.51"
+version = "0.13.53"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -30,7 +30,7 @@ fs2 = "0.4"
 # "dir" is required by the disk-cleanup janitor: os.scandir(dir_fd) parity
 # (directory enumeration relative to an already-validated dir fd — the core
 # sandbox primitive of providers/local/disk_cleanup).
-nix = { version = "0.30", features = ["signal", "process", "fs", "dir", "net", "resource"] }
+nix = { version = "0.30", features = ["signal", "process", "fs", "dir", "net"] }
 aws-config = "1"
 aws-sdk-ec2 = "1"
 aws-sdk-pricing = "*"
