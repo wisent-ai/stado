@@ -81,10 +81,33 @@ pub mod web;
 /// [`crate::failure::FailureCode::exit_code`] applied to `code`; a `None`
 /// message exits silently (click `SystemExit`, e.g. config validation
 /// failure after the ERROR lines were already printed).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CmdError {
     pub message: Option<String>,
     pub code: i32,
+    /// The failure code this error stated about itself where it was built.
+    ///
+    /// `None` means it arrived as prose and [`main_entry`] falls back to
+    /// [`crate::failure::classify_message`], which reads the wording. That
+    /// fallback is the last resort and never an equal alternative: a
+    /// keyword read of a sentence is a guess, and on 2026-09-03 the guess
+    /// reported a hard allowlist refusal as a retryable timeout because the
+    /// refusal printed an allowlist containing `--login-timeout-ms`. A
+    /// caller that knows what its failure is says so here.
+    pub failure: Option<crate::failure::FailureCode>,
+    /// Operator help that belongs beside the failure but not inside it —
+    /// the approved spellings of a refused command, for instance. Printed
+    /// after the error line, carried as its own field in `--json`, and
+    /// never classified or logged as the failure's detail.
+    pub help: Option<String>,
+    /// The caller was invoked with `--json` and its failure must be
+    /// machine-readable too.
+    ///
+    /// A command that answers `--json` with prose on the error path cannot
+    /// be handled by the script that asked for JSON; it can only be parsed
+    /// by eye. [`main_entry`] prints one envelope for every command that
+    /// sets this, so the shape is uniform rather than per-command.
+    pub json: bool,
 }
 
 /// click `ClickException`'s exit code: "it ran and failed". Every runtime
@@ -98,6 +121,7 @@ impl CmdError {
         Self {
             message: Some(msg.into()),
             code: CLICK_ERROR_CODE,
+            ..Self::default()
         }
     }
 
@@ -110,6 +134,7 @@ impl CmdError {
             // click's UsageError.exit_code, as a ratio of two width
             // constants rather than a bare literal.
             code: (u16::BITS / u8::BITS) as i32,
+            ..Self::default()
         }
     }
 
@@ -118,7 +143,27 @@ impl CmdError {
         Self {
             message: None,
             code,
+            ..Self::default()
         }
+    }
+
+    /// Carry the code the failure already knows, so nothing downstream has
+    /// to infer it from the wording.
+    pub fn stating(mut self, code: crate::failure::FailureCode) -> Self {
+        self.failure = Some(code);
+        self
+    }
+
+    /// Attach operator help that is not part of the failure sentence.
+    pub fn helping(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    /// Answer in JSON, because that is what the caller asked for.
+    pub fn machine_readable(mut self, json: bool) -> Self {
+        self.json = json;
+        self
     }
 }
 
@@ -2515,9 +2560,37 @@ pub async fn main_entry() -> i32 {
             let Some(message) = err.message.as_deref() else {
                 return err.code;
             };
-            let code = crate::failure::classify_message(message);
-            eprintln!("Error: {message}");
-            eprintln!("{}", crate::failure::operator_line(code));
+            // What the failure said about itself beats what its wording
+            // looks like. `classify_message` reads prose, and prose is
+            // evidence only when there is nothing better: it once read a
+            // refusal's own allowlist and reported `timeout, retryable`.
+            let code = err
+                .failure
+                .unwrap_or_else(|| crate::failure::classify_message(message));
+            if err.json {
+                // The same sorted-keys rendering every `--json` command on
+                // this CLI already prints, so a caller parses one shape.
+                println!(
+                    "{}",
+                    crate::deploy::host_recovery::to_sorted_pretty(&serde_json::json!({
+                        "status": "error",
+                        "failure_point": point,
+                        "service": service,
+                        "error_code": code.as_str(),
+                        "retryable": code.retryable(),
+                        "severity": code.severity().as_str(),
+                        "summary": code.operator_summary(),
+                        "message": message,
+                        "help": err.help,
+                    }))
+                );
+            } else {
+                eprintln!("Error: {message}");
+                if let Some(help) = err.help.as_deref() {
+                    eprintln!("{help}");
+                }
+                eprintln!("{}", crate::failure::operator_line(code));
+            }
             crate::failure::log_failure(&point, service, code, message);
             // Usage errors keep their own code: no amount of retrying fixes
             // an argument, whatever the message happens to read like.

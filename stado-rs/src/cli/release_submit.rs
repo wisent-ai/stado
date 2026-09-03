@@ -308,6 +308,7 @@ async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> CmdError {
                 error, save_error
             )),
             code: error.code,
+            ..CmdError::default()
         };
     }
     error
