@@ -1828,14 +1828,28 @@ impl RemoteObjectApi {
         // the two identities this read can travel under. Both are needed and
         // neither implies the other, which is why declaring a product used to
         // take one command plus a hand-run `skarbiec token-mint`.
-        crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"]).map_err(
-            |error| {
-                CmdError::click(format!(
-                    "cannot make release publisher item {} readable: {error}",
-                    publisher.item()
-                ))
-            },
-        )?;
+        //
+        // Advisory, never fatal, and that distinction was earned. Widening a
+        // grant requires the consumer's own bearer file to still hash to what
+        // the vault recorded, and a caller running as a different identity —
+        // `WC_SKARBIEC_CONSUMER=stado-release-publisher` with its acquisition
+        // token file, which is how the release train authenticates — may hold
+        // a bearer this machine cannot reproduce. Refusing there turned a read
+        // that was already authorized into `refusing to re-mint it, because
+        // the holders of the recorded bearer could not be given it back`: a
+        // correct refusal about a repair nobody asked for, reported as though
+        // the read itself had failed. The read is the question; whether a
+        // grant could be widened first is a convenience, and a convenience
+        // that cannot run says so and steps aside.
+        if let Err(error) =
+            crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"])
+        {
+            eprintln!(
+                "could not widen the grant on release publisher item {} before reading it, \
+                 continuing with the grant as it stands: {error}",
+                publisher.item()
+            );
+        }
         let token = crate::skarbiec::read_release_token(publisher.item(), "token")
             .await
             .map_err(|error| {
