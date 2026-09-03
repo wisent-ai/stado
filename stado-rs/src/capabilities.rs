@@ -1172,6 +1172,11 @@ pub const DATABASE_API_DATABASES_CONFIG: ConfigField = ConfigField::document(
     "WC_DATABASE_API_DATABASES",
     "database_api.databases",
 );
+pub const WEB_API_PRODUCTS_CONFIG: ConfigField = ConfigField::document(
+    "web-api-products",
+    "WC_WEB_API_PRODUCTS",
+    "web_api.products",
+);
 pub const RELEASE_API_PUBLISHERS_CONFIG: ConfigField = ConfigField::document(
     "release-api-publishers",
     "WC_RELEASE_API_PUBLISHERS",

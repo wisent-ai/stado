@@ -156,9 +156,23 @@ jobs:
     env:
       STADO_VERSION: ${{ needs.identity.outputs.version }}
     steps:
+      - uses: actions/checkout@v5
+      # The tree being released judges its own capacity.
+      #
+      # This step used to run `$HOME/.stado/bin/stado`, which is by
+      # construction older than the revision under release — and on 2026-09-03
+      # that staleness cost the 0.13.50 train everything: a migration created
+      # `queue_priority/` beside `queue/`, the installed gateway answered
+      # `prefix=queue/` with both, the installed client could not build the
+      # terminal-workdir keep-list, and the job refused before a single object
+      # was published. The fix for that listing is in this tree; the installed
+      # binary cannot have it, and a release that cannot start until the fix
+      # is installed cannot install the fix.
+      - name: Build the capacity binary from this revision
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Reclaim declared release capacity
         run: |
-          stado="$HOME/.stado/bin/stado"
+          stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           reclaimed=false
           for attempt in 1 2 3; do
             if "$stado" host reclaim lukasz-macbook --apply \
@@ -462,6 +476,16 @@ jobs:
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           export STADO_API_URL="$STADO_WRITER_API_URL"
           test -x "$stado_bin"
+          # The coordinate's identity, before a single artifact. `release.json`
+          # from the signed pipeline and `release-manifest-<platform>.json`
+          # from this job are disjoint names, so create-only immutability never
+          # made the two producers collide: 0.13.46/darwin-arm64 ended up
+          # attesting two different commits and can never be delivered. The
+          # claim is one create-only object both publishers must agree with, so
+          # the second build is refused here, with the prefix still artifact-
+          # free, instead of at delivery with the version already spent.
+          "$stado_bin" release claim-coordinate stado "$STADO_VERSION" linux-amd64 \
+            --source-commit "$GITHUB_SHA"
           # A second attempt at a version whose archive is already published
           # adopts those bytes instead of refusing its own rebuild against
           # them. Release objects are create-only and a rebuilt archive is
@@ -647,6 +671,12 @@ jobs:
           # Each put reads exact bytes back through the authenticated writer;
           # public delivery is verified in the next step.
           export STADO_API_URL="$STADO_WRITER_API_URL"
+          # The coordinate's identity, before a single artifact. See the Linux
+          # publisher above: 0.13.46/darwin-arm64 attests two commits because
+          # the two producers write disjoint names and never collided, and this
+          # is the one object both of them must agree with.
+          "$stado_bin" release claim-coordinate stado "$version" "$platform" \
+            --source-commit "$GITHUB_SHA"
           # Largest object first, and it is the archive by two orders of
           # magnitude. Alphabetical order put it last, behind SHA256SUMS, the
           # manifest and four binaries -- so the one object whose transfer

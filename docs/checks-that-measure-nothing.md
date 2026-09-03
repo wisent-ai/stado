@@ -1,7 +1,7 @@
 # Checks that measure nothing
 
-One defect shape has now been found twenty-eight times in this repository, in
-twenty-eight different subsystems, inside about two days. The twentieth was
+One defect shape has now been found thirty times in this repository, in thirty
+different subsystems, inside about two days. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
 every reading of it was true; the twenty-second is the one where the fleet
 could rule out every mechanism it owns and still not name what had happened;
@@ -11,15 +11,18 @@ two-field change, a worker force-pushed instead of fixing the input it had
 built, and the guard that refused the first attempt was the product working;**
 the next two are the first where the narrowing sat in the instruments this
 record itself produced — a keep-set and a liveness signal — rather than in the
-system they were built to judge; and the twenty-eighth answers instance 20 by
-measuring the thing that mattered about the same name: not who answered, but
-where the bytes went. Every instance is
+system they were built to judge; the twenty-eighth answers instance 20 by
+measuring the thing that mattered about the same name, not who answered but
+where the bytes went; the twenty-ninth is the only one so far whose
+prevention landed in the same change as its diagnosis; and the thirtieth is
+the one that had been true for as long as nobody created the sibling that
+made it visible. Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The twenty-eight
+## The thirty
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -51,6 +54,8 @@ what is actually there.
 | 26 | `REAP_SCRIPT`'s keep-set, `src/deploy/service.rs` (#285) | these pids belong to declared labels, so everything else under a managed root is unowned | **one command's printable domain.** The set is built from `launchctl list`, which prints only the domain the calling login can print, so a declared **system LaunchDaemon**'s pid is never in it. On 2026-09-01 `service ensure stado-agent-mini --as-daemon` installed `com.wisent.compute.service.stado-agent-mini` in the system domain and reported `pid: 3963`; ninety seconds later `service reap --command "stado agent"` classified 3963 `would_end` — the tool whose entire purpose is ending *undeclared* processes proposing to kill the one declared agent the host had, with `--apply` one word away. Its argv is byte-identical to the undeclared duplicate beside it (`/Users/charles/.stado/bin/stado agent --target charless-mac-mini`), so no `--command` substring could separate them: the choices were to end the declared agent along with the duplicate, or not to reap at all. The irony is local — `LOADED_LABELS_SCRIPT`, eight hundred lines above it **in the same file**, already carried the comment explaining that `launchctl list` cannot see the system domain. **Now checked:** the keep-set falls back to `launchctl print <domain>/<label>`, which reads that domain unprivileged, and takes only the `pid` line. Keep-set 3 pids → 14, 3963 flipped `would_end` → `kept`, and `--apply` then ended the duplicate and left the declared daemon running |
 | 27 | `service converge` / `service show` status, and `com.wisent.host-health-beacon-collect` | this host has gone silent, and this unit's state is unknown | **that the thing reporting silence was itself alive.** Every unit on `charless-mac-mini` read a beacon ~5.9 days stale (508416s) because the collector is not running — `launchctl list` holds it at PID `-`, last exit 1 — so `service list` answered `unit state is unknown` for the whole host and `service show` answered `status='declares'` for the queue agent **while two processes were executing its exact declared program**. Beacon freshness is therefore not an available liveness signal on that host at all, and a reader who takes it for one concludes a working host is dead. `declares` is spelled differently from `runs` in that module on purpose (instance 12's lesson); the trap here is one level out — the *staleness threshold* is the declaration, and nothing compared it against whether its own collector still ran. Liveness had to be established from a live fact instead: `host gates` reporting capacity published 0–53 seconds ago, which no stale artefact can fake. **Not fixed:** the collector is still down, so the signal is still unavailable fleet-wide on that host |
 | 28 | the `release` check in `src/doctor.rs`, and `STADO_PUBLIC_RELEASE_API_URL` in both release workflows (#298) | the release channel is reachable | **the route a release actually travels.** The check GETs a 201-byte manifest and passes on any 200, so it passed while `charless-mac-mini.tail6443b3.ts.net` resolved through `1.1.1.1`/`8.8.8.8` — the resolver this machine has for the MagicDNS suffix, which cannot answer a MagicDNS name — to the public `ts.net` front end on one attempt and to nothing on the next, with `100.100.100.100` answering `100.120.25.24` throughout and that address serving the same route in **82 ms**. The 0.13.40 train read one immutable object at 20 MB per 55 s, spent 42 minutes inside `Validate public native release delivery`, and was cancelled at 55 minutes with the object API healthy the whole time. Two narrowings, one name: the check measured the answer instead of the path, and the validation step re-downloaded every object — 300 MB per platform — to prove what the writer read-back had already proven. Instance 20 saw these public addresses and asked whether the name had been hijacked; the answer is that public DNS answers for `ts.net` names by design, and the property nothing held was that a tailnet origin must be reached at its tailnet address |
+| 29 | the immutable release coordinate `releases/<product>/<version>/<platform>/`, written by `deploy.yml` and by `cli::release_submit::publish` (#324) | these objects are immutable, so a version means one build | **that anything owned the version.** Create-only puts protect one OBJECT. The two producers write **disjoint** names — the train writes six executables, `SHA256SUMS`, `stado-v<v>-<p>.tar.gz` and `release-manifest-<p>.json`; the signed pipeline writes `release.json`, `release.sig`, `release.tar.gz` and `qualification.json` — so `--if-absent` never refused either of them, and the version number lives in `Cargo.toml`, which many commits share. `stado/0.13.46/darwin-arm64` is the bill: `release.json` attests `446ad490`, `release-manifest-darwin-arm64.json` attests `641a52b2`, both publications succeeded, and `pipeline_catalog_identity` (#266) then refused delivery of a version that means two builds — correctly, and too late, because immutable objects mean it can never be made to mean one. **Now prevented, not merely detected:** `RELEASE_REVISION_NAME` (`source-revision.json`) is claimed create-only, before any artifact, by every publisher through one function — `claim_release_coordinate`, reached from the pipeline directly and from both workflows as `stado release claim-coordinate` — so a second build is refused while the prefix still holds nothing, naming both commits and the one remedy immutability leaves: publish a new version |
+| 30 | `/api/object/list`, `ObjectRef::namespace_prefix`, both `authorized_list_prefix` implementations and `StadoObjectBackend::blob_prefix` (#334) | this listing answers for the prefix that was asked for | **the separator that says what a prefix is.** Every one of those layers called `trim_matches('/')`, so `prefix=queue/` became `queue`, and a store scan for `queue` answers with `queue/` **and every sibling whose name begins with those five letters**. Nothing had one until 2026-09-02 at 23:32, when a migration created `queue_priority/`: the next release train read 9026 priority markers as queued jobs, `list_jobs` could not build the terminal-workdir keep-list, and `release-capacity` refused the 0.13.50 train before a single object was published — a disk pass that never looked at a build cache, blocking a release, because of a trailing slash. **Now three things instead of one:** the separator survives from the query string to the store scan; a client filters an over-broad answer instead of refusing a store that holds exactly the right objects, so a fleet still running the old gateway cannot make a new reader wrong; and an unreadable queue costs the one stage that needs it — reported as `SKIPPED`, keeping every workdir — instead of the whole reclamation. The refusal for a genuinely inconsistent item, where `uri`, `namespace` and `key` disagree, is untouched: breadth and integrity were one error message, and they need opposite responses |
 
 ## The property they share
 
@@ -355,10 +360,21 @@ delivering `0.13.27` to `charless-mac-mini` and watching `host release` report
 reading true about itself and none of them true about the version that was
 asked for.
 
-**What is still a decision, and still belongs to whoever owns
-`release_control`:** which path should OWN the coordinate. #266 stops the fleet
-installing the wrong one of two, and it does not stop the two from being
-written. `install-stado.sh`, `self_update.rs` and `local_install.rs` still
-resolve the sidecar while `stado release status` resolves the signed manifest,
-so the two-answer problem above survives outside delivery. Taken deliberately
-and not during an incident.
+**The writing half is now closed too (#324), and it did not need the decision
+this paragraph used to wait for.** The question was framed as "which path
+should OWN the coordinate", which reads like a choice between two publishers
+and therefore like somebody else's call. It is not: what was missing is that
+the coordinate had no identity of its own. `source-revision.json`
+([`RELEASE_REVISION_NAME`]) is now claimed create-only before any artifact by
+every publisher, through `claim_release_coordinate` — the signed pipeline calls
+it inside `publish_pipeline_release`, the tag train and the existing-release
+recovery call it as `stado release claim-coordinate` — so the FIRST build to
+reach a version states it and any other build is refused with nothing
+published. Both producers may still write their own names into a coordinate;
+what they can no longer do is disagree about which commit it came from.
+
+**What remains a decision, and it is a smaller one:** which manifest a reader
+should resolve. `install-stado.sh`, `self_update.rs` and `local_install.rs`
+read the sidecar while `stado release status` reads the signed manifest. With
+#324 in place the two can no longer name different revisions, so this is now a
+question of which document is canonical rather than which answer is true.

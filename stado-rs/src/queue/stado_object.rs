@@ -429,7 +429,11 @@ impl BlobBackend for StadoObjectBackend {
     /// prefix is the whole namespace and is passed through as empty rather
     /// than validated as a key.
     fn blob_prefix(&self, _namespace: &str, prefix: &str) -> Result<String, StorageError> {
-        Ok(prefix.trim_matches('/').to_string())
+        // The trailing separator travels with the request: `queue/` means the
+        // queue's own objects, and without it the gateway answers with every
+        // sibling whose name starts with `queue` — `queue_priority/`'s 9026
+        // markers among them, which `list_jobs` then tries to parse as jobs.
+        Ok(prefix.trim_start_matches('/').to_string())
     }
 
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError> {
@@ -691,9 +695,16 @@ impl BlobBackend for StadoObjectBackend {
             return Err(Self::response_error(response).await);
         }
         let payload: ObjectList = response.json().await?;
+        // Keep only what was asked for. A gateway that drops the trailing
+        // separator answers a request for `queue/` with every `queue*`
+        // sibling, and a client that trusts the filter reads 9026
+        // `queue_priority/` markers as queued jobs. Filtering here means a
+        // fleet still running that gateway cannot make this reader wrong.
+        let requested = self.blob_prefix(&self.namespace, prefix)?;
         payload
             .objects
             .into_iter()
+            .filter(|object| object.key.starts_with(&requested))
             .map(|object| {
                 Ok(BlobInfo {
                     name: object.key,

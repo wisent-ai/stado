@@ -201,6 +201,23 @@ in the release documentation.
   acceptance suite is recorded for the released version; missing evidence is not
   promoted to stable support.
 
+### Host a web product on a public hostname
+
+- **Actor:** an operator replacing a third-party build-and-host platform.
+- **Initial state:** the product's repository carries a `.wisent-release.json`
+  with a `web` platform, and the fleet carries a declared public edge host.
+- **Outcome:** `stado release submit` builds the product on a fleet builder and
+  publishes one runnable tarball; `stado web deploy` installs it as a managed
+  unit with its environment delivered field by field from Skarbiec and its
+  database credential resolved for that unit's own consumer; `stado web route`
+  puts a certificate on the edge and then writes the hostname's DNS record
+  through `stado dns`.
+- **Safety boundary:** the unit binds loopback and the edge owns 443; a
+  hostname's record is written only after its certificate exists; no
+  credential value is read by the operator or placed in a command line; and a
+  product that is not a declared consumer of a database cannot receive its
+  credential. The contract is `docs/web-hosting.md`.
+
 ## How Stado works
 
 ```mermaid
@@ -345,6 +362,9 @@ stado machine ...
 stado artifact ...
 stado host ...
 stado service ...
+stado web declare|deploy|route|status|list|remove
+stado web edge provision|declare|status|hostnames|remove
+stado dns list|set|remove
 stado egress mobile serve ...
 stado resources ...
 stado doctor
@@ -385,6 +405,34 @@ the route and whether the realized exit quality is acceptable. The real-device
 contract is `stado-rs/tests/egress/`: Probierz supplies a trusted phone tether,
 runs the built binary, and requires the public exit to be classified as mobile
 and not hosting or a public proxy.
+
+### Web hosting
+
+`stado web` hosts a Node web product on the fleet, and `stado dns` owns the
+records of the zones Stado manages at their registrar. A product declares
+one `web` platform in its `.wisent-release.json` whose quality and build steps
+are `stado web quality` and `stado web build`, so the recipe stays declarative
+and the build has one implementation for every web product.
+
+```sh
+stado web declare preferences-landing \
+  --host charless-mac-mini --port 3210 \
+  --hostname preferences.wisent.com --consumer preferences-landing-web
+stado release submit preferences-landing --channel stable
+stado web deploy preferences-landing
+stado web route preferences-landing
+```
+
+The unit binds loopback and a declared edge host owns 443, with a Let's
+Encrypt certificate per hostname. The certificate is ordered before the DNS
+record is written, because a record that resolves to an edge holding no
+certificate is an outage. Environment reaches the unit only through
+`stado service secret-sync`, one Skarbiec field into one variable, and a
+database credential is resolved for that unit's own consumer through
+`stado database resolve`.
+
+The contract, the zones it was designed against, and why the edge is a host
+rather than a tunnel: [`docs/web-hosting.md`](docs/web-hosting.md).
 
 ### Machine JSON
 
@@ -534,6 +582,21 @@ plaintext is resolved only at execution time.
 Operators pin an exact immutable version and platform. Upgrade requires a
 verified release manifest, compatible schema range, backup, health check, and
 rollback coordinate. No runtime follows a mutable `latest` binary.
+
+One version means one build, and that is enforced where publication starts
+rather than where delivery ends. Two publishers write a
+`releases/<product>/<version>/<platform>/` coordinate — the release train
+writes the executables, `SHA256SUMS`, the platform archive and
+`release-manifest-<platform>.json`; the signed pipeline writes `release.json`,
+`release.sig`, `release.tar.gz` and `qualification.json` — and immutability
+alone never separated them, because those name sets are disjoint. Each
+publisher therefore claims `source-revision.json` create-only before its first
+artifact, through `stado release claim-coordinate PRODUCT VERSION PLATFORM
+--source-commit COMMIT`. The first build to reach a version states it; a
+second build is refused there, with the coordinate still empty of artifacts,
+and the refusal names both commits. Republishing the same version from the
+same commit confirms the record and is idempotent, which is what a resumed or
+recovered publication needs.
 
 Stado release artifacts contain the client only; they never bundle or apply
 Supabase migrations. Database rollout is versioned and deployed from

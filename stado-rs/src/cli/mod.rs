@@ -32,6 +32,7 @@ pub mod dashboard;
 pub mod database;
 pub mod directory;
 pub mod disk_cleanup;
+pub mod dns;
 pub mod doctor;
 pub mod egress;
 pub mod fleet;
@@ -61,8 +62,10 @@ pub mod resources;
 pub mod results;
 pub mod schedule;
 pub mod secrets;
+pub mod seed_freshness;
 pub mod service;
 pub mod service_converge;
+pub mod service_refresh_image;
 pub mod service_verify;
 pub mod status;
 pub mod storage;
@@ -70,6 +73,7 @@ pub mod stream;
 pub mod submit;
 pub mod table;
 pub mod vast;
+pub mod web;
 
 /// Command failure with a click-matching exit code. A `Some` message is
 /// printed as `Error: {msg}` on stderr (click `ClickException`, code 1)
@@ -551,6 +555,12 @@ enum Commands {
     /// Resolve fleet databases: placement endpoint and credential coordinate.
     #[command(subcommand)]
     Database(database::DatabaseCommands),
+    /// Host a web product on the fleet: build it, run it, publish its hostname.
+    #[command(subcommand)]
+    Web(web::WebCommands),
+    /// Own the records of a DNS zone Stado manages at its registrar.
+    #[command(subcommand)]
+    Dns(dns::DnsCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     ///
     /// Being replaced by the service declaration contract: a model server is
@@ -1965,6 +1975,27 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Whether each of TARGET's login rows still holds an authenticator seed
+    /// its account accepts.
+    ///
+    /// The vault is asked whether a seed exists; the recorded sign-in history
+    /// is asked whether codes computed from it were accepted or refused, and
+    /// since when. Four conditions with four different repairs come out of
+    /// that join: a seed last known good, a seed every attempt has refused
+    /// since a date, a declared `totp_secret` field carrying nothing, and a
+    /// row whose kind has no such field at all. Reads the host's own files, so
+    /// it still answers while the Weles worker API is down. No seed, password
+    /// or one-time code is read, printed or returned, and no code is computed.
+    #[command(name = "authenticator-seed-freshness")]
+    AuthenticatorSeedFreshness {
+        target: String,
+        /// Judge only this login item instead of every login row.
+        #[arg(long)]
+        login_item: Option<String>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect every image rendered by one HTTPS surface in a read-only Weles
     /// browser session on TARGET. The objective and safety constraints are
     /// fixed by Stado; the caller supplies only the URL.
@@ -3030,6 +3061,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 file,
                 json,
             } => host::weles_run_diagnostics(&target, &run_id, file.as_deref(), json).await,
+            HostCommands::AuthenticatorSeedFreshness {
+                target,
+                login_item,
+                json,
+            } => {
+                seed_freshness::authenticator_seed_freshness(&target, login_item.as_deref(), json)
+                    .await
+            }
             HostCommands::WelesImageInspect { target, url, json } => {
                 host::weles_image_inspect(&target, &url, json).await
             }
@@ -3154,6 +3193,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Database(sub) => database::dispatch(sub).await,
+        Commands::Web(sub) => web::dispatch(sub).await,
+        Commands::Dns(sub) => dns::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,

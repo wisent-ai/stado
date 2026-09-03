@@ -43,18 +43,23 @@ test -f "$release_dir/$manifest_name"
 # objects from here, four from there, and a check that expected the coordinate
 # to hold only what this runner had on disk refused a complete release.
 #
-# The four names are declared once, in `release_control.rs`, and read out of
-# that declaration here so this check cannot drift from the writer that makes
-# them.
+# Those names, plus `source-revision.json` — the claim every publisher writes
+# create-only before its first artifact, so one version can only ever attest
+# one build — are declared once, in `release_control.rs`, and read out of that
+# declaration here so this check cannot drift from the writers that make them.
+# `[A-Z_]*` and not `[A-Z]*`: a two-word constant like
+# `RELEASE_REVISION_NAME`'s successors would otherwise be silently skipped and
+# read as a member nobody declares.
 control_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/stado-rs/src/release_control.rs"
 test -f "$control_source"
 control_names="$(
-  sed -n 's/^pub const RELEASE_[A-Z]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source"
+  sed -n 's/^pub const RELEASE_[A-Z_]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source"
 )"
 declared_control="$(printf '%s\n' "$control_names" | sed '/^$/d' | /usr/bin/wc -l | tr -d '[:space:]')"
-if [ "$declared_control" -lt 4 ]; then
-  echo "$control_source declares $declared_control signed-release object name(s);" \
-    "this check needs them to know which members the release pipeline writes" >&2
+if [ "$declared_control" -lt 5 ]; then
+  echo "$control_source declares $declared_control release-owned object name(s);" \
+    "this check needs them to know which members the pipeline and the coordinate" \
+    "claim write" >&2
   exit 1
 fi
 
