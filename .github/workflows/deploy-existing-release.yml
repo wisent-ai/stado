@@ -121,6 +121,11 @@ jobs:
           cp "$manifest" "$recovered/release-manifest-$platform.json"
           cp "$archive" "$recovered/stado-v$version-$platform.tar.gz"
 
+          # The same claim every publisher makes first. A resume republishes
+          # the tag's own build, so this confirms the record the train already
+          # wrote and refuses a coordinate some other build owns.
+          "$stado_bin" release claim-coordinate stado "$version" "$platform" \
+            --source-commit "$tag_commit"
           for source in "$recovered"/*; do
             name="${source##*/}"
             "$stado_bin" storage put "$prefix/$name" "$source" --if-absent
@@ -274,6 +279,11 @@ jobs:
             "$tag_source/scripts/release_manifest.sh"
           mv "$archive" "$release_dir/$archive_name"
 
+          # The claim before the first put, as in the train: a rebuild of the
+          # tag's own commit confirms the existing record, and any other build
+          # is refused here rather than at delivery.
+          "$recovery_stado" release claim-coordinate stado "$version" "$platform" \
+            --source-commit "$tag_commit"
           for source in "$release_dir"/*; do
             name="${source##*/}"
             state="$("$recovery_stado" storage stat "$prefix/$name" --json |

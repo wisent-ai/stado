@@ -462,6 +462,16 @@ jobs:
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           export STADO_API_URL="$STADO_WRITER_API_URL"
           test -x "$stado_bin"
+          # The coordinate's identity, before a single artifact. `release.json`
+          # from the signed pipeline and `release-manifest-<platform>.json`
+          # from this job are disjoint names, so create-only immutability never
+          # made the two producers collide: 0.13.46/darwin-arm64 ended up
+          # attesting two different commits and can never be delivered. The
+          # claim is one create-only object both publishers must agree with, so
+          # the second build is refused here, with the prefix still artifact-
+          # free, instead of at delivery with the version already spent.
+          "$stado_bin" release claim-coordinate stado "$STADO_VERSION" linux-amd64 \
+            --source-commit "$GITHUB_SHA"
           # A second attempt at a version whose archive is already published
           # adopts those bytes instead of refusing its own rebuild against
           # them. Release objects are create-only and a rebuilt archive is
@@ -647,6 +657,12 @@ jobs:
           # Each put reads exact bytes back through the authenticated writer;
           # public delivery is verified in the next step.
           export STADO_API_URL="$STADO_WRITER_API_URL"
+          # The coordinate's identity, before a single artifact. See the Linux
+          # publisher above: 0.13.46/darwin-arm64 attests two commits because
+          # the two producers write disjoint names and never collided, and this
+          # is the one object both of them must agree with.
+          "$stado_bin" release claim-coordinate stado "$version" "$platform" \
+            --source-commit "$GITHUB_SHA"
           # Largest object first, and it is the archive by two orders of
           # magnitude. Alphabetical order put it last, behind SHA256SUMS, the
           # manifest and four binaries -- so the one object whose transfer
