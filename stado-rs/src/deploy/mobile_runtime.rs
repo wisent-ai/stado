@@ -95,6 +95,19 @@ pub const NPM_PREFIX: &str = "$HOME/.npm-global";
 /// the same tree rather than a second copy.
 pub const ANDROID_SDK_ROOT: &str = "$HOME/Library/Android/sdk";
 
+/// Wall clock a repair is allowed, and why it is not the shared default.
+///
+/// [`host_channel::run_script`]'s bound is 120 seconds, which is right for
+/// the reads every other host command makes and wrong for this one: a single
+/// `appium driver install uiautomator2` fetches the driver, its dependency
+/// tree and its bundled server APKs, and the first attempt at this repair
+/// died at exactly that bound with the driver half-installed. A timeout
+/// shorter than the operation does not protect anything — it converts a slow
+/// success into an indeterminate state — so the bound is sized to the work
+/// and stays a bound, because an install that has not finished in a quarter
+/// of an hour is a fault to report and not a download to keep waiting on.
+const REPAIR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
 /// One component of the runtime, as the host reported it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComponentState {
@@ -243,6 +256,19 @@ LC_ALL=C
 export LC_ALL
 decode=-D
 if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+# The reason, not the epilogue. npm ends a failed install with three lines
+# naming its own log files, so a blind `tail` reports where the answer was
+# written on a host nobody may read files on, and hides the answer. Prefer the
+# lines that carry the diagnosis, and fall back to the tail only when none do.
+diagnose() {
+  said=$(printf '%s' "$1" | /usr/bin/grep -E 'ERESOLVE|npm error' 2>/dev/null \
+    | /usr/bin/grep -v -E '_logs|A complete log|For a full report' \
+    | /usr/bin/head -n 8 | /usr/bin/tr '\n\t' '  ')
+  if [ -z "$said" ]; then
+    said=$(printf '%s' "$1" | /usr/bin/tail -n 3 | /usr/bin/tr '\n\t' '  ')
+  fi
+  printf '%s' "$said"
+}
 appium_version=$(printf '%s' '@APPIUM_B64@' | /usr/bin/base64 "$decode")
 drivers=$(printf '%s' '@DRIVERS_B64@' | /usr/bin/base64 "$decode")
 platform_tools=$(printf '%s' '@PLATFORM_TOOLS_B64@' | /usr/bin/base64 "$decode")
@@ -263,7 +289,7 @@ if [ -n "$appium_version" ]; then
     if out=$("$npm_bin" install --global --prefix "$prefix" "appium@$appium_version" 2>&1); then
       printf 'STADO_RUNTIME\tinstalled\tappium@%s\n' "$appium_version"
     else
-      printf 'STADO_RUNTIME\tfailed\tappium@%s: %s\n' "$appium_version" "$(printf '%s' "$out" | /usr/bin/tail -n 3 | /usr/bin/tr '\n\t' '  ')"
+      printf 'STADO_RUNTIME\tfailed\tappium@%s: %s\n' "$appium_version" "$(diagnose "$out")"
     fi
   fi
 fi
@@ -271,6 +297,39 @@ appium_bin=''
 for candidate in "$prefix/bin/appium" "$HOME/.local/bin/appium" /opt/homebrew/bin/appium /usr/local/bin/appium; do
   if [ -x "$candidate" ]; then appium_bin="$candidate"; break; fi
 done
+# The declared server and the installed driver tree have to agree, and on this
+# fleet they did not. `$APPIUM_HOME` outlives any one server: this host still
+# carried `appium-mac2-driver@1.20.5`, whose peer is `appium@^2.4.1`, from an
+# Appium 2 era, and npm resolves the whole extension tree at once -- so an
+# undeclared driver nobody asked about refused every install into it with
+# ERESOLVE. Updating the installed set is the conservative repair: it keeps
+# every driver the host has, including ones this declaration says nothing
+# about, and only moves them onto versions the declared server can host.
+# Removing the blocker instead would be Stado deciding that a capability it
+# was not asked about is expendable.
+# The deadlock needs one, and only one, relaxed resolution. The blocker is a
+# STALE pin: `appium-mac2-driver@1.20.5` demands `appium@^2.4.1`, and npm
+# resolves the whole extension tree at once, so while it is in the tree even
+# `driver update` cannot run -- the command that would remove the conflict is
+# refused by the conflict. `NPM_CONFIG_LEGACY_PEER_DEPS` is set for the
+# update alone, which lets the update land the CURRENT versions of every
+# installed driver, all of which declare `appium@^3.0.0-rc.2`. The tree is
+# then consistent on its own terms and the install that follows runs under
+# ordinary resolution. Nothing is uninstalled: an undeclared driver is
+# updated and kept, never removed, because deciding a capability nobody
+# asked about is expendable is the operator's call and not this command's.
+update_installed_drivers() {
+  if [ "$drivers_updated" = "yes" ]; then return 0; fi
+  drivers_updated=yes
+  if out=$(NPM_CONFIG_LEGACY_PEER_DEPS=true "$appium_bin" driver update installed --unsafe 2>&1); then
+    printf 'STADO_RUNTIME\tupdated\tinstalled driver set, onto versions the declared server can host\n'
+  else
+    # Never swallowed. An update that failed silently here is what made the
+    # first two repair attempts report a cause that was not the cause.
+    printf 'STADO_RUNTIME\tfailed\tdriver update: %s\n' "$(diagnose "$out")"
+  fi
+}
+drivers_updated=no
 for driver in $drivers; do
   if [ -z "$appium_bin" ]; then
     printf 'STADO_RUNTIME\tfailed\tdriver %s: no appium on this host to install it into\n' "$driver"
@@ -280,14 +339,29 @@ for driver in $drivers; do
   PATH="$node_dir:$PATH"
   export PATH
   if "$appium_bin" driver list --installed 2>&1 | /usr/bin/grep -q -- "$driver"; then
+    # Present, but presence is not agreement: a driver installed against an
+    # older server is reported here and judged by the verify pass that
+    # follows, which reads each driver's own version.
     printf 'STADO_RUNTIME\tpresent\tdriver %s\n' "$driver"
     continue
   fi
   if out=$("$appium_bin" driver install "$driver" 2>&1); then
     printf 'STADO_RUNTIME\tinstalled\tdriver %s\n' "$driver"
-  else
-    printf 'STADO_RUNTIME\tfailed\tdriver %s: %s\n' "$driver" "$(printf '%s' "$out" | /usr/bin/tail -n 3 | /usr/bin/tr '\n\t' '  ')"
+    continue
   fi
+  case "$out" in
+    *ERESOLVE*)
+      update_installed_drivers
+      if retry=$("$appium_bin" driver install "$driver" 2>&1); then
+        printf 'STADO_RUNTIME\tinstalled\tdriver %s\n' "$driver"
+      else
+        printf 'STADO_RUNTIME\tfailed\tdriver %s: %s\n' "$driver" "$(diagnose "$retry")"
+      fi
+      ;;
+    *)
+      printf 'STADO_RUNTIME\tfailed\tdriver %s: %s\n' "$driver" "$(diagnose "$out")"
+      ;;
+  esac
 done
 if [ "$platform_tools" = "yes" ]; then
   if [ -x "$sdk/platform-tools/adb" ]; then
@@ -315,6 +389,36 @@ if [ "$platform_tools" = "yes" ]; then
   fi
 fi
 "##;
+
+/// The version of one installed driver, out of `appium driver list
+/// --installed`.
+///
+/// The listing is decorated differently by Appium 2 and 3 — bullets, colour
+/// escapes, an `[installed (npm)]` suffix — and the one token both write
+/// identically is `<name>@<version>`. Matched on the exact name so
+/// `uiautomator2` is never read out of a line about a different driver, and
+/// `None` when the driver is listed without a version rather than a guess.
+pub fn installed_driver_version(listing: &str, driver: &str) -> Option<String> {
+    let needle = format!("{driver}@");
+    let mut rest = listing;
+    while let Some(at) = rest.find(&needle) {
+        // Reject a suffix match: `test@1` must not answer for `xcuitest@2`.
+        let boundary_ok = rest[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|character| !character.is_ascii_alphanumeric() && character != '-');
+        let tail = &rest[at + needle.len()..];
+        let version: String = tail
+            .chars()
+            .take_while(|character| character.is_ascii_digit() || *character == '.')
+            .collect();
+        if boundary_ok && !version.is_empty() {
+            return Some(version);
+        }
+        rest = tail;
+    }
+    None
+}
 
 /// Everything the host said about its runtime, judged against the
 /// declaration.
@@ -379,21 +483,27 @@ pub async fn verify(
 
     let installed_drivers = field("drivers");
     for driver in &declared.drivers {
-        // Matched as a word out of the driver table rather than parsed: the
-        // table's columns differ between Appium 2 and 3, and the one fact
-        // needed is whether the name is in it.
-        let present = installed_drivers
-            .split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
-            .any(|word| word == driver.as_str());
+        // The listing's columns differ between Appium 2 and 3, so this reads
+        // the one shape both spell the same way: `<name>@<version>`. Reporting
+        // the version and not just the name matters here — this host carried
+        // an Appium 2-era driver set under a `$APPIUM_HOME` that outlived its
+        // server, and "installed" alone would have called that agreement.
+        let installed_version = installed_driver_version(&installed_drivers, driver);
+        let present = installed_version.is_some()
+            || installed_drivers
+                .split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+                .any(|word| word == driver.as_str());
         components.push(ComponentState {
             name: format!("driver:{driver}"),
             declared: "required".to_string(),
             path: "appium driver list --installed".to_string(),
-            observed: if present {
-                "installed".to_string()
-            } else {
-                String::new()
-            },
+            observed: installed_version.unwrap_or_else(|| {
+                if present {
+                    "installed".to_string()
+                } else {
+                    String::new()
+                }
+            }),
             state: if present {
                 COMPONENT_PRESENT.to_string()
             } else {
@@ -472,7 +582,8 @@ pub async fn repair(
             "@PLATFORM_TOOLS_B64@",
             &STANDARD.encode(if declared.platform_tools { "yes" } else { "no" }),
         );
-    let output = host_channel::run_script(target, &script, runner).await?;
+    let output =
+        host_channel::run_script_with_timeout(target, &script, REPAIR_TIMEOUT, runner).await?;
     let lines: Vec<String> = output
         .stdout
         .lines()
@@ -604,6 +715,34 @@ mod tests {
         assert!(parsed.platform_tools);
         // A newer publisher's key survives a rewrite from this checkout.
         assert!(parsed.extra.contains_key("future_key"));
+    }
+
+    #[test]
+    fn a_drivers_own_version_is_read_out_of_the_listing() {
+        // The shape Appium 3 prints, bullets and suffix included.
+        let listing = "- uiautomator2@5.0.1 [installed (npm)] - xcuitest@12.9.1 [installed (npm)]";
+        assert_eq!(
+            installed_driver_version(listing, "uiautomator2").as_deref(),
+            Some("5.0.1")
+        );
+        assert_eq!(
+            installed_driver_version(listing, "xcuitest").as_deref(),
+            Some("12.9.1")
+        );
+        assert_eq!(installed_driver_version(listing, "mac2"), None);
+    }
+
+    #[test]
+    fn a_driver_name_is_never_read_out_of_a_longer_one() {
+        // `xcuitest@12.9.1` must not answer for a driver called `test`, which
+        // is the bug a substring search would ship.
+        let listing = "- xcuitest@12.9.1 [installed (npm)]";
+        assert_eq!(installed_driver_version(listing, "test"), None);
+    }
+
+    #[test]
+    fn a_listed_driver_with_no_version_is_not_guessed_at() {
+        assert_eq!(installed_driver_version("- uiautomator2 [installed]", "uiautomator2"), None);
     }
 
     #[test]
