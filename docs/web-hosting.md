@@ -34,84 +34,114 @@ unit's Skarbiec consumer grant.
 
 **The database plane.** `stado database resolve <db> --consumer <consumer>`
 answers with the Skarbiec item that carries the credential, and refuses a
-consumer the declaration does not list (`stado-rs/src/cli/database.rs`,
-`database_api` in the configuration). The value never leaves Skarbiec through
-this path; the item name does.
+consumer the declaration does not list (`stado-rs/src/cli/database.rs`). The
+value never leaves Skarbiec through this path; the item name does.
 
 ## What the zones and the credentials actually are
 
-Everything about the ingress follows from six measurements, all taken on
-2026-09-02.
+Everything about the ingress follows from measurements taken on 2026-09-02.
 
-`dig +short NS wisent.com` (and the same for `wisent.ai` and `needher.ai`)
-answers `dns1.registrar-servers.com` and `dns2.registrar-servers.com`. All
-three zones are served by Namecheap. None of them is on Cloudflare.
+**The zones are split between two registrars, and the ones that matter are at
+Namecheap.** `dig +short NS <zone>` puts `wisent.com`, `wisent.ai`,
+`needher.ai`, `aiwritecheck.com` and `undetectabletext.com` on
+`dns1/dns2.registrar-servers.com` — Namecheap. It puts `wisent-app.com`,
+`aiwisent.com`, `getwisent.com`, `trywisent.com`, `wisentai.com`,
+`wisentplatform.com`, `bobloo.com`, `pol-acc.com`, `tour-bot.com`,
+`lukaszbartoszcze.com` and `downloadreal.com` on
+`gabriel/galilea.ns.cloudflare.com`, `controlai.org` on `love/ned.ns.cloudflare.com`,
+and `alpha2.ai` at GoDaddy. Both Preferences hostnames live in `wisent.com`.
 
-`curl -sI https://preferences.wisent.com/` answers `200` with `server: Vercel`
-and an `x-vercel-id` header, and the hostname resolves to `76.76.21.21`. The
-same is true of `app.preferences.wisent.com` and of `brama.wisent.com`, which
-fronts a service that runs on the fleet. Vercel is the TLS edge for
-`*.wisent.com` today, including for surfaces the fleet already serves.
+**Vercel is only the custom-domain front; the fleet already serves the bytes.**
+`curl -sI https://preferences.wisent.com/` answers 200 with `server: Vercel`
+and an `x-vercel-id` header. The `brama-ingress` and `vercel-ingress` projects
+are the same code — the `vercel-ingress` root of `wisent-ai/brama`, whose
+`vercel.json` is a catch-all rewrite to
+`https://charless-mac-mini.tail6443b3.ts.net/:path*`. So Brama is already
+published over public HTTPS by the mini itself, and Vercel contributes exactly
+one thing: a certificate for a `wisent.com` name.
 
-Skarbiec holds two Cloudflare items. `platform-admin-cloudflare` carries
-`username` and `password` — a console login, not an API credential.
-`platform-cloudflare-bobloo-tunnel` carries `account_id`, `token`, `tunnel_id`
-and `tunnel_name`, and its `token` is a 180-character `cloudflared` tunnel
-token: presented to the Cloudflare API as a bearer it is refused with code
-6111, `Invalid format for Authorization header`. There is no Cloudflare API
-token in the vault, and `stado cloudflare` requires one
-(`--api-credential`, whose item must carry `account_id` and `api_token`).
-
+**No fleet host has a public address.**
 `stado host exec ubuntu-server-rtx-pro-6000 -- tailscale netcheck` reports
-`IPv4: yes, 24.23.232.108:56883`. `curl -s -4 https://api.ipify.org` from the
-operator's laptop answers the same address. Every fleet host sits behind one
-residential connection, and inbound TCP to 80 and 443 on that address times
-out. No fleet host has a public IPv4 address.
+`IPv4: yes, 24.23.232.108:56883`, and `curl -s -4 https://api.ipify.org` from
+the operator's laptop answers the same address: every host sits behind one
+residential connection. Inbound TCP to 80 and 443 on that address times out,
+and `PortMapping:` in the same report is empty.
 
+**The fleet's only public entrance is a Tailscale Funnel.**
 `stado host exec charless-mac-mini -- tailscale funnel status` reports Funnel
 on for `https://charless-mac-mini.tail6443b3.ts.net` on ports 443, 8443 and
-10000, each forwarding to a loopback origin. That is the fleet's only public
-entrance, and Tailscale states its limit plainly: Funnel can only use DNS names
-in the tailnet's own domain. A request whose SNI is `preferences.wisent.com`
-has nowhere to go in that path, whatever DNS says.
+10000, each forwarding to a loopback origin.
 
-`stado host exec charless-mac-mini -- lsof -nP -iTCP -sTCP:LISTEN` shows
-`cloudflared` already running on the mini on `127.0.0.1:20241`, `node` serving
-on three ports, and `caddy` with its admin API on `127.0.0.1:2019`.
+**There is no Cloudflare API credential.** `platform-admin-cloudflare` carries
+`username` and `password` — a console login. `platform-cloudflare-bobloo-tunnel`
+carries `account_id`, `token`, `tunnel_id` and `tunnel_name`, and its `token`
+is a 180-character `cloudflared` tunnel token: presented to the Cloudflare API
+as a bearer it is refused with code 6111, `Invalid format for Authorization
+header`. `stado cloudflare` requires an `--api-credential` item carrying
+`account_id` and `api_token`, and no such item exists.
 
-## Why the ingress is a Cloudflare Tunnel
+**Azure administration is unblocked.**
+`stado azure unusual-activity diagnose` on subscription
+`9ae7cfa4-93e4-44f6-8f4d-5cea670e22bd` reports
+`active_unusual_activity_denies: 0` and
+`resolution: no_active_unusual_activity_deny`, through the
+`stado-azure-operator` credential. `stado capabilities` lists `compute`/`azure`
+as `implemented` (`providers::azure::AzureProvider`), and the Azure grant is
+USD 100,000 valid to 2028-05-06 with its spending limit removed.
 
-A public `https://<hostname>` on the operator's own domain needs two things at
+## Why the ingress is a Stado edge host, not a tunnel
+
+A public `https://<hostname>` on the operator's own domain needs two things in
 the same place: a route the public internet can reach, and a certificate for
-that exact hostname. The fleet has the first only through Tailscale Funnel,
-which cannot supply the second for anything outside `*.ts.net`. So the
-certificate has to be issued and presented by something in front of the fleet.
+that exact hostname. The fleet has the route only through Tailscale Funnel, and
+Funnel cannot supply the certificate. Three mechanisms can, and they were
+weighed against what is actually true above.
 
-A Cloudflare Tunnel is the mechanism that fits, and it is the only one that
-costs nothing and adds no machine. `cloudflared` on a fleet host dials out to
-Cloudflare, so no inbound port and no public address are needed; Cloudflare
-terminates TLS for the hostname with a certificate it issues and manages; and
-the hostname's DNS record is a `CNAME` to `<tunnel_id>.cfargotunnel.com`, which
-only Cloudflare can resolve to the tunnel. Stado already speaks exactly this
-protocol in `stado cloudflare route-tunnel`: it reads the tunnel's ingress
-configuration, adds the hostname's rule, writes the configuration back, and
-creates the proxied `CNAME`.
+**Tailscale Funnel with a Namecheap CNAME — ruled out, verified.** Tailscale
+states the limit itself: Funnel can only use DNS names in the tailnet's own
+domain (`tailnet-name.ts.net`). A CNAME from a custom name to the MagicDNS name
+reaches the Funnel ingress and then fails the TLS handshake, because the
+ingress routes by SNI and holds no certificate for the custom name
+(tailscale/tailscale#16478, and the open request #11563 to allow custom domains
+at all). This is the mechanism `brama-ingress` works around by putting Vercel
+in front, and it cannot be fixed on our side.
 
-Cloudflare issues that edge certificate only for a hostname in a zone it
-serves. For `preferences.wisent.com` that means the `wisent.com` zone moves to
-Cloudflare's nameservers, with every record it holds today — including the
-Google Workspace MX records — re-created there first. Delegating only the
-`preferences.wisent.com` subtree as its own Cloudflare zone would avoid
-touching the apex, but subdomain zones and CNAME-only ("partial") setup are
-Business-plan features, so that variant costs money rather than a nameserver
-change.
+**A Cloudflare Tunnel — kept, but not for `wisent.com`.** `cloudflared` dials
+out, so no inbound port is needed, Cloudflare terminates TLS with a certificate
+it issues, and the hostname is a proxied `CNAME` to
+`<tunnel_id>.cfargotunnel.com`. Stado already speaks exactly this in
+`stado cloudflare route-tunnel`, and `cloudflared` is already running on the
+mini. But Cloudflare issues that certificate only for a hostname in a zone it
+serves, so a `wisent.com` hostname would mean moving that zone's nameservers
+off Namecheap and re-creating every record it holds, the Google Workspace MX
+records included. Delegating only the `preferences.wisent.com` subtree avoids
+the apex but needs a Business plan, so it trades a nameserver move for a
+monthly bill. **Moving a zone's nameservers is the operator's decision and is
+not taken here.** This edge stays implemented and is the right one for the
+eleven zones already on Cloudflare.
 
-**This is the operator's decision, and it is the one thing on this page that is
-not Stado's to take.** Until it is taken, `stado web route --edge cloudflare`
-refuses with the reason rather than half-publishing a hostname, and
-`stado web route --edge funnel` publishes the product on the fleet's own public
-entrance, which needs no zone change and proves everything except the custom
-hostname's certificate.
+**A Stado edge host with a public address — chosen.** One small Linux VM,
+provisioned by Stado through the Azure provider it already implements, joined
+to the fleet like any other host and to the tailnet with it. It holds the
+public IPv4 address, terminates TLS for the product hostname with a Let's
+Encrypt certificate, and forwards over the tailnet to the unit on whichever
+fleet host runs it. `wisent.com` stays at Namecheap; the only change to that
+zone is the product hostname's own A record, written by `stado dns`, which
+reads the whole zone, merges one name, and writes it back.
+
+That choice wins on the facts rather than on taste. It touches no nameserver
+and no MX record, so it needs no decision that is not already the operator's
+to delegate. It works the same for every zone in the inventory — five at
+Namecheap, eleven at Cloudflare, one at GoDaddy — where the tunnel works only
+for the Cloudflare ones. It removes the last thing Vercel does for the fleet,
+for all 69 projects, with one mechanism. And the certificate is ours: Let's
+Encrypt issues it to a host we own, rather than an edge provider issuing it on
+our behalf.
+
+Its cost is one VM. A `Standard_B2pts_v2` (2 vCPU, 1 GiB, ARM64) in `westus2`
+is about USD 15 a month; the reverse proxy is the only thing that runs on it.
+That is spend against the existing Azure grant — USD 100,000 valid to
+2028-05-06 — and not a new purchase or a raised limit.
 
 ## What was added
 
@@ -124,14 +154,18 @@ zone, so a record cannot be changed without re-sending every other record in
 it; that is why `wisent.com`'s records were written by a script inside a
 product repository. `stado dns` reads the zone with
 `namecheap.domains.dns.getHosts`, merges one record, and writes the whole zone
-back, so the merge lives in Stado and every product's DNS goes through the same
-command. The Namecheap credential is the Skarbiec item `namecheap_auto`
-(`api_user`, `api_key`, `username`, `client_ip`).
+back, so the merge lives in Stado and every product's DNS goes through one
+command. The credential is the Skarbiec item `namecheap_auto` (`api_user`,
+`api_key`, `username`, `client_ip`).
 
-**`stado web build`** — the build a Node web product's release runs. Twenty-five
-landing sites and five applications do not need twenty-five build scripts, so
-the recipe in `.wisent-release.json` calls one Stado command and the manifest
-stays declarative.
+**`stado web build`** — the build a Node web product's release runs. Twenty-four
+landing sites and ten applications do not need thirty-four build scripts, so the
+recipe in `.wisent-release.json` calls one Stado command and the manifest stays
+declarative.
+
+**`stado web edge`** — the edge host: provision it, declare it, install the
+Stado-managed reverse proxy on it, and reconcile the set of hostnames it
+terminates.
 
 ## The `.wisent-release.json` shape for a web product
 
@@ -177,13 +211,17 @@ whose build needs a credential names it in the platform's `secret_env` as
 One web product owns one hostname. The hostname's zone is whatever the
 registrar says it is, and Stado does not guess: `stado web declare` records the
 hostname, and `stado web route` resolves its zone, writes the record through
-the edge the operator names, and reports what the record became.
+the edge the product declares, and reports what the record became.
 
-For a zone at Namecheap the record is written by `stado dns set`, which is a
-whole-zone read, a merge of one name, and a whole-zone write. For a zone at
-Cloudflare the record is written by the Cloudflare API as a proxied `CNAME` to
-the tunnel, and the tunnel's ingress rule is written in the same command, so a
-hostname never resolves to a tunnel that does not carry it.
+For the Stado edge the record is an A record to the edge host's public address,
+written by `stado dns set` — a whole-zone read, a merge of one name, a
+whole-zone write. The edge is told about the hostname in the same command, so a
+name never resolves to an edge that does not terminate it, and the certificate
+is ordered before the record is written.
+
+For a zone at Cloudflare the record is written by the Cloudflare API as a
+proxied `CNAME` to the tunnel, and the tunnel's ingress rule is written in the
+same command.
 
 Nothing removes a Vercel project. A hostname stops being served by Vercel when
 its DNS record stops pointing there, and that record is the last step of
@@ -191,7 +229,14 @@ its DNS record stops pointing there, and that record is the last step of
 
 ## The command sequence
 
-Declare the product, once:
+Stand up the edge once for the whole fleet:
+
+```console
+stado web edge provision --name wisent-edge --region westus2 --size Standard_B2pts_v2
+stado web edge status
+```
+
+Declare a product:
 
 ```console
 stado web declare preferences-landing \
@@ -224,7 +269,7 @@ the operator and none appears in a command line.
 Publish the hostname:
 
 ```console
-stado web route preferences-landing --edge cloudflare
+stado web route preferences-landing
 ```
 
 An application with a database and an operator token declares them when it is
