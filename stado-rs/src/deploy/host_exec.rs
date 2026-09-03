@@ -185,18 +185,43 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     // install cannot disagree about whether the host has uv.
     (UV_INSTALLER, &[UV_INSTALLER, "/usr/local/bin/uv"]),
     // The four programs a Spis crawl placement needs, each at the paths this
-    // fleet actually installs it at. A single-path entry would report "no such
-    // file" for a host that has the program one prefix over, which is the
-    // failure mode these four were refused with for two days.
-    (APPIUM_CLI, &[APPIUM_CLI, "/usr/local/bin/appium"]),
+    // fleet actually installs it at, home-relative first. A single-path entry
+    // would report "no such file" for a host that has the program one prefix
+    // over, and the first probe run of these entries on 2026-09-03 proved that
+    // the system prefixes alone answer "missing" for a program that is present:
+    // rustup writes cargo into `~/.cargo/bin`, and
+    // `~/.stado/bin/install-cua-driver` links its CLI into `~/.local/bin` off
+    // the bundle it dittos into `/Applications/CuaDriver.app`.
+    (
+        APPIUM_CLI,
+        &[
+            "~/.npm-global/bin/appium",
+            "~/.local/bin/appium",
+            APPIUM_CLI,
+            "/usr/local/bin/appium",
+        ],
+    ),
     (
         ANDROID_DEBUG_BRIDGE,
-        &[ANDROID_DEBUG_BRIDGE, "/usr/local/bin/adb"],
+        &[
+            "~/Library/Android/sdk/platform-tools/adb",
+            ANDROID_DEBUG_BRIDGE,
+            "/usr/local/bin/adb",
+        ],
     ),
-    (CUA_DRIVER, &[CUA_DRIVER, "/usr/local/bin/cua-driver"]),
+    (
+        CUA_DRIVER,
+        &[
+            "~/.local/bin/cua-driver",
+            "/Applications/CuaDriver.app/Contents/MacOS/cua-driver",
+            CUA_DRIVER,
+            "/usr/local/bin/cua-driver",
+        ],
+    ),
     (
         CARGO_CLI,
         &[
+            "~/.cargo/bin/cargo",
             "/Users/Shared/.cargo/bin/cargo",
             CARGO_CLI,
             "/usr/local/bin/cargo",
@@ -926,7 +951,13 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
         .join(" ");
     let mut script = String::from("set -eu\n");
     for candidate in candidates {
-        let path = shlex_quote(candidate);
+        // A candidate may be home-relative: the installers that lay these
+        // programs down (`~/.stado/bin/install-cua-driver`, rustup, a global
+        // npm prefix) write into the login user's home, and only the host
+        // knows what that path is. `home_anchored` expands nothing here — it
+        // emits the host's own `"$HOME"` followed by the quoted remainder,
+        // exactly as the account-owned entries already do.
+        let path = home_anchored(candidate);
         let marker = shlex_quote(&format!("{RESOLVED_EXECUTABLE_MARKER}{candidate}"));
         script.push_str(&format!(
             "if [ -x {path} ]; then printf '%s\\n' {marker} >&2; exec {path} {fixed}; fi\n"
