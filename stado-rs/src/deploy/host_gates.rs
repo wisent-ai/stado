@@ -175,6 +175,25 @@ pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 /// already reports.
 pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 
+/// The janitor has never recorded a completed pass on this host at all.
+///
+/// Separated from [`DISK_CLEANUP_STALLED`] because the two were reported with
+/// one word and are not one finding, and on 2026-09-03 that cost the fleet a
+/// day. `charless-mac-mini` reported `outcome: lock_busy` with
+/// `last_success_at: null` on every tick — the busy-lock path threw the
+/// carried timestamp away, since it is read only after the lock is taken — so
+/// a host that had cleaned successfully minutes earlier presented as one that
+/// had never cleaned, and every host in the fleet was refused claiming on the
+/// strength of it while `host gates` said only "stalled".
+///
+/// The carry-forward is fixed where it belongs, in
+/// [`crate::providers::local::disk_cleanup`]. This name exists so the two
+/// states can never be confused again by a reader: "it succeeded at T and has
+/// missed its interval since" is a janitor to investigate, "nothing has ever
+/// completed here" is a host that was never armed, and they call for
+/// different actions.
+pub const DISK_CLEANUP_NEVER_COMPLETED: &str = "disk_cleanup_never_completed";
+
 /// How many of its own check intervals a janitor may miss before
 /// [`DISK_CLEANUP_STALLED`] fires.
 ///
@@ -480,8 +499,18 @@ fn assemble(
     // Directly after the pressure it explains: an operator who reads
     // "free 45 GiB, watermark 100 GiB" needs the next line to say whether
     // anything is still trying, and for fifteen days there was no such line.
+    // Two states, two words. Both refuse claiming — a host whose disk safety
+    // has not run is a host whose free space is unmanaged either way — but an
+    // operator must be able to tell "it cleaned at T and has missed its
+    // interval since" from "nothing has ever completed here", because the
+    // first is a janitor to look at and the second is a host that was never
+    // armed. Reported with one word, they cost a fleet-wide day.
     if disk_cleanup_stalled {
-        blockers.push(DISK_CLEANUP_STALLED.to_string());
+        if cleanup_success_age_seconds.is_none() {
+            blockers.push(DISK_CLEANUP_NEVER_COMPLETED.to_string());
+        } else {
+            blockers.push(DISK_CLEANUP_STALLED.to_string());
+        }
     }
     if diag_flag(payload, "disk_cleanup_policy_known") == Some(false) || low_watermark_gb.is_none()
     {

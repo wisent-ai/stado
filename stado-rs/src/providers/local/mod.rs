@@ -11,6 +11,7 @@
 
 pub mod agent;
 pub mod agent_janitor;
+pub mod agent_singleton;
 pub mod agent_heartbeat;
 pub mod azure_self;
 pub mod disk_cleanup;

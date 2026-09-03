@@ -2174,6 +2174,21 @@ async fn cleanup_once(
                     report.outcome = "lock_busy_unattributed".to_string();
                 }
             }
+            // Carry the last SUCCESS forward. It is read after the lock
+            // elsewhere, so a tick that merely could not get the lock used to
+            // report `last_success_at: null` — "this host has never completed
+            // a pass" — and `deploy::host_gates` reads exactly that as
+            // `disk_cleanup_stalled`. So one busy lock made a host that
+            // cleaned successfully minutes earlier look like one that never
+            // has, and refused claiming on the strength of it. Found by
+            // object-api-deploy while the fleet sat behind that gate.
+            if let Ok(previous) = read_state(&state_dir) {
+                report.last_success_at = previous
+                    .get("report")
+                    .filter(|value| value.is_object())
+                    .and_then(|value| value.get("last_success_at"))
+                    .and_then(|value| value.as_str().map(str::to_string));
+            }
             return finish(report, started, Some(&home), None, attempted_at, log_fn);
         }
         Err(exc) => {
