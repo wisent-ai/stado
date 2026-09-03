@@ -905,17 +905,32 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                  host; the queue it reads is not the fleet queue"
             ));
         }
-        // Every store read this tick performs BEFORE its capacity publication
-        // is bounded by the same budget, for the reason spelled out on
-        // [`constants::AGENT_STORE_READ_TIMEOUT_S`]: this loop is what
-        // publishes the broadcast the fleet judges liveness by AND what claims
-        // queued work, so a store that answers in 639 s does not delay a
-        // policy refresh, it takes the host off the fleet. Both reads below
-        // already have a "keep what we last knew" degradation, so the budget
-        // costs a tick's freshness and nothing else.
-        let store_read_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
+        // ONE budget for everything this tick reads out of the store, shared
+        // across the reads rather than handed out per read.
+        //
+        // Per-read budgets were the first shape of this and they were wrong in
+        // a way the host said out loud: with 20 s each, the claimable-job
+        // listing -- much the heaviest read, and the only one claiming depends
+        // on -- timed out on every tick against this store, so the host stayed
+        // fresh and still claimed nothing. Freshness bought by never claiming
+        // is not the fix. A shared deadline spends the budget where the tick
+        // actually needs it: the small documents normally answer in under a
+        // second and leave nearly the whole allowance to the listing.
+        //
+        // What the deadline guarantees is the only thing the fleet asks for:
+        // this loop cannot spend more than
+        // [`constants::AGENT_TICK_STORE_BUDGET_S`] waiting on the store in one
+        // iteration, so with the poll interval a publication is at most
+        // 100 s apart against a [`constants::CAPACITY_STALE_SECONDS`] window
+        // of 180 -- however slow the route is, and whatever it is slow on.
+        // Every read below degrades to "keep what we last knew" or "claim
+        // nothing this tick"; nothing mutating is inside the deadline.
+        let tick_store_deadline =
+            Instant::now() + Duration::from_secs(constants::AGENT_TICK_STORE_BUDGET_S);
+        let store_budget_left =
+            || tick_store_deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(
-            store_read_budget,
+            store_budget_left(),
             crate::config::refresh_model_policy(&store),
         )
         .await
@@ -925,9 +940,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 "model policy refresh failed; retaining last good policy: {exc}"
             )),
             Err(_) => log_fn(&format!(
-                "model policy refresh exceeded its {}s budget; retaining last good policy so this \
-                 tick still publishes capacity and claims",
-                constants::AGENT_STORE_READ_TIMEOUT_S
+                "model policy refresh exhausted this tick's {}s store budget; retaining last good \
+                 policy so this tick still publishes capacity and claims",
+                constants::AGENT_TICK_STORE_BUDGET_S
             )),
         }
         // DEVIATION: the wisent upload_worker sweep is not ported (the
@@ -1003,7 +1018,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // fetch already falls back to its last-known-good copy and to the
         // bundled snapshot before it errors at all.
         let registry_target = match tokio::time::timeout(
-            store_read_budget,
+            store_budget_left(),
             lookup_self_auto(&hostname),
         )
         .await
@@ -1013,7 +1028,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 log_fn(&format!(
                     "loop: canonical registry target did not answer within {}s; keeping the last \
                      known disk watermark and pinned-only state for this tick",
-                    constants::AGENT_STORE_READ_TIMEOUT_S
+                    constants::AGENT_TICK_STORE_BUDGET_S
                 ));
                 None
             }
@@ -1555,12 +1570,12 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // direction -- an agent that skips a claim loses a poll interval; an
         // agent whose broadcast goes stale loses the fleet's belief that it
         // exists.
-        let Ok(queue_control) = tokio::time::timeout(store_read_budget, control::read(&store)).await
+        let Ok(queue_control) = tokio::time::timeout(store_budget_left(), control::read(&store)).await
         else {
             log_fn(&format!(
-                "loop: queue-control read exceeded its {}s budget; claiming nothing this tick and \
+                "loop: queue-control read exhausted this tick's {}s store budget; claiming nothing this tick and \
                  publishing again",
-                constants::AGENT_STORE_READ_TIMEOUT_S
+                constants::AGENT_TICK_STORE_BUDGET_S
             ));
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
@@ -1666,7 +1681,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // and the answer stops being worth the fleet's belief that this host is
         // alive well before a slow store finishes giving it. A lapsed budget
         // claims nothing and publishes again.
-        let queued = match tokio::time::timeout(store_read_budget, async {
+        let queued = match tokio::time::timeout(store_budget_left(), async {
             let listed = store
                 .list_claimable_jobs(
                     "queue",
@@ -1705,9 +1720,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             Ok(result) => result?,
             Err(_) => {
                 log_fn(&format!(
-                    "loop: claimable-job read exceeded its {}s budget; claiming nothing this tick \
+                    "loop: claimable-job read exhausted this tick's {}s store budget; claiming nothing this tick \
                      and publishing again",
-                    constants::AGENT_STORE_READ_TIMEOUT_S
+                    constants::AGENT_TICK_STORE_BUDGET_S
                 ));
                 tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
                 continue;
@@ -1828,13 +1843,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // the measured estimate is unknown is how a host claims work that
             // does not fit.
             let Ok(estimated) =
-                tokio::time::timeout(store_read_budget, estimate_gpu_memory(&cmd, &sizing, &store))
+                tokio::time::timeout(store_budget_left(), estimate_gpu_memory(&cmd, &sizing, &store))
                     .await
             else {
                 log_fn(&format!(
-                    "loop: VRAM estimate for {} exceeded its {}s budget; not claiming it this tick",
+                    "loop: VRAM estimate for {} exhausted this tick's {}s store budget; not claiming it this tick",
                     job.job_id,
-                    constants::AGENT_STORE_READ_TIMEOUT_S
+                    constants::AGENT_TICK_STORE_BUDGET_S
                 ));
                 continue;
             };
@@ -1869,7 +1884,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // Same rule for the running slots' projection: one budget for the
             // whole projection, and an unfinished projection refuses the
             // candidate instead of admitting it against an incomplete total.
-            let projection = tokio::time::timeout(store_read_budget, async {
+            let projection = tokio::time::timeout(store_budget_left(), async {
                 let mut projected_used = need;
                 for s in &slots {
                     projected_used += helpers::slot_vram(&s.slot, &sizing, &store).await?;
@@ -1879,9 +1894,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             .await;
             let Ok(projected_used) = projection else {
                 log_fn(&format!(
-                    "loop: running-slot VRAM projection exceeded its {}s budget; not claiming {} \
+                    "loop: running-slot VRAM projection exhausted this tick's {}s store budget; not claiming {} \
                      this tick",
-                    constants::AGENT_STORE_READ_TIMEOUT_S,
+                    constants::AGENT_TICK_STORE_BUDGET_S,
                     job.job_id
                 ));
                 continue;

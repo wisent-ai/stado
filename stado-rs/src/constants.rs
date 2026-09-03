@@ -78,6 +78,21 @@ pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STA
 /// worst case is 40 s, inside one [`CAPACITY_HEARTBEAT_INTERVAL_S`].
 pub const AGENT_STORE_READ_TIMEOUT_S: u64 = 20;
 
+/// Total wall-clock an agent tick may spend waiting on the store, shared by
+/// every read in that iteration.
+///
+/// One budget for the iteration and not one per read, because per-read budgets
+/// produced a host that was fresh and claimed nothing: with 20 s each, the
+/// claimable-job listing — the heaviest read and the only one claiming needs —
+/// lapsed on every tick against a store answering in tens of seconds, while
+/// the four cheap reads never came close to theirs. Shared, the cheap reads
+/// return in milliseconds and leave the allowance to the listing.
+///
+/// Half of [`CAPACITY_STALE_SECONDS`]: with [`POLL_INTERVAL_S`] on top, a
+/// publication is at most 100 s apart, so a tick that spends its whole
+/// allowance still publishes twice inside the window that judges it.
+pub const AGENT_TICK_STORE_BUDGET_S: u64 = CAPACITY_STALE_SECONDS / 2;
+
 /// Ceiling on ONE text object read out of the store.
 ///
 /// The timeout above bounds how long a read may wait. It does not bound how

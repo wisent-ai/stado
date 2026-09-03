@@ -128,8 +128,42 @@ impl StadoObjectBackend {
             base_url,
             namespace: namespace.to_string(),
             token,
-            client: Self::client(ca_file)?,
+            client: Self::shared_client(ca_file)?,
         })
+    }
+
+    /// One pooled client per CA configuration, for the life of the process.
+    ///
+    /// `reqwest::Client` owns the connection pool, and this backend used to
+    /// build a fresh one in every constructor. Nothing here constructs once:
+    /// `JobStorage::new()` is called per janitor pass, per gates read, per CLI
+    /// invocation, and each of those was a pool with one connection in it that
+    /// was dropped at the end. The store's own socket table showed the result
+    /// on 2026-09-03 — 1,388 `TIME_WAIT` against `127.0.0.1:8765` beside 96
+    /// `ESTABLISHED`, with the object API pinned at 95.9% of a core — and a
+    /// read that has to queue behind a thousand fresh handshakes is a read
+    /// that takes 639 s, which is the latency that starves the agent loop.
+    ///
+    /// Cloning a `Client` shares its pool, so every backend built in this
+    /// process now reuses connections. Keyed by CA file because that is the
+    /// only input to [`Self::client`]; the token is a per-request header and
+    /// the base URL is per-request too, so neither belongs to the pool.
+    fn shared_client(ca_file: &str) -> Result<Client, StorageError> {
+        static CLIENTS: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashMap<String, Client>>,
+        > = std::sync::LazyLock::new(|| {
+            std::sync::Mutex::new(std::collections::HashMap::new())
+        });
+        let key = ca_file.trim().to_string();
+        let mut clients = CLIENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(client) = clients.get(&key) {
+            return Ok(client.clone());
+        }
+        let client = Self::client(&key)?;
+        clients.insert(key, client.clone());
+        Ok(client)
     }
 
     /// The HTTPS client, trusting the configured private authority in addition to
