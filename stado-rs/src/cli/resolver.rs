@@ -1659,8 +1659,24 @@ async fn proxy_connection(
     }
     // Both halves of the fleet reach the upstream over a plain socket: the host
     // that holds the store dials it directly, every other host dials the
-    // forward this resolver keeps to it. One code path, and no process per
-    // request on either.
+    // forward this resolver keeps to it. One code path, and neither branch
+    // below starts a process.
+    //
+    // That last sentence was false for as long as it stood here, and it is
+    // worth saying why rather than trusting it again. It read "no process per
+    // request on either" while the `else` branch called
+    // `select_resolver_ssh_path` right here, ahead of the pool: every host
+    // that declares an `ssh_fallbacks` entry -- every host in this fleet --
+    // paid one `ssh <destination> true`, bounded at twenty seconds, in front
+    // of every accepted connection. The claim was about the forward and was
+    // written as though it covered the whole function.
+    //
+    // So it is now checkable against what is visible below: this branch dials
+    // and nothing else. Every process the transport needs -- the path probe
+    // and the forward itself -- is started by
+    // [`ResolverState::tunnel_connect`], under the pool lock, once per
+    // forward. A request that finds a warm forward costs the two sockets it
+    // would cost anyway.
     let (mut client_read, mut client_write) = client.into_split();
     let upstream = if resolved.active_host == state.local_target {
         TcpStream::connect((host, port))
