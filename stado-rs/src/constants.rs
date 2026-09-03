@@ -50,6 +50,26 @@ pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STA
     CAPACITY_STALE_SECONDS / 3
 };
 
+/// Wall-clock budget for ONE of the janitor's pre-lock store reads.
+///
+/// `disk_cleanup::run_cleanup_once` runs inline in the agent's main loop, and
+/// the capacity broadcast the fleet judges liveness by is published later in
+/// that SAME iteration. So an unbounded store read there does not merely delay
+/// a cleanup: it spends the broadcast's entire freshness budget, and it stalls
+/// claiming, which lives in the same loop.
+///
+/// That is not hypothetical. On 2026-09-03 the janitor's two reads took 639 s
+/// and 2,178 s against a slow object-store route, so one loop iteration lasted
+/// 10 and 36 minutes against a [`CAPACITY_STALE_SECONDS`] window of 180. All
+/// three fleet hosts sat at `capacity_publication_stale` with live agents, and
+/// 17 jobs went unclaimed for 264 hours.
+///
+/// Two reads at this budget are 40 s worst case: inside one
+/// [`CAPACITY_HEARTBEAT_INTERVAL_S`], and well inside the window that judges
+/// it. Both reads already have a defined fail-safe degradation, so a store too
+/// slow to answer costs the janitor one pass, never the agent's liveness.
+pub const CLEANUP_INPUT_TIMEOUT_S: u64 = 20;
+
 /// Per-job heartbeat interval (derived from the 15-min staleness threshold).
 pub const SLOT_HEARTBEAT_INTERVAL_S: u64 = 60;
 

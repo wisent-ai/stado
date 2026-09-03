@@ -29,11 +29,12 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::constants;
 use crate::targets::{self, ComputeTarget, DiskCleanupPolicy};
 
 pub(crate) const GIB: i64 = 1024 * 1024 * 1024;
@@ -1925,8 +1926,32 @@ async fn cleanup_once(
     // side effects. Resolve them before taking the exclusive janitor lock: one
     // stalled store request must not prevent every other agent and cleanup
     // process on this host from reading policy or reclaiming disk.
-    let registry = fetch_canonical_registry().await;
-    let live_jobs = fetch_live_job_ids().await;
+    //
+    // And bound them, because moving them off the lock was only half the
+    // problem. This function runs INLINE in the agent's main loop, and the
+    // capacity broadcast the fleet judges liveness by is published later in
+    // that same iteration -- as is claiming. Unbounded, these two reads spend
+    // the broadcast's whole freshness budget: measured at 639 s and 2,178 s on
+    // 2026-09-03 against a slow object-store route, which put all three fleet
+    // hosts on `capacity_publication_stale` with live agents and left 17 jobs
+    // unclaimed for 264 hours. A janitor input is not worth a host's liveness.
+    //
+    // Both timeouts degrade the way this pass already degrades when a store
+    // answers badly, so nothing new can be deleted because of one: an
+    // unresolved registry yields `invalid_or_unavailable_policy` and no
+    // cleaner runs, and `live_jobs: None` makes `queue_workdirs` remove
+    // nothing rather than risk a live job's tree.
+    let input_budget = Duration::from_secs(constants::CLEANUP_INPUT_TIMEOUT_S);
+    let registry = match tokio::time::timeout(input_budget, fetch_canonical_registry()).await {
+        Ok(result) => result,
+        Err(_) => Err(JanitorError::timeout(&format!(
+            "canonical registry did not answer within {}s",
+            constants::CLEANUP_INPUT_TIMEOUT_S
+        ))),
+    };
+    let live_jobs = tokio::time::timeout(input_budget, fetch_live_job_ids())
+        .await
+        .unwrap_or_default();
     let lock = match acquire_lock(&state_dir) {
         Ok(lock) => lock,
         Err(exc) => {
