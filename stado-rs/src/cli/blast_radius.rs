@@ -137,6 +137,7 @@ struct BlastRadiusReport {
 
 const JOB_LIFECYCLE: &[&str] = &[
     "queue/",
+    "job-transitions/",
     "running/",
     "completed/",
     "uploaded/",

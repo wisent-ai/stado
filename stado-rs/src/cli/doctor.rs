@@ -61,14 +61,27 @@ pub async fn dispatch(args: DoctorArgs) -> Result<(), CmdError> {
     // Non-zero on any FAIL, naming the earliest one: the later checks are
     // usually downstream of it, so that is the line to act on first. The
     // report is already on stdout; this only adds the verdict.
+    //
+    // The failing check's own DETAIL travels into the message, not just its
+    // remedy. `crate::failure::classify_message` reads that message centrally
+    // in `main_entry`, and a message built only from the summary and the fix
+    // hint carries no observed error at all — which is why a doctor run whose
+    // real content was an upstream status reported
+    // `error_code="unknown" retryable=false`. The detail is the one field that
+    // holds the upstream sentence, so it is the one that has to be in here.
+    // Same defect, same repair, as #343 in `host_reclaim`.
+    //
+    // Unmeasured rows are deliberately not counted here: a probe that never
+    // answered is not a failure to exit non-zero about.
     match report.first_failure() {
         None => Ok(()),
         Some(first) => Err(CmdError::click(format!(
-            "{} of {} checks FAILED; first blocking failure is {} ({}). {}",
+            "{} of {} checks FAILED; first blocking failure is {} ({}) — {}. {}",
             report.failed(),
             report.checks.len(),
             first.id,
             first.title,
+            first.detail,
             first.remedy
         ))),
     }
@@ -106,13 +119,22 @@ fn print_human(report: &Report, fix_hints: bool) {
     }
 
     println!(
-        "\n{} check(s): {} failed, {} warned, generated at {}.",
+        "\n{} check(s): {} failed, {} warned, {} not measured, generated at {}.",
         report.checks.len(),
         report.failed(),
         report.warned(),
+        report.unmeasured(),
         report.generated_at
     );
-    if report.status() == Status::Pass {
-        println!("Deployment preflight is clean.");
+    match report.status() {
+        Status::Pass => println!("Deployment preflight is clean."),
+        // A sweep with a hole in it is not clean and is not broken. Saying
+        // neither is what lets an operator tell "nothing is wrong" from
+        // "nobody looked", which is the whole point of the row above.
+        Status::Unmeasured => println!(
+            "Nothing failed, but {} check(s) were not measured — this is not a clean result.",
+            report.unmeasured()
+        ),
+        Status::Warn | Status::Fail => {}
     }
 }

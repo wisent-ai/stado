@@ -191,6 +191,49 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     // The order Weles's kimi login trajectory probes, so this read and that
     // install cannot disagree about whether the host has uv.
     (UV_INSTALLER, &[UV_INSTALLER, "/usr/local/bin/uv"]),
+    // The four programs a Spis crawl placement needs, each at the paths this
+    // fleet actually installs it at, home-relative first. A single-path entry
+    // would report "no such file" for a host that has the program one prefix
+    // over, and the first probe run of these entries on 2026-09-03 proved that
+    // the system prefixes alone answer "missing" for a program that is present:
+    // rustup writes cargo into `~/.cargo/bin`, and
+    // `~/.stado/bin/install-cua-driver` links its CLI into `~/.local/bin` off
+    // the bundle it dittos into `/Applications/CuaDriver.app`.
+    (
+        APPIUM_CLI,
+        &[
+            "~/.npm-global/bin/appium",
+            "~/.local/bin/appium",
+            APPIUM_CLI,
+            "/usr/local/bin/appium",
+        ],
+    ),
+    (
+        ANDROID_DEBUG_BRIDGE,
+        &[
+            "~/Library/Android/sdk/platform-tools/adb",
+            ANDROID_DEBUG_BRIDGE,
+            "/usr/local/bin/adb",
+        ],
+    ),
+    (
+        CUA_DRIVER,
+        &[
+            "~/.local/bin/cua-driver",
+            "/Applications/CuaDriver.app/Contents/MacOS/cua-driver",
+            CUA_DRIVER,
+            "/usr/local/bin/cua-driver",
+        ],
+    ),
+    (
+        CARGO_CLI,
+        &[
+            "~/.cargo/bin/cargo",
+            "/Users/Shared/.cargo/bin/cargo",
+            CARGO_CLI,
+            "/usr/local/bin/cargo",
+        ],
+    ),
     // The order every Node reader in this repository already probes — the
     // launcher script in `deploy::weles_browser_runtime`, and the host reads in
     // `cli/host.rs` and `cli/seed_freshness.rs` — so a `host exec` answer about
@@ -237,6 +280,40 @@ const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 /// CLI install depends on one of them existing.
 const UV_INSTALLER: &str = "/opt/homebrew/bin/uv";
 
+/// The Appium server CLI, as Homebrew and a global npm prefix lay it down.
+///
+/// Spis's crawl coordinator asks this host, through this very channel, whether
+/// the mobile placement can run at all before it submits a job. Until
+/// 2026-09-03 the answer it got was "not an approved host-exec command", which
+/// reads as a policy gap and hid the only fact that mattered: whether the
+/// program is on the machine.
+const APPIUM_CLI: &str = "/opt/homebrew/bin/appium";
+
+/// The Android platform-tools bridge, at the two absolute paths the fleet's
+/// macOS hosts install it at.
+///
+/// `which adb` below answers a different question — whether the login shell's
+/// PATH carries it — and answers `not found` on a host that has the binary
+/// outside a non-interactive ssh PATH, which is exactly the case on Homebrew
+/// installs.
+const ANDROID_DEBUG_BRIDGE: &str = "/opt/homebrew/bin/adb";
+
+/// The Cua Driver CLI, which drives native macOS and desktop applications.
+///
+/// `cua-driver doctor --json` is its own read-only self-check and the exact
+/// prerequisite Spis's desktop placement probes; `~/.stado/bin/install-cua-driver`
+/// is what puts it on a host, and this entry is how an operator learns whether
+/// that ever ran here.
+const CUA_DRIVER: &str = "/opt/homebrew/bin/cua-driver";
+
+/// Cargo, at the paths this fleet installs Rust at: the shared toolchain the
+/// always-on hosts keep outside any one login's home first, then Homebrew,
+/// then a local rustup prefix.
+///
+/// Every Spis crawl worker runs as `cargo run --release` at a pinned revision
+/// on the placement host, so "does this host have cargo, and where" is the
+/// precondition of every native, terminal and command-line family.
+const CARGO_CLI: &str = "/opt/homebrew/bin/cargo";
 /// The Node runtime, at the absolute paths this fleet installs it at.
 ///
 /// A non-interactive ssh login reads no shell profile, and the fleet's Node
@@ -621,6 +698,65 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
         argv: &["/usr/bin/which", "adb"],
         why: "reports whether Android platform-tools are on the managed login's PATH; it takes \
               a fixed executable name, reads no application state, and writes nothing",
+    },
+    // The four crawl prerequisites, added 2026-09-03. Spis's crawl coordinator
+    // preflights a placement host through this channel before it submits any
+    // job, and for these four the channel answered "not an approved host-exec
+    // command". That refusal is indistinguishable from "the program is
+    // missing", so the 2026-09-01 crawl run recorded fifteen catalogs as
+    // preflight_failed without anybody being able to say which of the two it
+    // was. Each entry prints a version or a self-check, takes no
+    // operator-supplied word, installs nothing and mutates nothing.
+    ApprovedCommand {
+        argv: &[APPIUM_CLI, "--version"],
+        why: "prints the installed Appium server's version, probing the absolute paths this \
+              fleet installs it at rather than the non-interactive ssh PATH -- a different \
+              question that answers `not found` on a host that has the binary. It is the \
+              precondition of every iOS and Android capture placement: without Appium there \
+              is no driver to open an installed application with. `--version` starts no \
+              server, opens no device and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[APPIUM_CLI, "driver", "list", "--installed"],
+        why: "lists which Appium drivers are actually installed, which is the half of mobile \
+              readiness a version cannot answer: XCUITest for iOS and UiAutomator2 for \
+              Android are separate installs, and a placement fails at the first command \
+              without them. `list --installed` reads the local driver manifest; the forms \
+              that change anything (`driver install`, `uninstall`, `update`) are absent from \
+              this table and unreachable through it, because the allowlist matches an entry \
+              exactly and never appends operator words",
+    },
+    ApprovedCommand {
+        argv: &[ANDROID_DEBUG_BRIDGE, "version"],
+        why: "prints the installed Android Debug Bridge's version from the absolute paths the \
+              fleet installs platform-tools at. `which adb` above answers the PATH question \
+              and returns nothing on a Homebrew install reached over ssh, which is why both \
+              exist. `version` contacts no device and starts no server beyond adb's own \
+              local one",
+    },
+    ApprovedCommand {
+        argv: &[ANDROID_DEBUG_BRIDGE, "devices", "-l"],
+        why: "lists the Android devices and emulators this host can currently see, with their \
+              transport and model. It is the placement question for the Android family: a \
+              host with adb and no device cannot capture anything. The listing names devices, \
+              not their contents, and changes nothing on them",
+    },
+    ApprovedCommand {
+        argv: &[CUA_DRIVER, "doctor", "--json"],
+        why: "runs the Cua Driver's own read-only self-check and prints it as JSON: whether \
+              the driver is installed and whether this host's accessibility and \
+              screen-recording grants are in place. That is the exact precondition of the \
+              macOS and desktop capture families, and `~/.stado/bin/install-cua-driver` is \
+              what would repair it. `doctor` opens no application and grants nothing itself",
+    },
+    ApprovedCommand {
+        argv: &[CARGO_CLI, "--version"],
+        why: "prints the installed Rust toolchain's cargo version from the paths this fleet \
+              installs Rust at, shared-toolchain prefix first. Every Spis crawl worker runs \
+              as `cargo run --release` at a pinned revision on the placement host, so this \
+              one fact decides whether the terminal, command-line, documentation and native \
+              families can execute there at all. `--version` compiles nothing, fetches \
+              nothing and writes nothing",
     },
     ApprovedCommand {
         argv: &[UV_INSTALLER, "--version"],
@@ -1108,7 +1244,13 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
     }
     script.push_str("export PATH\n");
     for candidate in candidates {
-        let path = shlex_quote(candidate);
+        // A candidate may be home-relative: the installers that lay these
+        // programs down (`~/.stado/bin/install-cua-driver`, rustup, a global
+        // npm prefix) write into the login user's home, and only the host
+        // knows what that path is. `home_anchored` expands nothing here — it
+        // emits the host's own `"$HOME"` followed by the quoted remainder,
+        // exactly as the account-owned entries already do.
+        let path = home_anchored(candidate);
         let marker = shlex_quote(&format!("{RESOLVED_EXECUTABLE_MARKER}{candidate}"));
         script.push_str(&format!(
             "if [ -x {path} ]; then printf '%s\\n' {marker} >&2; exec {path} {fixed}; fi\n"
