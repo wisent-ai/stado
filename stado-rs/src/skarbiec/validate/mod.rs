@@ -10,11 +10,13 @@ use super::{read_grant, Client, SkarbiecError};
 
 mod machine;
 mod object;
+mod registry;
 mod release;
 mod service;
 
 pub use machine::validate_machine_verifier;
 pub use object::validate_object_verifier;
+pub use registry::validate_registry_verifier;
 pub use release::validate_release_verifier;
 pub use service::validate_service_verifier;
 

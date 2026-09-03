@@ -110,6 +110,41 @@ impl Client {
         )
     }
 
+    /// Dedicated verifier for exact registry-API client bearers.
+    ///
+    /// Its own consumer and its own grant file, for the same reason every
+    /// boundary here has them: a verifier that could read another boundary's
+    /// items would make the two boundaries one.
+    pub fn registry_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::registry_skarbiec_consumer()
+            != crate::config::REGISTRY_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "registry verifier consumer must be {:?}",
+                crate::config::REGISTRY_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::registry_skarbiec_token_file();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::agent_skarbiec_token_file()
+            || token_file == crate::config::object_skarbiec_token_file()
+            || token_file == crate::config::release_skarbiec_token_file()
+            || token_file == crate::config::service_skarbiec_token_file()
+            || token_file == crate::config::machine_skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "registry verifier token file must be distinct from coordinator, workload-agent, object, release, service, and machine verifier grants"
+                    .to_string(),
+            ));
+        }
+        Self::direct(
+            crate::config::registry_skarbiec_url(),
+            crate::config::registry_skarbiec_consumer(),
+            token_file,
+            GrantMode::RereadPerRequest,
+        )
+    }
+
     /// Dedicated verifier for exact machine client bearers.
     pub fn machine_verifier() -> Result<Self, SkarbiecError> {
         if crate::config::machine_skarbiec_consumer()
