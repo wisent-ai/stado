@@ -408,11 +408,20 @@ and not hosting or a public proxy.
 
 ### Web hosting
 
-`stado web` hosts a Node web product on the fleet, and `stado dns` owns the
+`stado web` hosts a web product on the fleet, and `stado dns` owns the
 records of the zones Stado manages at their registrar. A product declares
 one `web` platform in its `.wisent-release.json` whose quality and build steps
 are `stado web quality` and `stado web build`, so the recipe stays declarative
 and the build has one implementation for every web product.
+
+A product that declares a `start` script is served by it; a product that does
+not is a static site, and the same build stages its directory with a static
+server generated into the tarball — nothing is installed on the host and
+nothing is fetched at run time. `--root` names the directory when it is not
+the repository root, as in `stado web build --root dist`. Build-time values go
+in the platform's `secret_env` as `VAR: "item#field"` when they are
+credentials, and in its `env` as literals when they are not, so a public
+origin stays reviewable in the repository instead of becoming a vault entry.
 
 ```sh
 stado web declare preferences-landing \
