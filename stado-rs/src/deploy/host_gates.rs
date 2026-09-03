@@ -180,6 +180,30 @@ pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 /// late against, which [`DISK_CLEANUP_POLICY_UNKNOWN`] already reports.
 pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 
+/// This host's janitor is being refused the run lock and has not completed a
+/// pass within [`STALL_INTERVALS`] of its own declared interval: the lock is
+/// not being taken turns with, it is HELD.
+///
+/// Its own word and not a shade of [`DISK_CLEANUP_STALLED`], because the two
+/// send an operator to opposite places. A stalled janitor is a janitor that
+/// ran and got nowhere — read its report, its policy, its errors. A held lock
+/// is a janitor that never started, and the only thing worth looking at is the
+/// process on the other end of `~/.cache/wisent-compute/disk-cleanup.lock`,
+/// which `stado host disk` names in `cleanup_lock.holders`.
+///
+/// On 2026-09-03 charless-mac-mini reported the stalled word with 18.4 GiB
+/// free against a 15 GiB watermark while its own agent (pid 79473) held the
+/// lock, and lukasz-macbook reported it with 118.7 GiB free against 100. Both
+/// pointed at a disk that was fine. The mechanism —
+/// [`crate::providers::local::slots::release_hold_for_exited_workload`] — is
+/// fixed, and this word exists so the next hold that outlives its workload is
+/// read as a lock and not as a full disk.
+///
+/// Blocks on the same rule as [`DISK_CLEANUP_STALLED`] and for the same
+/// reason: under pressure a janitor that cannot run must refuse work, and
+/// above the watermark refusing work creates no space. It is a note there.
+pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
+
 /// How many of its own check intervals a janitor may miss before
 /// [`DISK_CLEANUP_STALLED`] fires.
 ///
@@ -209,6 +233,16 @@ pub struct HostGates {
     /// reading "free 45 GiB against a 100 GiB watermark" has to be able to see
     /// in the same object whether anything is still trying to fix it.
     pub disk_cleanup_stalled: bool,
+    /// [`DISK_CLEANUP_LOCK_HELD`]: the janitor is being refused the run lock
+    /// AND has completed nothing inside the stall window. Carried beside
+    /// `disk_cleanup_stalled` and never merged into it: the two are mutually
+    /// exclusive by construction and name different remedies.
+    pub disk_cleanup_lock_held: bool,
+    /// Seconds since a pass was last PREVENTED from taking the run lock, or
+    /// `None` when none was. The number behind `disk_cleanup_lock_held`, and
+    /// the one that distinguishes "a workload is holding it right now" from "a
+    /// hold has outlived its workload".
+    pub cleanup_prevented_age_seconds: Option<i64>,
     /// Seconds since the janitor last completed a pass, or `None` when it has
     /// never recorded one. `None` with a declared interval is the fifteen-day
     /// case, and is not the same finding as "it succeeded a long time ago".
@@ -369,12 +403,14 @@ async fn agent_store_backend(target: &ComputeTarget, runner: &Runner) -> Option<
 
 /// Join the four sources into the verdict.
 ///
-/// Split out from the reads so the truth table is exercisable without a host,
-/// a registry or a store.
+/// Split out from the reads, and public, so the truth table is exercisable
+/// without a host, a registry or a store — which is the only way a gate that
+/// decides whether a platform has any builder at all can be held to its
+/// truth table rather than to whatever a live fleet happened to be doing.
 ///
 /// `agent_store` is the host's own effective `wc_storage_backend`, or `None`
 /// when the host would not answer with one.
-fn assemble(
+pub fn assemble(
     target: &ComputeTarget,
     reading: &host_disk::DiskReading,
     publication: Option<&Publication>,
@@ -478,6 +514,18 @@ fn assemble(
         (Some(limit), Some(age)) => age <= limit,
         _ => false,
     };
+    // Being turned away is healthy for as long as somebody is taking turns.
+    // Being turned away while nothing has got through for the whole window the
+    // stall is measured over is not being turned away — it is a lock that is
+    // held, and it has a different remedy from every other condition here:
+    // find the holder (`host disk`'s `cleanup_lock.holders` names the pid) and
+    // deal with THAT process. See [`DISK_CLEANUP_LOCK_HELD`].
+    let disk_cleanup_lock_held = cleanup_prevented
+        && match (stall_after_seconds, cleanup_success_age_seconds) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            (Some(limit), Some(age)) => age > limit,
+        };
     let disk_cleanup_stalled = !cleanup_prevented
         && match (stall_after_seconds, cleanup_success_age_seconds) {
             (None, _) => false,
@@ -525,6 +573,9 @@ fn assemble(
     if disk_cleanup_stalled && disk_pressure_unresolved {
         blockers.push(DISK_CLEANUP_STALLED.to_string());
     }
+    if disk_cleanup_lock_held && disk_pressure_unresolved {
+        blockers.push(DISK_CLEANUP_LOCK_HELD.to_string());
+    }
     if diag_flag(payload, "disk_cleanup_policy_known") == Some(false) || low_watermark_gb.is_none()
     {
         blockers.push(DISK_CLEANUP_POLICY_UNKNOWN.to_string());
@@ -555,6 +606,12 @@ fn assemble(
     if disk_cleanup_stalled && !disk_pressure_unresolved {
         notes.push(DISK_CLEANUP_STALLED.to_string());
     }
+    // The same finding for a lock that is held rather than a janitor that is
+    // silent, and a note for the same reason: a host with headroom that cannot
+    // clean is a host to go fix, not a host to close.
+    if disk_cleanup_lock_held && !disk_pressure_unresolved {
+        notes.push(DISK_CLEANUP_LOCK_HELD.to_string());
+    }
     if agent_store.is_none() {
         notes.push(AGENT_STORE_UNREADABLE.to_string());
     }
@@ -565,7 +622,9 @@ fn assemble(
         blockers,
         disk_pressure_unresolved,
         disk_cleanup_stalled,
+        disk_cleanup_lock_held,
         cleanup_success_age_seconds,
+        cleanup_prevented_age_seconds,
         free_gb,
         low_watermark_gb,
         target_free_gb: policy.map(|policy| policy.target_free_gb),
@@ -750,6 +809,10 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             // apart, and how long since it last managed to.
             "cleanup_stalled": gates.disk_cleanup_stalled,
             "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
+            // ...and whether it is not trying because it cannot get the lock,
+            // which points at a process and not at this disk.
+            "cleanup_lock_held": gates.disk_cleanup_lock_held,
+            "cleanup_prevented_age_seconds": gates.cleanup_prevented_age_seconds,
         }),
     );
     report.insert(
@@ -809,6 +872,7 @@ pub fn gates_section(gates: &HostGates) -> Value {
     json!({
         "disk_pressure_unresolved": gates.disk_pressure_unresolved,
         "disk_cleanup_stalled": gates.disk_cleanup_stalled,
+        "disk_cleanup_lock_held": gates.disk_cleanup_lock_held,
         "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
         "free_gb": gates.free_gb,
         "low_watermark_gb": gates.low_watermark_gb,
