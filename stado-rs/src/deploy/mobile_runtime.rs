@@ -79,6 +79,18 @@ pub const RUNTIME_INCOMPLETE: &str = "incomplete";
 /// The requirement or the host could not be read.
 pub const RUNTIME_UNKNOWN: &str = "unknown";
 
+/// A driver the host carries, that this declaration says nothing about, and
+/// that the installed server itself calls incompatible with it.
+///
+/// Reported, counted and visible, and it does NOT decide the verdict. That is
+/// the split [`crate::host_software`] already argues for: failing a host over
+/// a program nothing declares is how an operator learns to write `|| true`
+/// after the command, at which point the drift the check exists to catch
+/// stops being noticed. But leaving it out of the report entirely is how
+/// `charless-mac-mini` kept a `mac2@1.20.5` that the server calls
+/// incompatible, ready to deadlock npm for whichever install came next.
+pub const COMPONENT_UNDECLARED_INCOMPATIBLE: &str = "incompatible-undeclared";
+
 /// The npm prefix repair installs the Appium server under.
 ///
 /// `~/.npm-global` is the first candidate [`super::host_exec`]'s table names
@@ -130,21 +142,31 @@ pub struct RuntimeReport {
 }
 
 impl RuntimeReport {
-    /// `complete` only when every component is present at its declaration.
+    /// Only components this host DECLARED decide anything.
+    ///
+    /// An undeclared driver the server calls incompatible is in the report
+    /// and not in the gate, for the reason
+    /// [`COMPONENT_UNDECLARED_INCOMPATIBLE`] gives.
+    fn judged(&self) -> impl Iterator<Item = &ComponentState> {
+        self.components
+            .iter()
+            .filter(|component| component.state != COMPONENT_UNDECLARED_INCOMPATIBLE)
+    }
+
+    /// `complete` only when every declared component is present at its
+    /// declaration.
     pub fn verdict(&self) -> &'static str {
-        if self.components.is_empty() {
+        if self.judged().next().is_none() {
             return RUNTIME_UNKNOWN;
         }
         if self
-            .components
-            .iter()
+            .judged()
             .any(|component| component.state == COMPONENT_UNKNOWN)
         {
             return RUNTIME_UNKNOWN;
         }
         if self
-            .components
-            .iter()
+            .judged()
             .all(|component| component.state == COMPONENT_PRESENT)
         {
             return RUNTIME_COMPLETE;
@@ -154,8 +176,7 @@ impl RuntimeReport {
 
     /// Components a repair would have to act on.
     pub fn incomplete(&self) -> Vec<&ComponentState> {
-        self.components
-            .iter()
+        self.judged()
             .filter(|component| component.state != COMPONENT_PRESENT)
             .collect()
     }
@@ -222,8 +243,24 @@ json_escape() {
 }
 # The same candidate order deploy::host_exec probes, so the two readers cannot
 # name different binaries on this machine.
-appium=$(resolve "$HOME/.npm-global/bin/appium" "$HOME/.local/bin/appium" /opt/homebrew/bin/appium /usr/local/bin/appium)
-adb=$(resolve "$HOME/Library/Android/sdk/platform-tools/adb" /opt/homebrew/bin/adb /usr/local/bin/adb)
+appium=$(resolve @APPIUM_CANDIDATES@)
+adb=$(resolve @ADB_CANDIDATES@)
+# `appium` is a JavaScript shim whose first line is `#!/usr/bin/env node`, so
+# on a channel whose PATH does not carry Node it answers `env: node: No such
+# file or directory` -- present, runnable, and reported as broken. That is
+# exactly what charless-mac-mini answered on the first repair: the binary was
+# installed at ~/.npm-global/bin/appium and `--version` came back empty, so
+# the runtime read `unknown`. The interpreter a shim needs is a sibling of the
+# Node the fleet installs, which is the argument `host_exec::candidate_script`
+# already makes for the same programs.
+node_dir=''
+for candidate in @NODE_CANDIDATES@; do
+  if [ -x "$candidate" ]; then node_dir=$(/usr/bin/dirname "$candidate"); break; fi
+done
+if [ -n "$node_dir" ]; then
+  PATH="$node_dir:$PATH"
+  export PATH
+fi
 appium_version=''
 drivers=''
 if [ -n "$appium" ]; then
@@ -294,7 +331,7 @@ if [ -n "$appium_version" ]; then
   fi
 fi
 appium_bin=''
-for candidate in "$prefix/bin/appium" "$HOME/.local/bin/appium" /opt/homebrew/bin/appium /usr/local/bin/appium; do
+for candidate in "$prefix/bin/appium" @APPIUM_CANDIDATES@; do
   if [ -x "$candidate" ]; then appium_bin="$candidate"; break; fi
 done
 # The declared server and the installed driver tree have to agree, and on this
@@ -321,13 +358,24 @@ done
 update_installed_drivers() {
   if [ "$drivers_updated" = "yes" ]; then return 0; fi
   drivers_updated=yes
-  if out=$(NPM_CONFIG_LEGACY_PEER_DEPS=true "$appium_bin" driver update installed --unsafe 2>&1); then
-    printf 'STADO_RUNTIME\tupdated\tinstalled driver set, onto versions the declared server can host\n'
-  else
-    # Never swallowed. An update that failed silently here is what made the
-    # first two repair attempts report a cause that was not the cause.
-    printf 'STADO_RUNTIME\tfailed\tdriver update: %s\n' "$(diagnose "$out")"
-  fi
+  out=$(NPM_CONFIG_LEGACY_PEER_DEPS=true "$appium_bin" driver update installed --unsafe 2>&1) \
+    || printf 'STADO_RUNTIME\tfailed\tdriver update: %s\n' "$(diagnose "$out")"
+  # The claim is checked against the world before it is made. The first
+  # version of this printed "updated" on a zero exit, and on
+  # charless-mac-mini that zero exit sat beside a `mac2` still at 1.20.5 with
+  # the server still calling it incompatible -- a report of a state nobody
+  # had verified, which is the whole defect class this module exists to
+  # avoid. So: re-read the server's own verdict and say what it says.
+  after=$("$appium_bin" driver list --installed 2>&1 || printf '')
+  case "$after" in
+    *"potential problem"*)
+      printf 'STADO_RUNTIME\tunresolved\tdriver update ran and the server still reports: %s\n' \
+        "$(printf '%s' "$after" | /usr/bin/grep -E 'may be incompatible' | /usr/bin/head -n 3 | /usr/bin/tr '\n\t' '  ')"
+      ;;
+    *)
+      printf 'STADO_RUNTIME\tupdated\tinstalled driver set; the server now reports no incompatible driver\n'
+      ;;
+  esac
 }
 drivers_updated=no
 for driver in $drivers; do
@@ -363,6 +411,25 @@ for driver in $drivers; do
       ;;
   esac
 done
+# The server's own verdict on its driver tree, acted on rather than printed.
+#
+# Appium validates every driver in its manifest at startup and says so:
+# `Driver "mac2" has 1 potential problem`. On charless-mac-mini that is a
+# stale `mac2@1.20.5` beside a declared 3.7.0 server -- it never blocked THIS
+# repair, because `uiautomator2` happened to install before it was reached,
+# so nothing here would have noticed and the deadlock would have been waiting
+# for whichever install came next. Reading the server's own complaint is not
+# inference about npm's resolver; it is the declared authority on this tree
+# stating that a driver disagrees with it, and the same conservative update
+# answers it. Undeclared drivers are still only updated, never removed.
+if [ -n "$appium_bin" ]; then
+  verdict=$("$appium_bin" driver list --installed 2>&1 || printf '')
+  case "$verdict" in
+    *"potential problem"*)
+      update_installed_drivers
+      ;;
+  esac
+fi
 if [ "$platform_tools" = "yes" ]; then
   if [ -x "$sdk/platform-tools/adb" ]; then
     printf 'STADO_RUNTIME\tpresent\tplatform-tools\n'
@@ -389,6 +456,182 @@ if [ "$platform_tools" = "yes" ]; then
   fi
 fi
 "##;
+
+/// Every driver the installed server itself calls incompatible with itself.
+///
+/// Read out of Appium's own startup validation, which writes
+/// `Driver "mac2" (package `appium-mac2-driver`) may be incompatible with the
+/// current version of Appium (v3.7.0) due to its peer dependency on Appium
+/// ^2.4.1`. Using the server's verdict rather than comparing peer ranges here
+/// keeps one authority on the question: the server is what will refuse to
+/// host the driver, and a second opinion computed in Rust could disagree with
+/// it.
+pub fn incompatible_drivers(listing: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for line in listing.split("WARN") {
+        if !line.contains("may be incompatible") {
+            continue;
+        }
+        let Some(rest) = line.split_once("Driver \"") else {
+            continue;
+        };
+        let Some((name, _)) = rest.1.split_once('"') else {
+            continue;
+        };
+        if name.is_empty() || found.iter().any(|(held, _): &(String, String)| held == name) {
+            continue;
+        }
+        found.push((
+            name.to_string(),
+            line.split_whitespace().collect::<Vec<&str>>().join(" "),
+        ));
+    }
+    found
+}
+
+/// The capability id this runtime implements, as
+/// [`crate::capabilities::CAPABILITIES`] declares it.
+pub const CAPABILITY_ID: &str = "mobile-app-capture";
+
+/// The two mobile capture families, and the Appium driver each one cannot run
+/// without.
+///
+/// The driver IS the routing rule, and that is deliberate: iOS capture is
+/// XCUITest and Android capture is UiAutomator2, each a separate install, so
+/// "may this host take this family" and "does this host declare that driver"
+/// are the same question. Nothing here consults the host — a declaration is
+/// what routing reads, for the reason `placement.rs` gives about a worker's
+/// placement having lived in the registry AND in a file on the worker's disk
+/// with only the file deciding.
+pub const FAMILIES: &[(&str, &str)] = &[("ios", "xcuitest"), ("android", "uiautomator2")];
+
+/// The driver one family requires, or `None` for a name that is not a mobile
+/// capture family.
+pub fn family_driver(family: &str) -> Option<&'static str> {
+    FAMILIES
+        .iter()
+        .find(|(name, _)| *name == family)
+        .map(|(_, driver)| *driver)
+}
+
+/// One host a mobile capture family may be placed on, with everything a
+/// coordinator needs to run it there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Placement {
+    pub host: String,
+    pub family: String,
+    /// The Appium driver this family runs through, which the host declares.
+    pub driver: String,
+    /// Appium server version the host declares.
+    pub appium: String,
+    /// Absolute paths, in probe order, at which the coordinator resolves the
+    /// Appium server. Never a bare program name: a non-interactive session on
+    /// these hosts carries none of these directories on `PATH`, which is why
+    /// `which adb` answers nothing on a host that has `adb`.
+    pub appium_paths: Vec<String>,
+    /// Absolute paths for `adb`, empty when the host declares no
+    /// platform-tools.
+    pub adb_paths: Vec<String>,
+}
+
+/// Every host the registry places one mobile capture family on, or every
+/// placement when `family` is `None`.
+///
+/// A host that declares no `mobile_runtime`, or declares one without the
+/// family's driver, is absent from the result and is therefore never probed:
+/// asking it is what produced the finding that started this work, where a
+/// refusal from a host that could not run the family at all was
+/// indistinguishable from a fleet-wide policy gap.
+pub fn placements(registry: &crate::targets::Registry, family: Option<&str>) -> Vec<Placement> {
+    let appium_paths = declared_paths(super::host_exec::APPIUM_PROGRAM);
+    let adb_paths = declared_paths(super::host_exec::ADB_PROGRAM);
+    let mut found = Vec::new();
+    for target in &registry.targets {
+        let Some(declared) = requirement(target) else {
+            continue;
+        };
+        for (name, driver) in FAMILIES {
+            if family.is_some_and(|asked| asked != *name) {
+                continue;
+            }
+            if !declared.drivers.iter().any(|held| held == *driver) {
+                continue;
+            }
+            found.push(Placement {
+                host: target.name.clone(),
+                family: (*name).to_string(),
+                driver: (*driver).to_string(),
+                appium: declared.appium.clone(),
+                appium_paths: appium_paths.clone(),
+                adb_paths: if declared.platform_tools {
+                    adb_paths.clone()
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+    }
+    found
+}
+
+/// One program's declared absolute paths, as a coordinator should read them.
+///
+/// `~/` is left as written: only the host knows its login home, and a
+/// coordinator that expanded it here would be guessing about a machine it is
+/// not running on.
+fn declared_paths(program: &str) -> Vec<String> {
+    super::host_exec::program_candidates(program)
+        .unwrap_or(&[])
+        .iter()
+        .map(|path| (*path).to_string())
+        .collect()
+}
+
+/// One program's declared absolute paths, rendered as shell words for the
+/// remote scripts.
+///
+/// Taken from [`super::host_exec::program_candidates`] rather than written
+/// out here, so the paths this module probes, installs into and reports are
+/// the same paths the allowlist's own probe uses. Copying the list would have
+/// let `stado host exec TARGET -- appium --version` and
+/// `stado host mobile-runtime TARGET` disagree about which binary a host has.
+///
+/// A `~/`-anchored candidate becomes `"$HOME"/rest`, because only the host
+/// knows what its login home is — the same expansion
+/// [`super::host_exec`]'s own `home_anchored` performs, and for the same
+/// reason.
+pub fn candidate_words(program: &str) -> String {
+    let Some(candidates) = super::host_exec::program_candidates(program) else {
+        // A program with one path is that path. Quoted, so a candidate table
+        // that ever grows a space cannot split into two words.
+        return super::shlex_quote(program);
+    };
+    candidates
+        .iter()
+        .map(|candidate| match candidate.strip_prefix("~/") {
+            Some(rest) => format!("\"$HOME\"/{}", super::shlex_quote(rest)),
+            None => super::shlex_quote(candidate),
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+/// Fill a remote script's candidate placeholders from the shared table.
+fn with_candidates(script: &str) -> String {
+    script
+        .replace(
+            "@APPIUM_CANDIDATES@",
+            &candidate_words(super::host_exec::APPIUM_PROGRAM),
+        )
+        .replace(
+            "@ADB_CANDIDATES@",
+            &candidate_words(super::host_exec::ADB_PROGRAM),
+        )
+        .replace(
+            "@NODE_CANDIDATES@",
+            &candidate_words(super::host_exec::NODE_PROGRAM),
+        )
+}
 
 /// The version of one installed driver, out of `appium driver list
 /// --installed`.
@@ -427,7 +670,8 @@ pub async fn verify(
     declared: &MobileRuntime,
     runner: &Runner,
 ) -> Result<RuntimeReport, DeployError> {
-    let output = host_channel::run_script(target, REMOTE_VERIFY_BODY, runner).await?;
+    let script = with_candidates(REMOTE_VERIFY_BODY);
+    let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(
             "{}: {}",
@@ -535,6 +779,27 @@ pub async fn verify(
         });
     }
 
+    // Visible, not judged. The server named these itself; a declaration that
+    // says nothing about them cannot fail on them, and a report that omitted
+    // them is how `charless-mac-mini` kept a driver the server refuses to
+    // host, waiting to deadlock npm for the next install into that tree.
+    for (driver, server_said) in incompatible_drivers(&installed_drivers) {
+        if declared.drivers.iter().any(|held| *held == driver) {
+            continue;
+        }
+        let version = installed_driver_version(&installed_drivers, &driver)
+            .unwrap_or_else(|| "installed".to_string());
+        components.push(ComponentState {
+            name: format!("driver:{driver}"),
+            declared: "undeclared".to_string(),
+            path: "appium driver list --installed".to_string(),
+            // The server's own sentence, so an operator reads why rather than
+            // a state name this module invented.
+            observed: format!("{version} — {server_said}"),
+            state: COMPONENT_UNDECLARED_INCOMPATIBLE.to_string(),
+        });
+    }
+
     Ok(RuntimeReport { components })
 }
 
@@ -572,7 +837,7 @@ pub async fn repair(
             )));
         }
     }
-    let script = REMOTE_REPAIR_BODY
+    let script = with_candidates(REMOTE_REPAIR_BODY)
         .replace("@APPIUM_B64@", &STANDARD.encode(declared.appium.as_bytes()))
         .replace(
             "@DRIVERS_B64@",
@@ -743,6 +1008,192 @@ mod tests {
     #[test]
     fn a_listed_driver_with_no_version_is_not_guessed_at() {
         assert_eq!(installed_driver_version("- uiautomator2 [installed]", "uiautomator2"), None);
+    }
+
+    fn registry_with(entries: &[(&str, Value)]) -> crate::targets::Registry {
+        let targets: Vec<Value> = entries
+            .iter()
+            .map(|(name, runtime)| {
+                let mut target = serde_json::json!({"name": name, "kind": "local"});
+                if !runtime.is_null() {
+                    target
+                        .as_object_mut()
+                        .expect("an object")
+                        .insert("mobile_runtime".to_string(), runtime.clone());
+                }
+                target
+            })
+            .collect();
+        crate::targets::load_registry_from_str(
+            &serde_json::json!({"schema_version": 2, "targets": targets}).to_string(),
+        )
+        .expect("a registry")
+    }
+
+    #[test]
+    fn the_ios_family_routes_only_to_the_host_declaring_its_driver() {
+        // The exact fleet shape: the mini carries Android only, the laptop
+        // both, and a third host declares nothing at all.
+        let registry = registry_with(&[
+            (
+                "charless-mac-mini",
+                serde_json::json!({"appium":"3.7.0","drivers":["uiautomator2"],"platform_tools":true}),
+            ),
+            (
+                "lukasz-macbook",
+                serde_json::json!({"appium":"3.7.0","drivers":["xcuitest","uiautomator2"],"platform_tools":true}),
+            ),
+            ("ubuntu-server-rtx-pro-6000", Value::Null),
+        ]);
+        let ios: Vec<String> = placements(&registry, Some("ios"))
+            .into_iter()
+            .map(|placement| placement.host)
+            .collect();
+        assert_eq!(ios, vec!["lukasz-macbook".to_string()]);
+    }
+
+    #[test]
+    fn the_android_family_routes_to_both_declared_hosts() {
+        let registry = registry_with(&[
+            (
+                "charless-mac-mini",
+                serde_json::json!({"appium":"3.7.0","drivers":["uiautomator2"],"platform_tools":true}),
+            ),
+            (
+                "lukasz-macbook",
+                serde_json::json!({"appium":"3.7.0","drivers":["xcuitest","uiautomator2"],"platform_tools":true}),
+            ),
+        ]);
+        let android: Vec<String> = placements(&registry, Some("android"))
+            .into_iter()
+            .map(|placement| placement.host)
+            .collect();
+        assert_eq!(
+            android,
+            vec![
+                "charless-mac-mini".to_string(),
+                "lukasz-macbook".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_host_declaring_no_runtime_is_never_a_placement_for_any_family() {
+        let registry = registry_with(&[("ubuntu-server-rtx-pro-6000", Value::Null)]);
+        assert!(placements(&registry, None).is_empty());
+    }
+
+    #[test]
+    fn a_placement_carries_absolute_paths_and_never_a_bare_program_name() {
+        let registry = registry_with(&[(
+            "lukasz-macbook",
+            serde_json::json!({"appium":"3.7.0","drivers":["xcuitest"],"platform_tools":true}),
+        )]);
+        let placement = placements(&registry, Some("ios")).remove(0);
+        assert!(!placement.appium_paths.is_empty());
+        for path in placement
+            .appium_paths
+            .iter()
+            .chain(placement.adb_paths.iter())
+        {
+            assert!(
+                path.starts_with('/') || path.starts_with("~/"),
+                "{path} is not an absolute or home-anchored path"
+            );
+        }
+    }
+
+    #[test]
+    fn a_host_without_platform_tools_gets_no_adb_path_to_resolve() {
+        let registry = registry_with(&[(
+            "lukasz-macbook",
+            serde_json::json!({"appium":"3.7.0","drivers":["xcuitest"],"platform_tools":false}),
+        )]);
+        assert!(placements(&registry, Some("ios")).remove(0).adb_paths.is_empty());
+    }
+
+    #[test]
+    fn the_remote_scripts_resolve_the_paths_the_allowlist_probes() {
+        // One table, two readers: the script the host runs must carry the same
+        // candidates `host_exec` uses, or the two could disagree about which
+        // binary a machine has.
+        let script = with_candidates(REMOTE_VERIFY_BODY);
+        assert!(!script.contains("@APPIUM_CANDIDATES@"));
+        assert!(!script.contains("@ADB_CANDIDATES@"));
+        assert!(!script.contains("@NODE_CANDIDATES@"));
+        for candidate in
+            crate::deploy::host_exec::program_candidates(crate::deploy::host_exec::APPIUM_PROGRAM)
+                .expect("appium is in the table")
+        {
+            let expected = candidate
+                .strip_prefix("~/")
+                .map_or_else(|| (*candidate).to_string(), |rest| rest.to_string());
+            assert!(script.contains(&expected), "{expected} missing from script");
+        }
+        // A home-relative candidate is expanded by the host, not here.
+        assert!(script.contains("\"$HOME\"/"));
+    }
+
+    #[test]
+    fn the_servers_own_incompatibility_warning_names_the_driver() {
+        // Verbatim from charless-mac-mini.
+        let listing = "WARN Appium Driver \"mac2\" has 1 potential problem: \n\
+             WARN Appium   - Driver \"mac2\" (package `appium-mac2-driver`) may be incompatible \
+             with the current version of Appium (v3.7.0) due to its peer dependency on Appium \
+             ^2.4.1. Please install a compatible version of the driver.\n\
+             - mac2@1.20.5 [installed (npm)]\n\
+             - uiautomator2@8.5.2 [installed (npm)]";
+        let found = incompatible_drivers(listing);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "mac2");
+        assert!(found[0].1.contains("peer dependency"));
+    }
+
+    #[test]
+    fn a_clean_listing_names_no_incompatible_driver() {
+        assert!(incompatible_drivers("- uiautomator2@8.5.2 [installed (npm)]").is_empty());
+    }
+
+    #[test]
+    fn an_undeclared_incompatible_driver_is_reported_and_does_not_fail_the_gate() {
+        // The exact mini shape: everything declared is present, and the
+        // server complains about a driver the declaration never mentions.
+        let report = RuntimeReport {
+            components: vec![
+                component("appium", COMPONENT_PRESENT),
+                component("driver:uiautomator2", COMPONENT_PRESENT),
+                component("adb", COMPONENT_PRESENT),
+                component("driver:mac2", COMPONENT_UNDECLARED_INCOMPATIBLE),
+            ],
+        };
+        assert_eq!(report.verdict(), RUNTIME_COMPLETE);
+        assert_eq!(report.failure("charless-mac-mini"), None);
+        // Still visible: it is in the report an operator reads.
+        assert!(report
+            .components
+            .iter()
+            .any(|component| component.name == "driver:mac2"));
+    }
+
+    #[test]
+    fn a_declared_driver_is_still_judged_even_beside_an_undeclared_one() {
+        let report = RuntimeReport {
+            components: vec![
+                component("driver:uiautomator2", COMPONENT_MISSING),
+                component("driver:mac2", COMPONENT_UNDECLARED_INCOMPATIBLE),
+            ],
+        };
+        assert_eq!(report.verdict(), RUNTIME_INCOMPLETE);
+        let said = report.failure("h").expect("a failure");
+        assert!(said.contains("uiautomator2"));
+        assert!(!said.contains("mac2"));
+    }
+
+    #[test]
+    fn only_the_declared_families_are_routable() {
+        assert_eq!(family_driver("ios"), Some("xcuitest"));
+        assert_eq!(family_driver("android"), Some("uiautomator2"));
+        assert_eq!(family_driver("windows"), None);
     }
 
     #[test]

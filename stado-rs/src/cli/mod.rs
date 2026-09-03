@@ -2278,6 +2278,18 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Which hosts a mobile capture family may be placed on, out of the
+    /// registry's declarations alone. Read-only, contacts no host: a host that
+    /// declares no runtime for the family is absent from the answer and is
+    /// never probed for it.
+    #[command(name = "mobile-placement")]
+    MobilePlacement {
+        /// `ios` or `android`; omit for every family.
+        #[arg(long)]
+        family: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's effective Stado configuration through its fleet channel.
     ConfigShow { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
@@ -3177,6 +3189,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 repair,
                 json,
             } => host::mobile_runtime(&target, repair, json).await,
+            HostCommands::MobilePlacement { family, json } => {
+                host::mobile_placement(family.as_deref(), json).await
+            }
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,

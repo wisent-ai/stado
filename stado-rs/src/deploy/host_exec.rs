@@ -250,6 +250,46 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// Every absolute path this fleet installs one program at, in probe order, or
+/// `None` for a program whose only path is its own `argv[0]`.
+///
+/// Exposed because a second reader appeared and copying the list into it would
+/// have created exactly the disagreement [`PROGRAM_CANDIDATES`] exists to
+/// prevent: `deploy::mobile_runtime` verifies and installs the mobile runtime
+/// and has to resolve `appium` and `adb` the same way this allowlist's probe
+/// does, or `stado host exec TARGET -- appium --version` and
+/// `stado host mobile-runtime TARGET` could name different binaries on one
+/// machine and disagree about whether the host is ready. One table, two
+/// readers.
+///
+/// It is also the answer to "which path should a placement use": the fleet's
+/// hosts do not carry these directories on a non-interactive `PATH`, so a
+/// consumer resolves a declared absolute path from here and never searches the
+/// environment.
+pub fn program_candidates(program: &str) -> Option<&'static [&'static str]> {
+    PROGRAM_CANDIDATES
+        .iter()
+        .find(|(name, _)| *name == program)
+        .map(|(_, candidates)| *candidates)
+}
+
+/// The Appium server CLI's canonical name in [`PROGRAM_CANDIDATES`].
+pub const APPIUM_PROGRAM: &str = APPIUM_CLI;
+
+/// The Android platform-tools bridge's canonical name in
+/// [`PROGRAM_CANDIDATES`].
+pub const ADB_PROGRAM: &str = ANDROID_DEBUG_BRIDGE;
+
+/// The Node runtime's canonical name in [`PROGRAM_CANDIDATES`].
+///
+/// Needed by any reader that runs a Node shim rather than a compiled binary:
+/// `appium` starts `#!/usr/bin/env node`, and a non-interactive ssh session on
+/// a Homebrew host carries none of Node's directories on `PATH`, so the shim
+/// answers `env: node: No such file or directory` and reads as broken while
+/// being perfectly installed. [`candidate_script`] makes the same argument one
+/// level up, and puts every candidate's directory on `PATH` for that reason.
+pub const NODE_PROGRAM: &str = NODE_RUNTIME;
+
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
 ///

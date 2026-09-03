@@ -6784,6 +6784,81 @@ pub async fn mobile_runtime(target: &str, repair: bool, json: bool) -> Result<()
     }
 }
 
+/// `stado host mobile-placement [--family ios|android] [--json]` — which
+/// hosts a mobile capture family may be placed on.
+///
+/// Read out of the registry's declarations and nothing else, contacting no
+/// host. That is the point of it: before this existed, the way to find out
+/// whether a host could take the iOS family was to ask the host, and a
+/// refusal from a machine that cannot run the family at all was
+/// indistinguishable from a fleet-wide policy gap — which is exactly how the
+/// four crawl families spent 2026-09-03 blocked on a question nobody could
+/// answer. A host that declares no runtime for the family is not in the
+/// answer, so it is never asked.
+///
+/// An empty answer exits non-zero and names the capability: no host declaring
+/// the family is a state to act on, not a quiet zero.
+pub async fn mobile_placement(family: Option<&str>, json: bool) -> Result<(), CmdError> {
+    if let Some(asked) = family {
+        if crate::deploy::mobile_runtime::family_driver(asked).is_none() {
+            return Err(CmdError::usage(format!(
+                "{asked:?} is not a mobile capture family; this build carries {}",
+                crate::deploy::mobile_runtime::FAMILIES
+                    .iter()
+                    .map(|(name, driver)| format!("{name} (driver {driver})"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )));
+        }
+    }
+    let registry = load_registry_by_source("auto").await?;
+    let placements = crate::deploy::mobile_runtime::placements(&registry, family);
+    if json {
+        print_json(&json!({
+            "status": "mobile_placement",
+            "capability": crate::deploy::mobile_runtime::CAPABILITY_ID,
+            "family": family,
+            "placements": placements,
+        }));
+    } else if placements.is_empty() {
+        println!(
+            "no registry host declares the {} capability for {}",
+            crate::deploy::mobile_runtime::CAPABILITY_ID,
+            family.unwrap_or("any mobile capture family"),
+        );
+    } else {
+        super::table::print(
+            &["FAMILY", "HOST", "DRIVER", "APPIUM", "RESOLVE APPIUM AT", "RESOLVE ADB AT"],
+            &placements
+                .iter()
+                .map(|placement| {
+                    vec![
+                        placement.family.clone(),
+                        placement.host.clone(),
+                        placement.driver.clone(),
+                        placement.appium.clone(),
+                        placement.appium_paths.join(" "),
+                        if placement.adb_paths.is_empty() {
+                            "-".to_string()
+                        } else {
+                            placement.adb_paths.join(" ")
+                        },
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    if placements.is_empty() {
+        return Err(CmdError::click(format!(
+            "no host declares {} for {}; declare targets[].mobile_runtime with the family's \
+             driver on a host that can carry it",
+            crate::deploy::mobile_runtime::CAPABILITY_ID,
+            family.unwrap_or("any mobile capture family"),
+        )));
+    }
+    Ok(())
+}
+
 /// What one `host capability-route` invocation asks for.
 pub struct CapabilityRouteRequest<'a> {
     pub target: &'a str,
