@@ -574,7 +574,12 @@ struct Snapshot {
 }
 
 /// How long a freshly opened forward may take to accept its first connection.
-const TUNNEL_OPEN_BUDGET: Duration = Duration::from_secs(30);
+///
+/// Read by [`crate::doctor`] too: a probe that reaches the fleet through this
+/// transport cannot be bounded tighter than the transport is declared to need,
+/// or it reports a healthy registry as unreachable every time the channel has
+/// gone cold.
+pub const TUNNEL_OPEN_BUDGET: Duration = Duration::from_secs(30);
 /// How often the opening forward is probed inside that budget.
 const TUNNEL_OPEN_POLL: Duration = Duration::from_millis(100);
 

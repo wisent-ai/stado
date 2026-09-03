@@ -1102,11 +1102,15 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let object_api = root.get("object_api").and_then(Value::as_object);
     if object_api.is_some() {
-        if let Err(object_problems) = crate::config::parse_object_api_namespaces(field_in(
+        match crate::config::parse_object_api_namespaces(field_in(
             root,
             &crate::capabilities::OBJECT_API_NAMESPACES_CONFIG,
         )) {
-            problems.extend(object_problems);
+            Err(object_problems) => problems.extend(object_problems),
+            // The policy parses; now it has to cover what the queue reads and
+            // writes, or `config set` would write a document under which the
+            // agent's next claim answers 401.
+            Ok(namespaces) => problems.extend(crate::config::queue_prefix_problem(&namespaces)),
         }
         let object_skarbiec = object_api
             .and_then(|section| section.get("skarbiec"))

@@ -1449,9 +1449,18 @@ const POLICY_MARKER: &str = "PLACEMENT_POLICY";
 /// error the worker reports — it is a worker that declines everything.
 const VANTAGE_MARKER: &str = "PLACEMENT_VANTAGE";
 
-/// What `_source.by` names, so a file on a host traces back to the command that
+/// What `_source.by` names, so a file on a host traces back to the writer that
 /// wrote it rather than to a machine that happened to have write access.
+///
+/// Two writers put this document on a host and both name themselves here: the
+/// operator command below, from the coordinator through the audited channel,
+/// and the host's own agent, which reconciles the same declaration on its own
+/// disk. Which one wrote the file is the first question asked of a host whose
+/// worker is declining rows, so the answer is in the file.
 const PUBLISHED_BY: &str = "stado host publish-placement-policy";
+
+/// [`PUBLISHED_BY`] for the host-side reconciler.
+pub(crate) const RECONCILED_BY: &str = "stado agent reconcile-placement-policy";
 
 /// The one document shape the worker's loader parses (`schema_version must be
 /// 1`, `placement-policy.ts`). Publishing anything else delivers a file the
@@ -1465,10 +1474,10 @@ const POLICY_CACHE_SECONDS: u64 = 30;
 
 /// The worker's own hostname rule, transcribed from `normalizeHostname` in
 /// `weles/src/worker/identity.ts`: trim, lowercase, drop trailing dots.
-///
 /// Transcribed rather than approximated because it is a comparison, and a
 /// comparison the two sides perform differently is a host that matches nothing.
-fn normalize_hostname(value: &str) -> String {
+/// Shared with the host-side reconciler for that reason.
+pub(crate) fn normalize_hostname(value: &str) -> String {
     value
         .trim()
         .to_ascii_lowercase()
@@ -1554,6 +1563,86 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
     Ok(weles.actions.clone())
 }
 
+/// The policy document one target's registry declaration produces.
+///
+/// One builder for both writers. `stado host publish-placement-policy` sends
+/// these bytes from the coordinator through the audited channel, and
+/// [`crate::providers::local::agent::reconcile_placement_policy`] writes the
+/// same bytes on the host's own disk. Two builders would be two policies for
+/// one declaration — the drift this whole path exists to end — so the shape,
+/// the action grammar and the identity rule are decided here exactly once.
+///
+/// `generation` is the registry version the declaration was read at. Every
+/// caller must have one: an unstamped document is the file nobody can trace to
+/// a registry read, which is the artefact being retired, and `apply_policy`
+/// refuses one on arrival.
+pub(crate) fn policy_document(
+    target: &ComputeTarget,
+    generation: &str,
+    by: &str,
+) -> Result<Value, CmdError> {
+    let weles = target.weles.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "{} declares no `weles` block in the registry, so there is nothing to publish. \
+             Declare weles.enabled and weles.actions there first: a policy invented here \
+             would be the second source of truth this command exists to remove",
+            target.name
+        ))
+    })?;
+    let actions = checked_actions(&target.name, weles)?;
+    let (hostname, aliases) = identities(target)?;
+    Ok(json!({
+        "_source": {
+            "registry_generation": generation,
+            "published_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            "by": by,
+        },
+        "schema_version": POLICY_SCHEMA_VERSION,
+        "hosts": [{
+            "hostname": hostname,
+            "aliases": aliases,
+            "enabled": weles.enabled,
+            "actions": actions,
+        }],
+    }))
+}
+
+/// The action list inside a document [`policy_document`] built, for reports
+/// that name what was written. Read back out rather than kept beside the
+/// document, so a report cannot describe a list the file does not carry.
+pub(crate) fn policy_actions(policy: &Value) -> Vec<String> {
+    policy
+        .get("hosts")
+        .and_then(Value::as_array)
+        .and_then(|hosts| hosts.first())
+        .and_then(|host| host.get("actions"))
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter_map(|action| action.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The two facts a host-side writer compares before it rewrites the file: the
+/// entry's `enabled` flag and its action list, ignoring `_source`.
+///
+/// `_source` carries a fresh timestamp on every build, so comparing whole
+/// documents would rewrite the file on every pass and republish a policy the
+/// worker is already running. What the worker acts on is exactly this pair.
+pub(crate) fn policy_effect(policy: &Value) -> (bool, Vec<String>) {
+    let enabled = policy
+        .get("hosts")
+        .and_then(Value::as_array)
+        .and_then(|hosts| hosts.first())
+        .and_then(|host| host.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    (enabled, policy_actions(policy))
+}
+
 /// One side of the change, as the host reported it.
 struct PolicySnapshot {
     /// Registry generation the document was stamped with, or the script's word
@@ -1632,32 +1721,7 @@ pub async fn publish_placement_policy(
     let (document, generation) = registry::fetch_versioned_document().await?;
     let declared = parse_registry(&document)?;
     let resolved = target(&declared, target_name)?.clone();
-    let weles = resolved.weles.as_ref().ok_or_else(|| {
-        CmdError::click(format!(
-            "{} declares no `weles` block in the registry, so there is nothing to publish. \
-             Declare weles.enabled and weles.actions there first: a policy invented here \
-             would be the second source of truth this command exists to remove",
-            resolved.name
-        ))
-    })?;
-    let actions = checked_actions(&resolved.name, weles)?;
-    let (hostname, aliases) = identities(&resolved)?;
-
-    let published_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let policy = json!({
-        "_source": {
-            "registry_generation": generation,
-            "published_at": published_at,
-            "by": PUBLISHED_BY,
-        },
-        "schema_version": POLICY_SCHEMA_VERSION,
-        "hosts": [{
-            "hostname": hostname,
-            "aliases": aliases,
-            "enabled": weles.enabled,
-            "actions": actions,
-        }],
-    });
+    let policy = policy_document(&resolved, &generation, PUBLISHED_BY)?;
 
     // Staged as a file because the delivery channel carries files: the same
     // delivered-file path any other artifact takes, checksummed on arrival,
@@ -1734,7 +1798,7 @@ pub async fn publish_placement_policy(
                 "installed": POLICY_DESTINATION,
                 "registry_generation": generation,
                 "previous_generation": previous_generation,
-                "published_at": published_at,
+                "published_at": policy.pointer("/_source/published_at"),
                 "enabled": installed.enabled,
                 "previous_enabled": previous_enabled,
                 "actions": current,
