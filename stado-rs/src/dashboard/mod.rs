@@ -1120,10 +1120,23 @@ impl Dashboard {
         }
     }
 
-    /// How long an idle reused connection is held before this side closes it.
-    /// It matches the client's pool idle timeout, so the two agree on when a
-    /// warm connection stops being worth a file descriptor.
-    const KEEP_ALIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(90);
+    /// How long this side waits for a request head before it closes the socket.
+    ///
+    /// It bounds the first request as much as a reused one: a connection that
+    /// is opened and then abandoned holds a task and a file descriptor exactly
+    /// like an idle reused one, and the accept loop puts no bound on how many
+    /// of those may exist. Only the head is bounded, never the body -- one
+    /// object PUT may declare up to `max_object_bytes`, and a slow upload is
+    /// progress rather than idleness.
+    ///
+    /// It must stay strictly LONGER than the object client's pool idle timeout
+    /// (90 s: reqwest's default, made explicit alongside the keyed client).
+    /// Equal timers race -- the client takes a warm connection out of its pool
+    /// in the same instant this side sends FIN, and the request written into it
+    /// then fails or re-dials, which is the cost this change exists to remove.
+    /// With the client retiring first, the socket is always closed by the side
+    /// that is not about to write to it.
+    const KEEP_ALIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
 
     async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
         // The peer is the reverse proxy's loopback address behind an HTTPS
@@ -1133,34 +1146,19 @@ impl Dashboard {
         // connection is the whole point of this loop, so they have to survive
         // into the next read rather than be dropped with the buffer.
         let mut carry: Vec<u8> = Vec::new();
-        let mut served = 0_u64;
         loop {
-            // The first request is what the connection was opened for and is
-            // waited on as before. A reused connection is idle between
-            // requests, and an idle socket must not hold a task forever.
-            let next = if served == 0 {
-                read_request(&mut stream, &mut carry).await?
-            } else {
-                match tokio::time::timeout(
-                    Self::KEEP_ALIVE_IDLE,
-                    read_request(&mut stream, &mut carry),
-                )
-                .await
-                {
-                    Ok(result) => result?,
-                    Err(_) => return stream.shutdown().await,
-                }
-            };
-            let Some(mut request) = next else {
+            let Some(mut request) =
+                read_request(&mut stream, &mut carry, Self::KEEP_ALIVE_IDLE).await?
+            else {
                 return Ok(());
             };
-            served = served.saturating_add(1);
             request.peer = peer;
             // The mode gate is the FIRST thing that looks at the request, ahead
-            // of the object PUT preflight, ahead of the remainder of the body,
-            // ahead of every Host check and authorization, and ahead of any
-            // store or vault access. A refused request costs one method/path
-            // comparison, and the connection closes rather than being reused.
+            // of the object PUT preflight, ahead of every Host check and
+            // authorization, and ahead of any store or vault access. A refused
+            // request costs one method/path comparison, and this listener has
+            // nothing further to offer it, so the connection closes rather than
+            // being held warm for more of the same.
             if self.enrollment_only && !enrollment_route_allowed(&request.method, &request.path) {
                 let mut response = Response::new(
                     http_status("404"),
@@ -1176,20 +1174,24 @@ impl Dashboard {
                 stream.write_all(&response.bytes).await?;
                 return stream.shutdown().await;
             }
-            let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
-            if is_object_put {
+            if request.method == "PUT" && request.path.starts_with("/api/object?") {
+                // A preflight answer refuses the write outright, so this
+                // connection has nothing left to serve either.
                 if let Some(mut response) = self.object_put_preflight(&request).await {
                     response.close_connection();
                     stream.write_all(&response.bytes).await?;
                     return stream.shutdown().await;
                 }
             }
-            if request.body.len() < request.content_length {
-                let received = request.body.len();
-                request.body.resize(request.content_length, u8::default());
-                stream.read_exact(&mut request.body[received..]).await?;
-            }
-            let keep_alive = request.wants_keep_alive();
+            // `read_request` hands over a body of exactly `content_length`, so
+            // no request can leave a byte behind to be read as the head of the
+            // next one; the carried remainder is the next request already.
+            //
+            // No route serves HEAD, so a HEAD would be answered with the body a
+            // GET returns. A client that correctly reads no body after a HEAD
+            // would parse those bytes as its next response, so HEAD ends the
+            // connection instead of poisoning it.
+            let keep_alive = request.wants_keep_alive() && request.method != "HEAD";
             let mut response = self.route(&request).await;
             eprintln!(
                 "[dashboard] \"{} {} HTTP/1.1\" {} -",
@@ -2915,13 +2917,21 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Read one request with a bounded head and body. Body framing is deliberately
 /// limited to Content-Length; mutating routes reject Transfer-Encoding.
+///
+/// `head_idle` bounds the wait for a complete head, and nothing else: the head
+/// is what an idle or abandoned connection is failing to send, while a body
+/// still arriving is a transfer that may legitimately outlast any idle limit.
+/// A connection that goes quiet before saying anything reads as a clean close,
+/// the same as an EOF between requests.
 async fn read_request(
     stream: &mut TcpStream,
     carry: &mut Vec<u8>,
+    head_idle: std::time::Duration,
 ) -> std::io::Result<Option<Request>> {
     // Whatever the previous request on this connection read past its own body.
     let mut buf: Vec<u8> = std::mem::take(carry);
     let mut tmp = [0u8; 8192];
+    let head_deadline = tokio::time::Instant::now() + head_idle;
     let head_end = loop {
         // Check before reading: a pipelined head may already be complete in
         // the bytes carried over, and blocking on the socket would deadlock
@@ -2935,7 +2945,16 @@ async fn read_request(
                 "HTTP request head too large",
             ));
         }
-        let n = stream.read(&mut tmp).await?;
+        let n = match tokio::time::timeout_at(head_deadline, stream.read(&mut tmp)).await {
+            Ok(read) => read?,
+            Err(_) if buf.is_empty() => return Ok(None),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "HTTP request head timed out",
+                ));
+            }
+        };
         if n == 0 {
             if buf.is_empty() {
                 return Ok(None);
