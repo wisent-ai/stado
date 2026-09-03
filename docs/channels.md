@@ -157,6 +157,16 @@ The object API authorizes an action in two stages:
 1. the caller bearer selects one namespace policy;
 2. the object API verifier uses its own host-local Skarbiec grant to read the exact namespace credential items declared in `object_api.namespaces`.
 
+The `probierz` policy must grant every prefix in
+`queue::copy::CANONICAL_PREFIXES` for get, put, list, stat and delete, because
+that list is what the queue reads and writes. `stado config validate`, `config
+set` and `host config-set` refuse a policy that leaves one out, naming it, and
+`stado doctor` on the host fails `object-auth` with the same sentence. The
+rule exists because `job-transitions/` arrived in the binary on 2026-09-01
+with no grant on any host: the object API answered every agent claim with 401
+and the agent restarted after each one until 2026-09-03, while its capacity
+broadcast kept saying the host was alive.
+
 The verifier bearer lives in `WC_OBJECT_SKARBIEC_TOKEN_FILE` on the object API host. To restore its grant without moving the bearer off that host:
 
 ```console

@@ -1528,6 +1528,63 @@ pub(crate) fn parse_object_api_namespaces(
     }
 }
 
+/// The namespace the queue lives in; every prefix in
+/// [`crate::queue::copy::CANONICAL_PREFIXES`] is read and written there.
+pub const QUEUE_OBJECT_NAMESPACE: &str = "probierz";
+
+/// The five actions the queue performs on its own prefixes.
+const QUEUE_OBJECT_ACTIONS: [&str; 5] = ["get", "put", "list", "stat", "delete"];
+
+/// Canonical queue prefixes the `probierz` object policy does not grant for
+/// every queue action, sorted; empty when the policy covers the queue.
+///
+/// A binary that reads a prefix nobody granted does not fail at the line
+/// that reads it: the object API answers 401, the agent logs "agent loop
+/// failed" and restarts, and the host claims nothing while its capacity
+/// broadcast keeps saying it is alive. The declaration lives in each object
+/// API host's config and the consumer lives in the binary, so the check
+/// belongs where the two meet: `stado config validate` and `config set` on
+/// the host, and `stado doctor` there.
+pub fn queue_prefixes_missing(namespaces: &BTreeMap<String, ObjectApiNamespace>) -> Vec<&'static str> {
+    let Some(policy) = namespaces.get(QUEUE_OBJECT_NAMESPACE) else {
+        return Vec::new();
+    };
+    let mut missing: Vec<&'static str> = crate::queue::copy::CANONICAL_PREFIXES
+        .iter()
+        .copied()
+        .filter(|prefix| {
+            // A prefix is probed with a key under it; a root object is
+            // probed as itself.
+            let key = if prefix.ends_with('/') {
+                format!("{prefix}probe")
+            } else {
+                (*prefix).to_string()
+            };
+            !QUEUE_OBJECT_ACTIONS
+                .iter()
+                .all(|action| policy.allows_object_action(&key, action))
+        })
+        .collect();
+    missing.sort_unstable();
+    missing
+}
+
+/// One sentence for a policy that leaves the queue's prefixes ungranted,
+/// naming them and the command that grants them; `None` when it covers them.
+pub fn queue_prefix_problem(namespaces: &BTreeMap<String, ObjectApiNamespace>) -> Option<String> {
+    let missing = queue_prefixes_missing(namespaces);
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "object_api.namespaces.{QUEUE_OBJECT_NAMESPACE} does not grant the queue prefix(es) {} for \
+         get, put, list, stat and delete; every agent claim against this object API answers 401. \
+         Add each as a prefix_policies entry: stado host config-set <target> \
+         object_api.namespaces.{QUEUE_OBJECT_NAMESPACE} '<json>' --reload-service <object-api unit>",
+        missing.join(", ")
+    ))
+}
+
 static OBJECT_API_NAMESPACES: LazyLock<Result<BTreeMap<String, ObjectApiNamespace>, Vec<String>>> =
     LazyLock::new(|| {
         let configured = match std::env::var("WC_OBJECT_API_NAMESPACES")
