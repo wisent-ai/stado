@@ -716,6 +716,15 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
             declared.redirect_to().unwrap_or_default()
         )));
     }
+    // A hostname in front of an existing service owns no release either. The
+    // service was declared, deployed and is kept running by whoever owns it —
+    // Brama is a Rust binary with its own unit, not a Node web product — and
+    // installing a web release over it is the one thing this must never do.
+    if let Some(service) = declared.upstream_service() {
+        return Err(CmdError::click(format!(
+            "web product {name} is a hostname in front of the registry service {service:?}, so there is nothing here to deploy: that service has its own unit and its own release. `stado web route {name}` publishes the hostname, `stado service status {service}` reports the unit, and `stado service deploy` is what installs it"
+        )));
+    }
     let host = declared.host();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let runner = production_runner();
@@ -959,17 +968,24 @@ fn now() -> String {
 /// anything else. The publication counter advances with the directory change
 /// for the same reason it advances on the way in.
 pub(crate) async fn retire(name: &str, declared: &WebApiProduct) -> Result<Value, CmdError> {
-    // A redirect never had a unit, so there is nothing on any host to stop
-    // and no host name in the declaration to reach for. `stado web remove`
-    // still retracts its hostname from the edge; that is the caller's half.
-    if declared.is_redirect() {
+    // Neither kind of hostname-only product owns a unit, so there is nothing
+    // on any host to stop and no host name in the declaration to reach for.
+    // `stado web remove` still retracts the hostname from the edge; that is
+    // the caller's half. For an upstream service this is the load-bearing
+    // case: stopping Brama because someone removed a hostname in front of it
+    // would be this command reaching into a service it does not own.
+    if !declared.owns_a_unit() {
+        let detail = match (declared.redirect_to(), declared.upstream_service()) {
+            (Some(target), _) => format!("{name} is a redirect to {target}, which runs nothing"),
+            (None, Some(service)) => format!(
+                "{name} is a hostname in front of the registry service {service:?}, which keeps running and is not touched here"
+            ),
+            (None, None) => unreachable!("a product with no unit is one of the two kinds"),
+        };
         return Ok(json!({
             "unit": Value::Null,
             "state": "no-unit",
-            "detail": format!(
-                "{name} is a redirect to {}, which runs nothing",
-                declared.redirect_to().unwrap_or_default()
-            ),
+            "detail": detail,
         }));
     }
     let host = declared.host();

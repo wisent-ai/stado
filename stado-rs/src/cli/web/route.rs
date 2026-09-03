@@ -130,7 +130,8 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
                     }))
                 }
             };
-            let routes: Vec<(String, String)> = super::edge::stado_routes()?
+            let routes: Vec<(String, String)> = super::edge::stado_routes()
+                .await?
                 .into_iter()
                 .filter(|(hostname, _)| hostname != declared.hostname())
                 .collect();
@@ -155,7 +156,7 @@ async fn publish(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let edge = super::edge::declared()?;
-    let routes = super::edge::stado_routes()?;
+    let routes = super::edge::stado_routes().await?;
     // The edge first, always. `check` false is what makes this the write; with
     // `check` true nothing is delivered and nothing is written locally either.
     let edge_report = super::edge::deliver(edge, &routes, !check).await?;

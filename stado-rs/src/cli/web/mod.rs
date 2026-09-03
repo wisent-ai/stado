@@ -53,6 +53,12 @@ pub(crate) fn unit_label(product: &str) -> String {
 /// The launcher the staged tarball carries, relative to the install root.
 pub(crate) const LAUNCHER: &str = "bin/start-web";
 
+// `Declare` carries every flag the three kinds of declaration between them
+// need, so it is much larger than `List` or `Quality`. Boxing a clap
+// subcommand variant would put an indirection in the parser's own type for
+// nothing: this enum is constructed once per process. `ReleaseCommands`
+// carries the same allow for the same reason.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub(crate) enum WebCommands {
     /// Declare a web product: where it runs, as whom, and on which hostname.
@@ -67,15 +73,15 @@ pub(crate) enum WebCommands {
         /// Registry target the unit runs on.
         #[arg(
             long,
-            required_unless_present = "redirect_to",
-            conflicts_with = "redirect_to"
+            required_unless_present_any = ["redirect_to", "upstream_service"],
+            conflicts_with_all = ["redirect_to", "upstream_service"]
         )]
         host: Option<String>,
         /// Loopback port the unit listens on.
         #[arg(
             long,
-            required_unless_present = "redirect_to",
-            conflicts_with = "redirect_to"
+            required_unless_present_any = ["redirect_to", "upstream_service"],
+            conflicts_with_all = ["redirect_to", "upstream_service"]
         )]
         port: Option<u16>,
         /// Public hostname the product answers on.
@@ -84,16 +90,21 @@ pub(crate) enum WebCommands {
         /// Skarbiec consumer identity the unit runs as.
         #[arg(
             long,
-            required_unless_present = "redirect_to",
-            conflicts_with = "redirect_to"
+            required_unless_present_any = ["redirect_to", "upstream_service"],
+            conflicts_with_all = ["redirect_to", "upstream_service"]
         )]
         consumer: Option<String>,
         /// Where this hostname redirects, instead of running a unit:
         /// an https URL with a host and no query or fragment.
-        #[arg(long = "redirect-to")]
+        #[arg(long = "redirect-to", conflicts_with = "upstream_service")]
         redirect_to: Option<String>,
+        /// A registry service this hostname is published in front of, instead
+        /// of a unit this product owns. The service directory answers which
+        /// host it is active on and which address it serves.
+        #[arg(long = "upstream-service")]
+        upstream_service: Option<String>,
         /// Request path that proves the unit is ready.
-        #[arg(long, default_value = "/", conflicts_with = "redirect_to")]
+        #[arg(long, default_value = "/", conflicts_with_all = ["redirect_to", "upstream_service"])]
         readyz: String,
         /// Which edge terminates TLS for the hostname.
         #[arg(
@@ -103,19 +114,19 @@ pub(crate) enum WebCommands {
         )]
         edge: String,
         /// Plain environment entry, `NAME=value`; repeatable.
-        #[arg(long = "env", conflicts_with = "redirect_to")]
+        #[arg(long = "env", conflicts_with_all = ["redirect_to", "upstream_service"])]
         env: Vec<String>,
         /// Secret environment entry, `NAME=item#field`; repeatable.
-        #[arg(long = "secret", conflicts_with = "redirect_to")]
+        #[arg(long = "secret", conflicts_with_all = ["redirect_to", "upstream_service"])]
         secrets: Vec<String>,
         /// Declared database the product reads.
-        #[arg(long, conflicts_with = "redirect_to")]
+        #[arg(long, conflicts_with_all = ["redirect_to", "upstream_service"])]
         database: Option<String>,
         /// Field of the database's Skarbiec item to deliver.
-        #[arg(long, default_value = "pooler_url", conflicts_with = "redirect_to")]
+        #[arg(long, default_value = "pooler_url", conflicts_with_all = ["redirect_to", "upstream_service"])]
         database_field: String,
         /// Variable the database field is delivered as.
-        #[arg(long, default_value = "DATABASE_URL", conflicts_with = "redirect_to")]
+        #[arg(long, default_value = "DATABASE_URL", conflicts_with_all = ["redirect_to", "upstream_service"])]
         database_variable: String,
         /// Emit machine-readable output.
         #[arg(long)]
@@ -206,6 +217,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             hostname,
             consumer,
             redirect_to,
+            upstream_service,
             readyz,
             edge,
             env,
@@ -224,6 +236,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             hostname: &hostname,
             consumer: consumer.as_deref().unwrap_or_default(),
             redirect_to: redirect_to.as_deref(),
+            upstream_service: upstream_service.as_deref(),
             readyz: &readyz,
             edge: &edge,
             env: &env,
@@ -342,6 +355,7 @@ struct DeclareRequest<'a> {
     hostname: &'a str,
     consumer: &'a str,
     redirect_to: Option<&'a str>,
+    upstream_service: Option<&'a str>,
     readyz: &'a str,
     edge: &'a str,
     env: &'a [String],
@@ -422,6 +436,12 @@ fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
             )));
         }
         entry.insert("redirect_to".into(), json!(target));
+    } else if let Some(service) = request.upstream_service {
+        // The service is checked against the directory now rather than at the
+        // first `route`: a hostname declared in front of a service nobody
+        // declared is a declaration that cannot be rendered, and finding that
+        // out here costs one read instead of a failed publication.
+        entry.insert("upstream_service".into(), json!(service));
     } else {
         entry.insert("host".into(), json!(request.host));
         entry.insert("port".into(), json!(request.port));
@@ -452,26 +472,45 @@ fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
         products.insert(name.clone(), Value::Object(entry));
         Ok(())
     })?;
-    let report = json!({
+    // Each kind reports what it is. A redirect and an upstream-service
+    // hostname have no host, no port and no consumer, and printing an empty
+    // host on port 0 as an empty consumer described a unit that does not
+    // exist.
+    let mut report = json!({
         "product": request.name,
-        "host": request.host,
-        "port": request.port,
         "hostname": request.hostname,
-        "consumer": request.consumer,
-        "unit": unit_label(request.name),
         "edge": request.edge,
         "change": if existed.get() { "replaced" } else { "declared" },
     });
+    let object = report
+        .as_object_mut()
+        .expect("a JSON object was just built");
+    let summary = if let Some(target) = request.redirect_to {
+        object.insert("kind".into(), json!("redirect"));
+        object.insert("redirect_to".into(), json!(target));
+        format!("redirect to {target}")
+    } else if let Some(service) = request.upstream_service {
+        object.insert("kind".into(), json!("upstream-service"));
+        object.insert("upstream_service".into(), json!(service));
+        format!("in front of service {service}")
+    } else {
+        object.insert("kind".into(), json!("unit"));
+        object.insert("host".into(), json!(request.host));
+        object.insert("port".into(), json!(request.port));
+        object.insert("consumer".into(), json!(request.consumer));
+        object.insert("unit".into(), json!(unit_label(request.name)));
+        format!(
+            "on {}:{} as {}",
+            request.host, request.port, request.consumer
+        )
+    };
     if request.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
-            "{} {} on {}:{} as {} -> https://{}",
+            "{} {} {summary} -> https://{}",
             report["change"].as_str().unwrap_or_default(),
             request.name,
-            request.host,
-            request.port,
-            request.consumer,
             request.hostname,
         );
     }
@@ -497,38 +536,72 @@ fn list(json_output: bool) -> Result<(), CmdError> {
     let rows: Vec<Value> = products
         .iter()
         .map(|(name, product)| {
-            json!({
+            // A hostname-only product has no host, port, consumer or unit,
+            // and printing empties for them described a unit that does not
+            // exist. Each kind carries the fields it actually has.
+            let mut row = json!({
                 "product": name,
-                "host": product.host(),
-                "port": product.port(),
                 "hostname": product.hostname(),
-                "consumer": product.consumer(),
-                "unit": unit_label(name),
                 "edge": product.edge(),
-                "readyz": product.readyz(),
-                "database": product.database().map(|database| json!({
-                    "name": database.name(),
-                    "field": database.field(),
-                    "variable": database.variable(),
-                })),
-                "secrets": product.secrets().keys().cloned().collect::<Vec<_>>(),
-            })
+            });
+            let object = row.as_object_mut().expect("a JSON object was just built");
+            match (product.redirect_to(), product.upstream_service()) {
+                (Some(target), _) => {
+                    object.insert("kind".into(), json!("redirect"));
+                    object.insert("redirect_to".into(), json!(target));
+                }
+                (None, Some(service)) => {
+                    object.insert("kind".into(), json!("upstream-service"));
+                    object.insert("upstream_service".into(), json!(service));
+                }
+                (None, None) => {
+                    object.insert("kind".into(), json!("unit"));
+                    object.insert("host".into(), json!(product.host()));
+                    object.insert("port".into(), json!(product.port()));
+                    object.insert("consumer".into(), json!(product.consumer()));
+                    object.insert("unit".into(), json!(unit_label(name)));
+                    object.insert("readyz".into(), json!(product.readyz()));
+                    object.insert(
+                        "database".into(),
+                        json!(product.database().map(|database| json!({
+                            "name": database.name(),
+                            "field": database.field(),
+                            "variable": database.variable(),
+                        }))),
+                    );
+                    object.insert(
+                        "secrets".into(),
+                        json!(product.secrets().keys().cloned().collect::<Vec<_>>()),
+                    );
+                }
+            }
+            row
         })
         .collect();
     if json_output {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         for row in &rows {
-            println!(
-                "{} host={} port={} hostname={} consumer={} edge={} unit={}",
-                row["product"].as_str().unwrap_or_default(),
-                row["host"].as_str().unwrap_or_default(),
-                row["port"].as_u64().unwrap_or_default(),
-                row["hostname"].as_str().unwrap_or_default(),
-                row["consumer"].as_str().unwrap_or_default(),
-                row["edge"].as_str().unwrap_or_default(),
-                row["unit"].as_str().unwrap_or_default(),
-            );
+            let product = row["product"].as_str().unwrap_or_default();
+            let hostname = row["hostname"].as_str().unwrap_or_default();
+            let edge = row["edge"].as_str().unwrap_or_default();
+            match row["kind"].as_str().unwrap_or_default() {
+                "redirect" => println!(
+                    "{product} redirect hostname={hostname} to={} edge={edge}",
+                    row["redirect_to"].as_str().unwrap_or_default()
+                ),
+                "upstream-service" => println!(
+                    "{product} upstream-service hostname={hostname} service={} edge={edge}",
+                    row["upstream_service"].as_str().unwrap_or_default()
+                ),
+                _ => println!(
+                    "{product} unit host={} port={} hostname={hostname} consumer={} edge={edge} unit={}",
+                    row["host"].as_str().unwrap_or_default(),
+                    row["port"].as_u64().unwrap_or_default(),
+                    row["consumer"].as_str().unwrap_or_default(),
+                    row["unit"].as_str().unwrap_or_default(),
+                ),
+            }
         }
     }
     Ok(())
