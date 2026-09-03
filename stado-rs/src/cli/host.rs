@@ -179,6 +179,40 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// `stado host beacon-units` — the unit ids the registry declares for this
+/// machine, one per line.
+///
+/// The list the health beacon must ask systemd or launchd about. Answered from
+/// the registry rather than assembled in the collector, because the registry
+/// is already the one place that says what a host runs and a second list in
+/// shell would be a second answer to that question. That second list existed:
+/// `WC_HEALTH_UNITS`, typed per host, and on ubuntu-server-rtx-pro-6000 it
+/// named `wisent-agent.service` alone while the registry declared
+/// `stado-resolver` there. The declared unit was never asked about, so the
+/// beacon carried no entry for it and `registry doctor` reported it as a unit
+/// the host does not have — while it was active with a live pid.
+///
+/// Never fails the caller. A machine that is not in the registry, or a
+/// registry that cannot be read, prints nothing and exits zero: the beacon
+/// then reports the operator's own list, and a collector that died here would
+/// report nothing at all.
+pub async fn beacon_units() -> Result<(), CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let Ok(Some(target)) = crate::providers::local::agent::lookup_self_auto(&hostname).await else {
+        return Ok(());
+    };
+    for service in crate::deploy::service::declared_services(&target) {
+        let unit = service.unit_id();
+        // A unit id carrying a space or a comma would break the collector's
+        // own comma-separated list, and nothing in this fleet has one.
+        if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
+            continue;
+        }
+        println!("{unit}");
+    }
+    Ok(())
+}
+
 fn valid_beacon_host(host: &str) -> bool {
     let bytes = host.as_bytes();
     !bytes.is_empty()

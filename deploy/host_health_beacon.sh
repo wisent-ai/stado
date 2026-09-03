@@ -10,6 +10,13 @@
 # interval should be approximately one minute.
 
 set -euo pipefail
+# The units this host is asked about. `WC_HEALTH_UNITS` is the operator's own
+# addition; the registry's declarations for this host are unioned onto it below,
+# once the binary that can read them is resolved. A hand-typed list was the only
+# source until 2026-09-03, and the registry had declared `stado-resolver` on
+# ubuntu-server-rtx-pro-6000 while the beacon watched `wisent-agent.service`
+# alone -- so `registry doctor` reported `missing-plist` for a unit that was
+# active with a live pid. Two lists and nothing reconciling them.
 UNITS_TO_WATCH="${WC_HEALTH_UNITS:-wisent-agent.service}"
 HOST_SLUG=$(/bin/hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')
 
@@ -29,6 +36,22 @@ if [ ! -x "$STADO_BIN" ]; then
     # here instead is why the fleet's one Linux machine reported nothing.
     collect_only=yes
     STADO_BIN=""
+fi
+
+# Union the registry's own declarations for this host onto the list above.
+#
+# Asked of the binary rather than derived here, for the same reason the
+# inference summary is: the registry is the binary's to read, and a second
+# reader in shell would be a second answer to "what does this host run".
+# Failure is not fatal -- a host that cannot reach the registry still reports
+# the units it was told about, which is strictly more than nothing.
+if [ -n "$STADO_BIN" ] && declared_units=$("$STADO_BIN" host beacon-units 2>/dev/null); then
+    for declared in $declared_units; do
+        case ",${UNITS_TO_WATCH}," in
+            *",${declared},"*) ;;
+            *) UNITS_TO_WATCH="${UNITS_TO_WATCH},${declared}" ;;
+        esac
+    done
 fi
 
 # The same coordinates the macOS collector derives, for the same reason: the
@@ -89,24 +112,72 @@ disk_pct="${disk_pct_str%%%}"
 disk_avail_gb=$(( ${disk_avail_kb:-0} / 1024 / 1024 ))
 
 
+# `systemctl --user`, with the environment a login shell does not carry.
+# Transcribed from the `systemctl_user()` helper the remote service scripts
+# already use, because a state read that asks a different manager than the
+# writer used is a state read about a different unit.
+systemctl_user() {
+    runtime="/run/user/$(/usr/bin/id -u)"
+    /usr/bin/env \
+        XDG_RUNTIME_DIR="$runtime" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+        /usr/bin/systemctl --user "$@"
+}
+
+# Run one systemctl query against a named manager.
+systemctl_in() {
+    manager="$1"
+    shift
+    case "$manager" in
+        system) /usr/bin/systemctl "$@" ;;
+        user) systemctl_user "$@" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Which manager has the unit loaded: `system`, `user`, or nothing.
+#
+# `LoadState` is the discriminator, because it separates the two facts this
+# script used to merge: `not-found` means this manager has never heard of the
+# unit, and `loaded` means it has and can be asked about its state. The fleet
+# installs some units into `systemd --user` under `~/.config/systemd/user`, so
+# asking the SYSTEM manager about one answered `not-found` and every such unit
+# was recorded `inactive`.
+unit_manager() {
+    if [ "$(/usr/bin/systemctl show -p LoadState --value "$1" 2>/dev/null)" = loaded ]; then
+        printf 'system\n'
+    elif [ "$(systemctl_user show -p LoadState --value "$1" 2>/dev/null)" = loaded ]; then
+        printf 'user\n'
+    fi
+}
 # systemctl unit states (one entry per UNITS_TO_WATCH item, comma-sep).
 units_json=""
 for unit in ${UNITS_TO_WATCH//,/ }; do
     case "$unit" in
         *weles*) echo "host_health_beacon: raw Weles unit lifecycle is forbidden"; false ;;
     esac
-    if /usr/bin/systemctl is-active "$unit" >/dev/null 2>&1; then
-        state="active"
-    elif /usr/bin/systemctl is-failed "$unit" >/dev/null 2>&1; then
-        state="failed"
+    manager=$(unit_manager "$unit")
+    if [ -z "$manager" ]; then
+        # Neither manager has this unit loaded, so no state was observed.
+        # Reported as `unknown` and NOT as `inactive`: "I could not see it"
+        # and "it is stopped" are different facts, and merging them is what
+        # let a running unit be reported as one that does not exist.
+        state="unknown"
+        n_restarts="?"
+        since="?"
     else
-        state="inactive"
+        if systemctl_in "$manager" is-active "$unit" >/dev/null 2>&1; then
+            state="active"
+        elif systemctl_in "$manager" is-failed "$unit" >/dev/null 2>&1; then
+            state="failed"
+        else
+            state="inactive"
+        fi
+        n_restarts=$(systemctl_in "$manager" show -p NRestarts --value "$unit" 2>/dev/null || echo "?")
+        since=$(systemctl_in "$manager" show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null || echo "?")
     fi
-    # Restart counter: parse from `systemctl show -p NRestarts`.
-    n_restarts=$(/usr/bin/systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo "?")
-    since=$(/usr/bin/systemctl show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null || echo "?")
     if [ -n "$units_json" ]; then units_json="$units_json,"; fi
-    units_json="$units_json\"$unit\":{\"state\":\"$state\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
+    units_json="$units_json\"$unit\":{\"state\":\"$state\",\"manager\":\"${manager:-none}\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
 done
 
 if [ -n "$STADO_BIN" ] && inference_json=$("$STADO_BIN" inference beacon); then
