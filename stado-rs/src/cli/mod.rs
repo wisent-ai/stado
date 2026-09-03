@@ -64,6 +64,7 @@ pub mod secrets;
 pub mod seed_freshness;
 pub mod service;
 pub mod service_converge;
+pub mod service_refresh_image;
 pub mod service_verify;
 pub mod status;
 pub mod storage;
