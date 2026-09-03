@@ -96,8 +96,12 @@ pub(crate) enum WebCommands {
         consumer: Option<String>,
         /// Where this hostname redirects, instead of running a unit:
         /// an https URL with a host and no query or fragment.
-        #[arg(long = "redirect-to", conflicts_with = "upstream_service")]
+        #[arg(long = "redirect-to", conflicts_with_all = ["upstream_service", "path_prefix"])]
         redirect_to: Option<String>,
+        /// A path prefix under a hostname another declaration owns, for a unit
+        /// product mounted inside that hostname's site block.
+        #[arg(long = "path-prefix", conflicts_with_all = ["redirect_to", "upstream_service"])]
+        path_prefix: Option<String>,
         /// A registry service this hostname is published in front of, instead
         /// of a unit this product owns. The service directory answers which
         /// host it is active on and which address it serves.
@@ -218,6 +222,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             consumer,
             redirect_to,
             upstream_service,
+            path_prefix,
             readyz,
             edge,
             env,
@@ -237,6 +242,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             consumer: consumer.as_deref().unwrap_or_default(),
             redirect_to: redirect_to.as_deref(),
             upstream_service: upstream_service.as_deref(),
+            path_prefix: path_prefix.as_deref(),
             readyz: &readyz,
             edge: &edge,
             env: &env,
@@ -356,6 +362,7 @@ struct DeclareRequest<'a> {
     consumer: &'a str,
     redirect_to: Option<&'a str>,
     upstream_service: Option<&'a str>,
+    path_prefix: Option<&'a str>,
     readyz: &'a str,
     edge: &'a str,
     env: &'a [String],
@@ -446,7 +453,42 @@ fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
         entry.insert("host".into(), json!(request.host));
         entry.insert("port".into(), json!(request.port));
         entry.insert("consumer".into(), json!(request.consumer));
-        entry.insert("readyz".into(), json!(request.readyz));
+        // A mount answers at its own prefix, so the owner's readiness path is
+        // not its readiness path and `route` proves it at `<prefix>/` instead.
+        if let Some(prefix) = request.path_prefix {
+            if !crate::config::is_mount_prefix(prefix) {
+                return Err(CmdError::usage(format!(
+                    "--path-prefix {prefix:?} must be an absolute path with no trailing slash, like \"/docs\""
+                )));
+            }
+            // The owner is required now rather than at the first `route`: a
+            // mount is rendered inside its owner's site block, so one with no
+            // owner is a block with nowhere to go, and the hostname would get
+            // no certificate at all.
+            let declared_products = crate::config::web_api_products().ok();
+            let owner = declared_products
+                .into_iter()
+                .flatten()
+                .find(|(other, product)| {
+                    other.as_str() != request.name
+                        && product.hostname() == request.hostname
+                        && product.owns_its_hostname()
+                })
+                .map(|(other, _)| other.clone());
+            let Some(owner) = owner else {
+                return Err(CmdError::usage(format!(
+                    "no declaration owns {}, so {prefix} has no site block to be mounted in: declare the product that answers that hostname first, without --path-prefix",
+                    request.hostname
+                )));
+            };
+            println!(
+                "mounting {prefix} on {}, owned by {owner}",
+                request.hostname
+            );
+            entry.insert("path_prefix".into(), json!(prefix));
+        } else {
+            entry.insert("readyz".into(), json!(request.readyz));
+        }
     }
     if !env.is_empty() {
         entry.insert("env".into(), Value::Object(env));

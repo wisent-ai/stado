@@ -55,6 +55,7 @@
 //! grants it, [`status`] reports both ports as unanswered, which is exactly
 //! what an operator needs to see.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use clap::Subcommand;
@@ -255,7 +256,7 @@ pub(super) fn declared() -> Result<&'static WebApiEdge, CmdError> {
 /// Only the products that name this edge: a `cloudflare` product's hostname is
 /// terminated by Cloudflare, and writing it here would order a second
 /// certificate for a name this host never answers on.
-pub(super) async fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
+pub(super) async fn stado_routes() -> Result<Vec<(String, Vec<String>)>, CmdError> {
     let products = match config::web_api_products() {
         Ok(products) => products,
         // An empty plane is not a broken one; the parser refuses an empty map
@@ -264,12 +265,27 @@ pub(super) async fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
         Err(_) if crate::config_file::get("web_api.products").is_none() => return Ok(Vec::new()),
         Err(problems) => return Err(CmdError::click(problems.join("; "))),
     };
-    let mut routes = Vec::new();
+    // One site block per hostname, and a hostname can now carry more than one
+    // directive: every mount, then the declaration that owns the hostname.
+    // Ordered, not sorted, because order is the semantics — Caddy takes the
+    // first matching route inside a block, so a catch-all `reverse_proxy`
+    // rendered before a `handle_path /docs*` would answer `/docs` itself and
+    // the mount would never be reached.
+    let mut mounts: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    let mut owners: BTreeMap<&str, String> = BTreeMap::new();
     for product in products
         .values()
         .filter(|product| product.edge() == "stado")
     {
-        routes.push(match (product.redirect_to(), product.upstream_service()) {
+        if let Some(prefix) = product.path_prefix() {
+            let (_, directive) = mount(product.hostname(), prefix, product.host(), product.port())?;
+            mounts
+                .entry(product.hostname())
+                .or_default()
+                .push((prefix.to_string(), directive));
+            continue;
+        }
+        let (_, directive) = match (product.redirect_to(), product.upstream_service()) {
             (Some(target), _) => redirect(product.hostname(), target)?,
             // Resolved on every render rather than snapshotted at declare
             // time: the service directory is what says which host a service
@@ -277,10 +293,65 @@ pub(super) async fn stado_routes() -> Result<Vec<(String, String)>, CmdError> {
             // point at the old host the day the service moved.
             (None, Some(service)) => upstream_route(product.hostname(), service).await?,
             (None, None) => route(product.hostname(), product.host(), product.port())?,
-        });
+        };
+        owners.insert(product.hostname(), directive);
+    }
+    let mut routes: Vec<(String, Vec<String>)> = Vec::new();
+    for (hostname, directive) in owners {
+        let mut block = Vec::new();
+        if let Some(mounted) = mounts.remove(hostname) {
+            // Longest prefix first, so `/docs/api` cannot be swallowed by a
+            // `/docs` mounted beside it.
+            let mut mounted = mounted;
+            mounted
+                .sort_by(|left, right| right.0.len().cmp(&left.0.len()).then(left.0.cmp(&right.0)));
+            block.extend(mounted.into_iter().map(|(_, directive)| directive));
+        }
+        block.push(directive);
+        routes.push((hostname.to_string(), block));
+    }
+    // A mount whose owner names another edge. The configuration plane
+    // refuses a mount with no owner at all, so what is left here is a mount
+    // whose owner is terminated elsewhere, and rendering it on this edge
+    // would order a certificate for a name this host never answers on. The
+    // first one is named; a run that fixes it will find the next.
+    if let Some((hostname, mounted)) = mounts.into_iter().next() {
+        let prefixes: Vec<String> = mounted.into_iter().map(|(prefix, _)| prefix).collect();
+        return Err(CmdError::click(format!(
+            "{} is mounted on {hostname}, whose owning declaration does not name the stado edge: a mount is rendered inside its owner's site block, so it can only be published where the owner is",
+            prefixes.join(", ")
+        )));
     }
     routes.sort();
     Ok(routes)
+}
+
+/// One mount: the hostname it lives under, and the `handle_path` block that
+/// answers its prefix from its own unit.
+///
+/// `handle_path` rather than `handle`, because it strips the matched prefix
+/// before proxying: the unit behind `/docs` is a site whose own paths start
+/// at `/`, so `/docs/core` has to arrive as `/core`. `handle` would forward
+/// `/docs/core` unchanged and every page would answer 404.
+///
+/// The matcher is `<prefix>*` so that the prefix itself matches as well as
+/// everything under it — `/docs` and `/docs/core` are both this mount's.
+pub(super) fn mount(
+    hostname: &str,
+    prefix: &str,
+    host: &str,
+    port: u16,
+) -> Result<(String, String), CmdError> {
+    if !config::is_mount_prefix(prefix) {
+        return Err(CmdError::click(format!(
+            "{prefix:?} is not a mount prefix: an absolute path with no trailing slash, like \"/docs\""
+        )));
+    }
+    let (hostname, upstream) = route(hostname, host, port)?;
+    Ok((
+        hostname,
+        format!("handle_path {prefix}* {{\n\t\t{upstream}\n\t}}"),
+    ))
 }
 
 /// One route to a service the registry already runs: the hostname, and a
@@ -422,7 +493,7 @@ pub(super) fn route(hostname: &str, host: &str, port: u16) -> Result<(String, St
 /// declares a log destination: the proxy runs as a managed unit, so its
 /// output is already where `stado service logs` reads it, and a second log
 /// file on the host would be one nothing rotates.
-pub(super) fn caddyfile(edge: &WebApiEdge, routes: &[(String, String)]) -> String {
+pub(super) fn caddyfile(edge: &WebApiEdge, routes: &[(String, Vec<String>)]) -> String {
     let mut text = String::with_capacity(320 + routes.len() * 96);
     text.push_str(
         "# Generated by `stado web edge`; the source of truth is web_api.products in\n\
@@ -439,12 +510,20 @@ pub(super) fn caddyfile(edge: &WebApiEdge, routes: &[(String, String)]) -> Strin
         );
         return text;
     }
-    for (hostname, directive) in routes {
+    for (hostname, block) in routes {
         text.push('\n');
         text.push_str(hostname);
-        text.push_str(" {\n\t");
-        text.push_str(directive);
-        text.push_str("\n}\n");
+        text.push_str(" {\n");
+        // In order: every mount's `handle_path`, then the directive that
+        // answers the rest. Caddy takes the first matching route in a block,
+        // so this order is what makes `/docs` the mount's and everything else
+        // the owner's.
+        for directive in block {
+            text.push('\t');
+            text.push_str(directive);
+            text.push('\n');
+        }
+        text.push_str("}\n");
     }
     text
 }
@@ -521,7 +600,7 @@ async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedServ
 /// excluded by the caller that is removing it.
 pub(super) async fn deliver(
     edge: &WebApiEdge,
-    routes: &[(String, String)],
+    routes: &[(String, Vec<String>)],
     apply: bool,
 ) -> Result<Value, CmdError> {
     let desired = caddyfile(edge, routes);
@@ -1331,6 +1410,15 @@ async fn hostnames(json_output: bool) -> Result<(), CmdError> {
 mod tests {
     use super::*;
 
+    /// The site blocks for a set of one-directive hostnames, which is what
+    /// every product except a mount produces.
+    fn blocks(routes: Vec<(String, String)>) -> Vec<(String, Vec<String>)> {
+        routes
+            .into_iter()
+            .map(|(hostname, directive)| (hostname, vec![directive]))
+            .collect()
+    }
+
     fn edge() -> WebApiEdge {
         config::parse_web_api_edge(Some(&json!({
             "target": "wisent-edge",
@@ -1343,7 +1431,7 @@ mod tests {
     #[test]
     fn one_product_becomes_one_site_block_over_the_tailnet() {
         let routes = vec![route("preferences.wisent.com", "charless-mac-mini", 3210).unwrap()];
-        let rendered = caddyfile(&edge(), &routes);
+        let rendered = caddyfile(&edge(), &blocks(routes));
         assert!(
             rendered.contains("\temail operator@wisent.com\n"),
             "{rendered}"
@@ -1363,7 +1451,7 @@ mod tests {
     #[test]
     fn a_redirect_product_becomes_a_redir_block_and_no_proxy() {
         let routes = vec![redirect("aiwisent.com", "https://wisent-app.com").unwrap()];
-        let rendered = caddyfile(&edge(), &routes);
+        let rendered = caddyfile(&edge(), &blocks(routes));
         // `{uri}` carries the path and the query across, which is what the
         // Vercel rewrite these replace did with `/:path*`. 308 keeps the
         // method, so a POST does not silently become a GET.
@@ -1388,7 +1476,7 @@ mod tests {
             route("preferences.wisent.com", "charless-mac-mini", 3210).unwrap(),
         ];
         routes.sort();
-        let rendered = caddyfile(&edge(), &routes);
+        let rendered = caddyfile(&edge(), &blocks(routes));
         assert_eq!(
             rendered.matches("\treverse_proxy ").count(),
             1,
@@ -1430,7 +1518,7 @@ mod tests {
             route("preferences.wisent.com", "charless-mac-mini", 3210).unwrap(),
             route("needher.needher.ai", "ubuntu-server-rtx-pro-6000", 3400).unwrap(),
         ];
-        let rendered = caddyfile(&edge(), &routes);
+        let rendered = caddyfile(&edge(), &blocks(routes));
         // One global block, and one site block per product.
         assert_eq!(
             rendered.matches("\treverse_proxy ").count(),
@@ -1498,7 +1586,10 @@ mod tests {
 
     #[test]
     fn the_global_block_and_indented_directives_are_not_site_addresses() {
-        let rendered = caddyfile(&edge(), &[route("a.wisent.com", "host", 80).unwrap()]);
+        let rendered = caddyfile(
+            &edge(),
+            &blocks(vec![route("a.wisent.com", "host", 80).unwrap()]),
+        );
         assert_eq!(
             terminated_hostnames(&rendered),
             vec!["a.wisent.com".to_string()]
@@ -1506,5 +1597,292 @@ mod tests {
         // A comment naming a hostname is a comment, not a site block.
         let commented = "# preferences.wisent.com {\n{\n\temail a@b.com\n}\n";
         assert!(terminated_hostnames(commented).is_empty(), "{commented}");
+    }
+
+    /// Brama's own documentation file names, as committed in
+    /// `brama/vercel-ingress/docs/` — all 79 of them, read off that
+    /// directory rather than invented, because what this test defends is that
+    /// the real pages resolve.
+    const BRAMA_DOCS_FILES: [&str; 79] = [
+        "agent-skill.html",
+        "architecture.html",
+        "changelog.html",
+        "cli.html",
+        "cli/collect-task-quality.html",
+        "cli/detect.html",
+        "cli/help.html",
+        "cli/mcp.html",
+        "cli/onboard.html",
+        "cli/serve.html",
+        "cli/subscription.html",
+        "cli/subscription/refresh.html",
+        "cli/subscription/sign-in.html",
+        "cli/subscriptions.html",
+        "cli/subscriptions/list.html",
+        "cli/test.html",
+        "cli/version.html",
+        "concepts/alias.html",
+        "concepts/capability.html",
+        "concepts/client-identity.html",
+        "concepts/entitlement.html",
+        "concepts/envelope.html",
+        "concepts/failure-point.html",
+        "concepts/provider.html",
+        "concepts/subscription.html",
+        "configuration.html",
+        "core.html",
+        "errors.html",
+        "examples.html",
+        "examples/automation/use-mcp-detect.html",
+        "examples/core/call-agent-selectors.html",
+        "examples/core/call-http-api.html",
+        "examples/failures/auth-and-transport.html",
+        "examples/failures/provider-unavailable.html",
+        "examples/getting-started/detect-local-resources.html",
+        "examples/inference/stream-a-completion.html",
+        "examples/operations/collect-task-quality.html",
+        "examples/operations/inspect-build-and-health.html",
+        "examples/operations/manage-subscriptions.html",
+        "examples/recovery/upgrade-and-rollback.html",
+        "http-api.html",
+        "index.html",
+        "integrations.html",
+        "onboarding.html",
+        "providers.html",
+        "providers/anthropic.html",
+        "providers/cerebras.html",
+        "providers/claude-code.html",
+        "providers/codex.html",
+        "providers/deepseek.html",
+        "providers/featherless.html",
+        "providers/fireworks.html",
+        "providers/groq.html",
+        "providers/huggingface.html",
+        "providers/kimi.html",
+        "providers/local-openai.html",
+        "providers/mistral.html",
+        "providers/moonshot.html",
+        "providers/novita.html",
+        "providers/nvidia.html",
+        "providers/openai.html",
+        "providers/openrouter.html",
+        "providers/qwen.html",
+        "providers/synthetic.html",
+        "providers/together.html",
+        "providers/venice.html",
+        "providers/xai.html",
+        "providers/zai.html",
+        "quick-start.html",
+        "readme.html",
+        "release.html",
+        "runbook.html",
+        "runnable-examples.html",
+        "security.html",
+        "support.html",
+        "testing.html",
+        "walkthrough-standalone-stub.html",
+        "walkthrough-subscriptions.html",
+        "what-is-brama.html",
+    ];
+
+    /// Every `source` the Vercel ingress rewrote, from
+    /// `brama/vercel-ingress/vercel.json`: the 57 `/docs*` rules this
+    /// edge has to replace. The catch-all is not here — it is the owner's.
+    const BRAMA_DOCS_ROUTES: [&str; 57] = [
+        "/docs",
+        "/docs/agent-skill",
+        "/docs/architecture",
+        "/docs/changelog",
+        "/docs/cli",
+        "/docs/cli/collect-task-quality",
+        "/docs/cli/detect",
+        "/docs/cli/help",
+        "/docs/cli/mcp",
+        "/docs/cli/onboard",
+        "/docs/cli/serve",
+        "/docs/cli/subscription",
+        "/docs/cli/subscription/refresh",
+        "/docs/cli/subscription/sign-in",
+        "/docs/cli/subscriptions",
+        "/docs/cli/subscriptions/list",
+        "/docs/cli/test",
+        "/docs/cli/version",
+        "/docs/concepts/alias",
+        "/docs/concepts/capability",
+        "/docs/concepts/client-identity",
+        "/docs/concepts/entitlement",
+        "/docs/concepts/envelope",
+        "/docs/concepts/failure-point",
+        "/docs/concepts/provider",
+        "/docs/concepts/subscription",
+        "/docs/configuration",
+        "/docs/core",
+        "/docs/errors",
+        "/docs/examples",
+        "/docs/examples/automation/use-mcp-detect",
+        "/docs/examples/core/call-agent-selectors",
+        "/docs/examples/core/call-http-api",
+        "/docs/examples/failures/auth-and-transport",
+        "/docs/examples/failures/provider-unavailable",
+        "/docs/examples/getting-started/detect-local-resources",
+        "/docs/examples/inference/stream-a-completion",
+        "/docs/examples/operations/collect-task-quality",
+        "/docs/examples/operations/inspect-build-and-health",
+        "/docs/examples/operations/manage-subscriptions",
+        "/docs/examples/recovery/upgrade-and-rollback",
+        "/docs/http-api",
+        "/docs/integrations",
+        "/docs/onboarding",
+        "/docs/providers",
+        "/docs/providers/:slug",
+        "/docs/quick-start",
+        "/docs/readme",
+        "/docs/release",
+        "/docs/runbook",
+        "/docs/runnable-examples",
+        "/docs/security",
+        "/docs/support",
+        "/docs/testing",
+        "/docs/walkthrough-standalone-stub",
+        "/docs/walkthrough-subscriptions",
+        "/docs/what-is-brama",
+    ];
+
+    /// The static server's resolution rule, applied to the same paths it will
+    /// be applied to in production: the exact file, then `<path>.html`, then
+    /// `<path>/index.html`.
+    ///
+    /// The rule itself lives in the server `stado web build` stages, in
+    /// JavaScript, because that is where it runs. Asserting that file's text
+    /// would prove nothing about whether these pages resolve, so the three
+    /// steps are applied here — and
+    /// `cli::web::build::tests::the_static_server_fetches_nothing_and_stays_inside_the_site`
+    /// pins the server's own order to the same three, so the two cannot drift
+    /// apart unnoticed.
+    fn resolve_static(path: &str, files: &[&str]) -> Option<String> {
+        let relative = path.trim_start_matches('/');
+        let candidates = [
+            relative.to_string(),
+            format!("{relative}.html"),
+            if relative.is_empty() {
+                "index.html".to_string()
+            } else {
+                format!("{relative}/index.html")
+            },
+        ];
+        candidates
+            .into_iter()
+            .find(|candidate| files.contains(&candidate.as_str()))
+    }
+
+    #[test]
+    fn a_mount_is_handled_before_the_owners_catch_all() {
+        // The owner forwards the whole hostname to Brama's own unit; the mount
+        // answers /docs from the documentation unit. The order is the
+        // semantics: Caddy takes the first matching route in a block, so a
+        // catch-all rendered first would answer /docs itself and the mount
+        // would never be reached.
+        let owner = route("brama.wisent.com", "charless-mac-mini", 18081).unwrap();
+        let mounted = mount("brama.wisent.com", "/docs", "charless-mac-mini", 3220).unwrap();
+        let routes = vec![(
+            "brama.wisent.com".to_string(),
+            vec![mounted.1.clone(), owner.1.clone()],
+        )];
+        let rendered = caddyfile(&edge(), &routes);
+        let block = rendered
+            .split_once("brama.wisent.com {")
+            .expect("the hostname has a site block")
+            .1;
+        let handle = block
+            .find("handle_path /docs* {")
+            .expect("the mount is rendered as handle_path");
+        let catch_all = block
+            .find("reverse_proxy http://charless-mac-mini:18081")
+            .expect("the owner's directive is rendered");
+        assert!(handle < catch_all, "{rendered}");
+        // handle_path, not handle: the prefix is stripped before proxying, so
+        // /docs/core arrives at the unit as /core. `handle` would forward it
+        // unchanged and every page would answer 404.
+        assert!(!block.contains("handle /docs"), "{rendered}");
+        assert!(
+            block.contains(
+                "handle_path /docs* {\n\t\treverse_proxy http://charless-mac-mini:3220\n\t}"
+            ),
+            "{rendered}"
+        );
+        // One site block, so one certificate, for the hostname the owner
+        // declared.
+        assert_eq!(
+            terminated_hostnames(&rendered),
+            vec!["brama.wisent.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn every_docs_route_the_ingress_rewrote_resolves_behind_the_mount() {
+        // What `handle_path /docs*` leaves of each request, and what the static
+        // server then makes of it. If one of these did not resolve, moving
+        // brama.wisent.com onto this edge would take that page offline.
+        let files: Vec<&str> = BRAMA_DOCS_FILES.to_vec();
+        let mut checked = 0_usize;
+        for source in BRAMA_DOCS_ROUTES {
+            if let Some(pattern) = source.strip_suffix("/:slug") {
+                // One rule stands for every file in a directory, so each file
+                // is checked and not the pattern.
+                let directory = pattern.trim_start_matches("/docs").trim_start_matches('/');
+                let members: Vec<&str> = files
+                    .iter()
+                    .copied()
+                    .filter(|name| {
+                        name.starts_with(&format!("{directory}/")) && name.ends_with(".html")
+                    })
+                    .collect();
+                assert!(
+                    !members.is_empty(),
+                    "{source} stands for no file under {directory}/"
+                );
+                for name in members {
+                    let slug = name
+                        .trim_start_matches(&format!("{directory}/"))
+                        .trim_end_matches(".html");
+                    // The prefix the mount strips, leaving the unit's own path.
+                    let stripped = format!("/{directory}/{slug}");
+                    assert_eq!(
+                        resolve_static(&stripped, &files).as_deref(),
+                        Some(name),
+                        "{source} -> {stripped} must resolve to {name}"
+                    );
+                    checked += 1;
+                }
+                continue;
+            }
+            let stripped = source.trim_start_matches("/docs");
+            let stripped = if stripped.is_empty() { "/" } else { stripped };
+            assert!(
+                resolve_static(stripped, &files).is_some(),
+                "{source} -> {stripped} resolves to nothing, so that page would 404"
+            );
+            checked += 1;
+        }
+        // Every page, and not fewer: a rule that quietly stopped covering half
+        // of them would still pass an "each one that ran resolved" assertion.
+        assert_eq!(checked, 79, "every documentation page must be checked");
+        // /docs itself is the directory index, which is what the ingress
+        // rewrote to /docs/index.html.
+        assert_eq!(resolve_static("/", &files).as_deref(), Some("index.html"));
+    }
+
+    #[test]
+    fn a_mount_prefix_that_could_change_the_matcher_is_refused() {
+        // The rendered matcher is `<prefix>*`. A trailing slash would stop
+        // /docs itself from matching; a wildcard or a brace of its own would
+        // rewrite the matcher into something nobody declared.
+        for prefix in [
+            "docs", "/docs/", "/", "", "/docs*", "/docs{x}", "/do cs", "/../etc",
+        ] {
+            mount("brama.wisent.com", prefix, "charless-mac-mini", 3220)
+                .expect_err("{prefix:?} must not reach the Caddyfile");
+        }
+        mount("brama.wisent.com", "/docs/api", "charless-mac-mini", 3220).unwrap();
     }
 }
