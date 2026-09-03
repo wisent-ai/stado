@@ -80,6 +80,17 @@ pub struct PlatformRecipe {
     pub stage: BTreeMap<String, String>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,
+    /// Build-time variables whose values are not secret and belong in the
+    /// repository: a public origin, a feature flag, a base path.
+    ///
+    /// `secret_env` is the wrong home for those. It names a Skarbiec item and
+    /// field, so a public constant stored there becomes a credential the fleet
+    /// grants, syncs and audits for no reason, and the value stops being
+    /// reviewable in the diff that changed it. `echo-web` needs
+    /// `NEXT_PUBLIC_SITE_URL=https://content.wisent.ai` at build time and
+    /// that URL is on the public internet.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
     #[serde(default = "default_required")]
     pub required: bool,
 }
@@ -499,6 +510,23 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
             };
             if !env_name(name) || !identifier(item) || !identifier(field) {
                 return Err(format!("{platform}: secret_env is invalid"));
+            }
+        }
+        for (name, value) in &recipe.env {
+            // A value is a literal the build reads, so the only thing that
+            // cannot be one is a control character: it would arrive in the
+            // child's environment as something no reader of this file typed.
+            if !env_name(name) || value.is_empty() || value.chars().any(char::is_control) {
+                return Err(format!("{platform}: env is invalid"));
+            }
+            // One variable declared in both places has two answers and the
+            // build would take whichever the exporter applied last. A public
+            // constant and a credential are also different review paths, so
+            // the collision is a mistake about which one this value is.
+            if recipe.secret_env.contains_key(name) {
+                return Err(format!(
+                    "{platform}: {name} is declared in both env and secret_env"
+                ));
             }
         }
         if !argv(&recipe.build.argv) || recipe.stage.is_empty() {

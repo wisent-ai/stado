@@ -774,14 +774,68 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
         .get("last_attempt_at")
         .and_then(Value::as_f64)
         .map_or(attempted_at, |recorded| recorded.max(attempted_at));
+    // When the last pass was prevented rather than run, and never moving
+    // backwards either.
+    //
+    // A janitor that cannot take the run lock because a workload holds it in
+    // shared mode has been PREVENTED. That is a modelled, healthy answer —
+    // `acquire_workload_lock` takes the lock for the job's whole duration on
+    // purpose — but until this stamp existed nothing recorded it, so
+    // `cleanup_success_age_seconds` downstream could not tell a prevented
+    // janitor from a silent one and inferred a stall from the absence. On
+    // 2026-09-03 charless-mac-mini ran one job for 42 minutes, roughly 40
+    // in-process passes hit `lock_busy` at the ten-second agent tick, none of
+    // them left a trace, and `host gates` turned `claiming` off on a host with
+    // 17.3 GiB free, a 15 GiB watermark and `disk_pressure_unresolved: false`.
+    //
+    // Only the time is recorded here, not the holder: a `flock` owner cannot be
+    // named from the process that failed to take it, and the one thing in this
+    // product that can name it -- `host disk`'s `cleanup_lock.holders` --
+    // already does. What the arithmetic needs is prevented-since-a-known-time,
+    // and that is what this is.
+    let prevented_now = report.get("outcome").and_then(Value::as_str) == Some("lock_busy");
+    let last_prevented_at = previous
+        .get("last_prevented_at")
+        .and_then(Value::as_f64)
+        .map_or_else(
+            || prevented_now.then_some(attempted_at),
+            |recorded| {
+                Some(if prevented_now {
+                    recorded.max(attempted_at)
+                } else {
+                    recorded
+                })
+            },
+        );
+    // A prevented pass returns before the lock is held, so it never reached the
+    // carry-forward in `run_with_lock` and its report says `last_success_at:
+    // null`. Writing that verbatim would erase the one timestamp the stall
+    // arithmetic is measured from — recording the prevented pass would then be
+    // worse than dropping it. The last success belongs to the host, not to a
+    // pass, so it is carried here for every writer and every outcome.
+    let mut report = report.clone();
+    if report.get("last_success_at").is_none_or(Value::is_null) {
+        if let Some(recorded) = previous
+            .get("report")
+            .and_then(|previous| previous.get("last_success_at"))
+            .filter(|stamp| !stamp.is_null())
+        {
+            if let Some(object) = report.as_object_mut() {
+                object.insert("last_success_at".to_string(), recorded.clone());
+            }
+        }
+    }
     let mut state = Map::new();
     state.insert("version".to_string(), serde_json::json!(STATE_VERSION));
     state.insert(
         "last_attempt_at".to_string(),
         serde_json::json!(last_attempt_at),
     );
+    if let Some(stamp) = last_prevented_at {
+        state.insert("last_prevented_at".to_string(), serde_json::json!(stamp));
+    }
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
-    state.insert("report".to_string(), report.clone());
+    state.insert("report".to_string(), report);
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()
@@ -1938,7 +1992,13 @@ async fn cleanup_once(
     let Some(lock) = lock else {
         report.lock_busy = true;
         report.outcome = "lock_busy".to_string();
-        return finish(report, started, Some(&home), None, attempted_at, log_fn);
+        // `persist`, not `None`. This branch used to be the one outcome the
+        // janitor reached and never wrote down, which is why `finish` carried a
+        // `lock_busy` case (state_write) that nothing could ever enter. A pass
+        // prevented by a live workload is the fact the stall arithmetic needs
+        // most: without it, forty consecutive prevented passes and forty passes
+        // that were never scheduled leave an identical, empty record.
+        return finish(report, started, Some(&home), persist, attempted_at, log_fn);
     };
     run_with_lock(
         &home,
