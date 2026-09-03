@@ -61,6 +61,26 @@ const STATE_NAME: &str = "disk-cleanup-state.json";
 const DEADLINE_SECONDS: f64 = 30.0;
 /// Python `_MAX_ERRORS`.
 const MAX_ERRORS: usize = 16;
+/// Who holds the exclusive run lock, and until when they said they would.
+///
+/// `flock` states that somebody holds the lock and can state nothing else.
+/// That was enough while every holder finished, and on 2026-09-03 it was not:
+/// `charless-mac-mini` reported `disk_cleanup_stalled` for nine and a half
+/// hours because one agent process held this lock, idle at 0% CPU with
+/// eleven ESTABLISHED sockets to an object API whose pid no longer existed,
+/// and a hold that never ends disables cleanup on the host permanently. The
+/// kernel frees a dead holder's lock; it cannot free a live holder that will
+/// never come back, and nothing in the file said the holder was overdue.
+const LOCK_HOLDER_NAME: &str = "disk-cleanup.lock.holder";
+/// How long past a holder's own declared deadline the lock may be taken over.
+///
+/// The criterion is deliberately NOT elapsed time alone: a long pass on a
+/// large tree is healthy, and stealing its lock would produce exactly the
+/// concurrent deletion the lock exists to prevent. It is the holder's OWN
+/// promise — the pass deadline it recorded when it acquired the lock — plus
+/// this grace. A holder past that has either stopped or lied about its
+/// budget, and both are states nobody should have to wait out.
+const LOCK_TAKEOVER_GRACE_S: f64 = 300.0;
 
 /// The janitor's state file relative to `$HOME` — `_STATE_DIR` joined with
 /// `_STATE_NAME` in the Python original.
@@ -586,13 +606,18 @@ pub fn ensure_state_dir(home: &Path) -> Result<PathBuf, JanitorError> {
 /// Python `_open_lock`: open `disk-cleanup.lock` with O_RDWR|O_CREAT|
 /// O_NOFOLLOW, verify it is a regular file owned by us, force 0600.
 fn open_lock(state_dir: &Path) -> Result<File, JanitorError> {
+    open_lock_at(&state_dir.join(LOCK_NAME))
+}
+
+/// The same checks at an exact path, for the takeover's staged file.
+fn open_lock_at(path: &Path) -> Result<File, JanitorError> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .custom_flags(nix::libc::O_NOFOLLOW)
         .mode(0o600)
-        .open(state_dir.join(LOCK_NAME))?;
+        .open(path)?;
     let info = file.metadata()?;
     if !info.is_file() || info.uid() != euid() {
         return Err(JanitorError::os("unsafe cleanup lock"));
@@ -617,22 +642,145 @@ fn lock_contended(exc: &io::Error) -> bool {
 /// process has opened the same lock file more than once.
 struct ExclusiveLock {
     file: File,
+    holder_record: Option<PathBuf>,
 }
 
 impl Drop for ExclusiveLock {
     fn drop(&mut self) {
         let _ = fs2::FileExt::unlock(&self.file);
+        // The record answers "who holds this, and until when". A record left
+        // behind by a finished pass would answer for nobody.
+        if let Some(path) = &self.holder_record {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
-/// Python `_acquire_lock`: exclusive non-blocking flock; None when busy.
-fn acquire_lock(state_dir: &Path) -> Result<Option<ExclusiveLock>, JanitorError> {
+/// What one holder said about itself when it took the lock.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct LockHolder {
+    pid: i32,
+    acquired_at: f64,
+    /// Epoch seconds by which this holder expects to be finished: its pass
+    /// deadline, not a guess made by the reader.
+    deadline_at: f64,
+    writer: String,
+    writer_version: String,
+}
+
+/// Why a contended lock is contended, in the terms an operator needs.
+enum LockState {
+    /// Ours, and the record now says so.
+    Held(ExclusiveLock),
+    /// Somebody else holds it and is still inside their declared budget.
+    Busy { holder: Option<LockHolder> },
+    /// Taken from a holder that is past its own declared deadline. Carries the
+    /// evidence so the pass can report it rather than looking like a normal
+    /// run.
+    TakenOver {
+        lock: ExclusiveLock,
+        from_pid: i32,
+        overdue_seconds: f64,
+    },
+}
+
+fn holder_record_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(LOCK_HOLDER_NAME)
+}
+
+fn read_lock_holder(state_dir: &Path) -> Option<LockHolder> {
+    let raw = std::fs::read_to_string(holder_record_path(state_dir)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_lock_holder(state_dir: &Path, pass_seconds: f64, writer: &str) {
+    let now = epoch_now();
+    let record = LockHolder {
+        pid: std::process::id() as i32,
+        acquired_at: now,
+        deadline_at: now + pass_seconds,
+        writer: writer.to_string(),
+        writer_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    if let Ok(body) = serde_json::to_string(&record) {
+        let _ = std::fs::write(holder_record_path(state_dir), body);
+    }
+}
+
+/// Is a pid still a process on this host?
+///
+/// `kill(pid, 0)` answers exactly that and nothing else: `ESRCH` means gone,
+/// `EPERM` means alive and owned by somebody else. A gone holder's `flock` is
+/// already released by the kernel, so this is a diagnosis rather than a
+/// release mechanism — it is what lets the report distinguish "the holder
+/// died mid-pass" from "the holder is hung".
+fn pid_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    match unsafe { nix::libc::kill(pid, 0) } {
+        0 => true,
+        _ => io::Error::last_os_error().raw_os_error() == Some(nix::libc::EPERM),
+    }
+}
+
+/// Exclusive flock, with a bounded answer for a hold that will never end.
+///
+/// The takeover replaces the lock FILE: the overdue holder keeps its flock on
+/// an inode nothing resolves any more, and every later process — including
+/// the shared workload holds — locks the new file. That is the only mechanism
+/// available, because a live process's flock cannot be revoked, and it is
+/// also why the criterion has to be the holder's own recorded deadline plus
+/// [`LOCK_TAKEOVER_GRACE_S`] rather than elapsed time: for the window of one
+/// pass, the taking process and the wedged one hold locks on different files,
+/// so the workload guard is briefly not mutual. `cleanup_once` pins that one
+/// pass to `report` mode for exactly this reason.
+fn acquire_lock_state(
+    state_dir: &Path,
+    pass_seconds: f64,
+    writer: &str,
+) -> Result<LockState, JanitorError> {
     let file = open_lock(state_dir)?;
     match fs2::FileExt::try_lock_exclusive(&file) {
-        Ok(()) => Ok(Some(ExclusiveLock { file })),
-        Err(exc) if lock_contended(&exc) => Ok(None),
-        Err(exc) => Err(exc.into()),
+        Ok(()) => {
+            write_lock_holder(state_dir, pass_seconds, writer);
+            return Ok(LockState::Held(ExclusiveLock {
+                file,
+                holder_record: Some(holder_record_path(state_dir)),
+            }));
+        }
+        Err(exc) if lock_contended(&exc) => {}
+        Err(exc) => return Err(exc.into()),
     }
+    let holder = read_lock_holder(state_dir);
+    let overdue = holder
+        .as_ref()
+        .map(|holder| epoch_now() - (holder.deadline_at + LOCK_TAKEOVER_GRACE_S))
+        .filter(|overdue| *overdue > 0.0);
+    let Some((holder, overdue_seconds)) = holder.as_ref().zip(overdue) else {
+        return Ok(LockState::Busy { holder });
+    };
+    // Replace the lock file with one this process owns. `rename` is atomic, so
+    // no reader ever sees the path missing.
+    let staged = state_dir.join(format!("{LOCK_NAME}.takeover.{}", std::process::id()));
+    let fresh = open_lock_at(&staged)?;
+    if fs2::FileExt::try_lock_exclusive(&fresh).is_err() {
+        let _ = std::fs::remove_file(&staged);
+        return Ok(LockState::Busy {
+            holder: Some(holder.clone()),
+        });
+    }
+    std::fs::rename(&staged, state_dir.join(LOCK_NAME))?;
+    let from_pid = holder.pid;
+    write_lock_holder(state_dir, pass_seconds, writer);
+    Ok(LockState::TakenOver {
+        lock: ExclusiveLock {
+            file: fresh,
+            holder_record: Some(holder_record_path(state_dir)),
+        },
+        from_pid,
+        overdue_seconds,
+    })
 }
 
 /// A shared-mode hold on the cleanup lock for one live workload
@@ -1953,18 +2101,86 @@ async fn cleanup_once(
     let live_jobs = tokio::time::timeout(input_budget, fetch_live_job_ids())
         .await
         .unwrap_or_default();
-    let lock = match acquire_lock(&state_dir) {
-        Ok(lock) => lock,
+    // The lock is taken with a stated deadline, and a hold past its own
+    // deadline is answered rather than waited out. `lock_busy` used to be the
+    // only answer this function had for "somebody else has it", and that is
+    // how a host spent nine and a half hours with cleanup disabled while its
+    // gate said `disk_cleanup_stalled` and nothing said WHO or FOR HOW LONG.
+    let pass_seconds = DEADLINE_SECONDS.max(
+        registry
+            .as_ref()
+            .ok()
+            .and_then(|data| resolve_canonical_policy(data, &report.hostname).ok())
+            .and_then(|(_, policy, _, _)| policy.max_pass_seconds)
+            .filter(|seconds| *seconds > 0)
+            .map_or(DEADLINE_SECONDS, |seconds| seconds as f64),
+    );
+    let mut taken_over = false;
+    let lock = match acquire_lock_state(&state_dir, pass_seconds, writer.as_str()) {
+        Ok(LockState::Held(lock)) => lock,
+        Ok(LockState::TakenOver {
+            lock,
+            from_pid,
+            overdue_seconds,
+        }) => {
+            taken_over = true;
+            let liveness = if pid_alive(from_pid) {
+                "still running and not progressing"
+            } else {
+                "gone"
+            };
+            let detail = format!(
+                "took the janitor run lock from pid {from_pid} ({liveness}), {:.0}s past the \
+                 deadline that holder recorded plus the {LOCK_TAKEOVER_GRACE_S:.0}s grace; this \
+                 pass runs in report mode because the replaced lock file cannot be mutual with a \
+                 workload hold the old holder may still have",
+                overdue_seconds
+            );
+            log_fn(&format!("disk cleanup: {detail}"));
+            report.add_error("lock_taken_over", &JanitorError::os(&detail));
+            lock
+        }
+        Ok(LockState::Busy { holder }) => {
+            report.lock_busy = true;
+            match holder {
+                Some(holder) => {
+                    let age = epoch_now() - holder.acquired_at;
+                    let remaining = holder.deadline_at - epoch_now();
+                    // Recognizable, not silent: an operator reading a report
+                    // now learns which process holds the lock, how long it has
+                    // held it and whether it is inside its own budget.
+                    let detail = format!(
+                        "held for {age:.0}s by pid {} ({} {}), {:.0}s of its declared budget left",
+                        holder.pid,
+                        holder.writer,
+                        holder.writer_version,
+                        remaining.max(0.0)
+                    );
+                    log_fn(&format!("disk cleanup: lock {detail}"));
+                    report.add_error("lock_busy", &JanitorError::os(&detail));
+                    report.outcome = "lock_busy".to_string();
+                }
+                None => {
+                    // No record at all: a holder from a build older than this
+                    // one, or a lock file created by hand. Say that too.
+                    log_fn(
+                        "disk cleanup: lock is held by a process that left no holder record; its \
+                         deadline is unknown, so it will not be taken over",
+                    );
+                    report.add_error(
+                        "lock_busy",
+                        &JanitorError::os("held with no holder record; deadline unknown"),
+                    );
+                    report.outcome = "lock_busy_unattributed".to_string();
+                }
+            }
+            return finish(report, started, Some(&home), None, attempted_at, log_fn);
+        }
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
             return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
-    };
-    let Some(lock) = lock else {
-        report.lock_busy = true;
-        report.outcome = "lock_busy".to_string();
-        return finish(report, started, Some(&home), None, attempted_at, log_fn);
     };
     run_with_lock(
         &home,
@@ -1976,7 +2192,11 @@ async fn cleanup_once(
         started,
         attempted_at,
         force,
-        preview,
+        // A taken-over pass scans and counts and deletes nothing, for exactly
+        // one pass: from the moment the lock file is replaced every later
+        // holder, workload holds included, contends on the same file again, so
+        // the mutual guarantee is restored for the pass after this one.
+        preview || taken_over,
         log_fn,
     )
 }
