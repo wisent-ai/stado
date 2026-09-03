@@ -1553,6 +1553,20 @@ async fn claim_only_verdict(
     )
 }
 
+/// Whether this coordinate's publication is still inside the budget its claim
+/// started.
+///
+/// One clock for both shapes of an unfinished publication — no artifacts at
+/// all, and some artifacts — because they are the same event observed at
+/// different moments, and two thresholds would eventually disagree about the
+/// same release. A coordinate with no claim timestamp is not in flight: this
+/// answers "provably still running", and absent evidence is not proof.
+fn in_flight(coordinate: &crate::cli::storage::PublishedCoordinate) -> bool {
+    coordinate
+        .claim_written_at
+        .is_some_and(|written| Utc::now() - written < CLAIM_WITHOUT_ARTIFACT)
+}
+
 /// Walk what the channel actually holds and say, per version and platform,
 /// whether the coordinate is deliverable: every object present, and every
 /// publisher of it naming one build.
@@ -1660,14 +1674,36 @@ async fn check_release_integrity() -> Check {
                     // `stado/0.11.0/darwin-arm64` is the shape being caught
                     // here — archive, manifest and SHA256SUMS present, five
                     // binaries absent, permanently.
-                    findings.note(
-                        Status::Fail,
-                        format!(
-                            "{version}/{platform} is PARTIAL and permanently so; absent: {}",
-                            missing.join(", ")
-                        ),
-                    );
-                    false
+                    //
+                    // Unless it is happening right now. A publisher writes
+                    // its objects one at a time, so every release passes
+                    // through "short of objects" on the way to whole, and the
+                    // claim it wrote first says when that began. Reading
+                    // 0.14.5 as PARTIAL at 18:23 while its train was still
+                    // uploading is the same false alarm the claim-only branch
+                    // above exists to avoid, and the same clock answers both.
+                    if in_flight(coordinate) {
+                        findings.note(
+                            Status::Unmeasured,
+                            format!(
+                                "{version}/{platform} is publishing now: {} object(s) not written \
+                                 yet ({}), within the {} minute budget its claim started",
+                                missing.len(),
+                                missing.join(", "),
+                                CLAIM_WITHOUT_ARTIFACT.num_minutes()
+                            ),
+                        );
+                        false
+                    } else {
+                        findings.note(
+                            Status::Fail,
+                            format!(
+                                "{version}/{platform} is PARTIAL and permanently so; absent: {}",
+                                missing.join(", ")
+                            ),
+                        );
+                        false
+                    }
                 }
                 Err(error) => {
                     findings.note(
