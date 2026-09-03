@@ -1850,13 +1850,6 @@ fn unread_reason(field: &DeclaredField, sibling: Option<String>) -> Option<Strin
                 condition.path, condition.value_prefix
             ))
         }
-        Consumer::OperatorCopy {
-            command,
-            destination,
-        } => Some(format!(
-            "no fleet process reads it: only `{command}` copies it to {destination}, and only when \
-             an operator runs that command"
-        )),
         Consumer::Unread => Some("no code path in this build reads it".to_string()),
     }
 }

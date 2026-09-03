@@ -1,5 +1,5 @@
 //! `stado config SUB` — configuration lifecycle commands:
-//! show | validate | init | migrate.
+//! show | validate | init | migrate | set | unset.
 
 use serde_json::{Map, Value};
 
@@ -21,8 +21,15 @@ pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdE
                  stado config set alerts.channels '[\"resend\"]'",
             )),
         },
+        "unset" => match key {
+            Some(key) => unset(key),
+            None => Err(CmdError::click(
+                "config unset needs a dotted key, e.g. \
+                 stado config unset storage.stado.ca_file",
+            )),
+        },
         other => Err(CmdError::click(format!(
-            "unknown config subcommand: {other} (show|validate|init|migrate|set)"
+            "unknown config subcommand: {other} (show|validate|init|migrate|set|unset)"
         ))),
     }
 }
@@ -86,6 +93,74 @@ fn set(key: &str, raw: &str) -> Result<(), CmdError> {
         parsed,
         path.display()
     );
+    Ok(())
+}
+
+/// `config unset KEY`: remove one dotted key from the config file.
+///
+/// [`set`] can only add a key or change one, so a declaration that outlived
+/// its reader could not be retired through this product at all. That is how
+/// `storage.stado.ca_file` survived in this deployment: unreachable behind a
+/// loopback `storage.stado.url`, reported by `registry doctor` every run, and
+/// removable only by hand-editing the document `set` exists to stop people
+/// hand-editing.
+///
+/// Same validation and the same atomic write as [`set`]: a removal that would
+/// leave the document invalid changes nothing. An absent key is reported and
+/// succeeds, so a converge pass can run this twice.
+fn unset(key: &str) -> Result<(), CmdError> {
+    let path = config_file::config_path()
+        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+    let original = std::fs::read_to_string(&path)?;
+    let mut document: Value = serde_json::from_str(&original)?;
+    if !document.is_object() {
+        return Err(CmdError::click("config file must contain a JSON object"));
+    }
+
+    let segments: Vec<&str> = key.split('.').collect();
+    let (last, parents) = segments
+        .split_last()
+        .ok_or_else(|| CmdError::click("config unset needs a non-empty key"))?;
+    let mut cursor = &mut document;
+    for segment in parents {
+        let object = cursor
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click(format!("{key}: {segment} is not an object")))?;
+        match object.get_mut(*segment) {
+            Some(next) => cursor = next,
+            // Nothing to remove, and no parent to invent: saying so is the
+            // whole answer.
+            None => {
+                println!("{key}: not present ({})", path.display());
+                return Ok(());
+            }
+        }
+    }
+    let object = cursor
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click(format!("{key}: parent is not an object")))?;
+    let Some(previous) = object.remove(*last) else {
+        println!("{key}: not present ({})", path.display());
+        return Ok(());
+    };
+
+    let problems = config_file::validate(&document);
+    if !problems.is_empty() {
+        return Err(CmdError::click(format!(
+            "{key} is required, config unchanged: {}",
+            problems.join("; ")
+        )));
+    }
+
+    let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let temporary = std::path::PathBuf::from(format!("{}.unsetting", path.display()));
+    std::fs::write(&temporary, body)?;
+    if let Ok(metadata) = std::fs::metadata(&path) {
+        std::fs::set_permissions(&temporary, metadata.permissions())?;
+    }
+    std::fs::rename(&temporary, &path)?;
+    println!("{key}: {previous} removed ({})", path.display());
     Ok(())
 }
 
