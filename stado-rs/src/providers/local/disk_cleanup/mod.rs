@@ -388,7 +388,7 @@ impl CleanupReport {
             target_name: None,
             policy_digest: None,
             writer: "unknown",
-            writer_version: env!("CARGO_PKG_VERSION"),
+            writer_version: crate::build_identity::BUILD_IDENTITY,
             policy_defaulted: false,
             mode: None,
             check_interval_seconds: None,
@@ -2077,7 +2077,7 @@ async fn cleanup_once(
     let hostname = crate::providers::vast::system_hostname();
     let mut report = CleanupReport::base(active_slot_count, &hostname);
     report.writer = writer.as_str();
-    report.writer_version = env!("CARGO_PKG_VERSION");
+    report.writer_version = crate::build_identity::BUILD_IDENTITY;
 
     // Python's outer `except BaseException` half: any failure before the
     // policy resolves lands in `runtime` and leaves the default outcome.
