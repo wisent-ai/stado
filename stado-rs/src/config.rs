@@ -2450,6 +2450,465 @@ pub fn database_api_databases(
     }
 }
 
+pub const WEB_API_EDGES: &[&str] = &["stado", "cloudflare"];
+
+/// One declared web product: the release it runs, where it runs, the identity
+/// it runs as, and the hostname it answers on.
+///
+/// The declaration holds no secret value. `secrets` and `database` name a
+/// Skarbiec item and one of its fields; the value travels only through
+/// `stado service secret-sync`, which reads it over the host channel and puts
+/// it in the unit's env file without it ever reaching a command line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebApiProduct {
+    host: String,
+    port: u16,
+    hostname: String,
+    consumer: String,
+    readyz: String,
+    edge: String,
+    env: BTreeMap<String, String>,
+    secrets: BTreeMap<String, String>,
+    database: Option<WebApiDatabase>,
+}
+
+/// The one database a web product reads, and how its credential reaches the
+/// unit: the declared database name, the field of that database's Skarbiec
+/// item, and the variable the field is delivered as.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebApiDatabase {
+    name: String,
+    field: String,
+    variable: String,
+}
+
+impl WebApiProduct {
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn hostname(&self) -> &str {
+        &self.hostname
+    }
+
+    pub fn consumer(&self) -> &str {
+        &self.consumer
+    }
+
+    pub fn readyz(&self) -> &str {
+        &self.readyz
+    }
+
+    pub fn edge(&self) -> &str {
+        &self.edge
+    }
+
+    pub fn env(&self) -> &BTreeMap<String, String> {
+        &self.env
+    }
+
+    /// Variable name to `item#field`, the same spelling
+    /// `.wisent-release.json` uses for a build secret.
+    pub fn secrets(&self) -> &BTreeMap<String, String> {
+        &self.secrets
+    }
+
+    pub fn database(&self) -> Option<&WebApiDatabase> {
+        self.database.as_ref()
+    }
+}
+
+impl WebApiDatabase {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    pub fn variable(&self) -> &str {
+        &self.variable
+    }
+}
+
+/// An `item#field` reference, split and checked.
+///
+/// The release manifest already spells a secret reference this way
+/// (`release_pipeline::validate`), and a second spelling for one idea is how
+/// an operator ends up with a unit whose environment nobody can trace.
+pub fn parse_secret_reference(reference: &str) -> Option<(&str, &str)> {
+    let (item, field) = reference.split_once('#')?;
+    let identifier = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    };
+    (identifier(item) && identifier(field)).then_some((item, field))
+}
+
+/// Whether one string is a public host name: lowercase labels of letters,
+/// digits and dashes, at least two of them, no trailing dot.
+pub fn is_public_hostname(value: &str) -> bool {
+    if value.is_empty() || value.len() > 253 || value.ends_with('.') {
+        return false;
+    }
+    let labels: Vec<&str> = value.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+/// Whether one string can name an environment variable.
+pub fn is_env_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+pub(crate) fn parse_web_api_products(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, WebApiProduct>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "web_api.products must be a non-empty object mapping product names to declarations"
+                .to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec!["web_api.products must not be empty".to_string()]);
+    }
+    let mut problems = Vec::new();
+    let mut products = BTreeMap::new();
+    let mut hostnames = BTreeMap::new();
+    for (name, raw) in entries {
+        let start = problems.len();
+        if !canonical_machine_name(name) {
+            problems.push(format!("web_api.products key {name:?} is not canonical"));
+        }
+        let Some(entry) = raw.as_object() else {
+            problems.push(format!(
+                "web_api.products.{name} must be an object with host, port, hostname and consumer"
+            ));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(
+                key.as_str(),
+                "host"
+                    | "port"
+                    | "hostname"
+                    | "consumer"
+                    | "readyz"
+                    | "edge"
+                    | "env"
+                    | "secrets"
+                    | "database"
+            ) {
+                problems.push(format!(
+                    "web_api.products.{name} contains unsupported key {key:?}"
+                ));
+            }
+        }
+        let host = match entry.get("host").and_then(Value::as_str) {
+            Some(host) if canonical_machine_name(host) => host.to_string(),
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.host {other:?} is not a canonical target name"
+                ));
+                String::new()
+            }
+            None => {
+                problems.push(format!("web_api.products.{name}.host is required"));
+                String::new()
+            }
+        };
+        // Anything below 1024 needs privilege these units deliberately do not
+        // have: a web unit runs as the same login account every other managed
+        // unit runs as, and the edge is what owns 443.
+        let port = match entry.get("port").and_then(Value::as_u64) {
+            Some(port) if (1024..=65535).contains(&port) => port as u16,
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.port {other} must be between 1024 and 65535"
+                ));
+                0
+            }
+            None => {
+                problems.push(format!("web_api.products.{name}.port is required"));
+                0
+            }
+        };
+        let hostname = match entry.get("hostname").and_then(Value::as_str) {
+            Some(hostname) if is_public_hostname(hostname) => hostname.to_string(),
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.hostname {other:?} is not a public host name"
+                ));
+                String::new()
+            }
+            None => {
+                problems.push(format!("web_api.products.{name}.hostname is required"));
+                String::new()
+            }
+        };
+        if !hostname.is_empty() {
+            if let Some(owner) = hostnames.insert(hostname.clone(), name.clone()) {
+                problems.push(format!(
+                    "web_api.products.{name}.hostname {hostname:?} is already declared by {owner:?}"
+                ));
+            }
+        }
+        let consumer = match entry.get("consumer").and_then(Value::as_str) {
+            Some(consumer) if canonical_machine_name(consumer) => consumer.to_string(),
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.consumer {other:?} is not canonical"
+                ));
+                String::new()
+            }
+            None => {
+                problems.push(format!("web_api.products.{name}.consumer is required"));
+                String::new()
+            }
+        };
+        let readyz = match entry.get("readyz") {
+            Some(Value::String(path)) if path.starts_with('/') && !path.contains(' ') => {
+                path.clone()
+            }
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.readyz {other} must be an absolute request path"
+                ));
+                String::new()
+            }
+            None => "/".to_string(),
+        };
+        let edge = match entry.get("edge") {
+            Some(Value::String(edge)) if WEB_API_EDGES.contains(&edge.as_str()) => edge.clone(),
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.edge {other} is not one of {WEB_API_EDGES:?}"
+                ));
+                String::new()
+            }
+            None => "stado".to_string(),
+        };
+        let mut env = BTreeMap::new();
+        match entry.get("env") {
+            Some(Value::Object(values)) => {
+                for (key, value) in values {
+                    match value.as_str() {
+                        Some(value) if is_env_name(key) && !value.chars().any(char::is_control) => {
+                            env.insert(key.clone(), value.to_string());
+                        }
+                        _ => problems.push(format!(
+                            "web_api.products.{name}.env.{key} must be a plain string value"
+                        )),
+                    }
+                }
+            }
+            Some(_) => problems.push(format!("web_api.products.{name}.env must be an object")),
+            None => {}
+        }
+        let mut secrets = BTreeMap::new();
+        match entry.get("secrets") {
+            Some(Value::Object(values)) => {
+                for (key, value) in values {
+                    match value.as_str() {
+                        Some(reference)
+                            if is_env_name(key)
+                                && parse_secret_reference(reference).is_some() =>
+                        {
+                            secrets.insert(key.clone(), reference.to_string());
+                        }
+                        _ => problems.push(format!(
+                            "web_api.products.{name}.secrets.{key} must be an \"item#field\" reference"
+                        )),
+                    }
+                }
+            }
+            Some(_) => problems.push(format!("web_api.products.{name}.secrets must be an object")),
+            None => {}
+        }
+        let mut database = None;
+        match entry.get("database") {
+            Some(Value::Object(declared)) => {
+                for key in declared.keys() {
+                    if !matches!(key.as_str(), "name" | "field" | "variable") {
+                        problems.push(format!(
+                            "web_api.products.{name}.database contains unsupported key {key:?}"
+                        ));
+                    }
+                }
+                let declared_name = declared.get("name").and_then(Value::as_str).unwrap_or("");
+                let field = declared.get("field").and_then(Value::as_str).unwrap_or("");
+                let variable = declared
+                    .get("variable")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let field_name = !field.is_empty()
+                    && field.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                    });
+                if !canonical_machine_name(declared_name) {
+                    problems.push(format!(
+                        "web_api.products.{name}.database.name is required and must be canonical"
+                    ));
+                } else if !field_name {
+                    problems.push(format!(
+                        "web_api.products.{name}.database.field is required and must be a field name"
+                    ));
+                } else if !is_env_name(variable) {
+                    problems.push(format!(
+                        "web_api.products.{name}.database.variable is required and must be an environment name"
+                    ));
+                } else {
+                    database = Some(WebApiDatabase {
+                        name: declared_name.to_string(),
+                        field: field.to_string(),
+                        variable: variable.to_string(),
+                    });
+                }
+            }
+            Some(_) => {
+                problems.push(format!(
+                    "web_api.products.{name}.database must be an object with name, field and variable"
+                ));
+            }
+            None => {}
+        }
+        if problems.len() == start {
+            products.insert(
+                name.clone(),
+                WebApiProduct {
+                    host,
+                    port,
+                    hostname,
+                    consumer,
+                    readyz,
+                    edge,
+                    env,
+                    secrets,
+                    database,
+                },
+            );
+        }
+    }
+    if problems.is_empty() {
+        Ok(products)
+    } else {
+        Err(problems)
+    }
+}
+
+static WEB_API_PRODUCTS: LazyLock<Result<BTreeMap<String, WebApiProduct>, Vec<String>>> =
+    LazyLock::new(|| {
+        match std::env::var("WC_WEB_API_PRODUCTS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => serde_json::from_str::<Value>(&encoded)
+                .map_err(|error| vec![format!("WC_WEB_API_PRODUCTS must be valid JSON: {error}")])
+                .and_then(|parsed| parse_web_api_products(Some(&parsed))),
+            None => parse_web_api_products(crate::config_file::get("web_api.products").as_ref()),
+        }
+    });
+
+pub fn web_api_products() -> Result<&'static BTreeMap<String, WebApiProduct>, &'static [String]> {
+    match &*WEB_API_PRODUCTS {
+        Ok(products) => Ok(products),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+/// The declared edge host: the fleet target that holds a public address and
+/// terminates TLS for every `edge: "stado"` hostname.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebApiEdge {
+    target: String,
+    address: String,
+    contact: String,
+}
+
+impl WebApiEdge {
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    /// The public IPv4 address the product hostnames' A records point at.
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+
+    /// The address Let's Encrypt sends expiry mail to.
+    pub fn contact(&self) -> &str {
+        &self.contact
+    }
+}
+
+pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Vec<String>> {
+    let Some(Value::Object(entry)) = value else {
+        return Err(vec![
+            "web_api.edge must be an object with target, address and contact".to_string(),
+        ]);
+    };
+    let mut problems = Vec::new();
+    for key in entry.keys() {
+        if !matches!(key.as_str(), "target" | "address" | "contact") {
+            problems.push(format!("web_api.edge contains unsupported key {key:?}"));
+        }
+    }
+    let target = entry.get("target").and_then(Value::as_str).unwrap_or("");
+    if !canonical_machine_name(target) {
+        problems.push("web_api.edge.target is required and must be a canonical target".to_string());
+    }
+    let address = entry.get("address").and_then(Value::as_str).unwrap_or("");
+    if address.parse::<std::net::Ipv4Addr>().is_err() {
+        problems.push("web_api.edge.address is required and must be an IPv4 address".to_string());
+    }
+    let contact = entry.get("contact").and_then(Value::as_str).unwrap_or("");
+    if !contact.contains('@') || contact.chars().any(char::is_whitespace) {
+        problems.push("web_api.edge.contact is required and must be a mail address".to_string());
+    }
+    if problems.is_empty() {
+        Ok(WebApiEdge {
+            target: target.to_string(),
+            address: address.to_string(),
+            contact: contact.to_string(),
+        })
+    } else {
+        Err(problems)
+    }
+}
+
+static WEB_API_EDGE: LazyLock<Result<WebApiEdge, Vec<String>>> =
+    LazyLock::new(|| parse_web_api_edge(crate::config_file::get("web_api.edge").as_ref()));
+
+pub fn web_api_edge() -> Result<&'static WebApiEdge, &'static [String]> {
+    match &*WEB_API_EDGE {
+        Ok(edge) => Ok(edge),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
 pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart", "promote", "reconcile"];
 pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-video-router"];

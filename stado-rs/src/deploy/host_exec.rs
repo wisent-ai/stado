@@ -191,6 +191,20 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     // The order Weles's kimi login trajectory probes, so this read and that
     // install cannot disagree about whether the host has uv.
     (UV_INSTALLER, &[UV_INSTALLER, "/usr/local/bin/uv"]),
+    // The order every Node reader in this repository already probes — the
+    // launcher script in `deploy::weles_browser_runtime`, and the host reads in
+    // `cli/host.rs` and `cli/seed_freshness.rs` — so a `host exec` answer about
+    // a host's Node cannot name a different binary from the one a managed unit
+    // executes on that same host.
+    (
+        NODE_RUNTIME,
+        &[NODE_RUNTIME, "/usr/local/bin/node", "/usr/bin/node"],
+    ),
+    (NPM_CLI, &[NPM_CLI, "/usr/local/bin/npm", "/usr/bin/npm"]),
+    (
+        CADDY_PROXY,
+        &[CADDY_PROXY, "/usr/local/bin/caddy", "/usr/bin/caddy"],
+    ),
 ];
 
 /// Brama's own service launcher, as the fleet installs it in the managed
@@ -222,6 +236,30 @@ const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 /// fleet probes for it — including Weles's kimi login trajectory, whose pinned
 /// CLI install depends on one of them existing.
 const UV_INSTALLER: &str = "/opt/homebrew/bin/uv";
+
+/// The Node runtime, at the absolute paths this fleet installs it at.
+///
+/// A non-interactive ssh login reads no shell profile, and the fleet's Node
+/// comes from Homebrew on the macOS hosts and from the distribution's own
+/// package on the Linux one, so `node` is on nobody's PATH over this channel
+/// and the question has to be asked of the paths directly. It is `argv[0]` of
+/// the node entry, so [`ApprovedCommand::display`] spells it `node --version`
+/// — the name of the program, in the case every operator types it.
+const NODE_RUNTIME: &str = "/opt/homebrew/bin/node";
+
+/// The npm CLI, at the absolute paths it is installed beside that Node at.
+///
+/// A separate program from the runtime and therefore a separate question: an
+/// install can leave one behind without the other, and `npm ci` is what a web
+/// product's release actually runs.
+const NPM_CLI: &str = "/opt/homebrew/bin/npm";
+
+/// The Caddy reverse proxy, at the absolute paths a host may carry it at.
+///
+/// The public web edge terminates TLS for a product hostname with a
+/// registry-managed Caddy unit, and the unit's program is this binary, so this
+/// is the path the unit will name and the path the read must probe.
+const CADDY_PROXY: &str = "/opt/homebrew/bin/caddy";
 
 /// The prefix that marks a program, or one of its environment values, as
 /// living under the login user's home rather than at a system path.
@@ -680,6 +718,28 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               interface operand and no address, and every configuring form of ifconfig requires \
               one, so this entry cannot change an address, a route, or an interface's state",
     },
+    // The Linux half of the interface read, added 2026-09-02.
+    // `stado host exec ubuntu-server-rtx-pro-6000 -- ifconfig -a` fails with
+    // `/sbin/ifconfig: No such file or directory`, because Ubuntu ships
+    // iproute2 and not net-tools, so the entry above answers for the macOS
+    // hosts and for no other kind of machine in the fleet.
+    ApprovedCommand {
+        argv: &["/usr/bin/ip", "addr"],
+        why: "lists every network interface on a Linux host with the addresses it carries — the \
+              same fact the `ifconfig -a` entry above reads, on the hosts where that entry \
+              cannot run. Ubuntu ships iproute2 and not net-tools, so \
+              `host exec ubuntu-server-rtx-pro-6000 -- ifconfig -a` answers \
+              `/sbin/ifconfig: No such file or directory` and the fleet's one approved way to \
+              read a host's interfaces was a macOS-only read; the address of the fleet's only \
+              Linux host had to be inferred from `tailscale netcheck` instead, which reports \
+              the reflexive address a relay observed and not one word about what the \
+              interfaces on the machine actually hold. `addr` with no object and no operand is \
+              iproute2's read-only listing form: every form that changes an address takes \
+              `add`, `del`, `change`, `replace` or `flush` after it, none of which is in this \
+              table and none of which can be appended, because the allowlist matches an entry \
+              exactly and never appends operator words. What it prints are the addresses the \
+              registry already holds",
+    },
     // The three sign-in repairs, added 2026-09-02. These are the only entries
     // in this table that change anything, and they are here because the thing
     // they change cannot be reached any other way: a provider grant the vendor
@@ -886,6 +946,65 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               stop. It takes no flag and no operator path, lists names only, and writes \
               nothing",
     },
+    // The three reads a web product's release and its unit need before either
+    // one runs, added 2026-09-02. `stado web` builds a Node product on a fleet
+    // builder with `npm ci` and runs it on a fleet host with `npm run start`,
+    // and the public hostname in front of it is terminated by a
+    // registry-managed Caddy unit. Each of those three facts is a property of
+    // the machine that is true before the release is submitted, and none of
+    // them could be asked of a host through this channel.
+    //
+    // All three probe absolute paths rather than the login shell's PATH, the
+    // way the `uv --version` entry above does and for the same reason: a
+    // non-interactive ssh login reads no profile, so a PATH lookup answers
+    // `not found` on a host that carries the binary, which is the wrong answer
+    // to a precondition check and the most expensive kind of wrong answer to
+    // get.
+    ApprovedCommand {
+        argv: &[NODE_RUNTIME, "--version"],
+        why: "prints the Node runtime's version, probing the absolute paths this fleet installs \
+              it at rather than the login shell's PATH — which is a different question and \
+              answers `not found` on a host that has the binary, because a non-interactive ssh \
+              login reads no shell profile and the fleet's Node comes from Homebrew. A web \
+              product's release builds with `npm ci` on whichever host the recipe's \
+              `runner_platform` selects, and its unit runs `npm run start` on whichever host \
+              the product is declared against, so a machine carrying no Node toolchain fails \
+              the first inside a quality gate and the second at unit bootstrap. Until this \
+              entry there was no sanctioned way to ask either host whether it has a Node \
+              toolchain at all: the question got answered by reading a release log after a \
+              build had already failed, which spends a whole submit to learn one fact that was \
+              true of the machine before the release started. `--version` takes no argument, \
+              installs nothing, resolves no registry, and runs no package script",
+    },
+    ApprovedCommand {
+        argv: &[NPM_CLI, "--version"],
+        why: "prints the npm CLI's version, probed the same way, for the other half of the same \
+              precondition. The runtime and the package manager are separate binaries, a \
+              partial or hand-rolled install leaves a host with one and not the other, and it \
+              is npm — not node — that a web release invokes: `npm ci` in the quality gate and \
+              `npm run start` in the unit. Its version is also the fact that decides whether \
+              `npm ci` can read the product's checked-in `package-lock.json` at all, since a \
+              lockfile written by a newer npm than the host carries is refused rather than \
+              honoured. That is the difference between 'this builder cannot build a Node \
+              product' and 'this product's build is broken', and before this entry the fleet \
+              learned which one it was facing from a failed release's log. `--version` prints \
+              and exits: it contacts no registry, writes no cache, and runs no lifecycle \
+              script",
+    },
+    ApprovedCommand {
+        argv: &[CADDY_PROXY, "version"],
+        why: "prints the version of the Caddy binary a host carries, probed at the same \
+              absolute paths rather than through the login shell's PATH. The public web edge \
+              terminates TLS for a product hostname with a registry-managed Caddy unit, so \
+              whether a host already carries that binary is the precondition of installing it: \
+              a host that has it needs a unit and a configuration written for it, and a host \
+              that does not needs the binary itself first, which is a different repair by a \
+              different mechanism. Asking after the fact means learning the answer from a unit \
+              that will not start, with the hostname already published and no certificate \
+              behind it. `version` is Caddy's own read-only subcommand: it loads no \
+              configuration, binds no port and starts no server, unlike `run`, `start` and \
+              `reload`, none of which is in this table",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
@@ -954,6 +1073,18 @@ pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, DeployError
 /// than a shell's `No such file or directory` against whichever path happened
 /// to be listed first, because the second reads as "the fleet installed this
 /// wrongly" when the truth is "this program is not on this machine".
+///
+/// Every candidate's directory goes on `PATH` before the exec, and that is not
+/// convenience. `/opt/homebrew/bin/npm` is a JavaScript shim whose first line
+/// is `#!/usr/bin/env node`, so executing it on a channel whose `PATH` does
+/// not carry Homebrew answers `env: node: No such file or directory` — which
+/// is what `stado host exec charless-mac-mini -- npm --version` answered on
+/// 2026-09-03 while `node --version` on the same host answered `v25.9.0` from
+/// the directory beside it. The interpreter a shim needs is always a sibling
+/// of the shim, so the directories this table already names are exactly the
+/// ones that make it runnable. They are prepended, not appended: a host with
+/// two Node installations must resolve the shim against the one whose path
+/// this entry selected, not against whatever the login shell prefers.
 fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
     let fixed = arguments
         .iter()
@@ -961,6 +1092,21 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
         .collect::<Vec<String>>()
         .join(" ");
     let mut script = String::from("set -eu\n");
+    // Reversed, because each line prepends: emitting the candidates back to
+    // front leaves the first candidate's directory first on PATH, which is the
+    // same precedence the exec loop below applies.
+    for candidate in candidates.iter().rev() {
+        if let Some(directory) = std::path::Path::new(candidate).parent() {
+            let directory = directory.to_string_lossy();
+            if !directory.is_empty() {
+                script.push_str(&format!(
+                    "PATH={}:\"$PATH\"\n",
+                    shlex_quote(directory.as_ref())
+                ));
+            }
+        }
+    }
+    script.push_str("export PATH\n");
     for candidate in candidates {
         let path = shlex_quote(candidate);
         let marker = shlex_quote(&format!("{RESOLVED_EXECUTABLE_MARKER}{candidate}"));
