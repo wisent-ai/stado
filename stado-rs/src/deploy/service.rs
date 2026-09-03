@@ -6226,10 +6226,10 @@ fn target_entry<'a>(
 
 /// Declare a service in the canonical document.
 ///
-/// Pure by design: the caller reads the document through
-/// `cli/registry.rs::fetch_document`, applies this, and writes it back
-/// through `cli/registry.rs::push_document`, which validates the whole
-/// document before it writes anything.
+/// Pure by design: the caller reads the document with its generation through
+/// `cli/registry.rs::{commit_document, fetch_versioned_document}`, applies
+/// this, and writes it back conditionally on that generation, which validates
+/// the whole document before it writes anything.
 pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(), DeployError> {
     let entry = target_entry(document, &service.host)?;
     let declared = entry

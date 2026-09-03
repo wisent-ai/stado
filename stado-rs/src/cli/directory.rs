@@ -3,11 +3,11 @@
 //!
 //! The canonical registry grew a `service_directory` block that no source in
 //! this tree modelled. It survived only because the registry write paths are
-//! lossless: `push` uploads the operator's exact bytes and `push_document`
-//! serializes a raw document. Nothing could read it, so every client that
-//! needed a service address reconstructed one from a host name and a guess
-//! about forwarded ports — which is wrong on every machine that is not the one
-//! running the service.
+//! lossless: `push` uploads the operator's exact bytes and
+//! `push_document_if` serializes a raw document. Nothing could read it, so
+//! every client that needed a service address reconstructed one from a host
+//! name and a guess about forwarded ports — which is wrong on every machine
+//! that is not the one running the service.
 //!
 //! The block's shape, as the live document carries it:
 //!
@@ -33,7 +33,7 @@
 //! of leaving every caller to derive it.
 //!
 //! Everything here reads and mutates the RAW document through
-//! `registry::fetch_document` and `registry::push_document`. There is
+//! `registry::fetch_document` and `registry::commit_document`. There is
 //! deliberately no typed model of the block: a model is exactly what deletes
 //! the keys it does not know, and this file exists because that already
 //! happened to this document.
@@ -987,35 +987,50 @@ async fn endpoint(name: &str, target: Option<String>, as_json: bool) -> Result<(
     Ok(())
 }
 
-/// Mutate one service entry in place and write the whole document back.
+/// Mutate one service entry in place and write the whole document back
+/// conditionally on the generation it was read at.
 ///
 /// The closure sees the service's own object, so nothing outside it can be
-/// touched, and the write goes through `push_document`, which validates the
-/// document and refuses one that would delete a top-level key.
+/// touched, and the write goes through `commit_document`, which validates the
+/// document, refuses one that would delete a top-level key, and re-reads and
+/// re-applies `edit` when another writer published first. `edit` is therefore
+/// `Fn`, not `FnOnce`: it may run once per round.
+///
+/// `advance_generation` runs INSIDE the transform because it derives the next
+/// counter from the document it was handed. Computing it against the first
+/// read and reusing it after a retry would republish a number the newer
+/// document has already passed — the same reverted-directory bug the counter
+/// exists to make visible. The generation returned is the one the round that
+/// actually landed produced.
 async fn edit_service<F>(name: &str, edit: F) -> Result<u64, CmdError>
 where
-    F: FnOnce(&mut Map<String, Value>) -> Result<(), CmdError>,
+    F: Fn(&mut Map<String, Value>) -> Result<(), CmdError>,
 {
-    let mut document = registry::fetch_document().await?;
-    {
-        let block = directory(&document)?;
-        service(block, name)?;
-    }
-    {
-        let entry = document
-            .get_mut(DIRECTORY_KEY)
-            .and_then(Value::as_object_mut)
-            .and_then(|block| block.get_mut("services"))
-            .and_then(Value::as_object_mut)
-            .and_then(|all| all.get_mut(name))
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
-        edit(entry)?;
-    }
-    let next_generation =
-        crate::service_resolution::advance_generation(&mut document).map_err(click)?;
-    registry::push_document(&document).await?;
-    Ok(next_generation)
+    let next_generation = std::cell::Cell::new(0);
+    registry::commit_document(|current| {
+        let mut document = current.clone();
+        {
+            let block = directory(&document)?;
+            service(block, name)?;
+        }
+        {
+            let entry = document
+                .get_mut(DIRECTORY_KEY)
+                .and_then(Value::as_object_mut)
+                .and_then(|block| block.get_mut("services"))
+                .and_then(Value::as_object_mut)
+                .and_then(|all| all.get_mut(name))
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
+            edit(entry)?;
+        }
+        next_generation.set(
+            crate::service_resolution::advance_generation(&mut document).map_err(click)?,
+        );
+        Ok(document)
+    })
+    .await?;
+    Ok(next_generation.get())
 }
 
 async fn consumer_add(

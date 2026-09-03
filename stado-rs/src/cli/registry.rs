@@ -19,17 +19,29 @@
 //! (`monitor/host_health.rs`) and the capacity broadcasts
 //! (`queue/capacity.rs`), never from ssh, so they cost one prefix listing
 //! and are safe to run on a loop.
+//!
+//! `push` compare-and-swaps, but until `--if-generation` existed it could
+//! only swap against the generation it had just read itself, which is no
+//! condition at all: a file carries no provenance, so a document edited
+//! against generation 9 and pushed after somebody published 10 landed on top
+//! of 10 with every guard here satisfied. The token can now come from the
+//! caller — `pull --generation-only` hands it out, `push --if-generation`
+//! spends it — so the read the operator's edit was made against is the read
+//! the write is conditional on. A refused write is
+//! [`REGISTRY_CONFLICT_EXIT`], never the generic failure code, so a reconcile
+//! loop can re-read and re-apply instead of forcing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::capabilities::{Consumer, DeclarationSurface, DeclaredField, SiblingCondition};
 use crate::deploy::service;
 use crate::monitor::host_health;
-use crate::queue::{capacity, JobStorage};
+use crate::queue::{capacity, JobStorage, StorageError};
 use crate::targets::{
     self, bundled_registry_path, validate_registry_file, ComputeTarget, Registry, RegistryStore,
 };
@@ -40,6 +52,142 @@ use super::CmdError;
 /// The state a live launchd/systemd unit reports
 /// (`deploy/host_health_beacon_macos.sh`, `deploy/host_health_beacon.sh`).
 const ACTIVE_STATE: &str = "active";
+
+/// Exit code for a registry write refused because the document had already
+/// moved: `sysexits.h`'s `EX_TEMPFAIL`, "try again".
+///
+/// A reconcile loop has to tell "somebody wrote first, so re-read and
+/// re-apply" from "the store is broken" without reading English. Both were
+/// [`super::CLICK_ERROR_CODE`], so a loop either treated a lost race as fatal
+/// or retried a genuine outage forever. Storage and validation failures keep
+/// exit 1; only a lost condition is 75, and [`super::main_entry`] passes any
+/// code other than 1 through unremapped.
+pub const REGISTRY_CONFLICT_EXIT: i32 = 75;
+
+/// How many times [`commit_document`] re-reads and re-applies a pure
+/// transform before it hands the conflict back.
+///
+/// Bounded because an unbounded retry against a document some other loop is
+/// rewriting every second is a command that never returns. Sixteen rounds
+/// outlast every burst this fleet has produced; past that the contention is
+/// the thing to report, not to sit inside.
+const COMMIT_ROUNDS: usize = 16;
+
+/// What the canonical object turned out to be when a conditional write was
+/// refused — the one input the operator sentence, the typed receipt and the
+/// exit code are all derived from.
+enum RegistryActual {
+    /// The object is there, at a generation that is not the caller's.
+    Generation(String),
+    /// There is no object at all, so no token can match one.
+    Absent,
+    /// The generation matched when it was read and had moved by the swap. The
+    /// generation it carries now is whatever the winning writer produced, and
+    /// this command deliberately does not go back to read it: that answer
+    /// would be one more race, and the caller has to re-read anyway.
+    Raced,
+}
+
+/// A refused conditional write, kept as data until the caller decides which
+/// of its faces it needs.
+///
+/// One place produces all three — the sentence on stderr, the `conflict`
+/// receipt on stdout and [`REGISTRY_CONFLICT_EXIT`] — so a machine reading
+/// the receipt and an operator reading the sentence can never disagree about
+/// what happened.
+struct RegistryConflict {
+    location: String,
+    expected: String,
+    actual: RegistryActual,
+}
+
+impl RegistryConflict {
+    /// The generation the object carries instead, when it is a generation at
+    /// all: the receipt's `actual_generation`.
+    fn actual_generation(&self) -> Option<&str> {
+        match &self.actual {
+            RegistryActual::Generation(version) => Some(version),
+            RegistryActual::Absent | RegistryActual::Raced => None,
+        }
+    }
+
+    /// The operator sentence and the machine-recognizable exit code.
+    fn error(&self) -> CmdError {
+        let observed = match &self.actual {
+            RegistryActual::Generation(version) => {
+                format!("{} is at generation {version}", self.location)
+            }
+            RegistryActual::Absent => format!("there is no document at {}", self.location),
+            RegistryActual::Raced => format!(
+                "{} moved between this command's read and its write",
+                self.location
+            ),
+        };
+        CmdError {
+            message: Some(format!(
+                "registry write refused: it is conditional on generation {} and {observed}. \
+                 Another writer got there first, so applying this document would erase what \
+                 they published. Re-read the registry (`stado registry pull --with-generation`), \
+                 re-apply the change to what it now says, and write again with the new token. \
+                 Exit {REGISTRY_CONFLICT_EXIT} means exactly this and nothing else: the store \
+                 is healthy and the document is valid.",
+                self.expected
+            )),
+            code: REGISTRY_CONFLICT_EXIT,
+        }
+    }
+}
+
+/// Why a registry write did not happen, split so [`push`] can answer a lost
+/// condition with a receipt and everything else with the failure it is.
+enum RegistryWriteError {
+    Conflict(RegistryConflict),
+    Failed(CmdError),
+}
+
+impl From<RegistryWriteError> for CmdError {
+    fn from(error: RegistryWriteError) -> Self {
+        match error {
+            RegistryWriteError::Conflict(conflict) => conflict.error(),
+            RegistryWriteError::Failed(error) => error,
+        }
+    }
+}
+
+/// `stado registry push --json`, for every outcome including the refusal.
+///
+/// A caller that has to scrape "pushed ... generation=..." out of a sentence
+/// to learn whether its edit landed is a caller that will one day mistake a
+/// refusal for a success. `expected_generation` is the caller's own token or
+/// null; `actual_generation` is what the object carried instead and is only
+/// ever set on a `conflict`; `generation` and `replaced` are only ever set on
+/// a `pushed`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryPushReceipt {
+    schema: String,
+    state: String,
+    location: String,
+    expected_generation: Option<String>,
+    actual_generation: Option<String>,
+    generation: Option<String>,
+    replaced: Option<String>,
+}
+
+/// `stado registry pull --with-generation`: the document and the token that
+/// makes it writable back, from one read.
+///
+/// Two reads cannot produce this object safely — the generation would belong
+/// to a different document than the one printed beside it, which is the exact
+/// lost update `--if-generation` exists to refuse.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryPullReceipt {
+    schema: String,
+    location: String,
+    generation: String,
+    document: Value,
+}
 
 fn source_path(path: Option<String>) -> PathBuf {
     path.map(PathBuf::from)
@@ -122,11 +270,19 @@ fn target_count(text: &str) -> Option<usize> {
     )
 }
 
-/// The upload half [`push`] and [`push_document`] share: read the current
-/// generation, refuse a write that would delete a top-level key unless the
-/// operator said so, compare-and-swap against it (or atomically create when
-/// the object is absent), then read back and verify BOTH the generation and
-/// the bytes. Returns `(generation, previous_generation)`.
+/// The upload half of [`push`]: read the current generation, refuse the write
+/// when it is not the one the caller made its edit against, refuse a write
+/// that would delete a top-level key unless the operator said so,
+/// compare-and-swap, then read back and verify BOTH the generation and the
+/// bytes. Returns `(generation, previous_generation)`.
+///
+/// `expected_generation` is the caller's own token, from an earlier
+/// [`pull`]. When it is `Some` the object must exist AND be at exactly that
+/// generation, checked before any guard runs and before anything is written,
+/// and the swap spends that token rather than the one this function just
+/// read: a document edited against generation 9 cannot land on top of 10.
+/// When it is `None` the swap is against the generation read here, which
+/// only rules out a writer that lands between this read and this write.
 ///
 /// `payload` is written verbatim, so [`push`] still uploads the operator's
 /// exact file bytes rather than a re-serialization of them.
@@ -136,20 +292,130 @@ async fn upload_payload(
     payload: &str,
     allow_removals: bool,
     allow_empty_fleet: bool,
-) -> Result<(String, String), CmdError> {
-    let store = RegistryStore::open()
-        .await
-        .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?;
-    let current = store
-        .read_versioned()
-        .await
-        .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?;
+    expected_generation: Option<&str>,
+) -> Result<(String, String), RegistryWriteError> {
+    let store = RegistryStore::open().await.map_err(|exc| {
+        RegistryWriteError::Failed(CmdError::click(format!("registry upload failed: {exc}")))
+    })?;
+    let current = store.read_versioned().await.map_err(|exc| {
+        RegistryWriteError::Failed(CmdError::click(format!("registry upload failed: {exc}")))
+    })?;
+    // Ahead of every guard and every write: a caller whose token no longer
+    // names the canonical document is holding an edit to a document that no
+    // longer exists, and the guards below cannot see that. They compare this
+    // payload against whatever is there now, which is exactly the comparison
+    // that passes while the write erases a publication the payload predates.
+    if let Some(expected) = expected_generation {
+        let actual = match current.as_ref() {
+            Some(blob) if blob.version == expected => None,
+            Some(blob) => Some(RegistryActual::Generation(blob.version.clone())),
+            None => Some(RegistryActual::Absent),
+        };
+        if let Some(actual) = actual {
+            return Err(RegistryWriteError::Conflict(RegistryConflict {
+                location: store.location().to_string(),
+                expected: expected.to_string(),
+                actual,
+            }));
+        }
+    }
     let previous_generation = current
         .as_ref()
         .map(|blob| blob.version.clone())
         .unwrap_or_else(|| "0".to_string());
+    refuse_unsafe_replace(current.as_ref(), payload, allow_removals, allow_empty_fleet)
+        .map_err(RegistryWriteError::Failed)?;
+    let generation = match current {
+        Some(blob) => {
+            // The caller's token when it brought one, this read's generation
+            // otherwise. They are equal here — the check above proved it — and
+            // spending the caller's own token is what makes the write
+            // conditional on the read the edit was made against.
+            let token = expected_generation.unwrap_or(blob.version.as_str());
+            match store.compare_and_swap(token, payload).await {
+                Ok(generation) => generation,
+                // The document moved between this function's read and its
+                // swap. Same answer as a stale `--if-generation`, because it
+                // is the same lost update seen a few milliseconds later.
+                Err(StorageError::StorageConflict(_)) => {
+                    return Err(RegistryWriteError::Conflict(RegistryConflict {
+                        location: store.location().to_string(),
+                        expected: token.to_string(),
+                        actual: RegistryActual::Raced,
+                    }));
+                }
+                Err(exc) => {
+                    return Err(RegistryWriteError::Failed(CmdError::click(format!(
+                        "registry upload failed: {exc}"
+                    ))));
+                }
+            }
+        }
+        None => {
+            let created = store.create_if_absent(payload).await.map_err(|exc| {
+                RegistryWriteError::Failed(CmdError::click(format!(
+                    "registry upload failed: {exc}"
+                )))
+            })?;
+            if !created {
+                // Somebody created the object while this command was deciding
+                // it was absent, so this write has no condition to stand on.
+                return Err(RegistryWriteError::Conflict(RegistryConflict {
+                    location: store.location().to_string(),
+                    expected: expected_generation.unwrap_or("0").to_string(),
+                    actual: RegistryActual::Raced,
+                }));
+            }
+            store
+                .read_versioned()
+                .await
+                .map_err(|exc| {
+                    RegistryWriteError::Failed(CmdError::click(format!(
+                        "registry upload failed: {exc}"
+                    )))
+                })?
+                .ok_or_else(|| {
+                    RegistryWriteError::Failed(CmdError::click(
+                        "registry upload verification could not read the object",
+                    ))
+                })?
+                .version
+        }
+    };
+    let confirmed = store
+        .read_versioned()
+        .await
+        .map_err(|exc| {
+            RegistryWriteError::Failed(CmdError::click(format!("registry upload failed: {exc}")))
+        })?
+        .ok_or_else(|| {
+            RegistryWriteError::Failed(CmdError::click(
+                "registry upload verification could not read the object",
+            ))
+        })?;
+    if confirmed.version != generation || confirmed.content != payload {
+        return Err(RegistryWriteError::Failed(CmdError::click(
+            "registry upload verification returned different bytes",
+        )));
+    }
+    Ok((generation, previous_generation))
+}
+
+/// Every refusal a whole-document replace earns on its own contents, run
+/// before anything is written and independently of whose generation the swap
+/// will spend.
+///
+/// `--if-generation` answers "is this an edit to the document that is there";
+/// these answer "is this a document worth having at all", and a caller with a
+/// perfectly current token still gets refused by them.
+fn refuse_unsafe_replace(
+    current: Option<&crate::queue::VersionedText>,
+    payload: &str,
+    allow_removals: bool,
+    allow_empty_fleet: bool,
+) -> Result<(), CmdError> {
     if !allow_removals {
-        if let Some(blob) = current.as_ref() {
+        if let Some(blob) = current {
             let removed = removed_top_level_keys(&blob.content, payload);
             if !removed.is_empty() {
                 return Err(CmdError::click(format!(
@@ -163,7 +429,7 @@ async fn upload_payload(
                 )));
             }
         }
-        if let Some(blob) = current.as_ref() {
+        if let Some(blob) = current {
             // Same accident as the deleted-key guard above, one level in: the
             // whole document is replaced, so a writer holding an older copy
             // publishes its older directory over a newer one and every
@@ -193,12 +459,13 @@ async fn upload_payload(
                 // correction was gone with nothing recording that it had
                 // been.
                 //
-                // `upload_payload` cannot compare-and-swap against the read
-                // the operator's FILE came from -- a file carries no
-                // provenance, which is why read-modify-write callers use
-                // `push_document_if` and the store's real CAS instead. So the
-                // directory states it for itself: changing a declaration
-                // means advancing the counter that announces the change.
+                // `push --if-generation` now refuses that write outright, and
+                // read-modify-write callers have always used `push_document_if`
+                // and the store's real CAS. This guard is what still catches
+                // the caller who brought no token at all: a file carries no
+                // provenance on its own, so the directory states the rule for
+                // itself -- changing a declaration means advancing the counter
+                // that announces the change.
                 //
                 // Only a CHANGED directory is refused. A writer that leaves
                 // it byte-identical -- `release promote` rewriting
@@ -237,7 +504,7 @@ async fn upload_payload(
     // `stado service reap` then answered that the always-on Mac is not in the
     // canonical registry.
     if !allow_empty_fleet {
-        if let Some(blob) = current.as_ref() {
+        if let Some(blob) = current {
             if let (Some(before), Some(after)) =
                 (target_count(&blob.content), target_count(payload))
             {
@@ -255,46 +522,24 @@ async fn upload_payload(
             }
         }
     }
-    let generation = match current {
-        Some(blob) => store
-            .compare_and_swap(&blob.version, payload)
-            .await
-            .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?,
-        None => {
-            let created = store
-                .create_if_absent(payload)
-                .await
-                .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?;
-            if !created {
-                return Err(CmdError::click("registry upload failed: concurrent create"));
-            }
-            store
-                .read_versioned()
-                .await
-                .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?
-                .ok_or_else(|| {
-                    CmdError::click("registry upload verification could not read the object")
-                })?
-                .version
-        }
-    };
-    let confirmed = store
-        .read_versioned()
-        .await
-        .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?
-        .ok_or_else(|| CmdError::click("registry upload verification could not read the object"))?;
-    if confirmed.version != generation || confirmed.content != payload {
-        return Err(CmdError::click(
-            "registry upload verification returned different bytes",
-        ));
-    }
-    Ok((generation, previous_generation))
+    Ok(())
 }
 
+/// `stado registry push PATH|- [--if-generation TOKEN] [--force]
+/// [--allow-empty-fleet] [--json]` — upload an operator's document.
+///
+/// `if_generation` is the token an earlier [`pull`] handed back. With it the
+/// write is conditional on the read the edit was made against, so a
+/// concurrent publication is refused with [`REGISTRY_CONFLICT_EXIT`] instead
+/// of overwritten; without it the write is only conditional on the read
+/// [`upload_payload`] does itself, which is what every push did before the
+/// flag existed.
 pub async fn push(
     path: Option<String>,
     force: bool,
     allow_empty_fleet: bool,
+    if_generation: Option<String>,
+    json_output: bool,
 ) -> Result<(), CmdError> {
     // This command takes a PATH, and with no path it falls back to the
     // repository's bundled document. A caller who pipes a body is therefore
@@ -321,29 +566,102 @@ pub async fn push(
     };
     let document: Value = serde_json::from_str(&payload)
         .map_err(|exc| CmdError::click(format!("{}: {exc}", source.display())))?;
+    // Ahead of every store call, as it has always been: a document that would
+    // not validate never reaches the registry, whatever token it carries.
     warn_scoped_validation(validate_for_write(&document).await?);
-    let (generation, previous_generation) =
-        upload_payload(&payload, force, allow_empty_fleet).await?;
-    println!(
-        "pushed {} -> {} generation={generation} replaced={previous_generation}",
-        source.display(),
-        targets::registry_location()
-    );
+    let location = targets::registry_location();
+    match upload_payload(
+        &payload,
+        force,
+        allow_empty_fleet,
+        if_generation.as_deref(),
+    )
+    .await
+    {
+        Ok((generation, previous_generation)) => {
+            if json_output {
+                return print_push_receipt(&RegistryPushReceipt {
+                    schema: PUSH_RECEIPT_SCHEMA.to_string(),
+                    state: "pushed".to_string(),
+                    location,
+                    expected_generation: if_generation,
+                    actual_generation: None,
+                    generation: Some(generation),
+                    replaced: Some(previous_generation),
+                });
+            }
+            println!(
+                "pushed {} -> {location} generation={generation} replaced={previous_generation}",
+                source.display()
+            );
+            Ok(())
+        }
+        Err(RegistryWriteError::Conflict(conflict)) => {
+            // The receipt goes out before the error, so a `--json` caller has
+            // the two generations in hand no matter how it treats exit 75.
+            if json_output {
+                print_push_receipt(&RegistryPushReceipt {
+                    schema: PUSH_RECEIPT_SCHEMA.to_string(),
+                    state: "conflict".to_string(),
+                    location: conflict.location.clone(),
+                    expected_generation: Some(conflict.expected.clone()),
+                    actual_generation: conflict.actual_generation().map(str::to_string),
+                    generation: None,
+                    replaced: None,
+                })?;
+            }
+            Err(conflict.error())
+        }
+        // A storage or verification failure is not a conflict: nothing about
+        // it says "re-read and re-apply", so it keeps exit 1 and emits no
+        // receipt for a caller to mistake for a decision about generations.
+        Err(RegistryWriteError::Failed(error)) => Err(error),
+    }
+}
+
+const PUSH_RECEIPT_SCHEMA: &str = "stado.registry-push-receipt.v1";
+const PULL_RECEIPT_SCHEMA: &str = "stado.registry-pull-receipt.v1";
+
+fn print_push_receipt(receipt: &RegistryPushReceipt) -> Result<(), CmdError> {
+    println!("{}", serde_json::to_string_pretty(receipt)?);
     Ok(())
 }
 
-/// Validate an in-memory registry document and write it through the same
-/// compare-and-swap [`push`] performs; returns the new generation.
+/// Read the canonical document, apply a pure transform to it, and write the
+/// result back conditionally on the generation that read produced — retrying
+/// the whole round when somebody else wrote first.
 ///
-/// The single validated write path for programmatic registry edits —
-/// `deploy/service.rs` (`stado service adopt|retire|deploy`) and
-/// [`host_add`] both land here. Validation runs BEFORE any store call, so
-/// a document that would not validate never reaches the registry.
-pub async fn push_document(document: &Value) -> Result<String, CmdError> {
-    warn_scoped_validation(validate_for_write(document).await?);
-    let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
-    let (generation, _) = upload_payload(&payload, false, false).await?;
-    Ok(generation)
+/// This is the correct loop for exactly one shape of caller: one whose
+/// `transform` is a function of the document and nothing else. Re-running such
+/// a transform against a newer document is the whole point, because the answer
+/// it produces is the answer for THAT document. A caller that has already
+/// installed a key, stopped a unit or probed a host between its read and its
+/// write must NOT be here: re-applying its transform would republish a
+/// decision taken against state that has since changed. Those callers take a
+/// single conditional attempt from their own [`fetch_versioned_document`] and
+/// let the conflict reach the operator.
+///
+/// Only the conflict is retried. A validation refusal or a storage failure is
+/// returned on the first round: neither becomes true by trying again.
+pub async fn commit_document<F>(transform: F) -> Result<String, CmdError>
+where
+    F: Fn(&Value) -> Result<Value, CmdError>,
+{
+    for _ in 0..COMMIT_ROUNDS {
+        let (document, expected_generation) = fetch_versioned_document().await?;
+        let next = transform(&document)?;
+        match push_document_if(&next, &expected_generation).await {
+            Ok(generation) => return Ok(generation),
+            Err(error) if error.code == REGISTRY_CONFLICT_EXIT => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(RegistryConflict {
+        location: targets::registry_location(),
+        expected: format!("whatever {COMMIT_ROUNDS} consecutive reads returned"),
+        actual: RegistryActual::Raced,
+    }
+    .error())
 }
 
 /// Validate a candidate against the document it would replace.
@@ -379,6 +697,14 @@ fn warn_scoped_validation(pre_existing: Option<String>) {
     }
 }
 
+/// Validate an in-memory document and compare-and-swap it against the
+/// generation the caller read it at; returns the new generation.
+///
+/// The only programmatic write path. Validation runs BEFORE any store call,
+/// so a document that would not validate never reaches the registry, and a
+/// lost condition comes back as [`REGISTRY_CONFLICT_EXIT`] rather than a
+/// generic failure — that is what lets [`commit_document`] retry a pure
+/// transform and every other caller report the race instead of forcing.
 pub async fn push_document_if(
     document: &Value,
     expected_generation: &str,
@@ -386,10 +712,26 @@ pub async fn push_document_if(
     warn_scoped_validation(validate_for_write(document).await?);
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
     let store = RegistryStore::open().await?;
-    let generation = store
-        .compare_and_swap(expected_generation, &payload)
-        .await
-        .map_err(|error| CmdError::click(format!("registry compare-and-swap failed: {error}")))?;
+    let generation = match store.compare_and_swap(expected_generation, &payload).await {
+        Ok(generation) => generation,
+        // Every backend reports both a moved generation and a missing object
+        // this way, and neither tells this function which one it got, so the
+        // sentence names what is certain: the document is not the one the
+        // caller read.
+        Err(StorageError::StorageConflict(_)) => {
+            return Err(RegistryConflict {
+                location: store.location().to_string(),
+                expected: expected_generation.to_string(),
+                actual: RegistryActual::Raced,
+            }
+            .error());
+        }
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "registry compare-and-swap failed: {error}"
+            )));
+        }
+    };
     let confirmed = store
         .read_versioned()
         .await?
@@ -402,6 +744,9 @@ pub async fn push_document_if(
     Ok(generation)
 }
 
+/// The canonical document and the generation it was read at, which together
+/// are the only safe input to [`push_document_if`]: a generation from a
+/// second read belongs to a possibly different document.
 pub async fn fetch_versioned_document() -> Result<(Value, String), CmdError> {
     let store = RegistryStore::open().await?;
     let blob = store
@@ -419,7 +764,7 @@ pub async fn fetch_versioned_document() -> Result<(Value, String), CmdError> {
 }
 
 /// The canonical registry as its raw document, off the same object
-/// [`push_document`] compare-and-swaps.
+/// [`push_document_if`] compare-and-swaps.
 ///
 /// Read-modify-write callers work on the raw document rather than on
 /// [`Registry`] because an edit here is a surgical key change, and the raw
@@ -444,15 +789,41 @@ pub async fn fetch_document() -> Result<Value, CmdError> {
     Ok(document)
 }
 
-pub async fn pull() -> Result<(), CmdError> {
+/// `stado registry pull [--with-generation | --generation-only]` — print the
+/// canonical registry.
+///
+/// Bare, it prints the pretty document and nothing else: scripts pipe this
+/// into `jq`. `--with-generation` prints one
+/// `stado.registry-pull-receipt.v1` object carrying the document and the
+/// token `push --if-generation` spends, and `--generation-only` prints just
+/// the token. Both come from ONE versioned read, because a generation read
+/// separately from the document it is supposed to describe is a token for a
+/// document nobody looked at.
+pub async fn pull(with_generation: bool, generation_only: bool) -> Result<(), CmdError> {
     let store = RegistryStore::open().await?;
-    let text = store.read_text().await?.ok_or_else(|| {
+    let blob = store.read_versioned().await?.ok_or_else(|| {
         CmdError::click(format!(
             "could not fetch registry from {}",
             store.location()
         ))
     })?;
-    let value: Value = serde_json::from_str(&text)?;
+    if generation_only {
+        println!("{}", blob.version);
+        return Ok(());
+    }
+    let value: Value = serde_json::from_str(&blob.content)?;
+    if with_generation {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&RegistryPullReceipt {
+                schema: PULL_RECEIPT_SCHEMA.to_string(),
+                location: store.location().to_string(),
+                generation: blob.version,
+                document: value,
+            })?
+        );
+        return Ok(());
+    }
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
