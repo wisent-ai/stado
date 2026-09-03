@@ -190,7 +190,26 @@ impl StadoObjectBackend {
         // handle storage failures.
         let builder = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
-            .timeout(std::time::Duration::from_secs(300));
+            .timeout(std::time::Duration::from_secs(300))
+            // Sharing the client is what makes a pool possible; these three
+            // state what the pool is for. The idle timeout is the contract
+            // with the object API, which holds a reused connection for 120 s
+            // (`Dashboard::KEEP_ALIVE_IDLE`): this side must retire the socket
+            // FIRST, because a connection retired by the server between the
+            // pool checkout and the write fails or re-dials -- the cost this
+            // sharing exists to remove. 90 s against the server's 120 s leaves
+            // a 30 s margin and is also reqwest's own default, so the value is
+            // unchanged and only its reason is now written down.
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            // A tick reads a handful of objects; eight warm connections per
+            // host serve that with room for the concurrent janitor read,
+            // instead of reqwest's unbounded idle set.
+            .pool_max_idle_per_host(8)
+            // A pooled connection dropped silently -- by the tailnet, by a
+            // NAT table, by a service restart -- is otherwise discovered only
+            // when a request is written into it, which surfaces as an
+            // occasional failed object operation rather than a clean re-dial.
+            .tcp_keepalive(std::time::Duration::from_secs(60));
         let ca_file = ca_file.trim();
         if ca_file.is_empty() {
             return builder.build().map_err(|error| {
