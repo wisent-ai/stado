@@ -187,53 +187,26 @@ impl Registrar {
     }
 }
 
-/// Make the registrar credential readable by the consumer this command
-/// authenticates as, before reading it.
+/// Make the registrar credential readable before reading it.
 ///
-/// Skarbiec grants are per item and per field, so an item nobody has granted
-/// yet is readable by nobody — the first run of `stado dns list wisent.com`
-/// answered `HTTP 403: consumer not authorized to read item field` for
-/// exactly that reason, with the credential sitting in the vault the whole
-/// time and `stado credentials get namecheap_auto --field api_user` answering
-/// the same 403 beside it. The alternative was an operator running `skarbiec
-/// token-mint` by hand, which replaces a whole capability list rather than
-/// adding to it and is how a fleet loses its credentials.
-///
-/// [`crate::credential_store::grant::grant_field_reads`] is the widening that
-/// already exists for this: it reads the live grant, refuses unless the
-/// consumer's own bearer file still hashes to what the vault recorded, takes
-/// the union with what is asked for, and preserves the remaining TTL.
-/// `stado fleet key` settles a freshly minted channel key the same way.
-///
-/// The consumer widened is deliberately [`crate::config::skarbiec_consumer`]
-/// and not the credential-store admin: `read_string` authenticates with that
-/// exact triple — consumer, token file, grant mode — so widening any other
-/// identity leaves the 403 in place while reporting a grant was written. That
-/// is the mistake this comment exists to stop the next reader repeating. A
-/// file store answers its owner directly and has no grant to widen, so this
-/// is a no-op there.
+/// The first real run answered `HTTP 403: consumer not authorized to read
+/// item field` with the credential sitting in the vault the whole time, and so
+/// did `stado credentials get namecheap_auto --field api_user` beside it.
+/// [`crate::credential_store::grant::settle_field_reads`] is where that whole
+/// story is written down, and it is shared because the same 403 arrived from
+/// `stado release catalog sync` an hour later.
 async fn settle_readable(item: &str) -> Result<(), CmdError> {
-    if crate::credential_store::skarbiec_url().is_none() {
-        return Ok(());
-    }
-    let consumer = crate::config::skarbiec_consumer();
-    let token_file = crate::config::skarbiec_token_file();
-    let outcome = crate::credential_store::grant::grant_field_reads(
-        consumer,
-        std::path::Path::new(token_file),
-        item,
-        &REGISTRAR_FIELDS,
-    )
-    .map_err(|error| {
-        CmdError::click(format!(
-            "cannot make the registrar credential {item:?} readable by {consumer}: {error}"
-        ))
-    })?;
-    if outcome.wrote() {
+    let outcome = crate::credential_store::grant::settle_field_reads(item, &REGISTRAR_FIELDS)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot make the registrar credential {item:?} readable: {error}"
+            ))
+        })?;
+    if let Some(outcome) = outcome.filter(crate::credential_store::grant::GrantOutcome::wrote) {
         // stderr, not stdout: `--json` callers parse one document, and a
         // widened grant is not part of it.
         eprintln!(
-            "granted {consumer} read on {} ({} capabilities held, was {})",
+            "granted read on {} ({} capabilities held, was {})",
             outcome.added.join(", "),
             outcome.held_after,
             outcome.held_before
