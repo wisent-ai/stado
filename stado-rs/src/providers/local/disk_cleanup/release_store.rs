@@ -78,7 +78,10 @@ struct ProductReleases {
 /// dotted numbers sorts before every one that is, so it is never counted as
 /// the newest of anything.
 fn version_key(version: &str) -> (bool, Vec<u64>) {
-    let parts: Option<Vec<u64>> = version.split('.').map(|part| part.parse::<u64>().ok()).collect();
+    let parts: Option<Vec<u64>> = version
+        .split('.')
+        .map(|part| part.parse::<u64>().ok())
+        .collect();
     match parts {
         Some(numbers) => (true, numbers),
         None => (false, Vec::new()),
@@ -144,7 +147,10 @@ fn host_pinned_versions(state_dir: &Path) -> BTreeMap<String, BTreeSet<String>> 
             }
         }
         // A quarantined digest names a version an operator may still inspect.
-        if let Some(quarantined) = state.get("quarantined").and_then(serde_json::Value::as_object) {
+        if let Some(quarantined) = state
+            .get("quarantined")
+            .and_then(serde_json::Value::as_object)
+        {
             for record in quarantined.values() {
                 if let Some(version) = record.get("version").and_then(serde_json::Value::as_str) {
                     versions.insert(version.to_string());
@@ -316,12 +322,14 @@ pub fn scan_release_store(
         for (product, inventory) in &products {
             let served_here = host_pins.contains_key(product) || run_pins.contains_key(product);
             if !served_here {
-                report.skip_release_store("product_not_served_here", inventory.versions.len() as i64);
+                report
+                    .skip_release_store("product_not_served_here", inventory.versions.len() as i64);
                 continue;
             }
             let mut ordered: Vec<&String> = inventory.versions.keys().collect();
             ordered.sort_by_key(|version| version_key(version));
-            let newest: BTreeSet<&String> = ordered.iter().rev().take(keep_newest).copied().collect();
+            let newest: BTreeSet<&String> =
+                ordered.iter().rev().take(keep_newest).copied().collect();
             let empty = BTreeSet::new();
             let by_host = host_pins.get(product).unwrap_or(&empty);
             let by_run = run_pins.get(product).unwrap_or(&empty);
@@ -359,9 +367,7 @@ pub fn scan_release_store(
                 }
                 let delete_attempt = (|| -> Result<i64, JanitorError> {
                     let current = std::fs::symlink_metadata(path)?;
-                    if !current.is_dir()
-                        || current.uid() != euid()
-                        || current.dev() != home_device
+                    if !current.is_dir() || current.uid() != euid() || current.dev() != home_device
                     {
                         return Err(JanitorError::os(
                             "release directory identity changed before deletion",

@@ -345,8 +345,12 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         let cleaner = cleaner
             .as_object()
             .ok_or_else(|| verr(&cleaner_location, "must be an object"))?;
-        const CLEANER_KEYS: [&str; 4] =
-            ["allow_missing_upload_proof", "keep_newest", "min_age_seconds", "root"];
+        const CLEANER_KEYS: [&str; 4] = [
+            "allow_missing_upload_proof",
+            "keep_newest",
+            "min_age_seconds",
+            "root",
+        ];
         let mut unknown_keys: Vec<&str> = cleaner
             .keys()
             .map(String::as_str)
