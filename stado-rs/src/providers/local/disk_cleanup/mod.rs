@@ -1889,12 +1889,12 @@ fn finish(
 /// Every job id currently in `queue` or `running` from an already-open store,
 /// or `None` when the keep-list could not be built inside `budget`.
 ///
-/// The keep-list for [`queue_workdirs`]. Read best-effort, exactly as
-/// [`crate::deploy::host_reclaim`] reads it for the same directories, and for
-/// the same reason: an unreadable store must not turn a disk repair into an
-/// outage. A partial read is discarded rather than narrowed, because a
-/// keep-list missing the running job's id authorizes deleting the tree that
-/// job is writing into.
+/// The keep-list for [`queue_workdirs`]. Read best-effort so an unreadable
+/// store cannot turn a disk repair into an outage. A partial read is discarded
+/// rather than narrowed, because a keep-list missing the running job's id
+/// authorizes deleting the tree that job is writing into. `host reclaim`
+/// deliberately delegates these directories to this locked path and does not
+/// maintain another keep-list.
 ///
 /// [`crate::queue::JobStorage::list_job_ids`] and NOT `list_jobs`: this wants
 /// ids, the ids are in the object names, and downloading every job document to
@@ -2243,10 +2243,10 @@ fn run_with_lock(
     if remaining_after_clones == 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
         report.caps.scan = true;
     }
-    // The queue's own per-job scratch trees, scanned last on the budget the
-    // rest leave. They share the temporary root with the clones above and are
-    // judged by their job's state rather than by age, so nothing about the
-    // order above changes what this pass may take — only how much of it.
+    // The queue's own per-job trees, scanned last on the budget the rest leave.
+    // They live under the persistent agent-owned work root and are judged by
+    // their job's state rather than by age, so nothing about the order above
+    // changes what this pass may take — only how much of it.
     queue_workdirs::scan_queue_workdirs(
         home,
         &policy,
