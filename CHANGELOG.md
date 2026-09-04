@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.3
+
+- **Release scheduling:** a live builder temporarily occupied by CPU, RAM, or an exclusive job can receive a queued release build when no builder is immediately available. Worker claim-time resource checks remain unchanged; disk, paused-queue, missing-measurement, and unexplained refusals still prevent selection.
+- **Migration:** no configuration or persisted-state rewrite is required. Existing release submissions can resume with the same source and version.
+- **Rollback boundary:** rolling back restores immediate submission failure when every matching builder is temporarily busy.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation covers this change, and release records retain the selected builder and its eventual build outcome.
+
 ## 0.16.2
 
 - **Release verifier:** `stado host reconcile-release-verifier TARGET` now compares the caller's publisher declarations with the target's effective configuration and binds the existing verifier bearer to the complete exact item set. Retired publishers no longer leave stale capabilities that close the release publication boundary.
