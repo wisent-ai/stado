@@ -2493,10 +2493,10 @@ enum HostCommands {
     /// The requirement is read from `browsers.json` inside the installed
     /// release, never hardcoded here, because Playwright pins an exact revision
     /// per component and a constant would verify the wrong path the moment the
-    /// release moved. Verification reports every component the release installs
-    /// by default; --repair installs only the ones named, defaulting to the one
-    /// Weles takes from that cache, so a repair never downloads browsers
-    /// nothing drives.
+    /// release moved. The report separately states whether the components
+    /// required by this invocation are present and whether any Chromium,
+    /// Firefox, or WebKit engine can open a page. --repair installs only the
+    /// components named, defaulting to ffmpeg.
     #[command(name = "weles-browser-runtime")]
     WelesBrowserRuntime {
         target: String,

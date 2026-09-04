@@ -9026,8 +9026,8 @@ pub async fn weles_browser_runtime(
     let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    // One set decides both what is judged and what a repair installs, so the
-    // verdict can never fail on something --repair would not have fixed.
+    // This set decides required_state and what a repair installs. Browser-engine
+    // readiness is measured separately and its refusal names an explicit engine.
     let required: Vec<String> = if components.is_empty() {
         vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
     } else {
@@ -9055,8 +9055,10 @@ pub async fn weles_browser_runtime(
         object.insert("repaired".to_string(), serde_json::json!(installed));
         println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
     } else {
-        println!("host:     {}", resolved.name);
-        println!("runtime:  {}", report.verdict());
+        println!("host:           {}", resolved.name);
+        println!("runtime:        {}", report.verdict());
+        println!("required state: {}", report.required_state());
+        println!("browser engine: {}", report.browser_engine_state());
         for line in &installed {
             println!("repair:   {line}");
         }
