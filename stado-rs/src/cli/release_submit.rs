@@ -26,7 +26,7 @@ use crate::release_pipeline::{
     WorkerRequest, PRODUCT_MANIFEST,
 };
 
-const OBJECT_API_SERVICE: &str = "stado-object-api";
+const OBJECT_API_CATALOG_SERVICE: &str = "stado";
 const OBJECT_API_REASON: &str =
     "release submission requires the canonical object store before its first write";
 
@@ -1587,18 +1587,24 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     require_rollback_compatibility(&m, &args.version).await?;
     // An explicit endpoint may be a Stado-managed loopback forward to the
     // control host. Only an absent endpoint means this caller owns the local
-    // object daemon and must ensure it before publishing.
+    // object daemon and must ensure it before publishing. Address the service
+    // by its canonical catalog name: that entry owns both the stable object-API
+    // unit identity and its host-local storage environment.
     if crate::config::stado_api_url().is_empty()
         && crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
             != Some(crate::capabilities::StorageAdapter::Local)
     {
-        super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "cannot ensure required service {OBJECT_API_SERVICE}: {error}"
-                ))
-            })?;
+        super::service::ensure_local_dependency(
+            OBJECT_API_CATALOG_SERVICE,
+            OBJECT_API_REASON,
+            true,
+        )
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot ensure required service {OBJECT_API_CATALOG_SERVICE}: {error}"
+            ))
+        })?;
     }
     let (commit, archive) = snapshot(&root)?;
     // Reserve every platform coordinate before this submission can become the

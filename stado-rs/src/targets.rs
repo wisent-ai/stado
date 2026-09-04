@@ -2789,12 +2789,13 @@ impl RegistryStore {
         })
     }
 
-    /// Bind a server-local reader to the canonical registry's direct backing
-    /// store when clients normally route through the Stado object API.
+    /// Bind a server-local reader to the canonical registry's host-local
+    /// authority when clients normally route through the Stado object API.
     ///
     /// This is intentionally narrower than [`Self::open`]: only an explicitly
-    /// configured `stado` primary switches to the server's declared backup.
-    /// Every other adapter retains the canonical routing above.
+    /// configured `stado` primary switches to its configured
+    /// `storage.local.path`. The disaster-recovery backup is never promoted;
+    /// every other adapter retains the canonical routing above.
     pub async fn open_for_server() -> Result<Self, StorageError> {
         if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
             != Some(crate::capabilities::StorageAdapter::StadoObject)

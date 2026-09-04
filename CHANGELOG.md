@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.5
+
+- **Object API authority:** a server whose client profile selects Stado opens the explicitly configured host-local store, never the backup replica. Registry readers and disk cleanup use the same authority.
+- **Catalog bootstrap:** release submission resolves the object API through the catalog's exact `stado` entry, preserving its primary and backup environment instead of rendering only the base process environment.
+- **Service archives:** local archives are extracted beside the installed version and must contain the service's declared executable before `current` changes. Existing immutable versions are not deleted during extraction, and symlink replacement is atomic.
+- **Migration:** no new configuration field is required; `storage.local.path` remains the server's local authority.
+- **Rollback boundary:** rolling back restores implicit backup promotion and allows an archive update to remove files from the version a service is still executing.
+- **Platforms and evidence:** native platforms remain `darwin-arm64` and `linux-amd64`; the object API recovery command targets macOS. Source compilation and retained release records describe what was built and delivered; no device-level test is included.
+
 ## 0.16.4
 
 - **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.

@@ -195,28 +195,33 @@ impl JobStorage {
     pub async fn new() -> Result<Self, StorageError> {
         Self::with_bucket(config::bucket()).await
     }
-    /// Build the backing store used by the Stado API server itself.
+    /// Build the host-local backing store used by the Stado API server itself.
     ///
     /// A client may select the `stado` adapter because it reaches this server,
     /// but the server cannot route its own queue and registry reads back through
-    /// its listener before that listener has bound. In that topology the
-    /// independently declared backup endpoint is the server's direct backing
-    /// store. Any other primary remains unchanged.
+    /// its listener before that listener has bound. The authority on that host is
+    /// the explicitly configured `storage.local.path`; the independently
+    /// configured backup remains a disaster-recovery replica and is never
+    /// promoted automatically. Any other primary remains unchanged.
     pub async fn for_server() -> Result<Self, StorageError> {
         let primary = super::copy::Endpoint::configured_primary();
         if primary.adapter() != Some(StorageAdapter::StadoObject) {
             return Self::new().await;
         }
-        let endpoint = super::copy::Endpoint::configured_backup().ok_or_else(|| {
-            StorageError::Other(
-                "WC_STORAGE_BACKEND=stado cannot back the Stado API server itself; configure a direct WC_BACKUP_STORAGE_BACKEND".to_string(),
-            )
-        })?;
-        if endpoint.adapter() == Some(StorageAdapter::StadoObject) {
+        let local_path = config::wc_local_storage_path();
+        if local_path.is_empty() {
             return Err(StorageError::Other(
-                "the Stado API server backup backend must be direct, not stado".to_string(),
+                "WC_STORAGE_BACKEND=stado requires WC_LOCAL_STORAGE_PATH \
+                 (storage.local.path) for the Stado API server's host-local authority"
+                    .to_string(),
             ));
         }
+        let endpoint = super::copy::Endpoint {
+            kind: StorageAdapter::Local.id().to_string(),
+            bucket: config::bucket().to_string(),
+            path: local_path.to_string(),
+            ..Default::default()
+        };
         let backend = endpoint.build().await?;
         let storage =
             Self::with_backend_and_bucket(backend, endpoint.kind.clone(), endpoint.bucket.clone());
