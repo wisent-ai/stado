@@ -6457,9 +6457,10 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The checked-in host helper only mutates an unavailable listener. It pins the
-/// service to the physical local store, preserves the previous system plist and
-/// verifies the loopback health endpoint after launchd has loaded the new unit.
+/// The fixed-script channel transports the checked-in helper verbatim. Its
+/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
+/// proxy reconciliation; object recovery itself mutates only a listener whose
+/// authenticated protected read is unavailable.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
