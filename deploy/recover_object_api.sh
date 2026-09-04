@@ -277,6 +277,31 @@ stable_bind = target.get("stable_bind") or ""
 readiness_path = target.get("readiness_path") or ""
 legacy_plist = target.get("legacy_launchd_plist") or ""
 legacy_label = target.get("legacy_launchd_label") or ""
+if bool(legacy_plist) != bool(legacy_label):
+    raise SystemExit("skarbiec bootstrap refused: release target has partial legacy ownership")
+if not legacy_plist:
+    host_targets = [
+        candidate
+        for candidate in (document.get("targets") or [])
+        if isinstance(candidate, dict) and candidate.get("name") == target_name
+    ]
+    if len(host_targets) != 1:
+        raise SystemExit(
+            "skarbiec bootstrap refused: registry does not declare this host exactly once"
+        )
+    legacy_services = [
+        service
+        for service in (host_targets[0].get("services") or [])
+        if isinstance(service, dict) and service.get("name") == policy.get("service")
+    ]
+    if len(legacy_services) != 1:
+        raise SystemExit(
+            "skarbiec bootstrap refused: registry does not declare one legacy service"
+        )
+    if legacy_services[0].get("kind") != "launchd":
+        raise SystemExit("skarbiec bootstrap refused: legacy service is not launchd")
+    legacy_plist = legacy_services[0].get("path") or ""
+    legacy_label = legacy_services[0].get("label") or ""
 candidate_ports = target.get("candidate_ports") or []
 timeout = strategy.get("readiness_timeout_seconds")
 required = (state_dir, stable_bind, readiness_path, legacy_plist, legacy_label)
@@ -295,8 +320,14 @@ if not 1 <= stable_port <= 65535:
     raise SystemExit("skarbiec bootstrap refused: stable bind port is invalid")
 if not readiness_path.startswith("/") or any(character.isspace() for character in readiness_path):
     raise SystemExit("skarbiec bootstrap refused: readiness path is invalid")
-if not legacy_plist.startswith("/Library/LaunchDaemons/"):
-    raise SystemExit("skarbiec bootstrap refused: legacy plist is not a system daemon")
+if (
+    not all(
+        character.isascii() and (character.isalnum() or character in ".-_")
+        for character in legacy_label
+    )
+    or legacy_plist != f"/Library/LaunchDaemons/{legacy_label}.plist"
+):
+    raise SystemExit("skarbiec bootstrap refused: legacy launchd identity is invalid")
 if (
     not isinstance(candidate_ports, list)
     or len(candidate_ports) != 2

@@ -23,8 +23,7 @@ fn definition() -> Result<Value, CmdError> {
     if definition.get("schema_version").and_then(Value::as_u64) != Some(1)
         || definition.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
         || definition.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
-        || definition.get("first_success_fact").and_then(Value::as_str)
-            != Some(FIRST_SUCCESS_FACT)
+        || definition.get("first_success_fact").and_then(Value::as_str) != Some(FIRST_SUCCESS_FACT)
     {
         return Err(CmdError::click(
             "shipped onboarding journey has an invalid identity",
@@ -60,7 +59,10 @@ fn write_state(path: &Path, state: &Value) -> Result<(), CmdError> {
         .ok_or_else(|| CmdError::click("onboarding state path has no parent"))?;
     fs::create_dir_all(parent)?;
     let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    fs::write(&temporary, format!("{}\n", serde_json::to_string_pretty(state)?))?;
+    fs::write(
+        &temporary,
+        format!("{}\n", serde_json::to_string_pretty(state)?),
+    )?;
     fs::rename(temporary, path)?;
     Ok(())
 }
@@ -106,7 +108,9 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
         let presentation = screen
             .get("presentation")
             .and_then(Value::as_object)
-            .ok_or_else(|| CmdError::click(format!("onboarding screen `{next_id}` has no presentation")))?;
+            .ok_or_else(|| {
+                CmdError::click(format!("onboarding screen `{next_id}` has no presentation"))
+            })?;
         if presentation.get("title").and_then(Value::as_str).is_none()
             || presentation.get("body").and_then(Value::as_str).is_none()
         {
@@ -163,7 +167,10 @@ pub fn run(reset: bool) -> Result<(), CmdError> {
     let path = state_path()?;
     let existing = if reset { None } else { read_state(&path)? };
 
-    if existing.as_ref().and_then(|state| state.get("status")).and_then(Value::as_str)
+    if existing
+        .as_ref()
+        .and_then(|state| state.get("status"))
+        .and_then(Value::as_str)
         == Some("completed")
     {
         println!("{COMPLETED_MESSAGE}");
