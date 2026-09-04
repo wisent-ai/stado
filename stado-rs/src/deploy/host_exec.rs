@@ -761,6 +761,14 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               sanctioned way to even name what was eating the disk",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "3", "/"],
+        why: "attributes a full root filesystem one level below the existing depth-two report; \
+              the depth and root remain fixed, read-only words. Added 2026-09-04 after the \
+              Ubuntu builder reached 100% while depth two named 16 GiB in /root/.stado, \
+              20 GiB in /home/ubuntu and 26 GiB in /mnt/wd16tb but could not identify any \
+              directory a declared cleaner could safely own",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "1", "/private/tmp"],
         why: "attributes the OS scratch directory one level deep; -x stays on one filesystem, \
               -k is a fixed unit, the depth and the path are fixed words, and du writes \
