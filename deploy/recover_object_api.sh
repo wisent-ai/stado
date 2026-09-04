@@ -597,26 +597,34 @@ if [ "$healthy" -eq 1 ]; then
   exit 0
 fi
 
-
-if [ "$same" -eq 1 ]; then
+# An interrupted earlier pass may have unloaded a correctly defined job.
+# The file and the loaded job are separate facts; kickstart requires both.
+loaded=0
+if /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+  loaded=1
+fi
+if [ "$same" -eq 1 ] && [ "$loaded" -eq 1 ]; then
   /usr/bin/sudo -n /bin/launchctl kickstart -k "system/$label"
   action=kickstarted
 else
-  /usr/bin/sudo -n /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
+  # Preserve the replacement before unload. A later pass can bootstrap it
+  # even if this host-channel invocation ends between bootout and bootstrap.
   /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
+  if [ "$loaded" -eq 1 ]; then
+    /usr/bin/sudo -n /bin/launchctl bootout "system/$label"
+  fi
   /usr/bin/sudo -n /bin/launchctl enable "system/$label" >/dev/null 2>&1 || true
   /usr/bin/sudo -n /bin/launchctl bootstrap system "$plist"
   action=reinstalled
 fi
 
-attempt=0
-while [ "$attempt" -lt 180 ]; do
+deadline=$((SECONDS + 180))
+while [ "$SECONDS" -lt "$deadline" ]; do
   if authenticated_object_ready; then
     reconcile_ingress
     printf '%s %s store=%s backup=%s\n' "$action" "$label" "$store" "${backup:-none}"
     exit 0
   fi
-  attempt=$((attempt + 1))
   /bin/sleep 1
 done
 printf 'authorization_timeout %s protected object read stayed unavailable after 180 seconds; backup=%s\n' \

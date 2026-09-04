@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.4
+
+- **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.
+- **Recovery deadline:** the protected-read wait now uses 180 elapsed seconds rather than 180 potentially slow network attempts.
+- **Migration:** no configuration change is required; the existing `stado host recover-object-api TARGET` command resumes an interrupted recovery.
+- **Rollback boundary:** rolling back can leave recovery trying to kickstart an unloaded job and waiting beyond the host-channel deadline.
+- **Platforms and evidence:** the affected recovery command targets macOS; compilation and shell syntax checks cover the change, while its retained recovery report records the production outcome.
+
 ## 0.16.3
 
 - **Release scheduling:** a live builder temporarily occupied by CPU, RAM, or an exclusive job can receive a queued release build when no builder is immediately available. Worker claim-time resource checks remain unchanged; disk, paused-queue, missing-measurement, and unexplained refusals still prevent selection.
