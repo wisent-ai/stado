@@ -204,6 +204,10 @@ pub struct StorageCopyArgs {
     /// Print the per-prefix plan and copy nothing.
     #[arg(long)]
     dry_run: bool,
+    /// Assert that every source writer is stopped; refuse a copy if an object
+    /// disappears from the fenced source.
+    #[arg(long)]
+    source_offline: bool,
     /// Objects copied in parallel.
     #[arg(long, default_value_t = default_concurrency())]
     concurrency: NonZeroUsize,
@@ -575,7 +579,7 @@ async fn run(args: &StorageCopyArgs) -> Result<(), CmdError> {
             concurrency: args.concurrency.get(),
         },
         args.dry_run,
-        true,
+        !args.source_offline,
     )
     .await
 }
@@ -652,6 +656,12 @@ pub(crate) async fn copy_between(
     print_report(&report);
     if warn_live {
         print_split_brain_warning();
+    }
+    let vanished: usize = report.prefixes.iter().map(|prefix| prefix.vanished()).sum();
+    if !warn_live && vanished != 0 {
+        return Err(CmdError::click(format!(
+            "{vanished} source object(s) disappeared during a fenced copy; the source was not stable"
+        )));
     }
     if !report.is_clean() {
         return Err(CmdError::click(format!(

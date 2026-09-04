@@ -8075,8 +8075,8 @@ pub async fn recover_skarbiec_acquisition_state(
 ///
 /// The fixed-script channel transports the checked-in helper verbatim. Its
 /// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation; object recovery itself mutates only a listener whose
-/// authenticated protected read is unavailable.
+/// proxy reconciliation. Object recovery also repairs a responsive listener
+/// whose loaded environment resolves to the wrong physical backing root.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
@@ -8084,7 +8084,7 @@ async fn recover_object_api_on_target(
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
         include_str!("../../../deploy/recover_object_api.sh"),
-        std::time::Duration::from_secs(240),
+        std::time::Duration::from_secs(7_200),
         runner,
     )
     .await

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Restore the Stado object API when its own client route is unavailable.
+# Restore the Stado object API without trusting a successful read alone.
 #
-# The listener is the authority for stado:// objects, so both of its storage
-# backends must be direct. If either inherits the operator profile's
-# `storage.backend=stado`, startup calls its own unopened port and launchd loops
-# forever. This helper gives the system daemon explicit local primary and backup
-# stores, preserves the prior plist, and only unloads a drifted job after proving
-# that an authenticated protected object read is unavailable.
+# launchd's loaded job and its plist are separate facts. Recovery therefore
+# proves the loaded storage route, fences a serving old root before using the
+# canonical metadata-preserving storage copier, and retains both the previous
+# definition and a clone/copy of the destination until the corrected root is
+# serving authenticated reads.
 set -euo pipefail
 
 label="com.wisent.always-on.stado-object-api"
@@ -25,28 +24,43 @@ if [ ! -x "$program" ]; then
   exit 66
 fi
 
-store="$HOME/.stado/local-storage"
-backup_store="$HOME/.stado/local-backup"
+store="${WC_LOCAL_STORAGE_PATH:-$HOME/.stado/local-storage}"
+backup_store="${WC_BACKUP_LOCAL_STORAGE_PATH:-$HOME/.stado/local-backup}"
 if [ -r "$config" ]; then
   configured=$(/usr/bin/python3 - "$config" <<'PY'
 import json, os, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
 value = ((document.get("storage") or {}).get("local") or {}).get("path") or ""
-print(os.path.abspath(os.path.expanduser(value)) if value else "")
+print(os.path.realpath(os.path.abspath(os.path.expanduser(value))) if value else "")
 PY
 )
-  if [ -n "$configured" ]; then store="$configured"; fi
+  if [ -z "${WC_LOCAL_STORAGE_PATH:-}" ] && [ -n "$configured" ]; then
+    store="$configured"
+  fi
   configured_backup=$(/usr/bin/python3 - "$config" <<'PY'
 import json, os, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
 value = ((((document.get("storage") or {}).get("backup") or {}).get("local") or {}).get("path") or "")
-print(os.path.abspath(os.path.expanduser(value)) if value else "")
+print(os.path.realpath(os.path.abspath(os.path.expanduser(value))) if value else "")
 PY
 )
-  if [ -n "$configured_backup" ]; then backup_store="$configured_backup"; fi
+  if [ -z "${WC_BACKUP_LOCAL_STORAGE_PATH:-}" ] &&
+    [ -n "$configured_backup" ]; then
+    backup_store="$configured_backup"
+  fi
 fi
+store=$(/usr/bin/python3 - "$store" <<'PY'
+import os, sys
+print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
+PY
+)
+backup_store=$(/usr/bin/python3 - "$backup_store" <<'PY'
+import os, sys
+print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
+PY
+)
 object_url="http://127.0.0.1:8765"
 object_namespace="probierz"
 object_token_file="$HOME/.stado/queue-object-api-token"
@@ -558,9 +572,195 @@ boundary = ((document.get("boundaries") or {}).get("object") or {})
 raise SystemExit(0 if boundary.get("ready") is True and not boundary.get("last_error") else 1)
 PY
 }
-reconcile_skarbiec_bootstrap
-healthy=0
-if authenticated_object_ready; then healthy=1; fi
+
+# Resolve the route a loaded job was given, rather than the route in the file
+# launchd may read next time. The legacy server selected the configured backup
+# whenever its client profile selected `stado`; that promotion is made explicit
+# here so a healthy read from local-backup cannot certify local-storage.
+inspect_route() {
+  mode=$1
+  source=$2
+  /usr/bin/python3 - "$mode" "$source" "$config" "$HOME" "$staged" <<'PY'
+import json, os, plistlib, re, sys
+
+mode, source, default_config, default_home, expected_path = sys.argv[1:]
+with open(expected_path, "rb") as handle:
+    expected = plistlib.load(handle).get("EnvironmentVariables") or {}
+
+state = "-"
+pid = "-"
+if mode == "launchctl":
+    with open(source, encoding="utf-8", errors="strict") as handle:
+        lines = handle.readlines()
+    environment = {}
+    in_environment = False
+    for line in lines:
+        if re.match(r"^\s*environment = \{\s*$", line):
+            in_environment = True
+            continue
+        if in_environment:
+            if re.match(r"^\s*\}\s*$", line):
+                in_environment = False
+                continue
+            match = re.match(r"^\s*([^=\s]+)\s+=>\s+(.*?)\s*$", line)
+            if match:
+                environment[match.group(1)] = match.group(2)
+            continue
+        match = re.match(r"^\s*state = (.*?)\s*$", line)
+        if match and state == "-":
+            state = match.group(1)
+        match = re.match(r"^\s*pid = ([0-9]+)\s*$", line)
+        if match and pid == "-":
+            pid = match.group(1)
+else:
+    with open(source, "rb") as handle:
+        document = plistlib.load(handle)
+    environment = document.get("EnvironmentVariables") or {}
+
+if not isinstance(environment, dict) or any(
+    not isinstance(key, str) or not isinstance(value, str)
+    for key, value in environment.items()
+):
+    raise SystemExit("object API recovery refused: invalid environment dictionary")
+
+home = environment.get("HOME") or default_home
+config_path = environment.get("STADO_CONFIG") or default_config
+
+def expand_path(value, fallback=""):
+    value = value or fallback
+    if not value:
+        return ""
+    if value == "~":
+        value = home
+    elif value.startswith("~/"):
+        value = os.path.join(home, value[2:])
+    return os.path.realpath(os.path.abspath(value))
+
+try:
+    with open(expand_path(config_path), encoding="utf-8") as handle:
+        configuration = json.load(handle)
+except (OSError, ValueError) as error:
+    raise SystemExit(f"object API recovery refused: cannot read loaded host config: {error}")
+
+def configured(*parts):
+    value = configuration
+    for part in parts:
+        value = value.get(part) if isinstance(value, dict) else None
+    return value if isinstance(value, str) else ""
+
+def resolve(env_name, config_parts, fallback=""):
+    return environment.get(env_name) or configured(*config_parts) or fallback
+
+def canonical_backend(value):
+    return "stado" if value == "stado-object" else value
+
+primary_backend = canonical_backend(
+    resolve("WC_STORAGE_BACKEND", ("storage", "backend"))
+)
+primary_root = expand_path(
+    resolve(
+        "WC_LOCAL_STORAGE_PATH",
+        ("storage", "local", "path"),
+        os.path.join(home, ".stado", "local-storage"),
+    )
+)
+backup_backend = canonical_backend(
+    resolve("WC_BACKUP_STORAGE_BACKEND", ("storage", "backup", "backend"))
+)
+backup_root = expand_path(
+    resolve(
+        "WC_BACKUP_LOCAL_STORAGE_PATH",
+        ("storage", "backup", "local", "path"),
+    )
+)
+
+legacy_implicit_backup = primary_backend == "stado"
+if primary_backend in ("", "local"):
+    served_backend = "local"
+    served_root = primary_root
+elif legacy_implicit_backup:
+    served_backend = backup_backend
+    served_root = backup_root if backup_backend == "local" else ""
+else:
+    served_backend = primary_backend
+    served_root = ""
+
+expected_matches = all(environment.get(key) == value for key, value in expected.items())
+explicit_backend = environment.get("WC_STORAGE_BACKEND") or ""
+explicit_root = expand_path(environment.get("WC_LOCAL_STORAGE_PATH") or "")
+
+fields = (
+    primary_backend,
+    primary_root,
+    backup_backend,
+    backup_root,
+    served_backend,
+    served_root,
+    "yes" if legacy_implicit_backup else "no",
+    "yes" if expected_matches else "no",
+    pid,
+    state,
+    explicit_backend,
+    explicit_root,
+)
+for field in fields:
+    if any(character in field for character in "\t\r\n"):
+        raise SystemExit("object API recovery refused: route contains control characters")
+print("\t".join(field if field else "-" for field in fields))
+PY
+}
+
+capture_loaded_route() {
+  loaded=0
+  loaded_backend=-
+  loaded_primary_root=-
+  loaded_backup_backend=-
+  loaded_backup_root=-
+  loaded_served_backend=-
+  loaded_served_root=-
+  loaded_legacy=-
+  loaded_env_matches=-
+  loaded_pid=-
+  loaded_state=-
+  loaded_explicit_backend=-
+  loaded_explicit_root=-
+  loaded_print="$work/$label.launchctl-print"
+  if /usr/bin/sudo -n /bin/launchctl print "system/$label" \
+    > "$loaded_print.tmp" 2>/dev/null; then
+    /bin/mv "$loaded_print.tmp" "$loaded_print"
+    /bin/chmod 600 "$loaded_print"
+    route=$(inspect_route launchctl "$loaded_print")
+    IFS=$'\t' read -r loaded_backend loaded_primary_root \
+      loaded_backup_backend loaded_backup_root loaded_served_backend \
+      loaded_served_root loaded_legacy loaded_env_matches loaded_pid \
+      loaded_state loaded_explicit_backend loaded_explicit_root <<< "$route"
+    loaded=1
+  else
+    /bin/rm -f "$loaded_print.tmp"
+  fi
+}
+
+loaded_ready_for_root() {
+  expected_root=$1
+  require_expected_environment=$2
+  capture_loaded_route
+  [ "$loaded" -eq 1 ] || return 1
+  [ "$loaded_state" = running ] || return 1
+  [[ "$loaded_pid" =~ ^[0-9]+$ ]] || return 1
+  [ "$loaded_served_backend" = local ] || return 1
+  [ "$loaded_served_root" = "$expected_root" ] || return 1
+  [ "$loaded_legacy" = no ] || return 1
+  if [ "$require_expected_environment" = yes ]; then
+    [ "$loaded_env_matches" = yes ] || return 1
+  fi
+  listener_pids=$(
+    /usr/bin/sudo -n /usr/sbin/lsof -nP -a -iTCP:8765 -sTCP:LISTEN -t \
+      2>/dev/null | /usr/bin/sort -u || true
+  )
+  [ "$listener_pids" = "$loaded_pid" ] || return 1
+  authenticated_object_ready
+}
+
 same=0
 if /usr/bin/python3 - "$staged" "$plist" <<'PY'
 import plistlib, sys
@@ -573,60 +773,555 @@ raise SystemExit(0 if same else 1)
 PY
 then same=1; fi
 
-if [ "$healthy" -eq 1 ] && [ "$same" -eq 1 ]; then
-  reconcile_ingress
-  printf 'already_healthy %s store=%s\n' "$label" "$store"
-  exit 0
-fi
-
-stamp=$(/bin/date -u +%Y%m%dT%H%M%SZ)
-backup="$work/$label.plist.before-$stamp"
+declared_backend=-
+declared_primary_root=-
+declared_backup_backend=-
+declared_backup_root=-
+declared_served_backend=-
+declared_served_root=-
+declared_legacy=-
+declared_env_matches=-
+declared_pid=-
+declared_state=-
+declared_explicit_backend=-
+declared_explicit_root=-
 if /usr/bin/sudo -n /bin/test -f "$plist"; then
-  /usr/bin/sudo -n /bin/cp "$plist" "$backup"
-  /usr/bin/sudo -n /usr/sbin/chown "$account" "$backup"
-  /bin/chmod 600 "$backup"
-  printf 'backup %s\n' "$backup"
+  declared_route=$(inspect_route plist "$plist")
+  IFS=$'\t' read -r declared_backend declared_primary_root \
+    declared_backup_backend declared_backup_root declared_served_backend \
+    declared_served_root declared_legacy declared_env_matches declared_pid \
+    declared_state declared_explicit_backend declared_explicit_root \
+    <<< "$declared_route"
 fi
-if [ "$healthy" -eq 1 ]; then
+declared_correct=0
+if [ "$declared_explicit_backend" = local ] &&
+  [ "$declared_explicit_root" = "$store" ]; then
+  declared_correct=1
+fi
+
+active_record="$work/$label.transition-active.json"
+transition_id=-
+transition_started=-
+transition_kind=-
+source_root=-
+destination_root="$store"
+destination_snapshot=-
+rollback_plist=-
+definition_backup=-
+copy_log=-
+destination_exposed=0
+snapshot_ready=0
+transition_phase=-
+rollback_needed=0
+
+persist_record() {
+  transition_phase=$1
+  transition_detail=$2
+  /usr/bin/python3 - "$active_record" "$transition_id" "$transition_started" \
+    "$transition_phase" "$transition_kind" "$source_root" "$destination_root" \
+    "$destination_snapshot" "$rollback_plist" "$definition_backup" "$copy_log" \
+    "$destination_exposed" "$snapshot_ready" "$transition_detail" <<'PY'
+import datetime, json, os, sys
+
+(path, transition_id, started_at, phase, kind, source_root, destination_root,
+ destination_snapshot, rollback_plist, definition_backup, copy_log,
+ destination_exposed, snapshot_ready, detail) = sys.argv[1:]
+document = {
+    "schema": "stado.object-api-storage-transition.v1",
+    "transition_id": transition_id,
+    "started_at": started_at,
+    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "phase": phase,
+    "kind": kind,
+    "source_root": source_root,
+    "destination_root": destination_root,
+    "destination_snapshot": None if destination_snapshot == "-" else destination_snapshot,
+    "rollback_plist": rollback_plist,
+    "definition_backup": None if definition_backup == "-" else definition_backup,
+    "copy_log": copy_log,
+    "destination_exposed": destination_exposed == "1",
+    "snapshot_ready": snapshot_ready == "1",
+    "detail": detail,
+}
+temporary = f"{path}.tmp-{os.getpid()}"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary, path)
+directory = os.open(os.path.dirname(path), os.O_RDONLY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+  /bin/chmod 600 "$active_record"
+}
+
+load_record() {
+  record_fields=$(/usr/bin/python3 - "$active_record" "$work" "$label" <<'PY'
+import json, os, re, sys
+path, work, label = sys.argv[1:]
+work = os.path.realpath(work)
+with open(path, encoding="utf-8") as handle:
+    document = json.load(handle)
+if document.get("schema") != "stado.object-api-storage-transition.v1":
+    raise SystemExit("object API recovery refused: unknown active transition record")
+required = (
+    "transition_id",
+    "started_at",
+    "phase",
+    "kind",
+    "source_root",
+    "destination_root",
+    "rollback_plist",
+    "copy_log",
+)
+if any(not isinstance(document.get(field), str) or not document[field] for field in required):
+    raise SystemExit("object API recovery refused: incomplete active transition record")
+transition_id = document["transition_id"]
+if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9]+", transition_id):
+    raise SystemExit("object API recovery refused: invalid active transition identity")
+if document["kind"] not in ("reload", "backing-root"):
+    raise SystemExit("object API recovery refused: invalid active transition kind")
+
+def managed_path(value, basename):
+    if value is None:
+        return "-"
+    if not isinstance(value, str):
+        raise SystemExit("object API recovery refused: invalid managed recovery path")
+    resolved = os.path.realpath(value)
+    if os.path.dirname(resolved) != work or os.path.basename(resolved) != basename:
+        raise SystemExit("object API recovery refused: managed recovery path escaped work directory")
+    return resolved
+
+snapshot = managed_path(
+    document.get("destination_snapshot"),
+    f"local-store.before-{transition_id}",
+)
+rollback = managed_path(
+    document["rollback_plist"],
+    f"{label}.plist.rollback-{transition_id}",
+)
+definition = managed_path(
+    document.get("definition_backup"),
+    f"{label}.plist.before-{transition_id}",
+)
+copy_log = managed_path(
+    document["copy_log"],
+    f"{label}.copy-{transition_id}.log",
+)
+fields = (
+    transition_id,
+    document["started_at"],
+    document["phase"],
+    document["kind"],
+    os.path.realpath(document["source_root"]),
+    os.path.realpath(document["destination_root"]),
+    snapshot,
+    rollback,
+    definition,
+    copy_log,
+    "1" if document.get("destination_exposed") is True else "0",
+    "1" if document.get("snapshot_ready") is True else "0",
+)
+for field in fields:
+    if any(character in field for character in "\t\r\n"):
+        raise SystemExit("object API recovery refused: active transition contains control characters")
+print("\t".join(fields))
+PY
+  )
+  IFS=$'\t' read -r transition_id transition_started transition_phase \
+    transition_kind source_root destination_root destination_snapshot \
+    rollback_plist definition_backup copy_log destination_exposed snapshot_ready \
+    <<< "$record_fields"
+}
+
+fence_loaded_job() {
+  capture_loaded_route
+  fenced_pid=$loaded_pid
+  if [ "$loaded" -eq 1 ]; then
+    /usr/bin/sudo -n /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
+  fi
+  fence_deadline=$((SECONDS + 30))
+  while [ "$SECONDS" -lt "$fence_deadline" ]; do
+    still_loaded=0
+    if /usr/bin/sudo -n /bin/launchctl print "system/$label" \
+      >/dev/null 2>&1; then
+      still_loaded=1
+    fi
+    pid_alive=0
+    if [[ "$fenced_pid" =~ ^[0-9]+$ ]] &&
+      /bin/kill -0 "$fenced_pid" >/dev/null 2>&1; then
+      pid_alive=1
+    fi
+    listeners=$(
+      /usr/bin/sudo -n /usr/sbin/lsof -nP -a -iTCP:8765 -sTCP:LISTEN -t \
+        2>/dev/null || true
+    )
+    if [ "$still_loaded" -eq 0 ] && [ "$pid_alive" -eq 0 ] &&
+      [ -z "$listeners" ]; then
+      return 0
+    fi
+    /bin/sleep 1
+  done
+  return 1
+}
+
+start_definition() {
+  definition=$1
+  expected_root=$2
+  require_expected_environment=$3
+  /usr/bin/sudo -n /bin/launchctl enable "system/$label" >/dev/null 2>&1 || true
+  /usr/bin/sudo -n /bin/launchctl bootstrap system "$definition" \
+    >/dev/null 2>&1 || return 1
+  ready_deadline=$((SECONDS + 180))
+  while [ "$SECONDS" -lt "$ready_deadline" ]; do
+    if loaded_ready_for_root "$expected_root" "$require_expected_environment"; then
+      return 0
+    fi
+    /bin/sleep 1
+  done
+  return 1
+}
+
+snapshot_destination() {
+  if ! /usr/bin/python3 - "$destination_root" "$destination_snapshot" "$work" <<'PY'
+import os, sys
+root, snapshot, work = map(os.path.realpath, sys.argv[1:])
+def inside(path, parent):
+    try:
+        return os.path.commonpath((path, parent)) == parent
+    except ValueError:
+        return False
+if root == snapshot or inside(snapshot, root) or inside(work, root):
+    raise SystemExit(1)
+PY
+  then
+    persist_record preparation_failed \
+      "recovery work or snapshot path is inside the destination root"
+    printf 'unsafe_snapshot_location destination=%s snapshot=%s work=%s\n' \
+      "$destination_root" "$destination_snapshot" "$work" >&2
+    return 1
+  fi
+  snapshot_partial="$destination_snapshot.partial"
+  persist_record snapshotting "preserving the pre-transition destination"
+  /usr/bin/sudo -n /bin/rm -rf "$snapshot_partial"
+  snapshot_mode=clone
+  if ! /usr/bin/sudo -n /bin/cp -cRp "$destination_root" "$snapshot_partial"; then
+    snapshot_mode=copy
+    /usr/bin/sudo -n /bin/rm -rf "$snapshot_partial"
+    if ! /usr/bin/sudo -n /bin/cp -Rp "$destination_root" "$snapshot_partial"; then
+      persist_record preparation_failed \
+        "destination clone and full-copy fallback both failed"
+      printf 'destination_snapshot_failed %s\n' "$destination_snapshot" >&2
+      return 1
+    fi
+  fi
+  /usr/bin/sudo -n /bin/mv "$snapshot_partial" "$destination_snapshot"
+  /bin/sync
+  snapshot_ready=1
+  persist_record prepared \
+    "durable pre-transition destination snapshot mode=$snapshot_mode"
+}
+
+copy_store() {
+  from_root=$1
+  to_root=$2
+  output=$3
+  # A prior interrupted run may resume after its last clean prefix. Finish that
+  # suffix, then run once more from the exhausted cursor so writes accepted by
+  # a restored source before this fence cannot hide in an earlier prefix.
+  "$program" storage copy \
+    --from local --from-path "$from_root" \
+    --to local --to-path "$to_root" > "$output" 2>&1 &&
+    "$program" storage copy \
+      --from local --from-path "$from_root" \
+      --to local --to-path "$to_root" >> "$output" 2>&1
+}
+
+rollback_to_source() {
+  reason=$1
+  rollback_needed=0
+  reverse_ok=1
+  persist_record rollback_started "$reason" || true
+  if ! /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \
+    "$rollback_plist" "$plist"; then
+    persist_record rollback_failed "could not install rollback definition" || true
+    return 1
+  fi
+  if ! fence_loaded_job; then
+    persist_record rollback_failed "could not fence destination API" || true
+    return 1
+  fi
+  if [ "$destination_exposed" -eq 1 ] && [ "$source_root" != "$destination_root" ]; then
+    reverse_log="$work/$label.reverse-$transition_id.log"
+    persist_record reverse_copying \
+      "merging any destination writes back into the old root" || true
+    if copy_store "$destination_root" "$source_root" "$reverse_log"; then
+      destination_exposed=0
+      persist_record reverse_copied "destination writes merged into old root" || true
+    else
+      reverse_ok=0
+      persist_record reverse_copy_failed \
+        "destination retained; reverse copy is resumable before the next transition" || true
+    fi
+  fi
+  if start_definition "$plist" "$source_root" no; then
+    if [ "$reverse_ok" -eq 1 ]; then
+      persist_record rollback_serving "old root restored and authenticated" || true
+      return 0
+    fi
+    persist_record rollback_serving_pending_reverse \
+      "old root restored; durable destination may contain writes pending reverse copy" || true
+    return 1
+  fi
+  persist_record rollback_failed "old root did not become ready within 180 seconds" || true
+  return 1
+}
+
+cleanup() {
+  rc=$?
+  trap - EXIT HUP INT TERM
+  if [ "$rollback_needed" -eq 1 ]; then
+    rollback_to_source "interrupted recovery exit=$rc" || true
+  fi
+  /bin/rm -f "$staged"
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+reconcile_skarbiec_bootstrap
+has_active_record=0
+if [ -f "$active_record" ]; then
+  load_record
+  has_active_record=1
+  if [ "$destination_root" != "$store" ]; then
+    printf 'active_transition_destination_mismatch recorded=%s declared=%s\n' \
+      "$destination_root" "$store" >&2
+    exit 70
+  fi
+fi
+
+# A completed read is acceptable only when launchd's loaded process owns the
+# listener and its loaded route explicitly names the declared local root. If an
+# interrupted copy had already restored the old root, an external reload of the
+# destination does not prove the old root's later writes crossed the fence:
+# reverse it first, then resume the recorded transition.
+runtime_correct=0
+if loaded_ready_for_root "$store" yes; then
+  runtime_correct=1
+fi
+if [ "$runtime_correct" -eq 1 ] && [ "$has_active_record" -eq 1 ] &&
+  [ "$transition_kind" = backing-root ] && [ "$destination_exposed" -eq 0 ]; then
+  destination_exposed=1
+  rollback_needed=1
+  persist_record externally_exposed_destination \
+    "correct root was reloaded before the recorded copy committed"
+  if ! rollback_to_source "externally exposed destination needs recorded copy resumed"; then
+    printf 'rollback_incomplete record=%s\n' "$active_record" >&2
+    exit 71
+  fi
+  runtime_correct=0
+fi
+if [ "$runtime_correct" -eq 1 ]; then
+  if [ "$same" -eq 0 ] || [ "$declared_correct" -eq 0 ]; then
+    /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
+    same=1
+  fi
+  if [ "$has_active_record" -eq 1 ]; then
+    destination_exposed=0
+    persist_record committed \
+      "corrected root already served when interrupted recovery resumed"
+    completed_record="$work/$label.transition-$transition_id.completed.json"
+    /bin/mv "$active_record" "$completed_record"
+  fi
   reconcile_ingress
-  # Persist the corrected definition without cycling a serving process. The
-  # current launchd job keeps running; the file is authoritative after reboot.
-  /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
-  printf 'persisted_while_healthy %s store=%s backup=%s loaded_job=unchanged\n' \
-    "$label" "$store" "${backup:-none}"
+  printf 'already_healthy %s backend=local store=%s loaded_environment=matched\n' \
+    "$label" "$store"
   exit 0
 fi
 
-# An interrupted earlier pass may have unloaded a correctly defined job.
-# The file and the loaded job are separate facts; kickstart requires both.
-loaded=0
-if /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
-  loaded=1
-fi
-if [ "$same" -eq 1 ] && [ "$loaded" -eq 1 ]; then
-  /usr/bin/sudo -n /bin/launchctl kickstart -k "system/$label"
-  action=kickstarted
-else
-  # Preserve the replacement before unload. A later pass can bootstrap it
-  # even if this host-channel invocation ends between bootout and bootstrap.
-  /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
-  if [ "$loaded" -eq 1 ]; then
-    /usr/bin/sudo -n /bin/launchctl bootout "system/$label"
+resuming=0
+if [ "$has_active_record" -eq 1 ]; then
+  resuming=1
+  if [ ! -f "$rollback_plist" ]; then
+    printf 'active_transition_rollback_missing %s\n' "$rollback_plist" >&2
+    exit 70
   fi
-  /usr/bin/sudo -n /bin/launchctl enable "system/$label" >/dev/null 2>&1 || true
-  /usr/bin/sudo -n /bin/launchctl bootstrap system "$plist"
-  action=reinstalled
+  if [ "$destination_exposed" -eq 1 ]; then
+    rollback_needed=1
+    if ! rollback_to_source "resuming an interrupted exposed destination"; then
+      printf 'rollback_incomplete record=%s\n' "$active_record" >&2
+      exit 71
+    fi
+  fi
+else
+  capture_loaded_route
+  if [ "$loaded" -eq 1 ]; then
+    source_backend=$loaded_served_backend
+    source_root=$loaded_served_root
+    source_legacy=$loaded_legacy
+  elif [ "$declared_served_backend" != "-" ]; then
+    source_backend=$declared_served_backend
+    source_root=$declared_served_root
+    source_legacy=$declared_legacy
+  else
+    source_backend=local
+    source_root=$store
+    source_legacy=no
+  fi
+  if [ "$source_backend" != local ] || [ "$source_root" = "-" ] ||
+    [ -z "$source_root" ]; then
+    printf 'source_route_unsupported backend=%s root=%s legacy=%s\n' \
+      "$source_backend" "$source_root" "$source_legacy" >&2
+    exit 72
+  fi
+  source_root=$(
+    /usr/bin/python3 - "$source_root" <<'PY'
+import os, sys
+print(os.path.realpath(os.path.abspath(sys.argv[1])))
+PY
+  )
+  transition_id="$(/bin/date -u +%Y%m%dT%H%M%SZ)-$$"
+  transition_started=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)
+  copy_log="$work/$label.copy-$transition_id.log"
+  rollback_plist="$work/$label.plist.rollback-$transition_id"
+  definition_backup="$work/$label.plist.before-$transition_id"
+  transition_kind=reload
+  if [ "$source_root" != "$destination_root" ]; then
+    transition_kind=backing-root
+    destination_snapshot="$work/local-store.before-$transition_id"
+  fi
+
+  /usr/bin/python3 - "$staged" "$rollback_plist" "$source_root" <<'PY'
+import os, plistlib, sys
+source, destination, root = sys.argv[1:]
+with open(source, "rb") as handle:
+    document = plistlib.load(handle)
+environment = document["EnvironmentVariables"]
+environment["WC_STORAGE_BACKEND"] = "local"
+environment["WC_LOCAL_STORAGE_PATH"] = root
+with open(destination, "wb") as handle:
+    plistlib.dump(document, handle, fmt=plistlib.FMT_XML, sort_keys=False)
+    handle.flush()
+    os.fsync(handle.fileno())
+PY
+  /bin/chmod 600 "$rollback_plist"
+  if /usr/bin/sudo -n /bin/test -f "$plist"; then
+    /usr/bin/sudo -n /bin/cp -p "$plist" "$definition_backup"
+    /usr/bin/sudo -n /usr/sbin/chown "$account" "$definition_backup"
+    /bin/chmod 600 "$definition_backup"
+  else
+    definition_backup=-
+  fi
+
+  persist_record preparing \
+    "loaded_backend=$source_backend loaded_root=$source_root legacy_implicit_backup=$source_legacy"
+  if [ "$transition_kind" = reload ]; then
+    persist_record prepared "no backing-root change; storage copy not required"
+  fi
 fi
 
-deadline=$((SECONDS + 180))
-while [ "$SECONDS" -lt "$deadline" ]; do
-  if authenticated_object_ready; then
-    reconcile_ingress
-    printf '%s %s store=%s backup=%s\n' "$action" "$label" "$store" "${backup:-none}"
-    exit 0
+if [ "$transition_kind" = backing-root ]; then
+  if [ ! -d "$source_root" ] || [ ! -r "$source_root/registry.json" ]; then
+    persist_record preparation_failed "source root or registry is unreadable"
+    rollback_to_source "source root or registry is unreadable" || true
+    printf 'transition_source_missing %s record=%s\n' \
+      "$source_root" "$active_record" >&2
+    exit 73
   fi
-  /bin/sleep 1
-done
-printf 'authorization_timeout %s protected object read stayed unavailable after 180 seconds; backup=%s\n' \
-  "$label" "${backup:-none}" >&2
-exit 69
+  if ! /usr/bin/python3 - "$source_root" "$destination_root" <<'PY'
+import os, sys
+source, destination = map(os.path.realpath, sys.argv[1:])
+try:
+    overlap = (
+        os.path.commonpath((source, destination)) == source
+        or os.path.commonpath((source, destination)) == destination
+    )
+except ValueError:
+    overlap = False
+raise SystemExit(1 if overlap else 0)
+PY
+  then
+    persist_record preparation_failed \
+      "source and destination roots overlap physically"
+    rollback_to_source "source and destination roots overlap physically" || true
+    printf 'transition_roots_overlap source=%s destination=%s record=%s\n' \
+      "$source_root" "$destination_root" "$active_record" >&2
+    exit 73
+  fi
+  if [ ! -d "$destination_snapshot" ]; then
+    if [ "$snapshot_ready" -eq 1 ]; then
+      persist_record preparation_failed \
+        "completed pre-transition destination snapshot is missing"
+      rollback_to_source "completed destination snapshot is missing" || true
+      printf 'active_transition_snapshot_missing %s phase=%s record=%s\n' \
+        "$destination_snapshot" "$transition_phase" "$active_record" >&2
+      exit 75
+    fi
+    if ! snapshot_destination; then
+      rollback_to_source "destination snapshot failed before transition" || true
+      exit 74
+    fi
+  fi
+fi
+
+# Persist the corrected definition before unloading. A crash after this point
+# leaves either the old loaded job plus a corrected next definition, or the
+# durable transition record needed to resume the fenced copy.
+rollback_needed=1
+persist_record installing_corrected "corrected plist will be installed before unload"
+if ! /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"; then
+  rollback_to_source "corrected plist installation failed" || true
+  printf 'corrected_definition_install_failed record=%s\n' "$active_record" >&2
+  exit 76
+fi
+persist_record corrected_installed "corrected plist persisted before source fence"
+if ! fence_loaded_job; then
+  rollback_to_source "source API did not fence within 30 seconds" || true
+  printf 'source_fence_timeout record=%s\n' "$active_record" >&2
+  exit 77
+fi
+persist_record source_fenced "loaded source API and port 8765 are stopped"
+
+if [ "$transition_kind" = backing-root ]; then
+  # Repair only the selected product store. The snapshot above preserves its
+  # prior ownership and contents; no parent or unrelated host path is touched.
+  if ! /usr/bin/sudo -n /usr/sbin/chown -Rh "$account" "$destination_root" ||
+    ! /usr/bin/sudo -n /bin/chmod -R u+rwX "$destination_root"; then
+    rollback_to_source "destination ownership repair failed" || true
+    printf 'destination_ownership_repair_failed %s\n' "$destination_root" >&2
+    exit 78
+  fi
+  persist_record copying \
+    "metadata-preserving non-deleting copy from old root to declared root"
+  if ! copy_store "$source_root" "$destination_root" "$copy_log"; then
+    rollback_to_source "storage copy failed; destination retained for resume" || true
+    printf 'storage_copy_failed record=%s log=%s\n' "$active_record" "$copy_log" >&2
+    exit 79
+  fi
+  persist_record copied "old-root writes copied and verified by stado storage copy"
+  destination_exposed=1
+  persist_record starting_destination \
+    "destination may accept writes; rollback must reverse-copy before restoring source"
+fi
+
+if ! start_definition "$plist" "$destination_root" yes; then
+  rollback_to_source "corrected root did not become ready within 180 seconds" || true
+  printf 'corrected_root_not_ready record=%s\n' "$active_record" >&2
+  exit 80
+fi
+rollback_needed=0
+destination_exposed=0
+persist_record committed "corrected local root serves authenticated reads"
+completed_record="$work/$label.transition-$transition_id.completed.json"
+/bin/mv "$active_record" "$completed_record"
+reconcile_ingress
+printf 'recovered %s backend=local store=%s prior_root=%s kind=%s record=%s snapshot=%s\n' \
+  "$label" "$destination_root" "$source_root" "$transition_kind" \
+  "$completed_record" "$destination_snapshot"

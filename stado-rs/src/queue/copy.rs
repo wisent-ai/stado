@@ -36,11 +36,10 @@
 //!   DESTINATION store records the last cleanly finished prefix plus the
 //!   running counts (same shape as the `queue_priority/.migration.json`
 //!   sentinel in `queue/migrations.rs`), and every object that already
-//!   exists at the destination with the same size is skipped.
+//!   exists at the destination with identical bytes is skipped.
 //!
-//! Cost note: [`BlobBackend`] exposes no object size — [`BlobInfo`] carries
-//! only name, timestamp and metadata — so the "same size" test reads the
-//! body at both ends. Re-runs are therefore cheap in WRITES, not in READS.
+//! Cost note: [`BlobBackend`] exposes no content digest, so equality reads the
+//! body at both ends. Re-runs are cheap in writes, not in reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -388,7 +387,7 @@ pub enum Outcome {
     /// Body was already identical; only the metadata had to be re-applied.
     /// This is the repair path for a swallowed Azure metadata write.
     MetadataRepaired,
-    /// Already at the destination with the same size and metadata.
+    /// Already at the destination with identical bytes and metadata.
     Skipped,
     /// Listed at the source but gone by the time it was read — a live queue
     /// moving a job between prefixes mid-copy. Not an error, but reported:
@@ -652,15 +651,14 @@ async fn copy_object(
     };
     let size = body.len() as u64;
 
-    // Already there? Compare sizes. BlobBackend exposes no content length,
-    // so the destination body is read only for names the destination
-    // listing already reported.
+    // Already there? Compare bytes, not lengths: different queue states and
+    // registry revisions routinely have the same serialized size.
     if let Some(landed) = landed {
         let existing = match destination.download_bytes(&blob.name).await {
             Ok(existing) => existing,
             Err(err) => return report(u64::default(), failed("destination read failed", err)),
         };
-        if existing.is_some_and(|existing| existing.len() == body.len()) {
+        if existing.is_some_and(|existing| existing == body) {
             if metadata_satisfied(landed, &blob.metadata) {
                 return report(u64::default(), Outcome::Skipped);
             }
