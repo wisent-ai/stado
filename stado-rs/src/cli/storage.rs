@@ -1250,7 +1250,7 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     // snapshot and repoint a recipe around a file that was never missing.
     let object_api = match (&parsed, &release) {
         (Ok(object), None) if object.namespace() != crate::config::wc_stado_storage_namespace() => {
-            RemoteObjectApi::configured()?.map(|remote| (remote, object.clone()))
+            RemoteObjectApi::configured_for_object(object)?.map(|remote| (remote, object.clone()))
         }
         _ => None,
     };
@@ -1516,10 +1516,16 @@ fn max_object_api_download_body() -> usize {
     crate::object_store::max_object_bytes()
 }
 
+enum RemoteObjectAuth {
+    Generic(String),
+    PublisherOnly,
+    Public,
+}
+
 struct RemoteObjectApi {
     http: reqwest::Client,
     base_url: url::Url,
-    token: String,
+    auth: RemoteObjectAuth,
 }
 
 #[derive(serde::Deserialize)]
@@ -1730,20 +1736,53 @@ impl RemoteObjectApi {
         Ok(Some(Self {
             http,
             base_url,
-            token,
+            auth: RemoteObjectAuth::Generic(token),
+        }))
+    }
+
+    fn configured_with_auth(auth: RemoteObjectAuth) -> Result<Option<Self>, CmdError> {
+        let Some(base_url) = Self::endpoint_from_env_or_config()? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            http: Self::http_client()?,
+            base_url,
+            auth,
         }))
     }
 
     fn configured_release_reader() -> Result<Option<Self>, CmdError> {
-        let Some(base_url) = Self::endpoint_from_env_or_config()? else {
-            return Ok(None);
-        };
-        let http = Self::http_client()?;
-        Ok(Some(Self {
-            http,
-            base_url,
-            token: String::new(),
-        }))
+        Self::configured_with_auth(RemoteObjectAuth::Public)
+    }
+
+    /// Release writes and exact release listings resolve their publisher bearer
+    /// from Skarbiec. Constructing that path must not first demand the generic
+    /// object credential it deliberately does not present.
+    fn configured_release_writer() -> Result<Option<Self>, CmdError> {
+        Self::configured_with_auth(RemoteObjectAuth::PublisherOnly)
+    }
+
+    fn release_authorized(namespace: &str, key_or_prefix: &str) -> bool {
+        matches!(namespace, "releases" | "sources")
+            || (namespace == "system" && key_or_prefix.starts_with("release-catalog/"))
+    }
+
+    fn configured_for_object(
+        object: &crate::object_store::ObjectRef,
+    ) -> Result<Option<Self>, CmdError> {
+        if Self::release_authorized(object.namespace(), object.key()) {
+            Self::configured_release_writer()
+        } else {
+            Self::configured()
+        }
+    }
+
+    fn configured_for_list(namespace: &str, prefix: &str) -> Result<Option<Self>, CmdError> {
+        if Self::release_authorized(namespace, prefix) {
+            Self::configured_release_writer()
+        } else {
+            Self::configured()
+        }
     }
 
     fn http_client() -> Result<reqwest::Client, CmdError> {
@@ -1758,20 +1797,25 @@ impl RemoteObjectApi {
         self.request_as(method, endpoint, None)
     }
 
-    /// Sign with an explicitly resolved credential, falling back to the
-    /// coordinator storage token. This is separate from `request` so that a
-    /// caller which has resolved a credential cannot silently drop it.
+    /// Sign according to the constructor-selected authentication mode.
+    /// Generic clients always use their configured object credential,
+    /// publisher clients use only the explicitly resolved publisher bearer,
+    /// and public clients never attach authorization.
     fn request_as(
         &self,
         method: reqwest::Method,
         endpoint: url::Url,
-        bearer: Option<&str>,
+        publisher_bearer: Option<&str>,
     ) -> reqwest::RequestBuilder {
         let request = self.http.request(method, endpoint);
-        match bearer.filter(|token| !token.is_empty()) {
+        let bearer = match &self.auth {
+            RemoteObjectAuth::Generic(token) => Some(token.as_str()),
+            RemoteObjectAuth::PublisherOnly => publisher_bearer,
+            RemoteObjectAuth::Public => None,
+        };
+        match bearer {
             Some(token) => request.bearer_auth(token),
-            None if self.token.is_empty() => request,
-            None => request.bearer_auth(&self.token),
+            None => request,
         }
     }
 
@@ -1797,10 +1841,10 @@ impl RemoteObjectApi {
     ) -> Result<Option<String>, CmdError> {
         let Some(policy_key) = crate::object_store::release_policy_key(namespace, key_or_prefix)
         else {
-            if namespace == "system" && key_or_prefix.starts_with("release-catalog/") {
-                return Err(CmdError::click(
-                    "aggregate release catalog operations have no single publisher credential; fetch exact release-catalog/<product>.json objects",
-                ));
+            if Self::release_authorized(namespace, key_or_prefix) {
+                return Err(CmdError::click(format!(
+                    "{namespace}/{key_or_prefix} does not resolve to one declared release publisher"
+                )));
             }
             return Ok(None);
         };
@@ -1925,8 +1969,9 @@ impl RemoteObjectApi {
                 response.status(),
                 reqwest::StatusCode::CONFLICT | reqwest::StatusCode::PRECONDITION_FAILED
             ) {
-                let stored: RemotePutResponse =
-                    self.response_json(response, "object chunk PUT").await?;
+                let stored: RemotePutResponse = self
+                    .response_json(response, "object chunk PUT", bearer)
+                    .await?;
                 if stored.state != "stored"
                     || stored.uri != chunk_uri
                     || stored.content_type != "application/octet-stream"
@@ -1960,14 +2005,15 @@ impl RemoteObjectApi {
             .send()
             .await?;
         let response: RemoteComposeResponse = self
-            .response_json(response, "object chunk composition")
+            .response_json(response, "object chunk composition", bearer)
             .await?;
         let status = reqwest::StatusCode::from_u16(response.status)
             .map_err(|_| CmdError::click("object composition returned an invalid HTTP status"))?;
         if !status.is_success() {
+            let payload = response.payload.to_string();
+            let detail = response_body_detail(payload.as_bytes(), self.generic_bearer(), bearer);
             return Err(CmdError::click(format!(
-                "Stado object API returned HTTP {status}: {}",
-                response.payload
+                "Stado object API returned HTTP {status}: {detail}"
             )));
         }
         serde_json::from_value(response.payload).map_err(|error| {
@@ -2061,12 +2107,14 @@ impl RemoteObjectApi {
                 None if bearer.is_some() => "a resolved release credential".to_string(),
                 None => "the coordinator storage token".to_string(),
             };
-            let refusal = self.response_error(response).await;
+            let refusal = self.response_error(response, bearer.as_deref()).await;
             return Err(CmdError::click(format!(
                 "{refusal}; PUT {uri} with if_absent={if_absent} presented {presented}"
             )));
         }
-        let payload: RemotePutResponse = self.response_json(response, "object PUT").await?;
+        let payload: RemotePutResponse = self
+            .response_json(response, "object PUT", bearer.as_deref())
+            .await?;
         if payload.state != "stored" || payload.uri != uri || payload.content_type != content_type {
             return Err(CmdError::click(
                 "Stado object API returned an inconsistent object PUT response",
@@ -2122,7 +2170,7 @@ impl RemoteObjectApi {
                 return Ok(None);
             }
             if !response.status().is_success() {
-                return Err(self.response_error(response).await);
+                return Err(self.response_error(response, bearer).await);
             }
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 return Err(CmdError::click(format!(
@@ -2222,7 +2270,7 @@ impl RemoteObjectApi {
                     .await;
             }
             if !response.status().is_success() {
-                return Err(self.response_error(response).await);
+                return Err(self.response_error(response, bearer.as_deref()).await);
             }
             if !body.is_empty() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 return Err(CmdError::click(format!(
@@ -2342,7 +2390,7 @@ impl RemoteObjectApi {
             return Ok(None);
         }
         if !response.status().is_success() {
-            return Err(self.response_error(response).await);
+            return Err(self.response_error(response, bearer.as_deref()).await);
         }
         let version = response
             .headers()
@@ -2356,6 +2404,7 @@ impl RemoteObjectApi {
                 response,
                 max_object_api_download_body(),
                 "versioned object GET",
+                bearer.as_deref(),
             )
             .await?;
         Ok(Some((bytes, version)))
@@ -2394,14 +2443,14 @@ impl RemoteObjectApi {
                         "the coordinator storage token".to_string()
                     }
                 });
-            let refusal = self.response_error(response).await;
+            let refusal = self.response_error(response, bearer.as_deref()).await;
             return Err(CmdError::click(format!(
                 "{refusal}; conditional PUT {uri} with if_version={expected_version:?} presented \
                  {presented}"
             )));
         }
         let payload: Value = self
-            .response_json(response, "conditional object PUT")
+            .response_json(response, "conditional object PUT", bearer.as_deref())
             .await?;
         if payload.get("state").and_then(Value::as_str) != Some("stored")
             || payload.get("uri").and_then(Value::as_str) != Some(uri)
@@ -2463,7 +2512,7 @@ impl RemoteObjectApi {
                 return Err(CmdError::click("too many release download redirects"));
             };
             if !response.status().is_success() {
-                return Err(self.response_error(response).await);
+                return Err(self.response_error(response, None).await);
             }
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 return Err(CmdError::click(format!(
@@ -2557,7 +2606,7 @@ impl RemoteObjectApi {
                     return self.get_release_in_ranges(origin).await;
                 }
                 if !response.status().is_success() {
-                    return Err(self.response_error(response).await);
+                    return Err(self.response_error(response, None).await);
                 }
                 if !body.is_empty() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                     return Err(CmdError::click(format!(
@@ -2734,7 +2783,9 @@ impl RemoteObjectApi {
             .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
             .send()
             .await?;
-        let payload: RemoteObjectListResponse = self.response_json(response, "object list").await?;
+        let payload: RemoteObjectListResponse = self
+            .response_json(response, "object list", bearer.as_deref())
+            .await?;
         let mut values = Vec::with_capacity(payload.objects.len());
         for item in payload.objects {
             let object = crate::object_store::ObjectRef::parse(&item.uri).map_err(|error| {
@@ -2779,7 +2830,8 @@ impl RemoteObjectApi {
             .request(reqwest::Method::DELETE, endpoint)
             .send()
             .await?;
-        let payload: RemoteDeleteResponse = self.response_json(response, "object DELETE").await?;
+        let payload: RemoteDeleteResponse =
+            self.response_json(response, "object DELETE", None).await?;
         if payload.state != "absent" || payload.uri != uri {
             return Err(CmdError::click(
                 "Stado object API returned an inconsistent object DELETE response",
@@ -2788,17 +2840,25 @@ impl RemoteObjectApi {
         Ok(())
     }
 
+    fn generic_bearer(&self) -> Option<&str> {
+        match &self.auth {
+            RemoteObjectAuth::Generic(token) => Some(token),
+            RemoteObjectAuth::PublisherOnly | RemoteObjectAuth::Public => None,
+        }
+    }
+
     async fn response_json<T>(
         &self,
         response: reqwest::Response,
         operation: &str,
+        bearer: Option<&str>,
     ) -> Result<T, CmdError>
     where
         T: serde::de::DeserializeOwned,
     {
         let status = response.status();
         let body = self
-            .success_body(response, max_object_api_json_body(), operation)
+            .success_body(response, max_object_api_json_body(), operation, bearer)
             .await?;
         serde_json::from_slice(&body).map_err(|error| {
             CmdError::click(format!(
@@ -2812,9 +2872,10 @@ impl RemoteObjectApi {
         mut response: reqwest::Response,
         limit: usize,
         operation: &str,
+        bearer: Option<&str>,
     ) -> Result<Vec<u8>, CmdError> {
         if !response.status().is_success() {
-            return Err(self.response_error(response).await);
+            return Err(self.response_error(response, bearer).await);
         }
         if response
             .content_length()
@@ -2846,7 +2907,11 @@ impl RemoteObjectApi {
         Ok(body)
     }
 
-    async fn response_error(&self, mut response: reqwest::Response) -> CmdError {
+    async fn response_error(
+        &self,
+        mut response: reqwest::Response,
+        bearer: Option<&str>,
+    ) -> CmdError {
         let status = response.status();
         let declared_length = response.content_length();
         let max_body = max_object_api_error_body();
@@ -2857,7 +2922,7 @@ impl RemoteObjectApi {
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => break,
                 Err(error) => {
-                    let detail = response_body_detail(&body, &self.token);
+                    let detail = response_body_detail(&body, self.generic_bearer(), bearer);
                     return CmdError::click(format!(
                         "Stado object API returned HTTP {status}; partial response body: \
                          {detail}; body read failed: {error}"
@@ -2879,7 +2944,7 @@ impl RemoteObjectApi {
         {
             truncated = true;
         }
-        let detail = response_body_detail(&body, &self.token);
+        let detail = response_body_detail(&body, self.generic_bearer(), bearer);
         let suffix = if truncated {
             " [response body truncated]"
         } else {
@@ -3162,16 +3227,23 @@ pub(crate) fn object_api_endpoint(
     Ok(endpoint)
 }
 
-fn response_body_detail(body: &[u8], secret: &str) -> String {
+fn response_body_detail(
+    body: &[u8],
+    generic_bearer: Option<&str>,
+    request_bearer: Option<&str>,
+) -> String {
     let detail = String::from_utf8_lossy(body);
     let detail = detail.trim();
     if detail.is_empty() {
-        "<empty response body>".to_string()
-    } else if secret.is_empty() {
-        detail.to_string()
-    } else {
-        detail.replace(secret, "[REDACTED]")
+        return "<empty response body>".to_string();
     }
+    let mut redacted = detail.to_string();
+    for secret in [generic_bearer, request_bearer].into_iter().flatten() {
+        if !secret.is_empty() {
+            redacted = redacted.replace(secret, "[REDACTED]");
+        }
+    }
+    redacted
 }
 
 fn read_object_source(source: &str) -> Result<Vec<u8>, CmdError> {
@@ -3242,7 +3314,7 @@ async fn store_object_with_metadata_outcome(
         }
         metadata.insert(name.clone(), value.clone());
     }
-    if let Some(remote) = RemoteObjectApi::configured()? {
+    if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         let bytes = read_object_source(source)?;
         if create_only {
             match remote.get_optional(&uri).await? {
@@ -3360,7 +3432,7 @@ async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
 pub(crate) async fn fetch_object_from_writer(uri: &str) -> Result<Vec<u8>, CmdError> {
     let object = crate::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    if let Some(remote) = RemoteObjectApi::configured()? {
+    if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote.get(&uri).await;
     }
     let store = JobStorage::new().await?;
@@ -3379,7 +3451,7 @@ pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
             return remote.get_release(&uri).await;
         }
-    } else if let Some(remote) = RemoteObjectApi::configured()? {
+    } else if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote.get(&uri).await;
     }
     let store = JobStorage::new().await?;
@@ -3420,6 +3492,58 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
     }
     let store = JobStorage::new().await?;
     Ok(store.read_bytes(&object.storage_path()).await?.is_some())
+}
+
+/// Source identity that authorizes delivery for one release coordinate.
+///
+/// New releases are bound by the platformless version claim. Coordinates
+/// published before that contract retain a validated platform-claim fallback.
+pub(crate) async fn release_claim_source(
+    product: &str,
+    version: &str,
+    platform: &str,
+) -> Result<String, CmdError> {
+    let version_base =
+        crate::release_control::release_version_base(product, version).map_err(CmdError::click)?;
+    let version_uri = format!(
+        "{version_base}/{}",
+        crate::release_control::RELEASE_VERSION_REVISION_NAME
+    );
+    if release_object_present(&version_uri).await? {
+        let bytes = fetch_object(&version_uri).await?;
+        let claim: crate::release_control::VersionRevision = serde_json::from_slice(&bytes)
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{version_uri} is not a valid version claim: {error}"
+                ))
+            })?;
+        if !claim.describes(product, version) {
+            return Err(CmdError::click(format!(
+                "{version_uri} does not describe {product}/{version}"
+            )));
+        }
+        return Ok(claim.source_revision);
+    }
+
+    let platform_base = crate::release_control::release_base(product, version, platform)
+        .map_err(CmdError::click)?;
+    let platform_uri = format!(
+        "{platform_base}/{}",
+        crate::release_control::RELEASE_REVISION_NAME
+    );
+    let bytes = fetch_object(&platform_uri).await?;
+    let claim: crate::release_control::CoordinateRevision = serde_json::from_slice(&bytes)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{platform_uri} is not a valid platform claim: {error}"
+            ))
+        })?;
+    if !claim.describes(product, version, platform) {
+        return Err(CmdError::click(format!(
+            "{platform_uri} does not describe {product}/{version}/{platform}"
+        )));
+    }
+    Ok(claim.source_revision)
 }
 
 /// The exact byte count the release channel holds for one object.
@@ -3469,11 +3593,15 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
 pub(crate) struct PublishedCoordinate {
     pub version: String,
     pub platform: String,
+    /// True for a synthetic entry representing a version claim that has no
+    /// platform objects yet.
+    pub version_scope: bool,
+    /// Whether the version-scoped arbitration record exists for this version.
+    pub has_version_claim: bool,
     /// Every object name directly under the coordinate prefix.
     pub names: BTreeSet<String>,
-    /// When [`crate::release_control::RELEASE_REVISION_NAME`] was written, as
-    /// the store reports it. `None` when the coordinate has no claim, or when
-    /// the store answered the listing without a timestamp.
+    /// When the version claim was written, falling back to the legacy
+    /// platform claim for releases created before version-scoped arbitration.
     pub claim_written_at: Option<DateTime<Utc>>,
 }
 
@@ -3487,10 +3615,12 @@ impl PublishedCoordinate {
     /// that declares what a complete coordinate holds — is exactly what is
     /// missing, so no object-level audit can say more than "absent".
     pub fn claim_only(&self) -> bool {
-        self.names.len() == 1
-            && self
-                .names
-                .contains(crate::release_control::RELEASE_REVISION_NAME)
+        let claim_name = if self.version_scope {
+            crate::release_control::RELEASE_VERSION_REVISION_NAME
+        } else {
+            crate::release_control::RELEASE_REVISION_NAME
+        };
+        self.names.len() == 1 && self.names.contains(claim_name)
     }
 }
 
@@ -3510,60 +3640,70 @@ pub(crate) async fn published_release_coordinates(
     // list route when the object API is configured; the backend's own listing
     // otherwise, so the audit still runs on a host holding its releases
     // locally rather than reporting that it could not look.
-    let keys: Vec<(String, Option<DateTime<Utc>>)> = match RemoteObjectApi::configured()? {
-        Some(remote) => remote
-            .list("releases", &prefix)
-            .await?
-            .into_iter()
-            .filter_map(|entry| {
-                let key = entry.get("key").and_then(Value::as_str)?.to_string();
-                let updated = entry
-                    .get("updated_at")
-                    .and_then(Value::as_str)
-                    .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
-                    .map(|stamp| stamp.with_timezone(&Utc));
-                Some((key, updated))
-            })
-            .collect(),
-        None => {
-            let store = JobStorage::new().await?;
-            let namespaced = crate::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
-            store
-                .backend()
-                .list_blobs_with_meta(&namespaced)
+    let keys: Vec<(String, Option<DateTime<Utc>>)> =
+        match RemoteObjectApi::configured_for_list("releases", &prefix)? {
+            Some(remote) => remote
+                .list("releases", &prefix)
                 .await?
                 .into_iter()
-                .filter_map(|blob| {
-                    crate::object_store::ObjectRef::from_storage_path(&blob.name)
-                        .ok()
-                        .map(|object| (object.key().to_string(), blob.updated))
+                .filter_map(|entry| {
+                    let key = entry.get("key").and_then(Value::as_str)?.to_string();
+                    let updated = entry
+                        .get("updated_at")
+                        .and_then(Value::as_str)
+                        .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+                        .map(|stamp| stamp.with_timezone(&Utc));
+                    Some((key, updated))
                 })
-                .collect()
-        }
-    };
+                .collect(),
+            None => {
+                let store = JobStorage::new().await?;
+                let namespaced =
+                    crate::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
+                store
+                    .backend()
+                    .list_blobs_with_meta(&namespaced)
+                    .await?
+                    .into_iter()
+                    .filter_map(|blob| {
+                        crate::object_store::ObjectRef::from_storage_path(&blob.name)
+                            .ok()
+                            .map(|object| (object.key().to_string(), blob.updated))
+                    })
+                    .collect()
+            }
+        };
     let mut seen: BTreeMap<(String, String), PublishedCoordinate> = BTreeMap::new();
+    let mut version_claims: BTreeMap<String, Option<DateTime<Utc>>> = BTreeMap::new();
     for (key, updated) in keys {
         let key = key.as_str();
         // Residue from an interrupted multipart upload is not a published
-        // object. `stado storage put` stages parts at
-        // `<key>.__stado_upload/<upload id>/<index>` and promotes them on
-        // completion, so a transfer that died leaves those parts and no object
-        // at all.
-        //
-        // `stado/0.13.44/darwin-arm64` is exactly that: four 3 MiB parts of an
-        // archive, written 2026-09-02T05:38, and nothing else -- no binaries,
-        // no `SHA256SUMS`, no manifest, no signed leg. Counting them made the
-        // coordinate appear in this walk, and the channel audit then reported
-        // it PARTIAL and permanently so. That contradicts the audit's own
-        // doctrine, which says a version that published nothing has no keys
-        // here and must never appear: an empty coordinate holds nothing to be
-        // inconsistent with, and the same version can still publish cleanly.
+        // object. `stado storage put` stages parts below this suffix and only
+        // promotes the complete object.
         if key.contains(".__stado_upload/") {
             continue;
         }
-        // `<product>/<version>/<platform>/<name>`; anything shorter is not a
-        // coordinate and is skipped rather than guessed at.
         let parts: Vec<&str> = key.split('/').collect();
+        if parts.len() == 3 && parts[0] == product {
+            if parts[2] == crate::release_control::RELEASE_VERSION_REVISION_NAME {
+                version_claims.insert(parts[1].to_string(), updated);
+            } else {
+                let entry = seen
+                    .entry((parts[1].to_string(), String::new()))
+                    .or_insert_with(|| PublishedCoordinate {
+                        version: parts[1].to_string(),
+                        platform: String::new(),
+                        version_scope: true,
+                        has_version_claim: false,
+                        names: BTreeSet::new(),
+                        claim_written_at: None,
+                    });
+                entry.names.insert(parts[2].to_string());
+            }
+            continue;
+        }
+        // `<product>/<version>/<platform>/<name>`; anything shorter is not a
+        // platform coordinate.
         if parts.len() < 4 || parts[0] != product {
             continue;
         }
@@ -3573,6 +3713,8 @@ pub(crate) async fn published_release_coordinates(
             .or_insert_with(|| PublishedCoordinate {
                 version: parts[1].to_string(),
                 platform: parts[2].to_string(),
+                version_scope: false,
+                has_version_claim: false,
                 names: BTreeSet::new(),
                 claim_written_at: None,
             });
@@ -3580,6 +3722,39 @@ pub(crate) async fn published_release_coordinates(
             entry.claim_written_at = updated;
         }
         entry.names.insert(name);
+    }
+    let versions_with_platforms: BTreeSet<String> = seen
+        .values()
+        .filter(|coordinate| !coordinate.version_scope)
+        .map(|coordinate| coordinate.version.clone())
+        .collect();
+    for coordinate in seen.values_mut() {
+        if !coordinate.version_scope {
+            if let Some(written) = version_claims.get(&coordinate.version) {
+                coordinate.has_version_claim = true;
+                coordinate.claim_written_at = *written;
+            }
+        }
+    }
+    for (version, written) in version_claims {
+        if versions_with_platforms.contains(&version) {
+            continue;
+        }
+        let entry = seen
+            .entry((version.clone(), String::new()))
+            .or_insert_with(|| PublishedCoordinate {
+                version,
+                platform: String::new(),
+                version_scope: true,
+                has_version_claim: false,
+                names: BTreeSet::new(),
+                claim_written_at: None,
+            });
+        entry.has_version_claim = true;
+        entry.claim_written_at = written;
+        entry
+            .names
+            .insert(crate::release_control::RELEASE_VERSION_REVISION_NAME.to_string());
     }
     let mut coordinates: Vec<PublishedCoordinate> = seen.into_values().collect();
     coordinates.sort_by(|left, right| {
@@ -3606,7 +3781,7 @@ pub(crate) async fn fetch_object_versioned(
             "release objects are immutable and have no catalog CAS path",
         ));
     }
-    if let Some(remote) = RemoteObjectApi::configured()? {
+    if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote.get_versioned(&object.to_string()).await;
     }
     let store = JobStorage::new().await?;
@@ -3626,7 +3801,7 @@ pub(crate) async fn compare_and_swap_object(
     if object.namespace() == "releases" {
         return Err(CmdError::click("release objects cannot be replaced"));
     }
-    if let Some(remote) = RemoteObjectApi::configured()? {
+    if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         return remote
             .put_if_version(
                 &object.to_string(),
@@ -3655,7 +3830,7 @@ pub(crate) async fn list_object_uris(
     prefix: &str,
 ) -> Result<Vec<String>, CmdError> {
     let storage_prefix = crate::object_store::ObjectRef::namespace_prefix(namespace, prefix)?;
-    if let Some(remote) = RemoteObjectApi::configured()? {
+    if let Some(remote) = RemoteObjectApi::configured_for_list(namespace, prefix)? {
         return remote
             .list(namespace, prefix)
             .await?
@@ -3697,7 +3872,9 @@ async fn get(args: &StorageGetArgs) -> Result<(), CmdError> {
 async fn objects(args: &StorageObjectsArgs) -> Result<(), CmdError> {
     let storage_prefix =
         crate::object_store::ObjectRef::namespace_prefix(&args.namespace, &args.prefix)?;
-    let values = if let Some(remote) = RemoteObjectApi::configured()? {
+    let values = if let Some(remote) =
+        RemoteObjectApi::configured_for_list(&args.namespace, &args.prefix)?
+    {
         remote.list(&args.namespace, &args.prefix).await?
     } else {
         let store = JobStorage::new().await?;
@@ -3764,16 +3941,12 @@ async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
 
 fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
-    let (base_url, route) = if object.namespace() == "releases" {
-        let base_url = configured_api_origin()?.ok_or_else(|| {
-            CmdError::click("STADO_API_URL is required to render a release object URL")
-        })?;
-        (base_url, "/api/release/object")
+    let base_url = configured_api_origin()?
+        .ok_or_else(|| CmdError::click("STADO_API_URL is required to render an object URL"))?;
+    let route = if object.namespace() == "releases" {
+        "/api/release/object"
     } else {
-        let remote = RemoteObjectApi::configured()?.ok_or_else(|| {
-            CmdError::click("STADO_API_URL is required to render a private object URL")
-        })?;
-        (remote.base_url, "/api/object")
+        "/api/object"
     };
     let uri = object.to_string();
     let url = object_api_endpoint(&base_url, route, &[("uri", &uri)])?;

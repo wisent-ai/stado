@@ -24,8 +24,8 @@
 /// [`BUILD_IDENTITY`], because a revision has no order.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The revision this binary was built from: twelve hex digits, optionally
-/// suffixed `-dirty`, or [`UNKNOWN_REVISION`].
+/// The revision this binary was built from: a full 40-digit lowercase commit,
+/// optionally suffixed `-dirty`, or [`UNKNOWN_REVISION`].
 pub const SOURCE_REVISION: &str = env!("STADO_SOURCE_REVISION");
 
 /// What [`SOURCE_REVISION`] reads as when no build context could name one.
@@ -33,7 +33,7 @@ pub const SOURCE_REVISION: &str = env!("STADO_SOURCE_REVISION");
 pub const UNKNOWN_REVISION: &str = "unknown";
 
 /// Version and revision as one line, for anywhere a human or a log reads
-/// "which build is this": `0.14.8 (rev a1b2c3d4e5f6)`.
+/// "which build is this": `0.15.2 (rev <40 lowercase hex digits>)`.
 ///
 /// `concat!` over `env!` keeps this a `&'static str` literal, which is what
 /// clap's `version` needs and what avoids a lazily-initialised global for a
@@ -92,9 +92,9 @@ mod tests {
         );
     }
 
-    /// Either the sentinel, or a short hex revision with an optional dirty
-    /// marker. Anything else means `build.rs` passed through something it
-    /// should have normalised — a branch name, a tag, an error message.
+    /// Either the sentinel, or a full lowercase Git commit with an optional
+    /// dirty marker. Anything else means `build.rs` passed through something
+    /// it should have rejected — a short revision, branch, tag, or error.
     #[test]
     fn the_revision_has_one_of_its_two_declared_shapes() {
         if !revision_known() {
@@ -104,13 +104,11 @@ mod tests {
         let core = SOURCE_REVISION
             .strip_suffix("-dirty")
             .unwrap_or(SOURCE_REVISION);
+        assert_eq!(core.len(), 40, "{core:?} is not a full Git commit");
         assert!(
-            core.len() >= 7 && core.len() <= 40,
-            "{core:?} is not a git revision length"
-        );
-        assert!(
-            core.chars().all(|character| character.is_ascii_hexdigit()),
-            "{core:?} is not hexadecimal, so it is not a revision"
+            core.bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "{core:?} is not lowercase hexadecimal, so it is not a canonical revision"
         );
     }
 

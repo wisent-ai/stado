@@ -450,24 +450,23 @@ delivering `0.13.27` to `charless-mac-mini` and watching `host release` report
 reading true about itself and none of them true about the version that was
 asked for.
 
-**The writing half is now closed too (#324), and it did not need the decision
-this paragraph used to wait for.** The question was framed as "which path
-should OWN the coordinate", which reads like a choice between two publishers
-and therefore like somebody else's call. It is not: what was missing is that
-the coordinate had no identity of its own. `source-revision.json`
-([`RELEASE_REVISION_NAME`]) is now claimed create-only before any artifact by
-every publisher, through `claim_release_coordinate` — the signed pipeline calls
-it inside `publish_pipeline_release`, the tag train and the existing-release
-recovery call it as `stado release claim-coordinate` — so the FIRST build to
-reach a version states it and any other build is refused with nothing
-published. Both producers may still write their own names into a coordinate;
-what they can no longer do is disagree about which commit it came from.
+**The writing half is now closed too (#324), including its cross-platform
+race.** A platform-scoped create-only claim still permitted two publishers to
+observe no sibling and atomically claim opposite platforms from different
+commits. Every publisher now first arbitrates the platformless
+`releases/<product>/<version>/source-revision.json` through the same
+`claim_release_coordinate` implementation, then writes the compatibility claim
+under its platform. A create-only write at version scope has one winner no
+matter which platform order or platform set a publisher carries. Backfilling
+an older coordinate requires an exact version-prefix inventory in which every
+existing platform has a valid, coherent claim for the same commit.
 
-**What remains a decision, and it is a smaller one:** which manifest a reader
-should resolve. `install-stado.sh`, `self_update.rs` and `local_install.rs`
-read the sidecar while `stado release status` reads the signed manifest. With
-#324 in place the two can no longer name different revisions, so this is now a
-question of which document is canonical rather than which answer is true.
+Readers do not merely notice the new object. The release-channel inventory
+represents a version claim that crashed before any platform write, excludes the
+version record from platform member sets, and compares it to platform claims
+and manifests. Promotion and delivery bind the artifact source to that shared
+claim, with a validated platform-claim fallback for coherent releases that
+predate the version record.
 
 **#7's worst reading arrived on 2026-09-03, and the half that hurt is now
 closed (instance 35).** Everything above concerns two paths disagreeing about

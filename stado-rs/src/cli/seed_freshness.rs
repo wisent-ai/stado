@@ -931,11 +931,7 @@ async fn release_managed_skarbiec(
             resolved.name
         )));
     }
-    let expected = std::path::Path::new(&target.home)
-        .join(&policy.install_root)
-        .join("releases")
-        .join(version)
-        .join(platform)
+    let expected = crate::release_control::release_directory(policy, target, version, platform)
         .join(&policy.binary);
     if !std::path::Path::new(path).is_absolute() || std::path::Path::new(path) != expected {
         return Err(CmdError::click(format!(

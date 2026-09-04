@@ -188,18 +188,12 @@ jobs:
             false
           fi
 
-      # Both platforms of this version are bound to this commit here, before
-      # either publisher starts.
-      #
-      # Each publisher already claims its own coordinate, and that is one step
-      # too late to keep a version whole: on 2026-09-03 the 0.14.3 tag claimed
-      # and published all ten Linux objects, and only then did the darwin job
-      # discover that `0.14.3/darwin-arm64` had been claimed minutes earlier by
-      # an unrelated commit through `Submit product release`. The version was
-      # left half published and unrepeatable, and 0.14.2 and 0.14.4 went the
-      # same way. A spent version now costs this job a minute instead of one
-      # platform's release, and the refusal names both commits.
-      - name: Claim every platform of this version
+      # Every call below first claims one create-only record at version scope,
+      # then its platform record. The shared version write is the arbitration
+      # point: two publishers starting together from different commits cannot
+      # each win a different platform after both observed no siblings. The loop
+      # still creates both platform records before either publisher starts.
+      - name: Claim version and every platform
         run: |
           set -euo pipefail
           stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
@@ -490,20 +484,16 @@ jobs:
             scripts/release_manifest.sh
           mv "$archive" "$release_dir/stado-v$STADO_VERSION-linux-amd64.tar.gz"
 
-
       - name: Create immutable Linux release through Stado
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           export STADO_API_URL="$STADO_WRITER_API_URL"
           test -x "$stado_bin"
-          # The coordinate's identity, before a single artifact. `release.json`
-          # from the signed pipeline and `release-manifest-<platform>.json`
-          # from this job are disjoint names, so create-only immutability never
-          # made the two producers collide: 0.13.46/darwin-arm64 ended up
-          # attesting two different commits and can never be delivered. The
-          # claim is one create-only object both publishers must agree with, so
-          # the second build is refused here, with the prefix still artifact-
-          # free, instead of at delivery with the version already spent.
+          # Claim the source identity before a single artifact. The command
+          # first arbitrates one create-only version record shared by all
+          # publishers and platform sets, then mirrors it at this platform
+          # coordinate. A different commit is refused before either prefix
+          # receives artifact bytes.
           "$stado_bin" release claim-coordinate stado "$STADO_VERSION" linux-amd64 \
             --source-commit "$GITHUB_SHA"
           # A second attempt at a version whose archive is already published
@@ -691,10 +681,9 @@ jobs:
           # Each put reads exact bytes back through the authenticated writer;
           # public delivery is verified in the next step.
           export STADO_API_URL="$STADO_WRITER_API_URL"
-          # The coordinate's identity, before a single artifact. See the Linux
-          # publisher above: 0.13.46/darwin-arm64 attests two commits because
-          # the two producers write disjoint names and never collided, and this
-          # is the one object both of them must agree with.
+          # Claim the shared version source record and this platform record
+          # before publishing any artifact. Every producer uses this command,
+          # so platform ordering cannot split one version across commits.
           "$stado_bin" release claim-coordinate stado "$version" "$platform" \
             --source-commit "$GITHUB_SHA"
           # Largest object first, and it is the archive by two orders of

@@ -26,11 +26,28 @@ least-privilege identities and owner-only token files on that same Skarbiec:
 `release_api.publishers`. `STADO_API_TOKEN` remains a generic object API
 credential and is never substituted for a product's release publisher.
 
-Exact `GET /api/release/object?uri=stado://releases/...` reads and byte ranges
-are public so a damaged credential plane cannot make signed recovery artifacts
-unreachable. The public route rejects the generic object API's `versioned`
-query mode rather than bypassing release-backend resolution. Release writes
-and listings remain authenticated by the product publisher contract above.
+The public release route accepts exactly one `uri` query field. Exact
+`GET /api/release/object?uri=stado://releases/...` reads and byte ranges are
+public so a damaged credential plane cannot make signed recovery artifacts
+unreachable; duplicate `uri`, `versioned`, and unknown query fields are
+rejected before storage access. Release writes and exact release listings
+remain authenticated by the product publisher contract above and do not
+require the generic object credential first.
+
+Before any platform artifact is written, every publisher create-only claims
+`stado://releases/<product>/<version>/source-revision.json`. That version record
+is the single arbitration point across changing platform sets; platform claim
+records are written only after it agrees. Older platform-only coordinates are
+backfilled only when every existing platform claim names the same full source
+commit. Release workers set both `WISENT_SOURCE_COMMIT` and
+`STADO_SOURCE_REVISION` from that verified request, and the Stado build rejects
+missing-shape or mismatched overrides.
+
+The object API recovery helper treats a release target's legacy launchd plist
+and label as an optional pair. A healthy handoff or a host with no exact orphan
+does not need that pair. Recovery validates and bootstraps it only when stopping
+an exact dead release-proxy orphan; without a declared pair, that branch refuses
+before sending `TERM` because it has no known service to restore.
 
 ## Resolve the executable that is actually active
 
@@ -47,6 +64,10 @@ directory; the exact Stado proxy executable and argument vector target that
 port at the recorded generation; and the installed marker, qualification,
 artifact digest, manifest digest, platform, directory, and executable all
 agree. The executable must be a regular, non-symlink, executable file.
+
+The policy-derived path uses the same canonical helper as the release agent:
+`{home}` expands to the target's declared home, and a relative install root is
+resolved beneath that home before the immutable release directory is appended.
 
 JSON output includes `state`, `product`, `target`, `version`, `platform`,
 `artifact_sha256`, `manifest_sha256`, and the absolute `path`; human output is

@@ -1504,12 +1504,31 @@ async fn claim_only_verdict(
     coordinate: &crate::cli::storage::PublishedCoordinate,
 ) -> (Status, String) {
     let (version, platform) = (&coordinate.version, &coordinate.platform);
-    let uri = format!(
-        "stado://releases/{}/{version}/{platform}/{}",
-        product.source.product,
-        crate::release_control::RELEASE_REVISION_NAME
-    );
+    let (scope, uri) = if coordinate.version_scope {
+        (
+            version.clone(),
+            format!(
+                "stado://releases/{}/{version}/{}",
+                product.source.product,
+                crate::release_control::RELEASE_VERSION_REVISION_NAME
+            ),
+        )
+    } else {
+        (
+            format!("{version}/{platform}"),
+            format!(
+                "stado://releases/{}/{version}/{platform}/{}",
+                product.source.product,
+                crate::release_control::RELEASE_REVISION_NAME
+            ),
+        )
+    };
     let revision = match crate::cli::storage::fetch_object(&uri).await {
+        Ok(bytes) if coordinate.version_scope => {
+            serde_json::from_slice::<crate::release_control::VersionRevision>(&bytes)
+                .map(|claim| claim.source_revision)
+                .unwrap_or_else(|error| format!("an unreadable claim record ({error})"))
+        }
         Ok(bytes) => serde_json::from_slice::<crate::release_control::CoordinateRevision>(&bytes)
             .map(|claim| claim.source_revision)
             .unwrap_or_else(|error| format!("an unreadable claim record ({error})")),
@@ -1523,7 +1542,7 @@ async fn claim_only_verdict(
         return (
             Status::Unmeasured,
             format!(
-                "{version}/{platform} holds only its claim, bound to {revision}, and the store \
+                "{scope} holds only its claim, bound to {revision}, and the store \
                  reported no write time for it, so whether the publication is in flight or \
                  permanently spent could not be decided"
             ),
@@ -1535,7 +1554,7 @@ async fn claim_only_verdict(
         return (
             Status::Unmeasured,
             format!(
-                "{version}/{platform} is publishing now: its claim was written {stamp}, binding \
+                "{scope} is publishing now: its claim was written {stamp}, binding \
                  it to {revision}, and no artifact has followed within the {} minute budget yet",
                 CLAIM_WITHOUT_ARTIFACT.num_minutes()
             ),
@@ -1544,13 +1563,107 @@ async fn claim_only_verdict(
     (
         Status::Fail,
         format!(
-            "{version}/{platform} is BURNT and permanently so: its claim was written {stamp}, \
+            "{scope} is BURNT and permanently so: its claim was written {stamp}, \
              binding it to {revision}, and no artifact followed within {} minutes. Claim and \
              artifacts are create-only, so no later train can publish this version — the number \
              is spent and a publication of it must use a new one",
             CLAIM_WITHOUT_ARTIFACT.num_minutes()
         ),
     )
+}
+
+async fn require_version_claim_agreement(
+    product: &crate::deploy::products::Product,
+    coordinate: &crate::cli::storage::PublishedCoordinate,
+) -> Result<(), String> {
+    if coordinate.version_scope || !coordinate.has_version_claim {
+        return Ok(());
+    }
+    let version_uri = format!(
+        "stado://releases/{}/{}/{}",
+        product.source.product,
+        coordinate.version,
+        crate::release_control::RELEASE_VERSION_REVISION_NAME
+    );
+    let platform_uri = format!(
+        "stado://releases/{}/{}/{}/{}",
+        product.source.product,
+        coordinate.version,
+        coordinate.platform,
+        crate::release_control::RELEASE_REVISION_NAME
+    );
+    let version_bytes = crate::cli::storage::fetch_object(&version_uri)
+        .await
+        .map_err(|error| format!("cannot read version claim {version_uri}: {error}"))?;
+    let platform_bytes = crate::cli::storage::fetch_object(&platform_uri)
+        .await
+        .map_err(|error| format!("cannot read platform claim {platform_uri}: {error}"))?;
+    let version_claim: crate::release_control::VersionRevision =
+        serde_json::from_slice(&version_bytes)
+            .map_err(|error| format!("invalid version claim {version_uri}: {error}"))?;
+    let platform_claim: crate::release_control::CoordinateRevision =
+        serde_json::from_slice(&platform_bytes)
+            .map_err(|error| format!("invalid platform claim {platform_uri}: {error}"))?;
+    if !version_claim.describes(&product.source.product, &coordinate.version)
+        || !platform_claim.describes(
+            &product.source.product,
+            &coordinate.version,
+            &coordinate.platform,
+        )
+        || version_claim.source_revision != platform_claim.source_revision
+    {
+        return Err(format!(
+            "{}/{} version claim and platform {} claim do not attest one source revision",
+            product.source.product, coordinate.version, coordinate.platform
+        ));
+    }
+    let base = format!(
+        "stado://releases/{}/{}/{}",
+        product.source.product, coordinate.version, coordinate.platform
+    );
+    let signed_uri = format!("{base}/{}", crate::release_control::RELEASE_MANIFEST_NAME);
+    if crate::cli::storage::release_object_present(&signed_uri)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let bytes = crate::cli::storage::fetch_object(&signed_uri)
+            .await
+            .map_err(|error| error.to_string())?;
+        let manifest: crate::release_control::ReleaseManifest = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid signed manifest {signed_uri}: {error}"))?;
+        crate::release_control::validate_manifest(&manifest)?;
+        if manifest.product != product.source.product
+            || manifest.version != coordinate.version
+            || manifest.platform != coordinate.platform
+            || manifest.source_revision != version_claim.source_revision
+        {
+            return Err(format!(
+                "{signed_uri} does not agree with the authoritative version claim"
+            ));
+        }
+    }
+    let sidecar_uri = format!("{base}/release-manifest-{}.json", coordinate.platform);
+    if crate::cli::storage::release_object_present(&sidecar_uri)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let bytes = crate::cli::storage::fetch_object(&sidecar_uri)
+            .await
+            .map_err(|error| error.to_string())?;
+        let sidecar: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid platform manifest {sidecar_uri}: {error}"))?;
+        if sidecar.get("product").and_then(Value::as_str) != Some(product.source.product.as_str())
+            || sidecar.get("version").and_then(Value::as_str) != Some(coordinate.version.as_str())
+            || sidecar.get("platform").and_then(Value::as_str) != Some(coordinate.platform.as_str())
+            || sidecar.get("source_commit").and_then(Value::as_str)
+                != Some(version_claim.source_revision.as_str())
+        {
+            return Err(format!(
+                "{sidecar_uri} does not agree with the authoritative version claim"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether this coordinate's publication is still inside the budget its claim
@@ -1584,11 +1697,11 @@ fn in_flight(coordinate: &crate::cli::storage::PublishedCoordinate) -> bool {
 /// 2026-09-01 and 0.13.49 on 2026-09-03, both discovered by a delivery attempt
 /// long after the train had finished writing them.
 ///
-/// A version that published nothing has no keys in the store, so it never
-/// appears in this walk — correctly, because an empty coordinate holds nothing
-/// to be inconsistent with and the same tag can still publish cleanly. That
-/// distinction between empty and damaged is the whole lesson of the incidents
-/// this check comes from.
+/// A version with no claim and no artifacts has no keys in the store, so it
+/// never appears in this walk. A publisher now claims the version before any
+/// platform, so a crash at that boundary appears as a version-scoped claim
+/// and is aged by the same publication budget as a platform-only legacy
+/// claim.
 ///
 /// Presence comes from [`crate::deploy::host_release::missing_release_objects`],
 /// which reads the coordinate's own `SHA256SUMS` and probes every name it
@@ -1643,6 +1756,25 @@ async fn check_release_integrity() -> Check {
             continue;
         }
         audited += 1;
+        if coordinate.version_scope && !coordinate.claim_only() {
+            findings.note(
+                Status::Fail,
+                format!(
+                    "{version} contains unexpected version-scoped objects: {}",
+                    coordinate
+                        .names
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+            continue;
+        }
+        if let Err(error) = require_version_claim_agreement(product, coordinate).await {
+            findings.note(Status::Fail, error);
+            continue;
+        }
         // A coordinate holding its claim and nothing else is not a partial
         // one, and the object audit below cannot tell the difference: the
         // claim carries no list of what a complete coordinate holds, so

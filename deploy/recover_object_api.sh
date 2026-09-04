@@ -275,14 +275,21 @@ target = targets[target_name]
 state_dir = target.get("state_dir") or ""
 stable_bind = target.get("stable_bind") or ""
 readiness_path = target.get("readiness_path") or ""
-legacy_plist = target.get("legacy_launchd_plist") or ""
-legacy_label = target.get("legacy_launchd_label") or ""
+legacy_plist = target.get("legacy_launchd_plist")
+legacy_label = target.get("legacy_launchd_label")
 candidate_ports = target.get("candidate_ports") or []
 timeout = strategy.get("readiness_timeout_seconds")
-required = (state_dir, stable_bind, readiness_path, legacy_plist, legacy_label)
+required = (state_dir, stable_bind, readiness_path)
 if not all(isinstance(value, str) and value for value in required):
     raise SystemExit("skarbiec bootstrap refused: release target is incomplete")
-if any(any(character in value for character in "\t\r\n") for value in required):
+legacy_values = (legacy_plist, legacy_label)
+legacy_configured = all(isinstance(value, str) and value for value in legacy_values)
+if legacy_configured != any(isinstance(value, str) and value for value in legacy_values):
+    raise SystemExit(
+        "skarbiec bootstrap refused: legacy plist and label must be declared together"
+    )
+checked = required + (legacy_values if legacy_configured else ())
+if any(any(character in value for character in "\t\r\n") for value in checked):
     raise SystemExit("skarbiec bootstrap refused: release target contains control characters")
 host_part, separator, port_text = stable_bind.partition(":")
 if host_part != "127.0.0.1" or separator != ":":
@@ -295,7 +302,7 @@ if not 1 <= stable_port <= 65535:
     raise SystemExit("skarbiec bootstrap refused: stable bind port is invalid")
 if not readiness_path.startswith("/") or any(character.isspace() for character in readiness_path):
     raise SystemExit("skarbiec bootstrap refused: readiness path is invalid")
-if not legacy_plist.startswith("/Library/LaunchDaemons/"):
+if legacy_configured and not legacy_plist.startswith("/Library/LaunchDaemons/"):
     raise SystemExit("skarbiec bootstrap refused: legacy plist is not a system daemon")
 if (
     not isinstance(candidate_ports, list)
@@ -306,7 +313,10 @@ if (
 if not isinstance(timeout, int) or not 1 <= timeout <= 600:
     raise SystemExit("skarbiec bootstrap refused: readiness timeout is invalid")
 state_dir = os.path.abspath(os.path.expanduser(state_dir))
-legacy_plist = os.path.abspath(os.path.expanduser(legacy_plist))
+if legacy_configured:
+    legacy_plist = os.path.abspath(os.path.expanduser(legacy_plist))
+else:
+    legacy_plist = legacy_label = "-"
 fields = (
     "managed",
     target_name,
@@ -429,6 +439,15 @@ PY
     printf 'skarbiec_bootstrap refused proxy_identity_mismatch\n' >&2
     return 1
   fi
+  if [ "$legacy_plist" = "-" ] || [ "$legacy_label" = "-" ]; then
+    if [ "$legacy_plist" != "-" ] || [ "$legacy_label" != "-" ]; then
+      printf 'skarbiec_bootstrap refused partial_legacy_restore_plan\n' >&2
+      return 1
+    fi
+    printf 'skarbiec_bootstrap refused exact_orphan_has_no_legacy_restore target=%s\n' \
+      "$target_name" >&2
+    return 1
+  fi
   if [ ! -f "$legacy_plist" ]; then
     printf 'skarbiec_bootstrap refused legacy_plist_missing=%s\n' "$legacy_plist" >&2
     return 1
@@ -449,7 +468,6 @@ PY
     printf 'skarbiec_bootstrap refused exact_proxy_does_not_own_bind\n' >&2
     return 1
   fi
-
 
   /bin/kill -TERM "$proxy_pid"
   attempt=0

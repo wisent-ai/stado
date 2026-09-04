@@ -22,24 +22,16 @@
 //! control plane actually carried took reading string literals and mangled
 //! symbols out of the binary with `strings` and `nm`. This makes it a read.
 //!
-//! A build that cannot find a revision must still build. A tree with no git
-//! metadata, a source tarball, or a CI checkout without history is a normal
-//! way to build this crate, and refusing there would be worse than the defect
-//! it guards against: it would take away the only route that currently ships
-//! fixes. Each context therefore has a defined answer, in this order:
+//! A verified release pipeline commit is authoritative. The worker exports
+//! `WISENT_SOURCE_COMMIT` from the immutable request and also sets
+//! `STADO_SOURCE_REVISION` to that exact value. If both are present they must
+//! be the same full lowercase Git commit; inherited parent environment cannot
+//! relabel pipeline bytes.
 //!
-//! 1. `STADO_SOURCE_REVISION` in the environment wins. A caller building a
-//!    source tarball can state the revision explicitly with the variable the
-//!    binary consumes.
-//! 2. Otherwise `WISENT_SOURCE_COMMIT` names the release pipeline's verified
-//!    source snapshot. The worker already exports that identity; the source
-//!    archive deliberately carries no `.git` directory.
-//! 3. Otherwise `git rev-parse` names it, with `-dirty` appended when the
-//!    working tree carries uncommitted changes. The dirty marker is the point:
-//!    the deployed `0.14.6` above is exactly what an uncommitted local build
-//!    installed by hand looks like, and a revision alone would have claimed
-//!    more precision than the bytes deserve.
-//! 4. Otherwise [`UNKNOWN_REVISION`]. Honest, greppable, and never a panic.
+//! Outside the release pipeline, a caller may state the same full commit with
+//! `STADO_SOURCE_REVISION`. Otherwise `git rev-parse` names the local checkout,
+//! with `-dirty` appended when tracked files differ. A source tree with neither
+//! an explicit revision nor Git metadata embeds [`UNKNOWN_REVISION`].
 //!
 //! One limitation, stated rather than hidden: the rerun triggers below fire on
 //! a commit, a checkout and a branch switch, but cargo cannot watch "the whole
@@ -60,9 +52,12 @@ const REVISION_OVERRIDE: &str = "STADO_SOURCE_REVISION";
 /// The verified source identity exported by Stado's release worker.
 const PIPELINE_REVISION: &str = "WISENT_SOURCE_COMMIT";
 
-/// Twelve hex digits: short enough to read aloud, long enough that this
-/// repository will not collide.
-const REVISION_LENGTH: &str = "--short=12";
+fn full_git_revision(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 /// Run `git` in the repository root and return trimmed stdout, including an
 /// empty string for a successful command with no output. `None` means git is
@@ -84,14 +79,33 @@ fn git(arguments: &[&str]) -> Option<String> {
 fn source_revision() -> String {
     println!("cargo:rerun-if-env-changed={REVISION_OVERRIDE}");
     println!("cargo:rerun-if-env-changed={PIPELINE_REVISION}");
-    for name in [REVISION_OVERRIDE, PIPELINE_REVISION] {
-        if let Some(stated) = std::env::var(name)
+    let stated = |name: &str| {
+        std::env::var(name)
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-        {
-            return stated;
+    };
+    let pipeline = stated(PIPELINE_REVISION);
+    let explicit = stated(REVISION_OVERRIDE);
+    if let Some(pipeline) = pipeline {
+        assert!(
+            full_git_revision(&pipeline),
+            "{PIPELINE_REVISION} must be a full lowercase Git commit"
+        );
+        if let Some(explicit) = explicit {
+            assert_eq!(
+                explicit, pipeline,
+                "{REVISION_OVERRIDE} must match authoritative {PIPELINE_REVISION}"
+            );
         }
+        return pipeline;
+    }
+    if let Some(explicit) = explicit {
+        assert!(
+            full_git_revision(&explicit),
+            "{REVISION_OVERRIDE} must be a full lowercase Git commit"
+        );
+        return explicit;
     }
 
     // Re-stamp when HEAD moves. `.git/HEAD` covers a checkout and a branch
@@ -102,14 +116,16 @@ fn source_revision() -> String {
         println!("cargo:rerun-if-changed=../.git/{reference}");
     }
 
-    let Some(revision) = git(&["rev-parse", REVISION_LENGTH, "HEAD"]) else {
+    let Some(revision) = git(&["rev-parse", "HEAD"]).filter(|value| full_git_revision(value))
+    else {
         return UNKNOWN_REVISION.to_string();
     };
     // A tree with uncommitted changes did not come from `revision` alone, and
     // saying so is the whole reason this exists.
     match git(&["status", "--porcelain", "--untracked-files=no"]) {
         Some(status) if !status.is_empty() => format!("{revision}-dirty"),
-        Some(_) | None => revision,
+        Some(_) => revision,
+        None => UNKNOWN_REVISION.to_string(),
     }
 }
 

@@ -45,9 +45,19 @@ pub const RELEASE_QUALIFICATION_NAME: &str = "qualification.json";
 /// This object is claimed create-only BEFORE any artifact, by every publisher,
 /// so the second revision is refused while nothing has been written yet.
 pub const RELEASE_REVISION_NAME: &str = "source-revision.json";
+/// The one source claim shared by every platform of a product version.
+pub const RELEASE_VERSION_REVISION_NAME: &str = "source-revision.json";
+
 const MAX_RELEASE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
+
+fn full_git_revision(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 /// The source revision one `product/version/platform` coordinate attests.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,11 +88,7 @@ impl CoordinateRevision {
                 "release product, version, and platform must be canonical coordinates".to_string(),
             );
         }
-        if source_revision.len() != 40
-            || !source_revision
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
+        if !full_git_revision(source_revision) {
             return Err(
                 "coordinate source revision must be a full lowercase Git commit".to_string(),
             );
@@ -112,6 +118,40 @@ impl CoordinateRevision {
             && self.product == product
             && self.version == version
             && self.platform == platform
+    }
+}
+/// The source revision shared by every platform under one `product/version`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionRevision {
+    pub schema_version: u32,
+    pub product: String,
+    pub version: String,
+    pub source_revision: String,
+}
+
+impl VersionRevision {
+    pub fn new(product: &str, version: &str, source_revision: &str) -> Result<Self, String> {
+        if !identifier(product) || !identifier(version) {
+            return Err("release product and version must be canonical coordinates".to_string());
+        }
+        if !full_git_revision(source_revision) {
+            return Err("version source revision must be a full lowercase Git commit".to_string());
+        }
+        Ok(Self {
+            schema_version: 1,
+            product: product.to_string(),
+            version: version.to_string(),
+            source_revision: source_revision.to_string(),
+        })
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn describes(&self, product: &str, version: &str) -> bool {
+        self.schema_version == 1 && self.product == product && self.version == version
     }
 }
 
@@ -441,6 +481,16 @@ pub(crate) fn safe_absolute(value: &str) -> bool {
             .all(|component| !matches!(component, Component::ParentDir))
 }
 
+fn safe_install_root(value: &str) -> bool {
+    if value == "{home}" {
+        return true;
+    }
+    if let Some(relative) = value.strip_prefix("{home}/") {
+        return safe_relative(relative);
+    }
+    !value.contains("{home}") && (safe_absolute(value) || safe_relative(value))
+}
+
 fn sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -584,7 +634,7 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
         }
         if policy.config_schema == 0
             || policy.state_schema == 0
-            || !safe_absolute(&policy.install_root)
+            || !safe_install_root(&policy.install_root)
             || !safe_relative(&policy.binary)
             || !safe_relative(&policy.launcher)
             || !env_name(&policy.binary_env)
@@ -748,6 +798,13 @@ pub fn release_base(product: &str, version: &str, platform: &str) -> Result<Stri
         );
     }
     Ok(format!("stado://releases/{product}/{version}/{platform}"))
+}
+
+pub fn release_version_base(product: &str, version: &str) -> Result<String, String> {
+    if !identifier(product) || !identifier(version) {
+        return Err("release product and version must be canonical coordinates".to_string());
+    }
+    Ok(format!("stado://releases/{product}/{version}"))
 }
 
 pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), String> {
@@ -928,14 +985,32 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
     result
 }
 
+pub fn install_root_path(policy: &ProductReleasePolicy, target: &ReleaseTargetPolicy) -> PathBuf {
+    let expanded = policy.install_root.replace("{home}", &target.home);
+    let path = PathBuf::from(expanded);
+    if path.is_absolute() {
+        path
+    } else {
+        Path::new(&target.home).join(path)
+    }
+}
+
+pub fn release_directory(
+    policy: &ProductReleasePolicy,
+    target: &ReleaseTargetPolicy,
+    version: &str,
+    platform: &str,
+) -> PathBuf {
+    install_root_path(policy, target)
+        .join("releases")
+        .join(version)
+        .join(platform)
+}
+
 pub fn install_directory(
     policy: &ProductReleasePolicy,
     target: &ReleaseTargetPolicy,
     manifest: &ReleaseManifest,
 ) -> PathBuf {
-    Path::new(&target.home)
-        .join(&policy.install_root)
-        .join("releases")
-        .join(&manifest.version)
-        .join(&manifest.platform)
+    release_directory(policy, target, &manifest.version, &manifest.platform)
 }

@@ -341,26 +341,23 @@ impl CoordinateClaim {
     }
 }
 
-/// Bind one immutable coordinate to exactly one source revision, before any
-/// artifact is written into it.
+/// Bind one immutable version and its platform coordinate to exactly one source
+/// revision before any artifact is written.
 ///
-/// Every publisher calls this first: the signed pipeline through
-/// [`publish_pipeline_release`], the tag train and the existing-release
-/// recovery workflow through `stado release claim-coordinate`. The record is
-/// created only if absent, so the first caller states the build and every
-/// later caller either agrees — a republish of the same version from the same
-/// commit, which is legitimate and idempotent — or is refused here, with
-/// nothing published.
-///
-/// The refusal names both commits and says what to do, because the remedy is
-/// not a retry: immutable objects mean a version that already attests one
-/// build cannot be made to attest another.
+/// The version-scoped record is the arbitration point shared by every
+/// publisher and every platform. Its create-only write closes the race where
+/// two publishers each observed no sibling claim and then claimed opposite
+/// platforms from different commits.
 pub(crate) async fn claim_release_coordinate(
     product: &str,
     version: &str,
     platform: &str,
     source_revision: &str,
 ) -> Result<CoordinateClaim, CmdError> {
+    let version_claim = release_control::VersionRevision::new(product, version, source_revision)
+        .map_err(CmdError::click)?;
+    claim_release_version(&version_claim).await?;
+
     let claim =
         release_control::CoordinateRevision::new(product, version, platform, source_revision)
             .map_err(CmdError::click)?;
@@ -368,28 +365,9 @@ pub(crate) async fn claim_release_coordinate(
     let base =
         release_control::release_base(product, version, platform).map_err(CmdError::click)?;
     let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
-
-    // A read that fails is not a coordinate without a record: the writer may
-    // simply not have answered. That distinction is why nothing is decided on
-    // a failed read here — the create-only put below is what decides, and it
-    // fails loudly against a writer that cannot be reached.
     if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
         return judge_existing_claim(&claim, &existing, &uri);
     }
-    // One version, one build, across platforms too.
-    //
-    // The record is per platform because that is where the artifacts live, and
-    // on 2026-09-03 that turned out to be one scope too narrow: 0.14.3's linux
-    // leg was claimed by the tag `8cf54ece` while another publisher had already
-    // claimed the darwin leg from `ccc43c5e`, so the version was split across
-    // producers with each platform internally consistent. A sibling that
-    // attests a different commit is the same defect one level up, so it is
-    // refused here — before this platform's first artifact — and named with
-    // both commits.
-    if let Some(conflict) = sibling_revision_conflict(&claim).await {
-        return Err(conflict);
-    }
-
     let temporary = tempfile::NamedTempFile::new()?;
     std::fs::write(temporary.path(), &bytes)?;
     match crate::cli::storage::store_object(
@@ -401,59 +379,121 @@ pub(crate) async fn claim_release_coordinate(
     .await
     {
         Ok(_) => Ok(CoordinateClaim::Claimed),
-        Err(error) => {
-            // Two publishers can reach this line at once, and the loser must
-            // read the winner's record rather than report a write conflict:
-            // one of them is about to publish artifacts and the other must
-            // learn why it may not.
-            match crate::cli::storage::fetch_object_from_writer(&uri).await {
-                Ok(existing) => judge_existing_claim(&claim, &existing, &uri),
-                Err(_) => Err(error),
-            }
-        }
+        Err(error) => match crate::cli::storage::fetch_object_from_writer(&uri).await {
+            Ok(existing) => judge_existing_claim(&claim, &existing, &uri),
+            Err(_) => Err(error),
+        },
     }
 }
 
-/// The first sibling platform of this version that attests a different commit.
-///
-/// `None` when every readable sibling agrees, and also when nothing can be
-/// read: an unreachable store is not evidence of a second build, and the
-/// per-platform record is still the claim that decides. This only ever adds a
-/// refusal that names two commits, never a permission.
-async fn sibling_revision_conflict(
-    claim: &release_control::CoordinateRevision,
-) -> Option<CmdError> {
-    let coordinates = crate::cli::storage::published_release_coordinates(&claim.product)
-        .await
-        .ok()?;
+async fn claim_release_version(
+    claim: &release_control::VersionRevision,
+) -> Result<CoordinateClaim, CmdError> {
+    let base = release_control::release_version_base(&claim.product, &claim.version)
+        .map_err(CmdError::click)?;
+    let uri = format!("{base}/{}", release_control::RELEASE_VERSION_REVISION_NAME);
+    if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
+        return judge_existing_version_claim(claim, &existing, &uri);
+    }
+
+    require_existing_platform_claims_agree(claim).await?;
+    let bytes = claim.canonical_bytes().map_err(CmdError::click)?;
+    let temporary = tempfile::NamedTempFile::new()?;
+    std::fs::write(temporary.path(), &bytes)?;
+    match crate::cli::storage::store_object(
+        &uri,
+        &temporary.path().display().to_string(),
+        "application/json",
+        true,
+    )
+    .await
+    {
+        Ok(_) => Ok(CoordinateClaim::Claimed),
+        Err(error) => match crate::cli::storage::fetch_object_from_writer(&uri).await {
+            Ok(existing) => judge_existing_version_claim(claim, &existing, &uri),
+            Err(_) => Err(error),
+        },
+    }
+}
+
+/// Backfill a version-scoped claim only when every platform already present
+/// carries a readable claim for this exact source revision.
+async fn require_existing_platform_claims_agree(
+    claim: &release_control::VersionRevision,
+) -> Result<(), CmdError> {
+    let coordinates = crate::cli::storage::published_release_coordinates(&claim.product).await?;
     for coordinate in coordinates {
-        let (version, platform) = (coordinate.version, coordinate.platform);
-        if version != claim.version || platform == claim.platform {
+        if coordinate.version != claim.version {
             continue;
         }
-        let base = release_control::release_base(&claim.product, &version, &platform).ok()?;
-        let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
-        let Ok(bytes) = crate::cli::storage::fetch_object_from_writer(&uri).await else {
-            continue;
-        };
-        let Ok(held) = serde_json::from_slice::<release_control::CoordinateRevision>(&bytes) else {
-            continue;
-        };
-        if held.source_revision != claim.source_revision {
-            return Some(CmdError::click(format!(
-                "{}/{} already attests source revision {} for platform {}, and this publisher \
-                 carries {} for {}. A version's platforms are one build: publish a new version \
-                 rather than splitting this one across two commits",
+        if coordinate.version_scope {
+            if coordinate.claim_only() {
+                continue;
+            }
+            return Err(CmdError::click(format!(
+                "cannot backfill the version claim because releases/{}/{} contains unexpected version-scoped objects: {}",
                 claim.product,
                 claim.version,
+                coordinate.names.iter().cloned().collect::<Vec<_>>().join(", ")
+            )));
+        }
+        let base =
+            release_control::release_base(&claim.product, &claim.version, &coordinate.platform)
+                .map_err(CmdError::click)?;
+        let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
+        let bytes = crate::cli::storage::fetch_object_from_writer(&uri)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cannot backfill the version claim because {uri} is unreadable: {error}"
+                ))
+            })?;
+        let held: release_control::CoordinateRevision =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                CmdError::click(format!(
+                    "cannot backfill the version claim because {uri} is invalid: {error}"
+                ))
+            })?;
+        if !held.describes(&claim.product, &claim.version, &coordinate.platform)
+            || held.source_revision != claim.source_revision
+        {
+            return Err(CmdError::click(format!(
+                "{}/{} already carries platform {} from source revision {}; this publisher \
+                 carries {}. A version's platforms are one build: publish a new version",
+                claim.product,
+                claim.version,
+                coordinate.platform,
                 held.source_revision,
-                platform,
-                claim.source_revision,
-                claim.platform
+                claim.source_revision
             )));
         }
     }
-    None
+    Ok(())
+}
+
+fn judge_existing_version_claim(
+    claim: &release_control::VersionRevision,
+    existing: &[u8],
+    uri: &str,
+) -> Result<CoordinateClaim, CmdError> {
+    let held: release_control::VersionRevision =
+        serde_json::from_slice(existing).map_err(|error| {
+            CmdError::click(format!("{uri} is not a version revision record: {error}"))
+        })?;
+    if !held.describes(&claim.product, &claim.version) {
+        return Err(CmdError::click(format!(
+            "{uri} attests {}/{} and not {}/{}",
+            held.product, held.version, claim.product, claim.version
+        )));
+    }
+    if held.source_revision != claim.source_revision {
+        return Err(CmdError::click(format!(
+            "{}/{} already attests source revision {}, and this publisher carries {}. \
+             Release objects are immutable: publish a new version",
+            claim.product, claim.version, held.source_revision, claim.source_revision
+        )));
+    }
+    Ok(CoordinateClaim::Confirmed)
 }
 
 fn judge_existing_claim(
@@ -724,6 +764,14 @@ pub(crate) async fn verified_artifact_with_archive(
         return Err(CmdError::click(
             "release manifest identity does not match its object coordinate",
         ));
+    }
+    let claimed_source =
+        crate::cli::storage::release_claim_source(product, version, platform).await?;
+    if claimed_source != manifest.source_revision {
+        return Err(CmdError::click(format!(
+            "release manifest source revision {} disagrees with authoritative claim {}",
+            manifest.source_revision, claimed_source
+        )));
     }
     if manifest.qualification.status != QualificationStatus::Passed {
         return Err(CmdError::click(format!(

@@ -28,6 +28,8 @@ test -d "$release_dir"
 test -d "$scratch_dir"
 
 prefix="stado://releases/$product/$version/$platform"
+version_claim_uri="stado://releases/$product/$version/source-revision.json"
+platform_claim_uri="$prefix/source-revision.json"
 archive_name="$product-v$version-$platform.tar.gz"
 manifest_name="release-manifest-$platform.json"
 test -f "$release_dir/$archive_name"
@@ -43,17 +45,18 @@ test -f "$release_dir/$manifest_name"
 # objects from here, four from there, and a check that expected the coordinate
 # to hold only what this runner had on disk refused a complete release.
 #
-# Those names, plus `source-revision.json` — the claim every publisher writes
-# create-only before its first artifact, so one version can only ever attest
-# one build — are declared once, in `release_control.rs`, and read out of that
-# declaration here so this check cannot drift from the writers that make them.
+# The platform `source-revision.json` remains a coordinate member for older
+# clients. The platformless version claim sits one level above this listing and
+# is fetched and compared below; it is the create-only arbitration point shared
+# by every publisher and platform.
 # `[A-Z_]*` and not `[A-Z]*`: a two-word constant like
 # `RELEASE_REVISION_NAME`'s successors would otherwise be silently skipped and
 # read as a member nobody declares.
 control_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/stado-rs/src/release_control.rs"
 test -f "$control_source"
 control_names="$(
-  sed -n 's/^pub const RELEASE_[A-Z_]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source"
+  sed -n 's/^pub const RELEASE_[A-Z_]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source" |
+    sort -u
 )"
 declared_control="$(printf '%s\n' "$control_names" | sed '/^$/d' | /usr/bin/wc -l | tr -d '[:space:]')"
 if [ "$declared_control" -lt 5 ]; then
@@ -81,6 +84,45 @@ listing="$(
   $stado_bin storage objects releases "$product/$version/$platform/" --json |
     jq -c '{objects: [.objects[] | select((.key // .uri) | contains(".__stado_upload/") | not)]}'
 )"
+
+version_claim="$scratch_dir/public-$version-source-revision.json"
+platform_claim="$scratch_dir/public-$version-$platform-source-revision.json"
+rm -f "$version_claim" "$platform_claim"
+"$stado_bin" storage get "$version_claim_uri" "$version_claim"
+"$stado_bin" storage get "$platform_claim_uri" "$platform_claim"
+source_revision="$(
+  jq -er --arg product "$product" --arg version "$version" '
+    select(
+      keys == ["product", "schema_version", "source_revision", "version"] and
+      .schema_version == 1 and
+      .product == $product and
+      .version == $version and
+      (.source_revision | test("^[0-9a-f]{40}$"))
+    ) | .source_revision
+  ' "$version_claim"
+)"
+jq -e \
+  --arg product "$product" \
+  --arg version "$version" \
+  --arg platform "$platform" \
+  --arg source_revision "$source_revision" '
+    keys == ["platform", "product", "schema_version", "source_revision", "version"] and
+    .schema_version == 1 and
+    .product == $product and
+    .version == $version and
+    .platform == $platform and
+    .source_revision == $source_revision
+  ' "$platform_claim" >/dev/null
+jq -e \
+  --arg product "$product" \
+  --arg version "$version" \
+  --arg platform "$platform" \
+  --arg source_revision "$source_revision" '
+    .product == $product and
+    .version == $version and
+    .platform == $platform and
+    .source_commit == $source_revision
+  ' "$release_dir/$manifest_name" >/dev/null
 for source in "$release_dir"/*; do
   name="${source##*/}"
   uri="$prefix/$name"

@@ -1105,15 +1105,16 @@ pub(crate) fn active_binary(
         )
     })?;
     let directory = PathBuf::from(&active.release_dir);
-    let active_process_matches =
-        release_processes(&policy.install_root)
-            .into_iter()
-            .any(|process| {
-                process.pid == active.pid
-                    && process.version == active.version
-                    && process.port == Some(active.port)
-                    && process.release_dir == directory
-            });
+    let install_root = release_control::install_root_path(policy, target);
+    let install_root = install_root
+        .to_str()
+        .ok_or_else(|| format!("{product} install root is not valid UTF-8"))?;
+    let active_process_matches = release_processes(install_root).into_iter().any(|process| {
+        process.pid == active.pid
+            && process.version == active.version
+            && process.port == Some(active.port)
+            && process.release_dir == directory
+    });
     if !active_process_matches {
         return Err(format!(
             "{product} observed active process tuple pid={} version={} port={} release_dir={} does not match a live release process",
@@ -1895,13 +1896,17 @@ async fn reconcile_product(
     target: &ReleaseTargetPolicy,
 ) -> Result<HostReleaseState, String> {
     let mut state = load_state(target, product, target_name)?;
+    let install_root = release_control::install_root_path(policy, target);
+    let install_root = install_root
+        .to_str()
+        .ok_or_else(|| format!("{product} install root is not valid UTF-8"))?;
     // Repair the stable bind before any desired/quarantine branch can return.
     // `reconcile_once` holds the per-product lock across this state load,
     // declaration/world reconciliation, and every persisted repair below.
     reconcile_stable_proxy(
         target,
         product,
-        &policy.install_root,
+        install_root,
         policy.strategy.readiness_timeout_seconds,
         &mut state,
     )
@@ -1914,7 +1919,7 @@ async fn reconcile_product(
     // Reconcile the process world before reasoning from the record: anything
     // running out of this product's releases directory that the record does not
     // name is a leak from a run that died between spawning and saving.
-    sweep_leaked_processes(target, product, &policy.install_root, &state);
+    sweep_leaked_processes(target, product, install_root, &state);
     let Some(desired) = policy.desired.as_ref() else {
         state.phase = RolloutPhase::Idle;
         state.detail = "no desired release".to_string();

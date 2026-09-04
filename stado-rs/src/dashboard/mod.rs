@@ -1533,10 +1533,10 @@ impl Dashboard {
             //   200: the object bytes, Content-Type from object metadata
             //        (default application/octet-stream), Accept-Ranges: bytes
             //   206/416: byte-range answers from get_object
-            //   400: {"error": ...} — missing or unparseable uri
+            //   400: {"error": ...} — query is not exactly one valid uri
             //   403: {"error": ...} — a namespace that is not `releases`
             //   404: {"state": "absent", "uri": ...} — the object is missing
-            let object = match object_from_query(query) {
+            let object = match public_release_object_from_query(query) {
                 Ok(object) => object,
                 Err(response) => return Ok(response),
             };
@@ -1606,12 +1606,6 @@ impl Dashboard {
             .split_once('?')
             .map_or(request.path.as_str(), |(path, _)| path)
             == "/api/release/object";
-        if versioned && public_release_route {
-            return Ok(send_json(
-                http_status("400"),
-                &json!({"error": "versioned reads are not supported by the public release route"}),
-            ));
-        }
         let (bytes, version) = if versioned {
             let Some(value) = self.store.read_text_versioned(&path).await? else {
                 return Ok(send_json(
@@ -3362,6 +3356,27 @@ fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Resp
         ));
     }
     crate::object_store::ObjectRef::parse(&uri)
+        .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))
+}
+
+fn public_release_object_from_query(
+    query: &str,
+) -> Result<crate::object_store::ObjectRef, Response> {
+    let values = parse_qs(query);
+    if values.len() != 1 || values[0].0 != "uri" {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "public release reads accept exactly one uri query field"}),
+        ));
+    }
+    let uri = &values[0].1;
+    if uri.is_empty() {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "uri is required"}),
+        ));
+    }
+    crate::object_store::ObjectRef::parse(uri)
         .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))
 }
 

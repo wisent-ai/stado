@@ -2102,6 +2102,16 @@ async fn pipeline_catalog_identity(
             )));
         }
     }
+    let claimed_source =
+        crate::cli::storage::release_claim_source(&product.source.product, version, platform)
+            .await
+            .map_err(|error| DeployError(error.to_string()))?;
+    if claimed_source != manifest.source_revision {
+        return Err(DeployError(format!(
+            "canonical pipeline release source {} disagrees with authoritative claim {}",
+            manifest.source_revision, claimed_source
+        )));
+    }
     // One immutable coordinate, one build. The signed document above is the
     // delivery authority and stays it; what was missing is any check that the
     // OTHER publisher of the same coordinate agrees with it.
@@ -2378,6 +2388,16 @@ pub(crate) async fn catalog_identity(
         return Err(DeployError(
             "canonical release manifest source_commit is invalid".to_string(),
         ));
+    }
+    let claimed_source =
+        crate::cli::storage::release_claim_source(&product.source.product, version, platform)
+            .await
+            .map_err(|error| DeployError(error.to_string()))?;
+    if claimed_source != source_commit {
+        return Err(DeployError(format!(
+            "canonical release manifest source {source_commit} disagrees with authoritative claim \
+             {claimed_source}"
+        )));
     }
     let missing = missing_release_objects(product, version, platform).await?;
     if !missing.is_empty() {

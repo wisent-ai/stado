@@ -601,19 +601,22 @@ verified release manifest, compatible schema range, backup, health check, and
 rollback coordinate. No runtime follows a mutable `latest` binary.
 
 One version means one build, and that is enforced where publication starts
-rather than where delivery ends. Two publishers write a
-`releases/<product>/<version>/<platform>/` coordinate — the release train
-writes the executables, `SHA256SUMS`, the platform archive and
-`release-manifest-<platform>.json`; the signed pipeline writes `release.json`,
-`release.sig`, `release.tar.gz` and `qualification.json` — and immutability
-alone never separated them, because those name sets are disjoint. Each
-publisher therefore claims `source-revision.json` create-only before its first
-artifact, through `stado release claim-coordinate PRODUCT VERSION PLATFORM
---source-commit COMMIT`. The first build to reach a version states it; a
-second build is refused there, with the coordinate still empty of artifacts,
-and the refusal names both commits. Republishing the same version from the
-same commit confirms the record and is idempotent, which is what a resumed or
-recovered publication needs.
+rather than where delivery ends. Two publishers write disjoint objects under
+`releases/<product>/<version>/<platform>/`, so object-level immutability alone
+cannot keep their commits coherent. Every
+`stado release claim-coordinate PRODUCT VERSION PLATFORM --source-commit COMMIT`
+first creates or confirms the shared platformless claim at
+`releases/<product>/<version>/source-revision.json`, then mirrors that identity
+at the platform coordinate for compatibility. The version claim is one
+create-only arbitration point even when publishers start concurrently or the
+platform set changes. A second commit is refused before artifact bytes are
+written; an older platform-only version can be backfilled only after every
+existing platform claim is valid and agrees.
+
+Promotion and delivery compare signed and compatibility manifests with that
+shared claim. Coordinates published before version claims remain readable
+through the validated platform claim, but no missing or malformed claim is
+silently treated as agreement.
 
 Stado release artifacts contain the client only; they never bundle or apply
 Supabase migrations. Database rollout is versioned and deployed from
