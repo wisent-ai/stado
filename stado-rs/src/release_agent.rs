@@ -2076,11 +2076,7 @@ async fn reconcile_product(
                         }
                         Err(why) => Err(format!(
                             "stable release proxy failed to start: {why}; stderr {}",
-                            log_tail(
-                                &release_log_path(target, product, "proxy", "err"),
-                                20,
-                                1200
-                            )
+                            log_tail(&release_log_path(target, product, "proxy", "err"), 20, 1200)
                         )),
                     }
                 }
