@@ -1072,53 +1072,56 @@ fn stage_release(
     atomic_json(&marker_path(directory), manifest)
 }
 
-/// Resolve the executable from the exact release the local agent has made
-/// active, refusing every fallback path.
+/// Resolve the executable from the exact release the local agent currently
+/// records and routes as active. Desired state is deliberately irrelevant:
+/// a rejected newer candidate may be quarantined while its healthy predecessor
+/// remains the release actually serving the stable bind.
 pub(crate) fn active_binary(
     product: &str,
     target_name: &str,
     policy: &ProductReleasePolicy,
     target: &ReleaseTargetPolicy,
 ) -> Result<ActiveBinary, String> {
-    let desired = policy
-        .desired
-        .as_ref()
-        .ok_or_else(|| format!("{product} has no desired release"))?;
-    let artifact = desired.artifacts.get(&target.platform).ok_or_else(|| {
+    let state = load_state(target, product, target_name)?;
+    let active = state.active.as_ref().ok_or_else(|| {
         format!(
-            "{} {} has no {} artifact",
-            product, desired.version, target.platform
+            "{product} is release-controlled on {target_name} but has no observed active release (phase {:?})",
+            state.phase
         )
     })?;
-    let state = load_state(target, product, target_name)?;
-    if state.rollout_generation != desired.rollout_generation {
+    if !pid_alive(active.pid) {
         return Err(format!(
-            "{product} local generation {} does not match desired generation {}",
-            state.rollout_generation, desired.rollout_generation
+            "{product} observed active process pid {} is not live",
+            active.pid
         ));
     }
-    if !matches!(
-        state.phase,
-        RolloutPhase::Routed | RolloutPhase::Monitoring | RolloutPhase::Committed
-    ) {
+    if state.quarantined.contains_key(&active.artifact_sha256) {
         return Err(format!(
-            "{product} local release is not active: phase {:?}",
-            state.phase
+            "{product} observed active digest {} is quarantined",
+            active.artifact_sha256
         ));
     }
-    if state.quarantined.contains_key(&artifact.artifact_sha256) {
+
+    let serving = target.blue_green_serving()?;
+    let proxy_pid = state
+        .proxy_pid
+        .ok_or_else(|| format!("{product} observed active release has no recorded stable proxy"))?;
+    if !proxy_process_matches(proxy_pid, target, &serving, product)? {
         return Err(format!(
-            "{product} desired digest {} is quarantined",
-            artifact.artifact_sha256
+            "{product} recorded stable proxy pid {proxy_pid} does not match the exact executable and arguments"
         ));
     }
-    let active = state
-        .active
-        .ok_or_else(|| format!("{product} local release has no active process record"))?;
-    if active.version != desired.version || active.artifact_sha256 != artifact.artifact_sha256 {
+    let proxy_path = proxy_state_path(target, product);
+    let proxy: ProxyState =
+        serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
+            format!("cannot read proxy target {}: {error}", proxy_path.display())
+        })?)
+        .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
+    let expected_upstream = format!("127.0.0.1:{}", active.port);
+    if proxy.generation != state.rollout_generation || proxy.upstream != expected_upstream {
         return Err(format!(
-            "{product} active identity {} {} does not match desired identity {} {}",
-            active.version, active.artifact_sha256, desired.version, artifact.artifact_sha256
+            "{product} stable proxy targets generation {} upstream {}, not observed active generation {} upstream {expected_upstream}",
+            proxy.generation, proxy.upstream, state.rollout_generation
         ));
     }
 
@@ -1135,19 +1138,16 @@ pub(crate) fn active_binary(
     release_control::validate_manifest(&manifest)?;
     let manifest_sha =
         release_control::sha256_bytes(&release_control::canonical_manifest(&manifest)?);
-    if manifest_sha != artifact.manifest_sha256
-        || manifest_sha != active.manifest_sha256
+    if manifest_sha != active.manifest_sha256
         || manifest.product != product
-        || manifest.version != desired.version
+        || manifest.version != active.version
         || manifest.platform != target.platform
-        || manifest.artifact_sha256 != artifact.artifact_sha256
-        || manifest.source_revision != artifact.source_revision
-        || manifest.key_id != artifact.key_id
+        || manifest.artifact_sha256 != active.artifact_sha256
         || manifest.binary != policy.binary
         || manifest.qualification.status != QualificationStatus::Passed
     {
         return Err(format!(
-            "{product} active release marker does not match the desired signed artifact"
+            "{product} observed active release marker does not match its process identity"
         ));
     }
     let expected_directory = release_control::install_directory(policy, target, &manifest);
