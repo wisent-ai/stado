@@ -2,7 +2,7 @@
 #
 # Each one is compiled into nothing. This file is a ratchet, not an amnesty:
 # it exists so `scripts/unreachable_modules.py` can fail on anything NEW while
-# these three wait for an owner's decision. Removing a line is the fix;
+# these two wait for an owner's decision. Removing a line is the fix;
 # adding one needs a reason that survives being read in a year.
 #
 # A stale entry - a path listed here that no longer exists - also fails the
@@ -19,5 +19,4 @@ src/queue/secrets.rs
 # tests under tests/ are their own crate roots and cannot reach a private
 # module of the library, so these can only ever have been used through a `mod`
 # declaration that is now gone. Delete or re-declare.
-src/providers/local/disk_cleanup/kit.rs
 src/testutil.rs
