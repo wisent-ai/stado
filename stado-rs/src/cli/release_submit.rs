@@ -1251,13 +1251,8 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     // stable platform order makes that incompatible submission fail before it
     // can become a delivery fence.
     for platform in m.platforms.keys() {
-        super::release_cmd::claim_release_coordinate(
-            &m.product,
-            &args.version,
-            platform,
-            &commit,
-        )
-        .await?;
+        super::release_cmd::claim_release_coordinate(&m.product, &args.version, platform, &commit)
+            .await?;
     }
     let source_sha = release_control::sha256_bytes(&archive);
     let manifest_sha = release_control::sha256_bytes(&manifest_bytes);
