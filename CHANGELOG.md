@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.15.17
+## 0.15.19
 
 - **Dynamic capacity:** hosts no longer declare a static job count. Admission now uses the CPU, memory, disk, accelerator, and active-workload measurements the host publishes, and the CLI, desktop fleet view, documentation, and behavior tests use the same model.
 - **Service identity:** systemd unit names remain canonical instead of accumulating `.service` suffixes. `service label-print` now reads Linux units through the host channel, so migrations can prove the canonical unit is healthy before retiring duplicate legacy names.
@@ -10,7 +10,7 @@
 - **Rollback boundary:** rolling back restores static machine job limits, reopens the retirement race with the autonomy reconciler, and can recreate duplicate systemd names or place graphical services in the system launchd domain.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; release CI supplies the existing qualification evidence before publication.
 
-## 0.15.16
+## 0.15.18
 
 - **Host probes:** `host exec` now approves the exact Appium, Android Debug Bridge, Git, tmux, Cua Driver bundle, and iOS Simulator spellings emitted by desktop-capture preflight while keeping each request normalized to the canonical read-only command.
 - **Object verifier:** reconciliation first compares the target's complete object namespace declaration with the local declaration and refuses before changing a grant when either input is incomplete; it no longer reports an exact match from a partial view.
