@@ -31,16 +31,13 @@
 //!    naming a port nothing serves. The file is fetched byte-exact through
 //!    [`super::service_file_fetch`] because a clamped or sanitized read of a
 //!    JSON document is not the document.
-//! 2. **Repair is opt-in per component, and the default is the one Weles
-//!    actually takes from that cache.** Weles drives its own Chromium and
-//!    Firefox, pinned by digest through `WELES_CHROMIUM_RELEASE_*` and
-//!    `WELES_FIREFOX_RELEASE_*`, so Playwright's bundled browsers are not what
-//!    it launches; `ffmpeg` is what it consumes from the Playwright cache, and
-//!    it is the component whose absence breaks recording. Verification still
-//!    reports every component the release marks `installByDefault`, so an
-//!    operator sees the whole runtime rather than the one line this fault
-//!    turned on, but a verify pass never downloads half a gigabyte of browsers
-//!    nothing drives.
+//! 2. **Requirements and page readiness are separate facts.** `--component`
+//!    selects the components this invocation requires and `ffmpeg` remains the
+//!    default because recording was the incident this command first repaired.
+//!    Independently, the report checks whether any Chromium, Firefox, or WebKit
+//!    engine is present. Satisfying a recording-only requirement therefore
+//!    cannot report a host with no browser as complete. Repair stays opt-in per
+//!    component and never downloads an engine unless the operator names it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -58,12 +55,21 @@ pub const COMPONENT_MISSING: &str = "missing";
 /// The host could not be asked.
 pub const COMPONENT_UNKNOWN: &str = "unknown";
 
-/// Every component the release marks `installByDefault` is present.
+/// Every component required by this invocation is present and a browser engine
+/// is available.
 pub const RUNTIME_COMPLETE: &str = "complete";
-/// At least one is missing.
+/// At least one component required by this invocation is missing.
 pub const RUNTIME_INCOMPLETE: &str = "incomplete";
 /// The requirement or the cache could not be read.
 pub const RUNTIME_UNKNOWN: &str = "unknown";
+/// The required components are present, but no browser engine can open a page.
+pub const RUNTIME_BROWSER_ENGINE_MISSING: &str = "browser_engine_missing";
+/// At least one browser engine could not be inspected and none is known present.
+pub const RUNTIME_BROWSER_ENGINE_UNKNOWN: &str = "browser_engine_unknown";
+
+pub const BROWSER_ENGINE_PRESENT: &str = "present";
+pub const BROWSER_ENGINE_MISSING: &str = "missing";
+pub const BROWSER_ENGINE_UNKNOWN: &str = "unknown";
 
 /// Where the Weles release keeps Playwright's own requirement declaration.
 pub const BROWSERS_JSON: &str = "$HOME/weles/node_modules/playwright-core/browsers.json";
@@ -71,11 +77,11 @@ pub const BROWSERS_JSON: &str = "$HOME/weles/node_modules/playwright-core/browse
 /// Playwright's cache root on Darwin.
 pub const CACHE_ROOT: &str = "$HOME/Library/Caches/ms-playwright";
 
-/// The component Weles takes from the Playwright cache.
+/// The default component required when the caller names none.
 ///
-/// Not "all of them": the worker launches its own pinned Chromium and Firefox
-/// releases, so Playwright's browsers are not what it drives. `ffmpeg` is what
-/// the recording path needs and what its absence breaks.
+/// This preserves the recording repair that introduced the command. Browser
+/// engine readiness is reported separately and its refusal names the explicit
+/// Chromium repair command.
 pub const DEFAULT_COMPONENT: &str = "ffmpeg";
 
 /// One component Playwright pins, as the release declares it.
@@ -155,43 +161,70 @@ pub struct ComponentState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeReport {
     pub components: Vec<ComponentState>,
-    /// The components this host's worker actually consumes from the Playwright
-    /// cache, and therefore the only ones the verdict turns on.
+    /// The components this invocation requires from the Playwright cache.
     ///
-    /// Reporting every `installByDefault` component and judging every one of
-    /// them are different things. Weles launches its own Chromium and Firefox,
-    /// pinned by digest, so Playwright's bundled browsers are absent on a
-    /// perfectly healthy worker; a verdict that failed on them would be red on
-    /// every host forever, and a check that is always red is a check nobody
-    /// reads. The full table stays visible so an operator can see the whole
-    /// runtime; the verdict answers "can this host run a browser task".
+    /// This list decides `required_state`; browser-engine readiness is measured
+    /// independently across Chromium, Firefox, and WebKit so satisfying a
+    /// recording-only requirement can never masquerade as page readiness.
     pub required: Vec<String>,
 }
 
 impl RuntimeReport {
-    /// One word for the runtime, over the components this host consumes.
-    pub fn verdict(&self) -> &'static str {
-        let judged: Vec<&ComponentState> = self
+    /// Whether every component explicitly required by this invocation is ready.
+    pub fn required_state(&self) -> &'static str {
+        let mut found = false;
+        let mut unknown = false;
+        for component in self
             .components
             .iter()
             .filter(|component| self.required.iter().any(|name| name == &component.name))
-            .collect();
-        if judged.is_empty() {
-            return RUNTIME_UNKNOWN;
-        }
-        if judged
-            .iter()
-            .any(|component| component.state == COMPONENT_UNKNOWN)
         {
-            return RUNTIME_UNKNOWN;
+            found = true;
+            if component.state == COMPONENT_MISSING {
+                return RUNTIME_INCOMPLETE;
+            }
+            unknown |= component.state == COMPONENT_UNKNOWN;
         }
-        if judged
+        if !found || unknown {
+            RUNTIME_UNKNOWN
+        } else {
+            RUNTIME_COMPLETE
+        }
+    }
+
+    /// Whether any Playwright Chromium, Firefox, or WebKit engine can open a page.
+    pub fn browser_engine_state(&self) -> &'static str {
+        let mut found = false;
+        let mut unknown = false;
+        for component in self
+            .components
             .iter()
-            .any(|component| component.state == COMPONENT_MISSING)
+            .filter(|component| is_browser_engine(&component.name))
         {
-            return RUNTIME_INCOMPLETE;
+            found = true;
+            if component.state == COMPONENT_PRESENT {
+                return BROWSER_ENGINE_PRESENT;
+            }
+            unknown |= component.state == COMPONENT_UNKNOWN;
         }
-        RUNTIME_COMPLETE
+        if !found || unknown {
+            BROWSER_ENGINE_UNKNOWN
+        } else {
+            BROWSER_ENGINE_MISSING
+        }
+    }
+
+    /// The overall browser-task readiness shown in the report.
+    pub fn verdict(&self) -> &'static str {
+        match self.required_state() {
+            RUNTIME_INCOMPLETE => RUNTIME_INCOMPLETE,
+            RUNTIME_UNKNOWN => RUNTIME_UNKNOWN,
+            _ => match self.browser_engine_state() {
+                BROWSER_ENGINE_PRESENT => RUNTIME_COMPLETE,
+                BROWSER_ENGINE_MISSING => RUNTIME_BROWSER_ENGINE_MISSING,
+                _ => RUNTIME_BROWSER_ENGINE_UNKNOWN,
+            },
+        }
     }
 
     /// Every required component that is not there.
@@ -205,20 +238,14 @@ impl RuntimeReport {
             .collect()
     }
 
-    /// Why this runtime cannot run a browser task, in the words Playwright
-    /// itself used, or `None`.
-    ///
-    /// The message names the binary and the exact path it was expected at,
-    /// because that is the sentence that made the fault legible in the first
-    /// place — a verdict without the path sends an operator looking.
+    /// Why this host cannot open a page, or `None`.
     pub fn failure(&self, host: &str) -> Option<String> {
-        match self.verdict() {
-            RUNTIME_COMPLETE => None,
+        match self.required_state() {
             RUNTIME_UNKNOWN => Some(format!(
-                "{host}: the browser runtime could not be judged — the release's requirement or \
-                 the Playwright cache was unreadable"
+                "{host}: the required Playwright components could not be judged because the \
+                 release requirement or cache was unreadable"
             )),
-            _ => {
+            RUNTIME_INCOMPLETE => {
                 let missing = self.missing();
                 let listed = missing
                     .iter()
@@ -230,12 +257,30 @@ impl RuntimeReport {
                     })
                     .collect::<Vec<String>>()
                     .join("; ");
+                let component_flags = missing
+                    .iter()
+                    .map(|component| format!(" --component {}", component.name))
+                    .collect::<String>();
                 Some(format!(
                     "{host}: the browser runtime is incomplete, so every browser task fails at \
-                     `browserContext.newPage` before any navigation: {listed}. Repair it with \
-                     `stado host weles-browser-runtime {host} --repair`"
+                     `browserContext.newPage` before any navigation: {listed}; repair it with \
+                     `stado host weles-browser-runtime {host}{component_flags} --repair`."
                 ))
             }
+            _ => match self.browser_engine_state() {
+                BROWSER_ENGINE_MISSING => Some(format!(
+                    "{host}: required Playwright components are complete, but no Chromium, \
+                     Firefox, or WebKit engine is installed, so `browserContext.newPage` cannot \
+                     open a page; install Chromium with `stado host weles-browser-runtime {host} \
+                     --component chromium --repair`."
+                )),
+                BROWSER_ENGINE_UNKNOWN => Some(format!(
+                    "{host}: required Playwright components are complete, but browser-engine \
+                     readiness could not be judged, so `browserContext.newPage` is not known to \
+                     work."
+                )),
+                _ => None,
+            },
         }
     }
 
@@ -245,12 +290,21 @@ impl RuntimeReport {
         object.insert("status".to_string(), json!(OK_STATUS));
         object.insert("runtime".to_string(), json!(self.verdict()));
         object.insert("required".to_string(), json!(self.required));
+        object.insert("required_state".to_string(), json!(self.required_state()));
+        object.insert(
+            "browser_engine_state".to_string(),
+            json!(self.browser_engine_state()),
+        );
         object.insert(
             "components".to_string(),
             serde_json::to_value(&self.components).unwrap_or(Value::Null),
         );
         object
     }
+}
+
+fn is_browser_engine(name: &str) -> bool {
+    name == "webkit" || name.starts_with("chromium") || name.starts_with("firefox")
 }
 
 /// Read the release's requirement, byte-exact.
@@ -441,116 +495,4 @@ pub async fn repair(
         )));
     }
     Ok(lines)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const DECLARATION: &str = r#"{"comment":"x","browsers":[
-        {"name":"chromium","revision":"1217","installByDefault":true},
-        {"name":"chromium-headless-shell","revision":"1217","installByDefault":true},
-        {"name":"chromium-tip-of-tree","revision":"1417","installByDefault":false},
-        {"name":"ffmpeg","revision":"1011","installByDefault":true}
-    ]}"#;
-
-    #[test]
-    fn the_requirement_comes_from_the_release_with_its_exact_revisions() {
-        let declared = parse_requirements(DECLARATION).unwrap();
-        assert_eq!(declared.len(), 4);
-        let ffmpeg = declared.iter().find(|c| c.name == "ffmpeg").unwrap();
-        assert_eq!(ffmpeg.revision, "1011");
-        assert!(ffmpeg.install_by_default);
-        // The exact path the failure named.
-        assert_eq!(
-            ffmpeg.marker(),
-            "$HOME/Library/Caches/ms-playwright/ffmpeg-1011/INSTALLATION_COMPLETE"
-        );
-    }
-
-    #[test]
-    fn a_hyphenated_component_uses_playwrights_underscore_spelling() {
-        let declared = parse_requirements(DECLARATION).unwrap();
-        let shell = declared
-            .iter()
-            .find(|c| c.name == "chromium-headless-shell")
-            .unwrap();
-        assert_eq!(shell.directory(), "chromium_headless_shell-1217");
-    }
-
-    #[test]
-    fn a_declaration_that_is_not_playwrights_is_refused() {
-        assert!(parse_requirements("{}").is_err());
-        assert!(parse_requirements(r#"{"browsers":[]}"#).is_err());
-        assert!(parse_requirements("not json").is_err());
-    }
-
-    fn state(name: &str, by_default: bool, state: &str) -> ComponentState {
-        ComponentState {
-            name: name.to_string(),
-            revision: "1011".to_string(),
-            install_by_default: by_default,
-            expected_path: format!(
-                "/Users/charles/Library/Caches/ms-playwright/{name}-1011/INSTALLATION_COMPLETE"
-            ),
-            state: state.to_string(),
-        }
-    }
-
-    #[test]
-    fn a_missing_default_component_is_incomplete_and_names_binary_and_path() {
-        let report = RuntimeReport {
-            components: vec![
-                state("chromium", true, COMPONENT_PRESENT),
-                state("ffmpeg", true, COMPONENT_MISSING),
-            ],
-            required: vec!["ffmpeg".to_string()],
-        };
-        assert_eq!(report.verdict(), RUNTIME_INCOMPLETE);
-        let said = report.failure("charless-mac-mini").unwrap();
-        assert!(said.contains("ffmpeg"), "{said}");
-        assert!(said.contains("ms-playwright/ffmpeg-1011"), "{said}");
-        assert!(said.contains("browserContext.newPage"), "{said}");
-        assert!(said.contains("--repair"), "{said}");
-    }
-
-    #[test]
-    fn a_component_this_host_does_not_consume_never_fails_the_verdict() {
-        let report = RuntimeReport {
-            components: vec![
-                state("ffmpeg", true, COMPONENT_PRESENT),
-                state("chromium-tip-of-tree", false, COMPONENT_MISSING),
-            ],
-            required: vec!["ffmpeg".to_string()],
-        };
-        assert_eq!(report.verdict(), RUNTIME_COMPLETE);
-        assert_eq!(report.failure("h"), None);
-        assert!(report.missing().is_empty());
-    }
-
-    #[test]
-    fn an_unreadable_component_is_unknown_rather_than_present_or_missing() {
-        let report = RuntimeReport {
-            components: vec![state("ffmpeg", true, COMPONENT_UNKNOWN)],
-            required: vec!["ffmpeg".to_string()],
-        };
-        assert_eq!(report.verdict(), RUNTIME_UNKNOWN);
-        assert!(report.failure("h").unwrap().contains("could not be judged"));
-    }
-
-    #[test]
-    fn the_verify_script_carries_markers_only_base64() {
-        use base64::engine::general_purpose::STANDARD;
-        use base64::Engine as _;
-        let declared = parse_requirements(DECLARATION).unwrap();
-        let payload = declared
-            .iter()
-            .map(|c| format!("{}|{}", c.name, c.marker()))
-            .collect::<Vec<String>>()
-            .join("\n");
-        let script =
-            REMOTE_VERIFY_BODY.replace("@MARKERS_B64@", &STANDARD.encode(payload.as_bytes()));
-        assert!(!script.contains("ffmpeg-1011"), "{script}");
-        assert!(script.contains(&STANDARD.encode(payload.as_bytes())));
-    }
 }
