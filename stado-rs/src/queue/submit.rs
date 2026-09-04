@@ -303,6 +303,8 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
     let object = value.as_object_mut().expect("Job serializes as an object");
     for field in [
         "state",
+        "provider",
+        "pin_to_provider",
         "started_at",
         "completed_at",
         "lease_expires_at",

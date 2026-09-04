@@ -1263,6 +1263,12 @@ impl JobStorage {
         F: Fn(&mut Job),
     {
         let path = format!("queue/{job_id}.json");
+        // A transition still pending on this job is finished before the
+        // document is rewritten, so the rewrite never lands under a fence
+        // another writer is about to retire — and an operator's own
+        // `job set-priority` becomes a way to finish a transition the agent
+        // cannot, which is what cleared `charless-mac-mini` on 2026-09-03.
+        self.recover_job_transition(job_id).await?;
         for _ in 0..3 {
             let Some(versioned) = self.read_text_versioned(&path).await? else {
                 return Ok(None);
@@ -1353,6 +1359,29 @@ impl JobStorage {
     }
 
     /// CAS-update the makespan assignment without recreating moved work.
+    /// CAS-update one current queued generation's placement: the provider it
+    /// is pinned to and the capacity it is assigned to. Goes through the same
+    /// rewrite as priority and assignment so a transition still pending on
+    /// the job is recovered before the document is touched; a placement
+    /// written under a pending transition is what left `charless-mac-mini`
+    /// refusing to claim on 2026-09-03.
+    pub async fn update_queued_placement(
+        &self,
+        job_id: &str,
+        provider: &str,
+        assigned_to: Option<&str>,
+    ) -> Result<Option<Job>, StorageError> {
+        self.rewrite_queued_job(job_id, |job| {
+            job.provider = provider.to_string();
+            job.pin_to_provider = true;
+            match assigned_to {
+                Some(target) => job.assigned_to = target.to_string(),
+                None => job.assigned_to.clear(),
+            }
+        })
+        .await
+    }
+
     pub async fn update_queued_assignment(
         &self,
         job_id: &str,

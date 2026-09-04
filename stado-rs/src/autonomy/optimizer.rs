@@ -686,7 +686,7 @@ async fn update_job_placement(
     let Some(versioned) = store.read_text_versioned(&path).await? else {
         return Ok(false);
     };
-    let mut current = Job::from_json(&versioned.content).map_err(|error| {
+    let current = Job::from_json(&versioned.content).map_err(|error| {
         StorageError::Other(format!("invalid queued job {}: {error}", original.job_id))
     })?;
     if current.state != crate::models::job_state::QUEUED {
@@ -711,18 +711,15 @@ async fn update_job_placement(
     {
         return Ok(false);
     }
-    current.provider = selected.provider.as_str().to_string();
-    current.pin_to_provider = true;
-    if selected.existing_capacity {
-        current.assigned_to = selected.target_id.clone();
-    } else {
-        current.assigned_to.clear();
-    }
-    store
-        .compare_and_swap_text(&path, &versioned.version, &current.to_json())
-        .await?;
-    store.refresh_job_metadata("queue", &current).await?;
-    Ok(true)
+    // The storage rewrite recovers a transition still pending on this job
+    // before it writes, and refreshes the metadata the listing reads.
+    let assigned = selected
+        .existing_capacity
+        .then_some(selected.target_id.as_str());
+    Ok(store
+        .update_queued_placement(&original.job_id, selected.provider.as_str(), assigned)
+        .await?
+        .is_some())
 }
 
 async fn persist_unplaced_decision(
