@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.1
+
+- **Workload liveness:** local-agent job shells now give Git HTTPS transfers a two-minute low-speed deadline and disable terminal credential prompts, so a connected but non-progressing fetch cannot hold a heartbeat lease and disk-cleanup lock forever.
+- **Resource fidelity:** Cargo builds inherit `CARGO_BUILD_JOBS` from the CPU cores Stado reserved for that job. An undeclared job therefore keeps Cargo to its one-core fallback instead of each of ten admitted jobs fanning out across the whole host.
+- **Reclaim availability:** when the configured queue primary is the local Stado object API, disk cleanup reads its live-job safety fence from the explicitly declared direct server backing store. Exhausting the host disk can no longer make an unavailable listener disable the canonical workdir janitor needed to recover that disk.
+- **Migration:** no persisted-state rewrite is required. Existing jobs receive the bounds when they next start under the updated local agent.
+- **Rollback boundary:** rolling back restores unbounded Git HTTPS progress waits and lets each Cargo process ignore its Stado CPU reservation.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the repository release pipeline supplies its standard qualification evidence before publication.
+
 ## 0.15.26
 
 - **Release-store retention:** the host janitor now reclaims immutable product versions only after preserving every host-owned, active-pipeline, recently completed, quarantined, and newest rollback coordinate. It walks the canonical product/run layout without following links, enforces the declared byte and item limits, and reports every reason a version stayed.
