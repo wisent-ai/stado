@@ -53,6 +53,8 @@ struct CleanupReport: Codable, Sendable {
             OutcomePresentation(title: "Healthy", detail: "Free space is above the cleanup threshold.", symbol: "checkmark.circle.fill", severity: .healthy)
         case "reclaimed_target":
             OutcomePresentation(title: "Target restored", detail: "Cleanup restored the registry target.", symbol: "checkmark.circle.fill", severity: .healthy)
+        case "reclaimed_progress":
+            OutcomePresentation(title: "Space reclaimed", detail: "Cleanup removed eligible data, but the registry free-space target still needs another pass.", symbol: "arrow.up.circle.fill", severity: .warning)
         case "interval_noop":
             OutcomePresentation(title: "Checked recently", detail: "The registry-controlled interval has not elapsed.", symbol: "clock.fill", severity: .neutral)
         case "report_only":

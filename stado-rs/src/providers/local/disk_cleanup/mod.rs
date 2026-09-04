@@ -1077,7 +1077,7 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
 // ---------------------------------------------------------------------------
 
 /// Python `_PUBLIC_OUTCOMES`.
-const PUBLIC_OUTCOMES: [&str; 11] = [
+const PUBLIC_OUTCOMES: [&str; 12] = [
     "never_run",
     "invalid_or_unavailable_policy",
     "lock_busy",
@@ -1086,6 +1086,7 @@ const PUBLIC_OUTCOMES: [&str; 11] = [
     "report_only",
     "blocked_running_jobs",
     "reclaimed_target",
+    "reclaimed_progress",
     "cap_reached",
     "partial_error",
     "no_eligible_items",
@@ -2127,7 +2128,7 @@ fn run_with_lock(
     } else if deleted == 0 {
         report.outcome = "no_eligible_items".to_string();
     } else {
-        report.outcome = "partial_error".to_string();
+        report.outcome = "reclaimed_progress".to_string();
     }
     if report.errors.is_empty() {
         report.last_success_at = Some(utc_now());
@@ -2200,8 +2201,7 @@ pub async fn run_cleanup_once(
 ///
 /// The interval gate is bypassed, because an operator who asks what the
 /// cleanup would delete must get an answer rather than `interval_noop`,
-/// and no slots are declared, because the operator is not the agent and
-/// holds none.
+/// and the preview carries zero running jobs because it is not the worker.
 ///
 /// `stado disk-cleanup --dry-run` runs this locally;
 /// `stado host cleanup TARGET --dry-run`
