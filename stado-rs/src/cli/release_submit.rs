@@ -559,8 +559,6 @@ fn identity(
     )[..32]
         .into()
 }
-/// What one capacity publication says about its host's ability to TAKE work,
-/// as opposed to its ability to talk.
 /// Whether a fresh worker publication says it can accept another job.
 ///
 /// The worker's explicit admission decision is authoritative. Missing data is

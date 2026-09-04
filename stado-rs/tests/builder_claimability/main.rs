@@ -1,38 +1,9 @@
-//! A release builder must be able to CLAIM the work, not merely to talk.
+//! A release builder must be able to claim work, not merely publish a heartbeat.
 //!
-//! # The incident
-//!
-//! `cli::release_submit::builder` selected purely on the presence of a live
-//! capacity publication, and the host it picks is written into `pinned_host`,
-//! where it is fixed for the job's lifetime. On 2026-09-03 that pinned release
-//! run 987591db to charless-mac-mini at 16:59Z. The host was publishing every
-//! ~21 seconds, comfortably inside the 180s staleness cutoff — and its gates
-//! refused every job: `charless-mac-mini is claiming nothing:
-//! disk_cleanup_stalled`, with 18.4 GiB free against a 15 GiB watermark. The
-//! queue does not re-choose, it honours a pin already written, so the build job
-//! sat unclaimed indefinitely while the submit reported nothing at all.
-//! Publishing and claiming are two different facts and only one was checked.
-//!
-//! The other declared darwin-arm64 target was blocked by the same gate at the
-//! same moment, so the platform had no builder — and a submit still succeeded
-//! in pinning one.
-//!
-//! # What is defended
-//!
-//! * a publication with free slots is claimable;
-//! * a publication that declares a slot table with nothing free is a refusal,
-//!   and is never pinned — it is the shape a gate-blocked agent broadcasts;
-//! * the refusal carries the blockers the host itself declared, in the same
-//!   words `deploy::host_gates` uses, so one host reads identically in both
-//!   commands;
-//! * a publication with no slot table at all is NOT a refusal. That is the
-//!   half that keeps this from becoming the opposite defect: a selector that
-//!   refuses whatever it cannot read would take the fleet offline just as
-//!   thoroughly as the old one let jobs queue forever. Silence is not "no".
-//!
-//! These are library-level tests over the judgement itself, which takes the
-//! publication as data — so the whole table is exercised without a store, a
-//! host, an SSH channel or a queue.
+//! Builder selection consumes the worker's explicit live admission decision.
+//! The old inferred slot table is deliberately ignored: during a rolling
+//! upgrade a publication without `accepting_jobs` is unknown, while an explicit
+//! false is authoritative and carries the same blockers as `stado host gates`.
 
 use serde_json::{json, Value};
 
@@ -42,115 +13,68 @@ use stado::deploy::host_gates::{
     DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
 };
 
-/// A publication shaped like the ones this fleet actually writes.
-fn publication(free_slots: Option<Value>, diag: Value) -> Value {
+fn publication(accepting_jobs: Option<Value>, available_cpu_cores: Option<i64>, diag: Value) -> Value {
     let mut payload = json!({
-        "consumer_id": "local-Charless-Mac-mini.local",
+        "consumer_id": "local-charless-mac-mini.local",
         "kind": "local",
-        "published_at": "2026-09-03T17:42:17.379737+00:00",
+        "running_jobs": 0,
+        "total_cpu_cores": 12,
+        "free_ram_gb": 32,
+        "total_ram_gb": 64,
+        "free_vram_gb": 0,
+        "total_vram_gb": 0,
+        "available_accelerators": {},
+        "published_at": "2026-09-04T17:42:17.379737+00:00",
         "diag": diag,
     });
-    if let Some(slots) = free_slots {
-        payload["free_slots"] = slots;
+    if let Some(accepting) = accepting_jobs {
+        payload["accepting_jobs"] = accepting;
+    }
+    if let Some(cores) = available_cpu_cores {
+        payload["available_cpu_cores"] = json!(cores);
     }
     payload
 }
 
-/// A host with capacity is selectable, and says how much.
 #[test]
-fn a_host_with_free_slots_is_claimable() {
-    let verdict = claimability(&publication(
-        Some(json!({"cpu": 1, "nvidia-l4": 0})),
-        json!({}),
-    ));
-    assert_eq!(verdict, Claimability::Claimable { free_slots: 1 });
+fn an_accepting_worker_is_claimable_with_its_live_cpu_count() {
+    let verdict = claimability(&publication(Some(json!(true)), Some(7), json!({})));
+    assert_eq!(
+        verdict,
+        Claimability::Claimable {
+            available_cpu_cores: 7
+        }
+    );
     assert!(verdict.eligible());
-    assert!(verdict.describe().contains("1 free slot"));
+    assert!(verdict.describe().contains("7 CPU core(s) available"));
 }
 
-/// A live slot table is not permission to schedule when the same publication
-/// says the agent is in its release-delivery-only recovery mode.
-///
-/// This is the exact contradictory shape the mini published on 2026-09-04:
-/// one CPU slot, disk below its low watermark, and an agent loop that retained
-/// only signed Stado release deliveries. Pinning a platform build to that host
-/// left it queued until disk was reclaimed.
 #[test]
-fn active_disk_pressure_refuses_a_build_despite_an_advertised_slot() {
-    let verdict = claimability(&publication(
-        Some(json!({"cpu": 1})),
-        json!({
-            "disk_pressure_active": true,
-            "disk_pressure_unresolved": false,
-        }),
-    ));
-    let Claimability::Refusing { blockers } = &verdict else {
-        panic!("expected a refusal, got {verdict:?}");
-    };
-    assert!(!verdict.eligible());
-    assert!(
-        blockers
-            .iter()
-            .any(|blocker| blocker.starts_with(DISK_PRESSURE_ACTIVE)),
-        "{blockers:?}"
+fn an_explicit_refusal_is_never_selected_even_if_old_slots_say_free() {
+    let mut payload = publication(
+        Some(json!(false)),
+        Some(8),
+        json!({"admission_reason": "ram_exhausted"}),
     );
-    assert!(verdict.describe().contains("release deliveries only"));
-}
-
-/// The second incident, as an invariant, and it corrected the first one's
-/// reading. `charless-mac-mini` and `lukasz-macbook` publish an EMPTY slot
-/// table permanently: `build_capacity_dict_per_card` returns an empty map for
-/// every `gpu_type` that is absent or `cpu`, and both Macs are CPU-only. They
-/// claim and run CPU work in that state — every release-worker job of this
-/// fleet — so on 2026-09-04 refusing the empty table left `darwin-arm64` with
-/// no builder at all and every product release refused with "0 free slot(s),
-/// no blocker declared", which was the selector quoting its own inference.
-#[test]
-fn a_cpu_only_host_publishing_an_empty_table_is_not_refused() {
-    let verdict = claimability(&publication(Some(json!({})), json!({})));
-    assert_eq!(verdict, Claimability::Unstated);
-    assert!(
-        verdict.eligible(),
-        "an empty table from a host with no VRAM is silence, not a refusal"
-    );
-}
-
-/// The first incident's shape, kept: a host that holds VRAM and publishes no
-/// slot for it is the wedged agent `monitor` reaps on, and it is refused.
-#[test]
-fn a_gpu_host_publishing_an_empty_table_is_refused() {
-    let mut wedged = publication(Some(json!({})), json!({}));
-    wedged["total_vram_gb"] = json!(80);
-    wedged["free_vram_gb"] = json!(0);
-    let verdict = claimability(&wedged);
+    payload["free_slots"] = json!({"cpu": 99});
+    let verdict = claimability(&payload);
     assert_eq!(
         verdict,
         Claimability::Refusing {
-            blockers: Vec::new()
+            blockers: vec!["ram_exhausted".to_string()]
         }
     );
-    assert!(
-        !verdict.eligible(),
-        "a host that will take nothing must not receive an irrevocable pin"
-    );
-}
-
-/// A slot table that is present but exhausted is the same refusal: every
-/// declared slot taken is still "this host will accept nothing now".
-#[test]
-fn a_host_whose_every_slot_is_taken_is_refused() {
-    let verdict = claimability(&publication(Some(json!({"cpu": 0, "gpu": 0})), json!({})));
     assert!(!verdict.eligible());
+    assert!(verdict.describe().contains("ram_exhausted"));
 }
 
-/// The refusal has to be legible, which is the whole point of the change: the
-/// caller learns which host was considered and what stopped it, in the words
-/// `host gates` already uses.
 #[test]
-fn a_refusal_carries_the_blockers_the_host_declared() {
+fn a_refusal_carries_the_host_gate_reasons_the_worker_published() {
     let verdict = claimability(&publication(
-        Some(json!({})),
+        Some(json!(false)),
+        Some(0),
         json!({
+            "disk_pressure_active": true,
             "disk_pressure_unresolved": true,
             "disk_cleanup_policy_known": false,
             "queue_paused": true,
@@ -160,126 +84,50 @@ fn a_refusal_carries_the_blockers_the_host_declared() {
     let Claimability::Refusing { blockers } = &verdict else {
         panic!("expected a refusal, got {verdict:?}");
     };
+    assert!(blockers.iter().any(|b| b.starts_with(DISK_PRESSURE_ACTIVE)));
     assert!(blockers.iter().any(|b| b == DISK_PRESSURE_UNRESOLVED));
     assert!(blockers.iter().any(|b| b == DISK_CLEANUP_POLICY_UNKNOWN));
     assert!(blockers.iter().any(|b| b == QUEUE_PAUSED));
-    assert!(
-        blockers.iter().any(|b| b.starts_with(DISK_CLEANUP_STALLED)),
-        "a lock_busy pass never advances last_success_at, which is what closed \
-         both darwin-arm64 builders: {blockers:?}"
-    );
-    let described = verdict.describe();
-    assert!(described.contains("0 free slot(s)"), "{described}");
-    assert!(described.contains(DISK_CLEANUP_STALLED), "{described}");
+    assert!(blockers.iter().any(|b| b.starts_with(DISK_CLEANUP_STALLED)));
 }
 
-/// The exact publication the wedged mini was broadcasting: punctual, fresh,
-/// empty slot table, janitor pass exiting `lock_busy`. Refused, and the reason
-/// names the janitor.
 #[test]
-fn the_wedged_builders_own_publication_is_refused_with_its_reason() {
-    let verdict = claimability(&json!({
-        "consumer_id": "local-Charless-Mac-mini.local",
-        "kind": "local",
-        "free_slots": {},
-        "free_vram_gb": 1,
-        "total_vram_gb": 1,
-        "published_at": "2026-09-03T17:42:17.379737+00:00",
-        "diag": {
-            "storage_backend": "stado",
-            "storage_answers_for_fleet": true,
-            "disk_cleanup": {
-                "writer": "agent-tick",
-                "writer_version": "0.13.52",
-                "writer_pid": 79473,
-                "outcome": "lock_busy",
-                "lock_busy": true,
-                "duration_ms": 372,
-                "last_success_at": Value::Null,
-            },
-        },
-    }));
+fn an_explicit_refusal_without_a_reason_stays_a_refusal() {
+    let verdict = claimability(&publication(Some(json!(false)), Some(0), json!({})));
+    assert_eq!(
+        verdict,
+        Claimability::Refusing {
+            blockers: Vec::new()
+        }
+    );
     assert!(!verdict.eligible());
-    assert!(verdict.describe().contains(DISK_CLEANUP_STALLED));
+    assert_eq!(verdict.describe(), "not accepting jobs; no reason published");
 }
 
-/// The guard against becoming the opposite defect. A publication with no slot
-/// table has not refused anything, and must stay eligible: refusing on
-/// unreadable data would take every builder offline the moment a field went
-/// missing, which is a worse outage than the one being fixed.
 #[test]
-fn a_publication_with_no_slot_table_is_not_a_refusal() {
-    let verdict = claimability(&publication(None, json!({"storage_backend": "stado"})));
-    assert_eq!(verdict, Claimability::Unstated);
-    assert!(
-        verdict.eligible(),
-        "silence from a host is not the host saying no; inventing a refusal from a missing \
-         field is how a selector takes a fleet offline"
-    );
-    assert!(verdict.describe().contains("no slot table"));
-}
-
-/// A slot table of the wrong shape is the same silence, not a refusal.
-#[test]
-fn an_unreadable_slot_table_is_treated_as_silence_not_refusal() {
-    for shape in [json!("plenty"), json!(3), json!([1, 2]), Value::Null] {
-        let verdict = claimability(&publication(Some(shape.clone()), json!({})));
-        assert_eq!(verdict, Claimability::Unstated, "shape {shape:?}");
-        assert!(verdict.eligible(), "shape {shape:?}");
+fn a_rolling_upgrade_publication_without_a_decision_is_unstated() {
+    for legacy_shape in [
+        json!({"cpu": 0}),
+        json!({"cpu": 4}),
+        json!({}),
+        Value::Null,
+    ] {
+        let mut payload = publication(None, None, json!({"storage_backend": "stado"}));
+        payload["free_slots"] = legacy_shape;
+        let verdict = claimability(&payload);
+        assert_eq!(verdict, Claimability::Unstated);
+        assert!(
+            verdict.eligible(),
+            "missing new admission data is unknown during a rolling upgrade, not a refusal"
+        );
+        assert_eq!(verdict.describe(), "published no admission decision");
     }
 }
 
-/// Non-numeric slot values must not be counted as capacity, but must not
-/// manufacture capacity either: a table whose values cannot be summed to a
-/// positive number is a refusal, not a free slot.
 #[test]
-fn slot_values_that_are_not_numbers_do_not_create_capacity() {
-    let verdict = claimability(&publication(Some(json!({"cpu": "one"})), json!({})));
-    assert!(!verdict.eligible());
-}
-
-/// What the agent publishes when it has CPU slots but no card to offer.
-///
-/// On 2026-09-03 both darwin-arm64 builders vanished from selection while
-/// idle: an apple-mps host reads ~1 GB of VRAM, the safety buffer zeroes its
-/// card offer, and the slot table went out as `{}` -- which `claimability`
-/// rightly reads as a refusal. The agent's own claim loop was taking CPU work
-/// the whole time; only the publication lied. `with_cpu_capacity` is the
-/// publisher's half of that contract, so the table says what the loop does.
-#[test]
-fn a_host_with_no_card_offer_still_publishes_its_free_cpu_slots() {
-    use stado::providers::local::helpers::with_cpu_capacity;
-
-    // Nothing offered, cap 2, nothing running: the table says two CPU slots.
-    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 2, 0);
-    assert_eq!(offered.get("cpu"), Some(&2));
-    // And the selector agrees that is capacity.
-    let verdict = claimability(&publication(
-        Some(serde_json::to_value(&offered).unwrap()),
-        json!({}),
-    ));
-    assert_eq!(verdict, Claimability::Claimable { free_slots: 2 });
-    assert!(verdict.eligible());
-
-    // One slot busy: the table says one.
-    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 2, 1);
-    assert_eq!(offered.get("cpu"), Some(&1));
-
-    // Both busy: nothing to add, and the table must NOT grow a zero -- a
-    // present-but-exhausted table is the refusal shape above.
-    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 2, 2);
-    assert!(!offered.contains_key("cpu"));
-    assert!(offered.is_empty());
-
-    // No cap configured: the loop would take work without bound, and no
-    // invented number belongs in the table.
-    let offered = with_cpu_capacity(std::collections::BTreeMap::new(), 0, 0);
-    assert!(offered.is_empty());
-
-    // A card already offered: the CPU answer never overwrites it.
-    let mut gpu = std::collections::BTreeMap::new();
-    gpu.insert("apple-mps".to_string(), 1);
-    let offered = with_cpu_capacity(gpu, 2, 0);
-    assert_eq!(offered.get("apple-mps"), Some(&1));
-    assert!(!offered.contains_key("cpu"));
+fn a_non_boolean_admission_value_is_unstated_not_invented() {
+    for malformed in [json!(1), json!("yes"), json!([]), json!({})] {
+        let verdict = claimability(&publication(Some(malformed.clone()), Some(5), json!({})));
+        assert_eq!(verdict, Claimability::Unstated, "shape {malformed:?}");
+    }
 }
