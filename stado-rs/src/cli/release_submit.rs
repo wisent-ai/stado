@@ -594,12 +594,20 @@ pub enum Claimability {
     /// This is a positive statement by the host that it will accept nothing,
     /// which is what a gate-blocked agent broadcasts.
     Refusing { blockers: Vec<String> },
-    /// The publication carries no readable slot table at all.
+    /// The publication carries no readable slot table, or an empty one.
     ///
     /// Deliberately NOT a refusal. A missing field is the host failing to say,
     /// not the host saying no, and inventing a refusal from silence is how a
-    /// selector takes a fleet offline. Such a candidate stays eligible and the
-    /// receipt records that it was chosen without a claimability statement.
+    /// selector takes a fleet offline. An EMPTY table is the same silence with
+    /// braces around it: `build_capacity_dict_per_card` returns an empty map
+    /// for every host whose `gpu_type` is absent or `cpu`, so both Macs have
+    /// always published `"free_slots": {}` while claiming and running CPU work
+    /// — including every release-worker job of this fleet. Reading that as a
+    /// positive refusal closed both `darwin-arm64` builders on 2026-09-04 and
+    /// with them every product release, under the sentence "0 free slot(s), no
+    /// blocker declared", which is the selector describing its own inference.
+    /// Such a candidate stays eligible and the receipt records that it was
+    /// chosen without a claimability statement.
     Unstated,
 }
 
@@ -648,9 +656,39 @@ pub fn claimability(publication: &Value) -> Claimability {
     if free > 0 {
         return Claimability::Claimable { free_slots: free };
     }
-    Claimability::Refusing {
-        blockers: publication_blockers(publication),
+    // A table with keys and nothing free is the host saying no: every declared
+    // slot is taken or withheld.
+    if !slots.is_empty() {
+        return Claimability::Refusing {
+            blockers: publication_blockers(publication),
+        };
     }
+    // From here the table is EMPTY, which two different hosts mean two
+    // different things by, and only the publication itself can tell them
+    // apart.
+    let blockers = publication_blockers(publication);
+    if !blockers.is_empty() {
+        return Claimability::Refusing { blockers };
+    }
+    // A host that holds VRAM and publishes no slot for it is the wedged shape
+    // `monitor` reaps on: fresh publication, `free_vram_gb` at zero, table
+    // empty. That host is refused, which is the 2026-09-03 incident this
+    // judgement was written for.
+    if publication
+        .get("total_vram_gb")
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+        > 0
+    {
+        return Claimability::Refusing { blockers };
+    }
+    // A host with no VRAM has no slot to publish and never had one:
+    // `build_capacity_dict_per_card` returns an empty map for every `gpu_type`
+    // that is absent or `cpu`. Both Macs of this fleet have published `{}`
+    // continuously while claiming and running CPU work, so the empty table is
+    // silence and reading it as a refusal closed both `darwin-arm64` builders
+    // on 2026-09-04, and with them every product release.
+    Claimability::Unstated
 }
 fn publication_flag(publication: &Value, name: &str) -> Option<bool> {
     publication

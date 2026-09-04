@@ -97,12 +97,32 @@ fn active_disk_pressure_refuses_a_build_despite_an_advertised_slot() {
     assert!(verdict.describe().contains("release deliveries only"));
 }
 
-/// The incident, as an invariant. charless-mac-mini published exactly this —
-/// an empty slot table — while publishing punctually every ~21 seconds. It
-/// must never be pinned again.
+/// The second incident, as an invariant, and it corrected the first one's
+/// reading. `charless-mac-mini` and `lukasz-macbook` publish an EMPTY slot
+/// table permanently: `build_capacity_dict_per_card` returns an empty map for
+/// every `gpu_type` that is absent or `cpu`, and both Macs are CPU-only. They
+/// claim and run CPU work in that state — every release-worker job of this
+/// fleet — so on 2026-09-04 refusing the empty table left `darwin-arm64` with
+/// no builder at all and every product release refused with "0 free slot(s),
+/// no blocker declared", which was the selector quoting its own inference.
 #[test]
-fn a_host_publishing_no_free_slots_is_refused_not_pinned() {
+fn a_cpu_only_host_publishing_an_empty_table_is_not_refused() {
     let verdict = claimability(&publication(Some(json!({})), json!({})));
+    assert_eq!(verdict, Claimability::Unstated);
+    assert!(
+        verdict.eligible(),
+        "an empty table from a host with no VRAM is silence, not a refusal"
+    );
+}
+
+/// The first incident's shape, kept: a host that holds VRAM and publishes no
+/// slot for it is the wedged agent `monitor` reaps on, and it is refused.
+#[test]
+fn a_gpu_host_publishing_an_empty_table_is_refused() {
+    let mut wedged = publication(Some(json!({})), json!({}));
+    wedged["total_vram_gb"] = json!(80);
+    wedged["free_vram_gb"] = json!(0);
+    let verdict = claimability(&wedged);
     assert_eq!(
         verdict,
         Claimability::Refusing {
