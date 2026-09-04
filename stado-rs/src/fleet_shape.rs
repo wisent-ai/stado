@@ -1182,12 +1182,17 @@ fn service_artefacts(
 ///
 /// Derived from the tags, not guessed: `git tag --contains` on the commit that
 /// added each name to `crate::targets`'s allowed list answers `stado-v0.12.0`
-/// for `queue_workdirs` (#154) and `stado-v0.13.0` for `backup_twins`. The two
-/// cleaners already in 0.9.5 — `build_caches`, `chromium_clones`,
-/// `huggingface_cache`, `weles_recordings` — need no entry, because no host in
-/// this fleet runs anything older.
-const CLEANERS_BY_VERSION: &[(&str, &str)] =
-    &[("queue_workdirs", "0.12.0"), ("backup_twins", "0.13.0")];
+/// for `queue_workdirs` (#154) and `stado-v0.13.0` for `backup_twins`.
+/// `release_store` first ships in 0.15.26; declaring it against an older host
+/// makes that host reject the entire policy instead of merely skipping the
+/// unknown cleaner. The four cleaners already in 0.9.5 — `build_caches`,
+/// `chromium_clones`, `huggingface_cache`, `weles_recordings` — need no entry,
+/// because no host in this fleet runs anything older.
+const CLEANERS_BY_VERSION: &[(&str, &str)] = &[
+    ("queue_workdirs", "0.12.0"),
+    ("backup_twins", "0.13.0"),
+    ("release_store", "0.15.26"),
+];
 
 /// Whether `installed` is at least `required`, comparing `X.Y.Z` numerically.
 ///
