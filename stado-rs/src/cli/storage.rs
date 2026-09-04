@@ -1520,10 +1520,6 @@ struct RemoteObjectApi {
     http: reqwest::Client,
     base_url: url::Url,
     token: String,
-    /// True only when the caller supplied `STADO_API_TOKEN` directly. A token
-    /// file may be the coordinator's object bearer and must not be mistaken
-    /// for a product-scoped release credential.
-    explicit_token: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -1670,9 +1666,7 @@ impl RemoteObjectApi {
         let Some(base_url) = Self::endpoint_from_env_or_config()? else {
             return Ok(None);
         };
-        let configured_token = std::env::var("STADO_API_TOKEN");
-        let explicit_token = matches!(&configured_token, Ok(value) if !value.trim().is_empty());
-        let token = match configured_token {
+        let token = match std::env::var("STADO_API_TOKEN") {
             Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
             Ok(_) | Err(std::env::VarError::NotPresent) => {
                 let token_file = std::env::var("STADO_API_TOKEN_FILE")
@@ -1737,7 +1731,6 @@ impl RemoteObjectApi {
             http,
             base_url,
             token,
-            explicit_token,
         }))
     }
 
@@ -1750,7 +1743,6 @@ impl RemoteObjectApi {
             http,
             base_url,
             token: String::new(),
-            explicit_token: false,
         }))
     }
 
@@ -1803,9 +1795,6 @@ impl RemoteObjectApi {
         namespace: &str,
         key_or_prefix: &str,
     ) -> Result<Option<String>, CmdError> {
-        if self.explicit_token {
-            return Ok(Some(self.token.clone()));
-        }
         let Some(policy_key) = crate::object_store::release_policy_key(namespace, key_or_prefix)
         else {
             if namespace == "system" && key_or_prefix.starts_with("release-catalog/") {

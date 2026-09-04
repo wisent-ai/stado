@@ -16,8 +16,44 @@ The Stado delivery job starts its worker from the digest-pinned candidate
 archive and that worker uses itself for `install-local`; a broken older
 installed worker therefore cannot prevent the release that repairs it.
 
+## Release publication authority
 
+Release signing and authenticated release-object publication resolve one
+declared credential authority: `release_api.skarbiec.url`. They use separate
+least-privilege identities and owner-only token files on that same Skarbiec:
+`stado-release-coordinator` reads only the signing key, while
+`stado-release-api-verifier` reads the product publisher bearer named by
+`release_api.publishers`. `STADO_API_TOKEN` remains a generic object API
+credential and is never substituted for a product's release publisher.
 
+Exact `GET /api/release/object?uri=stado://releases/...` reads are public so a
+damaged credential plane cannot make signed recovery artifacts unreachable.
+Release writes and listings remain authenticated by the product publisher
+contract above.
+
+## Resolve the executable that is actually active
+
+```console
+stado release active-binary skarbiec --json
+```
+
+`release active-binary` resolves the local registry target unless `--target`
+names that same host. It reads observed rollout state, not `policy.desired`: a
+newer quarantined candidate cannot displace the healthy predecessor that still
+serves the stable bind. The command succeeds only when one live release process
+matches the recorded PID, version, candidate port, and immutable release
+directory; the exact Stado proxy executable and argument vector target that
+port at the recorded generation; and the installed marker, qualification,
+artifact digest, manifest digest, platform, directory, and executable all
+agree. The executable must be a regular, non-symlink, executable file.
+
+JSON output includes `state`, `product`, `target`, `version`, `platform`,
+`artifact_sha256`, `manifest_sha256`, and the absolute `path`; human output is
+the path alone for direct command substitution. If release control declares
+the product and target but no release is observably active, the command fails
+instead of falling back to an old file. Stado's authenticator-seed freshness
+reader and Weles use this same contract for `SKARBIEC_BIN`, so they cannot
+select desired, quarantined, or merely present Skarbiec bytes independently.
 
 ## Create and run a recipe
 
