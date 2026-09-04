@@ -153,6 +153,12 @@ pub async fn canonical_target(target_name: &str) -> Result<ComputeTarget, Deploy
 pub fn ssh_options(ssh_target: &str) -> Vec<String> {
     let mut argv = host_reboot::ssh_reboot_argv(ssh_target);
     argv.pop();
+    if tracing::enabled!(
+        target: "stado::deploy::host_channel",
+        tracing::Level::TRACE
+    ) {
+        argv.insert(argv.len() - 1, "-vvv".to_string());
+    }
     argv
 }
 
