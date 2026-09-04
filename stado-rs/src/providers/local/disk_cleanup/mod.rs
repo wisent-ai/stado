@@ -2313,13 +2313,7 @@ fn run_with_lock(
     // share and only after every cleaner that reclaims scratch has had its
     // turn — a release is the one class here that costs a rebuild to get
     // back.
-    release_store::scan_release_store(
-        home,
-        &policy,
-        remaining_after_twins,
-        deadline,
-        &mut report,
-    );
+    release_store::scan_release_store(home, &policy, remaining_after_twins, deadline, &mut report);
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items

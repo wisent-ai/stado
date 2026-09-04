@@ -184,7 +184,11 @@ fn run_pinned_versions(
     let mut directories = Vec::new();
     if let Ok(namespaces) = std::fs::read_dir(ecosystem) {
         for namespace in namespaces.flatten() {
-            if namespace.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            if namespace
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or(false)
+            {
                 directories.push((namespace.path().join(RUNS_PREFIX), 0usize));
             }
         }

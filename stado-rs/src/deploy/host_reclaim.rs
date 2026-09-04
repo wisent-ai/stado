@@ -146,6 +146,9 @@ pub const REBUILDABLE_CACHES_STAGE: &str = "rebuildable_caches";
 pub const FOREIGN_HOME_TREES_STAGE: &str = "foreign_home_trees";
 /// The stage name for eligible local Time Machine APFS snapshots.
 pub const LOCAL_APFS_SNAPSHOTS_STAGE: &str = "local_apfs_snapshots";
+/// The stage name for queue job trees left in the OS scratch directory by an
+/// agent that predates the persistent `$HOME/.stado/work/jobs` root.
+pub const LEGACY_TMP_WORKDIRS_STAGE: &str = "legacy_tmp_workdirs";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -264,6 +267,30 @@ if [ -d "$scratch" ]; then
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tbuild_scratch\t%s\t%s\n' "$before" "$(free_kb)"
+
+before=$(free_kb)
+# Queue job trees an agent that predates the persistent root left in the OS
+# scratch directory. The janitor's own `queue_workdirs` cleaner is rooted in
+# the account's home and only ever unlinked the compatibility SYMLINK here, so
+# a real tree left by an older agent was invisible to every stage: on
+# 2026-09-04 ten of them held 14.2 GB on charless-mac-mini while the host sat
+# at 1.1 GB free, which took its object API, the registry authority and every
+# Skarbiec decryption down together, and this command measured zero in all
+# eight stages. The gates are the ones the rest of this script uses: the entry
+# is a directory and not a symlink, no live process names its path, and it has
+# not been written to for an hour. The floor is the clone stage's hour rather
+# than the day the home stages use, because a queue tree is scratch whose real
+# fence is `held` — the janitor itself gives this cleaner no age floor at all
+# and gates on the job being terminal.
+if [ -d /tmp ]; then
+  for entry in /tmp/wc-*; do
+    [ -d "$entry" ] || continue
+    [ -L "$entry" ] && continue
+    stale_minutes "$entry" || continue
+    reclaim "$entry" legacy_tmp_workdirs
+  done
+fi
+printf 'STADO_RECLAIM_STAGE\tlegacy_tmp_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
 # macOS-style home trees on a Linux host. `/Users/<name>` exists on Linux only
