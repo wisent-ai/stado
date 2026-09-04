@@ -2316,7 +2316,6 @@ fn run_with_lock(
     release_store::scan_release_store(
         home,
         &policy,
-        crate::config::wc_stado_storage_namespace(),
         remaining_after_twins,
         deadline,
         &mut report,
