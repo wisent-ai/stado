@@ -373,6 +373,13 @@ stado capabilities --json
 
 See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
 
+For a loaded launchd label or systemd unit that the registry does not declare,
+`stado service bootout <exact-unit> --host <target> --domain system|user`
+retires only that exact init-system identity. Linux bootout disables and stops
+the unit and verifies it inactive without deleting its unit file; omitting the
+domain preserves system-first precedence. See
+[Channels](docs/channels.md#retiring-an-undeclared-init-system-unit).
+
 ### Weles mobile egress
 
 `stado egress mobile serve` is the data path for a Weles browser that must

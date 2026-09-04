@@ -102,29 +102,28 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Boot one loaded launchd label out of its system or user domain.
+    /// Boot one exact launchd label or systemd unit out of its system or user
+    /// scope.
     ///
-    /// `stop` ends a declared unit and the processes launchd disowned from it.
-    /// Nothing ended a process whose label the registry never declared, or
-    /// whose label was removed while the process kept running. On
-    /// charless-mac-mini that is how a `stado agent` from 2026-08-27 kept
-    /// publishing the host's capacity through three release deliveries, two
-    /// restarts, a `service stop` and a `service remove`, refusing 55 pinned
-    /// jobs for a week — and why `service list --undeclared` could name the
-    /// state while no command could end it.
+    /// `stop` and `retire` require a registry declaration. This command is for
+    /// a loaded unit the registry does not declare, including an obsolete
+    /// duplicate that `service list --undeclared` found. It never removes the
+    /// unit's file.
     ///
-    /// For a label the registry does not declare, which `stop` cannot resolve
-    /// and `retire` cannot reach. `service list --undeclared` names them.
+    /// On Linux the selected systemd manager stops and disables only the exact
+    /// requested unit, then Stado reads back that it is inactive and not
+    /// enabled. On Darwin the selected launchd domain is booted out as before.
     Bootout {
-        /// launchd label, as the host knows it.
+        /// Exact launchd label or systemd unit name, as the host knows it.
         label: String,
         /// Registry host that has it loaded.
         #[arg(long)]
         host: String,
-        /// Which launchd domain to act in: `system`, `user`, or unset for the
-        /// historical order (system first, user domains only if the system
-        /// domain holds nothing). A label loaded in BOTH domains has two jobs
-        /// and the unset order can only ever reach the system one.
+        /// Which init-system scope to act in: `system`, `user`, or unset for
+        /// `any`. The unset order is system first, then the calling account
+        /// only when the system scope holds no exact unit by this name. A name
+        /// loaded in both scopes identifies two jobs; pass `user` to leave its
+        /// system sibling untouched.
         #[arg(long)]
         domain: Option<String>,
         #[arg(long)]
@@ -982,6 +981,10 @@ pub enum ServiceCommands {
         /// program and the two are never mixed.
         #[arg(long = "arg")]
         args: Vec<String>,
+        /// Non-secret NAME=VALUE persisted with the unit; repeat for each key.
+        /// Use secret-sync for credentials, never put them on the command line.
+        #[arg(long = "env", value_name = "NAME=VALUE")]
+        env: Vec<String>,
         /// Why this host must run this unit. Required: `ensure` installs units
         /// and restarts running ones, and every such change is recorded beside
         /// the registry document it declared the unit in.
@@ -1460,6 +1463,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host,
             from,
             args,
+            env,
             reason,
             as_daemon,
             as_launch_agent,
@@ -1470,6 +1474,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 host: &host,
                 from: from.as_deref(),
                 args: &args,
+                env: &env,
                 reason: &reason,
                 as_daemon,
                 as_launch_agent,
@@ -1795,13 +1800,13 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     fail_if_any(&failures, "scan for undeclared units")
 }
 
-/// `service bootout LABEL --host HOST [--domain system|user]` — take one loaded
-/// label out of launchd, declared or not.
+/// `service bootout LABEL --host HOST [--domain system|user]` — take one exact
+/// unit out of launchd or systemd, whether the registry declares it or not.
 ///
-/// Without `--domain` the system domain is tried first and the user domains
-/// only if it holds nothing, which is right for the usual single job and cannot
-/// reach the second job of a label loaded in both. `--domain user` is what ends
-/// a stale LaunchAgent copy while leaving the declared system daemon running.
+/// Without `--domain`, the system scope is tried first and the calling
+/// account's scope only when the system manager holds no exact unit by that
+/// name. Explicit `user` is what ends a stale user unit while leaving its
+/// canonical system sibling running.
 async fn bootout(
     label: &str,
     host: &str,
@@ -3070,6 +3075,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             host: options.host,
             from: None,
             args: &[],
+            env: &[],
             reason: &reason,
             as_daemon: true,
             as_launch_agent: false,
@@ -6380,6 +6386,7 @@ struct EnsureOptions<'a> {
     host: &'a str,
     from: Option<&'a str>,
     args: &'a [String],
+    env: &'a [String],
     reason: &'a str,
     as_daemon: bool,
     as_launch_agent: bool,
@@ -6398,8 +6405,7 @@ pub(crate) struct UnitProgram {
     pub(crate) source: &'static str,
     /// Stable unit identity supplied by a registry or catalog declaration.
     pub(crate) unit: Option<String>,
-    /// Environment the catalog declares for the unit, placeholders intact;
-    /// empty for every other source, which declares none.
+    /// Non-secret environment declared by this unit, with target placeholders intact.
     pub(crate) env: std::collections::BTreeMap<String, String>,
 }
 pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
@@ -6461,7 +6467,9 @@ pub(crate) fn unit_program(
             args: args.to_vec(),
             source: "flag",
             unit: None,
-            env: Default::default(),
+            env: declared
+                .map(|service| service.env.clone())
+                .unwrap_or_default(),
         });
     }
     if !args.is_empty() {
@@ -6476,7 +6484,7 @@ pub(crate) fn unit_program(
             args: declared.args.clone(),
             source: "registry",
             unit: Some(declared.unit_id().to_string()),
-            env: Default::default(),
+            env: declared.env.clone(),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -6511,7 +6519,7 @@ pub(crate) fn unit_program(
             args: shipped.args,
             source: "shipped",
             unit: Some(unit),
-            env: Default::default(),
+            env: shipped.env,
         });
     }
     Err(CmdError::usage(format!(
@@ -6579,6 +6587,7 @@ pub(crate) async fn ensure_local_dependency(
         host: &host,
         from: None,
         args: &[],
+        env: &[],
         reason,
         as_daemon,
         as_launch_agent: false,
@@ -6616,6 +6625,7 @@ pub(crate) async fn reconcile_after_config_change(
         host,
         from: None,
         args: &[],
+        env: &[],
         reason,
         as_daemon: true,
         as_launch_agent: false,
@@ -6726,6 +6736,26 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit.args.join(" ")
         );
     }
+    let home = crate::deploy::service_catalog::home_for(&target);
+    let mut env_overrides = unit.env;
+    for assignment in options.env {
+        let (name, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| CmdError::usage("--env requires NAME=VALUE"))?;
+        env_overrides.insert(name.to_string(), value.to_string());
+    }
+    for (name, value) in env_overrides {
+        let value = crate::deploy::service_catalog::resolve_word(
+            &value,
+            &home,
+            Some(&target.release_platform),
+            &target.name,
+        );
+        match unit_env.iter_mut().find(|(key, _)| key == &name) {
+            Some((_, current)) => *current = value,
+            None => unit_env.push((name, value)),
+        }
+    }
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise
@@ -6743,7 +6773,14 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             &unit.args,
             &unit_env,
         ),
-        None => service::plan_deploy(&target, options.name, &unit.program, &unit.args),
+        None => service::plan_deploy_labelled(
+            &target,
+            options.name,
+            &crate::deploy::local_install::label(service::DEPLOY_KIND, options.name),
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
     }
     .map_err(click)?;
     let mut plan = plan;
@@ -6796,6 +6833,7 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;
     record.args = unit.args;
+    record.env = unit_env.into_iter().collect();
     let generation = match &already {
         // Declared, at the same file and running the same program, by the
         // registry: the document already says what this pass just confirmed,
@@ -6805,7 +6843,8 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
                 && existing.path == record.path
                 && existing.kind == record.kind
                 && existing.program == record.program
-                && existing.args == record.args =>
+                && existing.args == record.args
+                && existing.env == record.env =>
         {
             None
         }

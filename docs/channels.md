@@ -21,6 +21,29 @@ Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. 
 
 An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
 
+### Retiring an undeclared init-system unit
+
+`stado service bootout <exact-unit> --host <target> [--domain system|user]` is the declaration-independent stop path for a unit found by `service list --undeclared` or `service label-print`. It addresses the exact launchd label or systemd unit name supplied; it does not derive a prefix or add or remove a `.service` suffix. With no domain, Stado preserves system-first precedence and checks the calling account only when the system manager holds no exact unit by that name. Pass `--domain user` when the same or a related canonical name must remain running in system scope.
+
+On Linux, bootout uses the target account's explicit systemd user bus for `user` scope and the existing non-interactive privilege path for `system`. It runs `systemctl disable --now` for only the exact requested identity, then refuses unless that identity reads back inactive and not enabled. An absent identity is a retry-safe `absent`; manager, privilege, disable, identity, and postcondition failures are `refused`. On Darwin, the existing system or per-login launchd bootout and absence checks are unchanged. Neither platform branch deletes the unit definition; file removal remains a separate `stado host remove-file` operation.
+
+For example, the obsolete Ubuntu user unit `com.wisent.compute.service.stado-resolver.service.service.service` can be retired with an explicit user-domain bootout. The canonical `com.wisent.stado-resolver.service` is a different exact identity and is not selected or changed.
+
+### Keeping a service's non-secret environment
+
+`stado service ensure <name> --host <target> --env NAME=VALUE --reason <reason>`
+records each non-secret assignment in the managed service's `env` map and renders
+it into the host unit. Repeat `--env` for multiple keys; the last assignment wins.
+Recorded values override catalog defaults and survive subsequent `ensure` calls
+and automatic repairs. `$HOME`, `$STADO_HOST`, and `$STADO_PLATFORM` expand
+against the target, not the caller. Credentials still use `secret-sync`, never
+`--env`.
+
+For an independently managed instance outside a release policy's target map,
+`registry doctor` accepts pinned environment only when both the registry record
+and the local unit file contain the product's exact required values. A remote
+unit that was not read is not treated as agreeing.
+
 ### Release-controlled placement handoff
 
 A service placement unit has one exact lifecycle. Stado-managed units retain the existing shape:
