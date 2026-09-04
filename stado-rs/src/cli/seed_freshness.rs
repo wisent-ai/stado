@@ -840,60 +840,109 @@ async fn remote_seed_state(
     })
 }
 
-/// The Skarbiec the fleet actually released, else the one that predates
-/// release control.
+/// Resolve Skarbiec through the host's release agent, using the same observed
+/// active-binary contract consumed by Weles.
 ///
-/// A release-controlled product keeps its delivered copies at
-/// `install_root/releases/<version>/<platform>/<binary>` — the layout
-/// [`crate::release_control::install_directory`] commits them into — and the
-/// desired release names the version whose bytes this fleet can attest.
-/// `$HOME/.stado/bin/skarbiec` is where Skarbiec lived before release control
-/// existed, and on a host installed by hand once it is still sitting there
-/// beside the delivery path: on 2026-09-04 charless-mac-mini had a committed
-/// 0.2.38 under `install_root` and an unattested 0.2.28 at the legacy path, so
-/// asking the legacy copy whether the vault supports `totp-seed-state`
-/// answered `vault_read_unsupported` for a release that carries it.
-///
-/// Candidates in order and never a search, the way `service converge` resolves
-/// an artefact root: a probe that hunts the filesystem for something named
-/// `skarbiec` finds a backup copy and reports its capabilities as the running
-/// one's.
+/// A product/target with no release-control policy may still use the historical
+/// `$HOME/.stado/bin/skarbiec` install. Once the policy exists, however, desired
+/// state and executable files are not evidence that a release is active: a
+/// quarantined candidate leaves both behind. The host's installed Stado must
+/// identify and validate the exact process, proxy target, manifest identity,
+/// immutable directory and executable that are actually active.
 async fn release_managed_skarbiec(
     resolved: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
     home: &str,
 ) -> Result<String, CmdError> {
     let legacy = format!("{home}/.stado/bin/skarbiec");
-    // A registry carrying no release control, no desired release or no policy
-    // for this target cannot name a managed copy, and the
-    // pre-release-control path is then the only answer there is.
-    let managed = super::release_quarantine::canonical_control()
-        .await
-        .ok()
-        .and_then(|control| {
-            let policy = control.products.get("skarbiec")?;
-            let target = policy.targets.get(resolved.name.as_str())?;
-            let desired = policy.desired.as_ref()?;
-            Some(format!(
-                "{}/releases/{}/{}/{}",
-                policy.install_root.trim_end_matches('/'),
-                desired.version,
-                target.platform,
-                policy.binary
-            ))
-        });
-    let Some(managed) = managed.filter(|path| *path != legacy) else {
+    let document = super::registry::fetch_document().await?;
+    let control = crate::release_control::control(&document).map_err(CmdError::click)?;
+    let Some(control) = control else {
         return Ok(legacy);
     };
-    let present = crate::deploy::host_channel::remote_test(
-        resolved,
-        &format!("-x {}", crate::deploy::shlex_quote(&managed)),
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    // A desired release the rollout has not delivered here yet leaves the
-    // legacy copy as the only executable one; reporting what it answers beats
-    // reporting nothing at all.
-    Ok(if present { managed } else { legacy })
+    let Some(policy) = control.products.get("skarbiec") else {
+        return Ok(legacy);
+    };
+    let Some(target) = policy.targets.get(resolved.name.as_str()) else {
+        return Ok(legacy);
+    };
+
+    let stado = format!("{home}/.stado/bin/stado");
+    let invocation = [
+        stado.as_str(),
+        "release",
+        "active-binary",
+        "skarbiec",
+        "--target",
+        resolved.name.as_str(),
+        "--json",
+    ];
+    let output = crate::deploy::host_channel::run_program(resolved, &invocation, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{}: release-controlled Skarbiec has no available active binary: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&output, "active release unavailable")
+        )));
+    }
+    let active: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "{}: Stado active-binary returned unreadable JSON: {error}",
+            resolved.name
+        ))
+    })?;
+    let field = |name: &str| {
+        active
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: Stado active-binary omitted {name:?}",
+                    resolved.name
+                ))
+            })
+    };
+    let state = field("state")?;
+    let product = field("product")?;
+    let active_target = field("target")?;
+    let version = field("version")?;
+    let platform = field("platform")?;
+    let artifact_sha256 = field("artifact_sha256")?;
+    let manifest_sha256 = field("manifest_sha256")?;
+    let path = field("path")?;
+    let digest = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    if state != "active"
+        || product != "skarbiec"
+        || active_target != resolved.name
+        || platform != target.platform
+        || !digest(artifact_sha256)
+        || !digest(manifest_sha256)
+    {
+        return Err(CmdError::click(format!(
+            "{}: Stado active-binary returned an invalid Skarbiec identity",
+            resolved.name
+        )));
+    }
+    let expected = std::path::Path::new(&target.home)
+        .join(&policy.install_root)
+        .join("releases")
+        .join(version)
+        .join(platform)
+        .join(&policy.binary);
+    if !std::path::Path::new(path).is_absolute() || std::path::Path::new(path) != expected {
+        return Err(CmdError::click(format!(
+            "{}: Stado active-binary returned path {path:?}, expected {}",
+            resolved.name,
+            expected.display()
+        )));
+    }
+    Ok(path.to_string())
 }
