@@ -292,6 +292,38 @@ under the same product prefix. A public `releases/` stat proves neither boundary
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
 
+### The object API runs the managed binary, since 2026-09-04
+
+`com.wisent.always-on.stado-object-api` used to execute a private service
+tree, `.../services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado`,
+which nothing in the release pipeline ever moved: the control-plane job
+delivers with `stado host declare-version` plus `stado service converge
+<host> stado --apply`, and that pair resolves one root per managed binary,
+`$HOME/.stado/bin/<binary>`. The object API was not on that root, so it was
+the one unit on the host frozen at whatever build last installed it by hand
+— on 2026-09-04, a build old enough that its release refusals carried no
+`reason` code, while every other unit on the host had rolled forward many
+times.
+
+It now runs `$HOME/.stado/bin/stado`, the same managed binary as the
+resolver, the control plane, the release agent and the queue agent, and it is
+listed among the `stado` product's units. So `stado host declare-version
+<host> --binary stado --version <v>` followed by `stado host release <host>
+--binary stado --version <v>` moves the object API with every roll and
+restarts it with the rest, and the `deploy-control-plane` job needs no step
+of its own for it.
+
+The corollary is worth stating because it caused an outage before it was
+understood: a unit's program and the archive a version arrives in must
+agree. `stado service update --from-archive` now reads the unit's declared
+program, inspects the archive's member list, and refuses when the program is
+not in it, naming both — `the unit runs current/darwin-arm/stado; the
+archive holds bin/stado`. Relinking `current` at a tree without the
+program does not fail at install time. It fails at launchd's next spawn,
+which cannot say why, and a KeepAlive job that cannot spawn leaves its
+domain, so the repair stops being a rollback and becomes a privileged
+bootstrap.
+
 ## Workload grants and service authentication
 
 `stado service grant-sync` binds an existing owner-only token file on one host to an exact consumer and capability set. Skarbiec reads the bearer locally and stores only its digest:
