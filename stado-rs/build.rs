@@ -28,15 +28,18 @@
 //! it guards against: it would take away the only route that currently ships
 //! fixes. Each context therefore has a defined answer, in this order:
 //!
-//! 1. `STADO_SOURCE_REVISION` in the environment wins. That is how a source
-//!    tarball or a packaging pipeline states the revision it was cut from when
-//!    no `.git` travels with the source.
-//! 2. Otherwise `git rev-parse` names it, with `-dirty` appended when the
+//! 1. `STADO_SOURCE_REVISION` in the environment wins. A caller building a
+//!    source tarball can state the revision explicitly with the variable the
+//!    binary consumes.
+//! 2. Otherwise `WISENT_SOURCE_COMMIT` names the release pipeline's verified
+//!    source snapshot. The worker already exports that identity; the source
+//!    archive deliberately carries no `.git` directory.
+//! 3. Otherwise `git rev-parse` names it, with `-dirty` appended when the
 //!    working tree carries uncommitted changes. The dirty marker is the point:
 //!    the deployed `0.14.6` above is exactly what an uncommitted local build
 //!    installed by hand looks like, and a revision alone would have claimed
 //!    more precision than the bytes deserve.
-//! 3. Otherwise [`UNKNOWN_REVISION`]. Honest, greppable, and never a panic.
+//! 4. Otherwise [`UNKNOWN_REVISION`]. Honest, greppable, and never a panic.
 //!
 //! One limitation, stated rather than hidden: the rerun triggers below fire on
 //! a commit, a checkout and a branch switch, but cargo cannot watch "the whole
@@ -51,9 +54,11 @@ use std::process::Command;
 /// treats this as a value, not an error, so `stado --version` still answers.
 const UNKNOWN_REVISION: &str = "unknown";
 
-/// The environment variable a packaging pipeline sets when no `.git` travels
-/// with the source.
+/// The variable consumed by builds that explicitly state Stado's revision.
 const REVISION_OVERRIDE: &str = "STADO_SOURCE_REVISION";
+
+/// The verified source identity exported by Stado's release worker.
+const PIPELINE_REVISION: &str = "WISENT_SOURCE_COMMIT";
 
 /// Twelve hex digits: short enough to read aloud, long enough that this
 /// repository will not collide.
@@ -82,12 +87,15 @@ fn git(arguments: &[&str]) -> Option<String> {
 /// The revision this build should claim, by the order documented above.
 fn source_revision() -> String {
     println!("cargo:rerun-if-env-changed={REVISION_OVERRIDE}");
-    if let Some(stated) = std::env::var(REVISION_OVERRIDE)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return stated;
+    println!("cargo:rerun-if-env-changed={PIPELINE_REVISION}");
+    for name in [REVISION_OVERRIDE, PIPELINE_REVISION] {
+        if let Some(stated) = std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return stated;
+        }
     }
 
     // Re-stamp when HEAD moves. `.git/HEAD` covers a checkout and a branch
