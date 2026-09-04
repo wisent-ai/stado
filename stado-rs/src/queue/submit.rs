@@ -594,7 +594,12 @@ fn validate_run_manifest(
                     "terminal retained job timestamp is outside the outcome lifetime".into(),
                 ));
             }
-            validate_recovered_job(terminal_job, &job, index)?;
+            if !crate::queue::runs::terminal_job_matches_entry(terminal_job, &job, run_id, index) {
+                return Err(SubmitError::Validation(format!(
+                    "stable job key {} belongs to different submission content",
+                    job.job_id
+                )));
+            }
         } else if outcome_job.is_some() {
             return Err(SubmitError::Validation(
                 "non-terminal entry unexpectedly carries an outcome".into(),

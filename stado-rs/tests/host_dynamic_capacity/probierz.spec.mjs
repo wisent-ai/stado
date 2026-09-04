@@ -8,12 +8,12 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
-const test = 'coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry';
+const test = 'host_gates_use_live_resources_and_never_fixed_slots';
 let stdout;
 let stderr;
 try {
   ({ stdout, stderr } = await exec('cargo', [
-    'test', '--test', 'run_history', test,
+    'test', '--locked', '--test', 'host_dynamic_capacity', test,
     '--', '--ignored', '--nocapture', '--test-threads=1',
   ], {
     cwd: crate,
@@ -24,10 +24,10 @@ try {
 } catch (error) {
   const output = `${error.stdout || ''}\n${error.stderr || ''}`.trim();
   process.stderr.write(`${output}\n`);
-  throw new Error(`run-retention journey failed with exit code ${error.code ?? 'unknown'}`);
+  throw new Error(`host-dynamic-capacity journey failed with exit code ${error.code ?? 'unknown'}`);
 }
 assert.equal(stderr.includes('FAILED'), false, stderr);
-assert.match(stdout, new RegExp(`${test} \\.\\.\\.`));
+assert.match(stdout, new RegExp(`${test} \\.\\.`));
 assert.ok(stdout.includes('test result: ok. 1 passed; 0 failed'));
 process.stdout.write(stdout);
 
@@ -39,12 +39,12 @@ const [{ stdout: revision }, { stdout: status }] = await Promise.all([
   exec('git', ['rev-parse', 'HEAD'], { cwd: repository }),
   exec('git', ['status', '--porcelain'], { cwd: repository }),
 ]);
-const tracePath = join(artifacts, 'stado-run-retention.trace.json');
+const tracePath = join(artifacts, 'stado-host-dynamic-capacity.trace.json');
 await mkdir(dirname(tracePath), { recursive: true });
 await writeFile(tracePath, `${JSON.stringify({
   schemaVersion: 1,
   kind: 'probierz-stado-cli-trace',
-  journey: 'run-retention',
+  journey: 'host-dynamic-capacity',
   runId: process.env.PROBIERZ_RUN_ID || null,
   status: 'completed',
   source: {
@@ -55,8 +55,9 @@ await writeFile(tracePath, `${JSON.stringify({
   test,
   productionMutations: 'none: the product binary used an isolated local Stado store',
   contracts: [
-    'the coordinator retains the exact legacy terminal job named by its manifest entry',
-    'the lifecycle blob is reaped only after its outcome is retained',
+    'host gates reports live CPU, RAM, VRAM, accelerator, and running-job capacity',
+    'the public JSON and human output contain no fixed slot count',
+    'a paused host is refused with its exact blocker sentence',
   ],
   redaction: {
     status: 'verified_redacted',

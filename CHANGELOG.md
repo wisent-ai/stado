@@ -8,6 +8,20 @@
 - **Migration:** install 0.15.24 on every registry reader and agent before publishing the external lifecycle shape. Perform the handoff once, then consume its receipts directly—without another dry-run—to retire the legacy plist first and convenience binary second as separately reported operations; routes, endpoints, consumers, profile state, and probes stay unchanged.
 - **Rollback boundary:** rollback before handoff is ordinary binary rollback. After handoff, an older reader cannot parse the external lifecycle and cannot safely own the service; restoring managed lifecycle requires a new generation-bound registry change plus restoring both archived files, and must not run alongside release-control.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation, clippy, registry static validation, and shell static checks cover this release, while publication supplies its signed two-platform manifests and exact fleet delivery receipts.
+## 0.15.23
+
+- **Run retention:** validation of an already-retained terminal outcome now uses the same legacy-linkage rule as the reaper that records it. A terminal job may omit all three submission-linkage fields only when its job id and remaining immutable projection exactly match the durable manifest entry; live and partially linked jobs still require exact submission identity.
+- **Migration:** no persisted-state rewrite is required. The coordinator can validate and complete the normal reaper repair for affected v3 run manifests.
+- **Rollback boundary:** rolling back lets the reaper write the migrated outcome but makes the next manifest validation reject that same outcome as different submission content.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the run-retention journey drives the built coordinator through the migrated terminal state.
+
+## 0.15.22
+
+- **Desktop verification host:** managed GUI hosts now use the pinned and checksummed CuaDriver 0.23.2 bundle. `stado host gui-automation enable TARGET` replaces the previous managed driver and recreates its Aqua LaunchAgent when the installed version differs.
+- **Test bundle:** `desktop/StadoDesktop/scripts/build-app.sh --unsigned-bundle` builds a complete bundle for transfer to a dedicated Probierz host without reading signing identities, installing the app, registering it with LaunchServices, launching it, or changing the local running app.
+- **Migration:** no persisted-state rewrite is required. Reconcile each declared GUI host with `stado host gui-automation enable TARGET`; the existing Accessibility grant is re-established for the new signed bundle.
+- **Rollback boundary:** rolling back pins CuaDriver 0.22.0 again and removes the side-effect-free test-bundle staging mode.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the Desktop capacity journey runs on the Stado-selected macOS GUI host through Probierz.
 
 ## 0.15.21
 

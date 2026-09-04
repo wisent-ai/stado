@@ -36,7 +36,8 @@ let package = Package(
         .testTarget(
             name: "FleetTests",
             dependencies: ["Stado"],
-            path: "tests/fleet"
+            path: "tests/fleet",
+            exclude: ["HostsDynamicCapacity.probierz.mjs"]
         ),
         .testTarget(
             name: "LinkTests",
