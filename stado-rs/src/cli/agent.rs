@@ -173,6 +173,13 @@ pub async fn run(
         match local_agent::run_agent(&gpu_type, idle_shutdown, &kind).await {
             Ok(()) => return Ok(()),
             Err(error) => {
+                // A release handoff must reach launchd/systemd. Retrying
+                // `run_agent` here keeps executing the replaced inode forever,
+                // publishes no capacity, and prevents the next release from
+                // being built on this host.
+                if error.is::<local_agent::ReleaseHandoff>() {
+                    return Err(CmdError::click(error.to_string()));
+                }
                 // A 401 from the object API is not this agent's credential:
                 // the bearer selected the namespace, and the namespace policy
                 // on the object API host did not grant the key. Between

@@ -866,6 +866,12 @@ async fn publish_branch(
 
 const INSTALLED_STADO_RELEASE_VERSION: &str = "stado.release-version";
 
+/// Tells the command wrapper to end the process so its declared supervisor can
+/// start the installed Stado image. Ordinary loop errors remain retryable.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct ReleaseHandoff(String);
+
 /// What the managed binary on disk says it is, asked of the file itself.
 fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new(managed)
@@ -1101,9 +1107,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 );
                 log_fn(&format!("loop: release-handoff: {detail}"));
                 // Linux services use Restart=on-failure; launchd KeepAlive also
-                // recreates this process. Returning an error is therefore the
-                // cross-platform handoff signal, not a failed workload.
-                return Err(anyhow::anyhow!(detail));
+                // recreates this process. The command wrapper must propagate
+                // this typed error instead of treating it as a retryable loop
+                // failure inside the same process.
+                return Err(ReleaseHandoff(detail).into());
             }
         }
         // The janitor's bounded cleanup pass runs on its own task
