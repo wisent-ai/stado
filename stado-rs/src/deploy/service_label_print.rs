@@ -1,12 +1,12 @@
 //! `stado service label-print` — ask the host init system what it holds under
-//! one named unit, in one named domain, and print only fixed scalar facts.
+//! one named unit, in one named domain, and print only fixed diagnostic facts.
 //!
 //! Enumeration cannot find a loaded unit whose file was deleted, and it cannot
 //! explain a systemd service another unit keeps starting. This command asks for
 //! the exact operator-supplied identity instead. On launchd it reports the
-//! fixed `pid`, state, exit, path, program and argument fields. On systemd it
+//! fixed `pid`, state, exit, path, program, argument and log-path fields plus a
+//! bounded tail of launchd's own events for that exact label. On systemd it
 //! reports the matching fixed properties, including restart and trigger links.
-//! Neither branch reads an environment property.
 //!
 //! It signals nothing, loads nothing and stops nothing. `service bootout` or
 //! `service remove` are the commands that act; this one only answers.
@@ -14,16 +14,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::service::{quote_unit_path, validate_unit_id, BootoutScope};
-use super::{host_channel, DeployError, Runner};
+use super::service::{validate_unit_id, BootoutScope};
+use super::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-/// Read-only init-system query. Only named scalar properties leave the host;
-/// neither launchctl's environment block nor systemd's Environment property is
-/// requested.
+/// Read-only init-system query. Only named scalar properties and, on launchd,
+/// a bounded event tail for the exact validated label leave the host; neither
+/// launchctl's environment block nor systemd's Environment property is requested.
 const LABEL_PRINT_SCRIPT: &str = "set -u
 os=$(/usr/bin/uname -s)
 label=@LABEL@
+predicate=@PREDICATE@
 scope=@SCOPE@
 uid=$(/usr/bin/id -u)
 found=no
@@ -40,7 +41,7 @@ if [ \"$os\" = Darwin ]; then
     printf 'STADO_LABEL_DOMAIN\\t%s\\n' \"$domain\"
     printf '%s\\n' \"$block\" | /usr/bin/awk -F' = ' '
       { key=$1; sub(/^[ \\t]+/, \"\", key); sub(/[ \\t]+$/, \"\", key) }
-      key == \"pid\" || key == \"state\" || key == \"last exit code\" || key == \"runs\" || key == \"path\" {
+      key == \"pid\" || key == \"state\" || key == \"last exit code\" || key == \"runs\" || key == \"path\" || key == \"stdout path\" || key == \"stderr path\" {
         value=$2
         sub(/^[ \\t]+/, \"\", value); sub(/[ \\t]+$/, \"\", value)
         printf \"STADO_LABEL_FIELD\\t%s\\t%s\\n\", key, value
@@ -50,6 +51,54 @@ if [ \"$os\" = Darwin ]; then
       /^[ \\t]*arguments[ \\t]*=[ \\t]*\\{/ { collecting=1; argv=\"\"; next }
       collecting && /^[ \\t]*\\}/ { collecting=0; sub(/^ /, \"\", argv); printf \"STADO_LABEL_FIELD\\targuments\\t%s\\n\", argv; next }
       collecting { line=$0; sub(/^[ \\t]+/, \"\", line); sub(/[ \\t]+$/, \"\", line); if (line != \"\") argv = argv \" \" line }'
+    if [ -x /usr/bin/log ]; then
+      {
+        /usr/bin/log show --last 1h --style compact --predicate \"$predicate\" 2>&1
+        printf 'STADO_LABEL_EVENT_EXIT\\t%s\\n' \"$?\"
+      } |
+        STADO_LABEL=\"$label\" STADO_QUALIFIED=\"$domain/$label\" LC_ALL=C /usr/bin/awk '
+          function complete_identity_field(line, identity) {
+            return index(line, \"(\" identity \")\") > 0 ||
+                   index(line, \"[\" identity \"]\") > 0 ||
+                   index(line, \"[\" identity \":]\") > 0 ||
+                   index(line, \"[\" identity \" [\") > 0
+          }
+          BEGIN {
+            label=ENVIRON[\"STADO_LABEL\"]
+            qualified=ENVIRON[\"STADO_QUALIFIED\"]
+          }
+          index($0, \"STADO_LABEL_EVENT_EXIT\\t\") == 1 {
+            status=substr($0, length(\"STADO_LABEL_EVENT_EXIT\\t\") + 1)
+            saw_status=1
+            next
+          }
+          {
+            detail=substr($0, 1, 512)
+            if (complete_identity_field($0, qualified) ||
+                complete_identity_field($0, label)) {
+              count++
+              events[(count - 1) % 12]=substr($0, 1, 2048)
+            }
+          }
+          END {
+            if (!saw_status) {
+              printf \"STADO_LABEL_EVENT_STATUS\\terror: log reader returned no status\\n\"
+            } else if (status != 0) {
+              gsub(/\\t/, \" \", detail)
+              printf \"STADO_LABEL_EVENT_STATUS\\terror %s: %s\\n\", status, detail
+            } else {
+              first=count > 12 ? count - 11 : 1
+              for (number=first; number <= count; number++) {
+                event=events[(number - 1) % 12]
+                gsub(/\\t/, \" \", event)
+                printf \"STADO_LABEL_EVENT\\t%s\\n\", event
+              }
+              printf \"STADO_LABEL_EVENT_STATUS\\tok\\n\"
+            }
+          }'
+    else
+      printf 'STADO_LABEL_EVENT_STATUS\\tunavailable: /usr/bin/log is absent\\n'
+    fi
     break
   done
 elif [ \"$os\" = Linux ]; then
@@ -108,6 +157,14 @@ pub struct LabelState {
     pub path: Option<String>,
     pub program: Option<String>,
     pub arguments: Option<String>,
+    pub stdout_path: Option<String>,
+    pub stderr_path: Option<String>,
+    /// At most twelve launchd events from the preceding hour whose message
+    /// names this exact validated label. Empty on Linux and unsupported hosts.
+    pub recent_events: Vec<String>,
+    /// Whether launchd's bounded event read succeeded. The failure detail is
+    /// capped remotely and never substitutes for an empty successful result.
+    pub event_read_status: Option<String>,
     pub unit_file_state: Option<String>,
     pub restart: Option<String>,
     pub triggers: Option<String>,
@@ -134,7 +191,7 @@ impl LabelState {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut report = json!({
             "host": self.host,
             "label": self.label,
             "loaded": self.loaded(),
@@ -152,7 +209,20 @@ impl LabelState {
             "triggered_by": self.triggered_by,
             "part_of": self.part_of,
             "unsupported": self.unsupported,
-        })
+        });
+        if self.event_read_status.is_some() {
+            let fields = report
+                .as_object_mut()
+                .expect("the label report is always a JSON object");
+            fields.insert("stdout_path".to_string(), json!(self.stdout_path));
+            fields.insert("stderr_path".to_string(), json!(self.stderr_path));
+            fields.insert("recent_events".to_string(), json!(self.recent_events));
+            fields.insert(
+                "event_read_status".to_string(),
+                json!(self.event_read_status),
+            );
+        }
+        report
     }
 
     /// How many times launchd has started the job; absent on systemd.
@@ -171,8 +241,13 @@ pub async fn print_label(
     runner: &Runner,
 ) -> Result<LabelState, DeployError> {
     validate_unit_id(label)?;
+    let predicate = format!(
+        "process == \"launchd\" AND eventMessage CONTAINS \"{}\"",
+        label.replace('\\', "\\\\").replace('"', "\\\"")
+    );
     let script = LABEL_PRINT_SCRIPT
-        .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
+        .replace("@LABEL@", &shlex_quote(label))
+        .replace("@PREDICATE@", &shlex_quote(&predicate))
         .replace("@SCOPE@", scope.word());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
@@ -212,12 +287,26 @@ pub fn parse_label_print(host: &str, label: &str, stdout: &str) -> LabelState {
                     "path" => state.path = Some(value),
                     "program" => state.program = Some(value),
                     "arguments" => state.arguments = Some(value),
+                    "stdout path" => state.stdout_path = Some(value),
+                    "stderr path" => state.stderr_path = Some(value),
                     "unit file state" => state.unit_file_state = Some(value),
                     "restart" => state.restart = Some(value),
                     "triggers" => state.triggers = Some(value),
                     "triggered by" => state.triggered_by = Some(value),
                     "part of" => state.part_of = Some(value),
                     _ => {}
+                }
+            }
+            ["STADO_LABEL_EVENT", event] => {
+                let event = (*event).trim();
+                if !event.is_empty() {
+                    state.recent_events.push(event.to_string());
+                }
+            }
+            ["STADO_LABEL_EVENT_STATUS", status] => {
+                let status = (*status).trim();
+                if !status.is_empty() {
+                    state.event_read_status = Some(status.to_string());
                 }
             }
             _ => {}

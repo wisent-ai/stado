@@ -3,8 +3,9 @@
 ## 0.16.3
 
 - **Release scheduling:** a live builder temporarily occupied by CPU, RAM, or an exclusive job can receive a queued release build when no builder is immediately available. Worker claim-time resource checks remain unchanged; disk, paused-queue, missing-measurement, and unexplained refusals still prevent selection.
+- **Launchd diagnostics:** `service label-print` now reports the unit's declared stdout/stderr paths and at most twelve launchd events from the preceding hour whose delimited launchd identity field names the exact validated label. A broad text predicate only bounds the source scan; it never proves attribution. Event-read failure is explicit rather than indistinguishable from an empty result; the read-only command still omits the unit environment and never reads the declared log files.
 - **Migration:** no configuration or persisted-state rewrite is required. Existing release submissions can resume with the same source and version.
-- **Rollback boundary:** rolling back restores immediate submission failure when every matching builder is temporarily busy.
+- **Rollback boundary:** rolling back restores immediate submission failure when every matching builder is temporarily busy and removes the bounded launchd spawn/exit evidence from `service label-print`.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation covers this change, and release records retain the selected builder and its eventual build outcome.
 
 ## 0.16.2
