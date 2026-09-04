@@ -769,6 +769,31 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               directory a declared cleaner could safely own",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/root/.stado/work"],
+        why: "attributes the root-owned Stado work tree two levels deep; the path and depth \
+              are fixed and read-only. Added 2026-09-04 after the Ubuntu builder reached \
+              100% with 13 GiB below this one managed root while every reclaim stage \
+              reported zero items",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/home/ubuntu/.cache"],
+        why: "attributes the Ubuntu service account's cache tree two levels deep; the path \
+              and depth are fixed and read-only, so regenerable caches can be distinguished \
+              from installed environments before a cleaner claims them",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/home/ubuntu/.local"],
+        why: "attributes the Ubuntu service account's local data tree two levels deep; the \
+              path and depth are fixed and read-only, separating installed programs from \
+              build artifacts before any cleanup policy changes",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/mnt/wd16tb/stado"],
+        why: "attributes the declared large-disk Stado tree two levels deep; the path and \
+              depth are fixed and read-only, proving whether its 26 GiB belongs on the root \
+              filesystem or to a mounted storage role before any relocation",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "1", "/private/tmp"],
         why: "attributes the OS scratch directory one level deep; -x stays on one filesystem, \
               -k is a fixed unit, the depth and the path are fixed words, and du writes \
