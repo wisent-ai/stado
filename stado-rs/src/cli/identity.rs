@@ -126,9 +126,10 @@ async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Ve
     let plist = format!("/Users/{user}/Library/Preferences/MobileMeAccounts.plist");
     let quoted = crate::deploy::shlex_quote(&plist);
     let directory = crate::deploy::shlex_quote(&format!("/Users/{user}/Library/Preferences"));
-    let readable = crate::deploy::host_channel::remote_test(&target, &format!("-r {quoted}"), &runner)
-        .await
-        .ok()?;
+    let readable =
+        crate::deploy::host_channel::remote_test(&target, &format!("-r {quoted}"), &runner)
+            .await
+            .ok()?;
     if readable {
         let printed = crate::deploy::host_channel::run_program(
             &target,
@@ -159,9 +160,10 @@ async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Ve
         crate::deploy::host_channel::remote_test(&target, &format!("-x {directory}"), &runner)
             .await
             .ok()?;
-    let present = crate::deploy::host_channel::remote_test(&target, &format!("-f {quoted}"), &runner)
-        .await
-        .ok()?;
+    let present =
+        crate::deploy::host_channel::remote_test(&target, &format!("-f {quoted}"), &runner)
+            .await
+            .ok()?;
     if searchable && !present {
         return Some(Vec::new());
     }
