@@ -2546,6 +2546,21 @@ enum HostCommands {
         #[arg(long)]
         reload_service: Option<String>,
     },
+    /// Remove one dotted Stado configuration key from TARGET.
+    ///
+    /// A declaration that should never have been made is retracted, not
+    /// overwritten with a null: a key present with a null value and a key that
+    /// is absent read the same through `jq` and differently through the code
+    /// that iterates the object.
+    #[command(name = "config-unset")]
+    ConfigUnset {
+        target: String,
+        key: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the retraction immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
+    },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
@@ -3546,6 +3561,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 value,
                 reload_service,
             } => host::config_set(&target, &key, &value, reload_service.as_deref()).await,
+            HostCommands::ConfigUnset {
+                target,
+                key,
+                reload_service,
+            } => host::config_unset(&target, &key, reload_service.as_deref()).await,
             HostCommands::Release {
                 target,
                 binary,
