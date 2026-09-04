@@ -2611,11 +2611,14 @@ enum HostBuildCacheCommands {
 
 #[derive(Subcommand)]
 enum HostGuiAutomationCommands {
-    /// Report autologin, remote management, TCC and automation artifacts.
+    /// Report autologin, remote management, TCC, CuaDriver, and the signed
+    /// Apple challenge helper for the registry-bound GUI user.
     Status { target: String },
-    /// Configure persistent GUI login, install CuaDriver, and grant Accessibility.
+    /// Configure the persistent GUI login, CuaDriver, the Apple challenge
+    /// helper, runtime, and Accessibility grants.
     Enable { target: String },
-    /// Grant the installed CuaDriver app Accessibility for the host's GUI user.
+    /// Reconcile the signed Apple challenge helper and grant it and the
+    /// installed CuaDriver Accessibility for the registry-bound GUI user.
     #[command(name = "grant-accessibility")]
     GrantAccessibility { target: String },
     /// Revert the enablement: autologin, kcpassword, remote management,
@@ -3012,6 +3015,28 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 identity,
                 json,
             } => identity::verify(kind, identity, json).await,
+            IdentityCommands::RelayAppleChallenge {
+                identity,
+                authorization_id,
+                preflight,
+                json,
+            } => identity::relay_apple_challenge(identity, authorization_id, preflight, json).await,
+            IdentityCommands::IssueAppleCapabilities {
+                target,
+                agent,
+                authorization_id,
+                ttl_seconds,
+                json,
+            } => {
+                identity::issue_apple_capabilities(
+                    target,
+                    agent,
+                    authorization_id,
+                    ttl_seconds,
+                    json,
+                )
+                .await
+            }
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
@@ -3620,6 +3645,33 @@ enum IdentityCommands {
         kind: String,
         #[arg(long)]
         identity: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Capture on the verified Apple-account holder and store on this worker.
+    #[command(hide = true)]
+    RelayAppleChallenge {
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        authorization_id: String,
+        /// Resolve both hosts and their broker/helper without opening a prompt.
+        #[arg(long)]
+        preflight: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Issue Apple login capabilities in the worker's own Weles broker.
+    #[command(hide = true)]
+    IssueAppleCapabilities {
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        authorization_id: String,
+        #[arg(long)]
+        ttl_seconds: u64,
         #[arg(long)]
         json: bool,
     },

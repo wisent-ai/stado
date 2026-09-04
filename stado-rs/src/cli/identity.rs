@@ -5,10 +5,11 @@
 //! host a hardware token is plugged into, the box a licence is bound to. That is not
 //! capacity and not permission, so `weles.actions` cannot express it.
 //!
-//! Two commands, matching the two questions an operator actually asks:
+//! Three commands, matching the questions an operator and a trajectory ask:
 //!
-//!   list    what does the registry claim, and has any host confirmed it
-//!   verify  go and look, then say what is true right now
+//!   list                   what does the registry claim
+//!   verify                 what does each host confirm right now
+//!   relay-apple-challenge  capture on the holder and store on the worker
 //!
 //! `verify` reads the host rather than trusting the declaration, because these
 //! identities are granted elsewhere and revoked without notice: an Apple account
@@ -21,7 +22,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::targets::{load_registry_auto, ComputeTarget, IdentityBinding};
+use crate::targets::{load_registry_auto, ComputeTarget, IdentityBinding, Registry};
 
 const APPLE_ACCOUNT: &str = "apple-account";
 
@@ -252,21 +253,29 @@ fn local_apple_accounts() -> Option<Vec<String>> {
 ///
 /// A per-user identity is only usable where its own session can be driven: a two-factor
 /// notification for an Apple account is delivered into the session of the user signed
-/// into it, and no other session on that Mac can read or answer it. The fleet drives
-/// exactly one session per host -- the one `gui-automation` configures, whose autologin
-/// credential is the single host account the vault holds for that target.
+/// into it, and no other session on that Mac can read or answer it.
 ///
-/// `Some(false)` is therefore a hard answer, not a warning: the binding names a user
-/// the fleet has no way to log in, so every run placed here will reach the prompt and
-/// stop. Worth knowing before dispatch, because reaching that point spends an Apple
-/// sign-in attempt, and repeated attempts are how an Apple ID gets locked.
-async fn drivable_session(target: &ComputeTarget, binding: &IdentityBinding) -> Option<bool> {
+/// The full GUI verdict matters. Merely matching the console user used to return true
+/// while Accessibility was not granted and the CuaDriver runtime was absent. That is
+/// not a drivable session; it is a correctly named session with no working actuator.
+async fn drivable_session(
+    kind: &str,
+    target: &ComputeTarget,
+    binding: &IdentityBinding,
+) -> Option<bool> {
     let declared = binding.user.as_deref()?;
     let runner = crate::deploy::production_runner();
-    let session = crate::deploy::host_gui_automation::automated_session_user(target, &runner)
+    if kind == APPLE_ACCOUNT {
+        crate::deploy::host_gui_automation::apple_challenge_session_ready_for(
+            target, declared, &runner,
+        )
         .await
-        .ok()?;
-    Some(session == declared)
+        .ok()
+    } else {
+        crate::deploy::host_gui_automation::automated_session_ready_for(target, declared, &runner)
+            .await
+            .ok()
+    }
 }
 
 fn binding_row(
@@ -334,18 +343,14 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Resolve which host currently holds an identity, checking rather than trusting.
-///
-/// Exits non-zero when nothing satisfies the binding. That is the point: a caller
-/// that needs a trusted device can gate on this and fail with "no host holds
-/// <identity>" instead of dispatching work that cannot possibly complete.
-pub async fn verify(kind: String, identity: String, json_output: bool) -> Result<(), CmdError> {
-    let registry = load_registry_auto()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut rows: Vec<Value> = Vec::new();
-    let mut satisfied = false;
+struct Verification {
+    rows: Vec<Value>,
+    satisfied: bool,
+}
 
+async fn verified_bindings(registry: &Registry, kind: &str, identity: &str) -> Verification {
+    let mut rows = Vec::new();
+    let mut satisfied = false;
     for target in &registry.targets {
         for binding in &target.identities {
             if binding.kind != kind || binding.identity != identity {
@@ -358,34 +363,41 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 // reading this process's preferences would confidently answer the
                 // wrong account.
                 APPLE_ACCOUNT if is_local_target(target) && probes_own_user(target, binding) => {
-                    local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
+                    local_apple_accounts().map(|found| found.iter().any(|entry| entry == identity))
                 }
-                // A binding naming someone other than the channel's login user is
-                // beyond `defaults read`, which carries no path and no sudo. The
-                // installed probe reads each user's own preference file and reports
-                // an answer apart from a refusal, so this is unknown only when that
-                // probe is absent or declined -- not merely because the binding names
-                // a second user. Saying `false` without one of those readings would
-                // be a false negative dressed as a measurement.
+                // The installed probe reads a named user's own preferences. Unknown
+                // means the host could not be asked, never that the account is absent.
                 APPLE_ACCOUNT if !probes_own_user(target, binding) => {
                     let user = binding.user.as_deref().unwrap_or_default();
                     observe_user_apple_accounts(&target.name, user)
                         .await
-                        .map(|found| found.iter().any(|entry| entry == &identity))
+                        .map(|found| found.iter().any(|entry| entry == identity))
                 }
                 APPLE_ACCOUNT => observe_apple_accounts(&target.name)
                     .await
-                    .map(|found| found.iter().any(|entry| entry == &identity)),
+                    .map(|found| found.iter().any(|entry| entry == identity)),
                 // An identity family we cannot probe stays unknown rather than being
-                // reported as present: claiming verification we did not perform is
-                // worse than admitting the gap.
+                // reported as present.
                 _ => None,
             };
             satisfied |= observed == Some(true);
-            let drivable = drivable_session(target, binding).await;
+            let drivable = drivable_session(kind, target, binding).await;
             rows.push(binding_row(target, binding, observed, drivable));
         }
     }
+    Verification { rows, satisfied }
+}
+
+/// Resolve which host currently holds an identity, checking rather than trusting.
+///
+/// Exits non-zero when nothing satisfies the binding. That is the point: a caller
+/// that needs a trusted device can gate on this and fail with "no host holds
+/// <identity>" instead of dispatching work that cannot possibly complete.
+pub async fn verify(kind: String, identity: String, json_output: bool) -> Result<(), CmdError> {
+    let registry = load_registry_auto()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let Verification { rows, satisfied } = verified_bindings(&registry, &kind, &identity).await;
 
     if json_output {
         println!(
@@ -408,10 +420,11 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 None => "unknown",
             };
             // Two separate questions, so two separate words: whether the identity is
-            // there, and whether the fleet can act where it is.
+            // there, and whether the fleet can act where it is. False covers either a
+            // different session or an incomplete GUI runtime; both refuse placement.
             let session = match row["drivable_session"].as_bool() {
                 Some(true) => "drivable",
-                Some(false) => "OTHER-SESSION",
+                Some(false) => "NOT-DRIVABLE",
                 None => "unknown",
             };
             println!(
@@ -431,4 +444,286 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             "no host holds {kind} {identity}; enroll one before dispatching work that needs it"
         )))
     }
+}
+
+/// Capture a trusted-device code on the verified holder and put it into the
+/// Weles capability broker on the host executing this command.
+pub async fn relay_apple_challenge(
+    identity: String,
+    authorization_id: String,
+    preflight: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if identity.trim().is_empty() {
+        return Err(CmdError::click("an Apple account identity is required"));
+    }
+    if uuid::Uuid::parse_str(&authorization_id).is_err() {
+        return Err(CmdError::click("--authorization-id must be a UUID"));
+    }
+    let registry = load_registry_auto()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let Verification { rows, .. } = verified_bindings(&registry, APPLE_ACCOUNT, &identity).await;
+    let holder = rows.iter().find(|row| {
+        row.get("observed").and_then(Value::as_bool) == Some(true)
+            && row.get("drivable_session").and_then(Value::as_bool) == Some(true)
+    });
+    let Some(holder) = holder else {
+        let observed = rows
+            .iter()
+            .filter(|row| row.get("observed").and_then(Value::as_bool) == Some(true))
+            .filter_map(|row| {
+                let host = row.get("host")?.as_str()?;
+                let user = row
+                    .get("user")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown-user");
+                Some(format!("{host}/{user}"))
+            })
+            .collect::<Vec<_>>();
+        if observed.is_empty() {
+            return Err(CmdError::click(format!(
+                "no verified host holds apple-account {identity}"
+            )));
+        }
+        return Err(CmdError::click(format!(
+            "apple-account {identity} is held on {}, but none of those Apple challenge sessions is drivable",
+            observed.join(", ")
+        )));
+    };
+    let holder_name = holder
+        .get("host")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::click("the Apple identity report names no holder"))?;
+    let holder_user = holder
+        .get("user")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::click("the Apple identity holder names no macOS user"))?;
+    let holder_target = registry
+        .targets
+        .iter()
+        .find(|target| target.name == holder_name)
+        .ok_or_else(|| CmdError::click("the Apple identity holder left the registry"))?;
+
+    let destinations = registry
+        .targets
+        .iter()
+        .filter(|target| crate::deploy::host_channel::target_is_this_host(target))
+        .collect::<Vec<_>>();
+    let [destination] = destinations.as_slice() else {
+        return Err(CmdError::click(format!(
+            "the current machine resolves to {} registry targets; exactly one is required",
+            destinations.len()
+        )));
+    };
+    let runner = crate::deploy::production_runner();
+    let resource = format!("challenge:apple/{authorization_id}");
+    let broker = crate::deploy::host_capability::resolve(
+        destination,
+        &crate::deploy::weles_browser_task::weles_api_broker_files(),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.0))?;
+    if preflight {
+        crate::deploy::host_gui_automation::preflight_apple_challenge(
+            holder_target,
+            holder_user,
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.0))?;
+        let receipt = json!({
+            "status": "ready",
+            "identity": identity,
+            "holder": holder_name,
+            "user": holder_user,
+            "destination": destination.name,
+            "resource": resource,
+        });
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&receipt).unwrap_or_default()
+            );
+        } else {
+            println!(
+                "Apple challenge relay is ready from {holder_name}/{holder_user} to {}",
+                destination.name
+            );
+        }
+        return Ok(());
+    }
+
+    let mut code = crate::deploy::host_gui_automation::capture_apple_challenge(
+        holder_target,
+        holder_user,
+        &authorization_id,
+        90,
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.0))?;
+    let stored = crate::deploy::host_capability::apple_challenge_put(
+        destination,
+        &broker,
+        &resource,
+        &code,
+        &runner,
+    )
+    .await;
+    code.clear();
+    stored.map_err(|error| CmdError::click(error.0))?;
+
+    let receipt = json!({
+        "status": "stored",
+        "identity": identity,
+        "holder": holder_name,
+        "user": holder_user,
+        "destination": destination.name,
+        "resource": resource,
+    });
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&receipt).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "stored Apple challenge from {holder_name}/{holder_user} for {}",
+            destination.name
+        );
+    }
+    Ok(())
+}
+
+/// Issue the three authorization-bound Apple login capabilities in the broker
+/// on the worker that will redeem them.
+pub async fn issue_apple_capabilities(
+    target_name: String,
+    agent: String,
+    authorization_id: String,
+    ttl_seconds: u64,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if uuid::Uuid::parse_str(&authorization_id).is_err() {
+        return Err(CmdError::click("--authorization-id must be a UUID"));
+    }
+    if agent.trim().is_empty() || agent.trim() != agent {
+        return Err(CmdError::click("--agent must be a non-empty exact name"));
+    }
+    if !(60..=3600).contains(&ttl_seconds) {
+        return Err(CmdError::click("--ttl-seconds must be between 60 and 3600"));
+    }
+    let registry = load_registry_auto()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = registry
+        .targets
+        .iter()
+        .find(|target| target.name == target_name)
+        .ok_or_else(|| CmdError::click(format!("unknown target {target_name}")))?;
+    let runner = crate::deploy::production_runner();
+    let broker = crate::deploy::host_capability::resolve(
+        target,
+        &crate::deploy::weles_browser_task::weles_api_broker_files(),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.0))?;
+    let ttl = ttl_seconds.to_string();
+
+    let email_purpose = "weles.browser.fill";
+    let email_resource = "origin:https://idmsa.apple.com/email";
+    let email_id = crate::deploy::host_capability::issue(
+        target,
+        &broker,
+        &crate::deploy::host_capability::Issuance {
+            agent: &agent,
+            purpose: email_purpose,
+            resource: email_resource,
+            capability_target: "weles",
+            ttl_seconds: &ttl,
+            max_uses: "1",
+            authorization_id: Some(&authorization_id),
+        },
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.0))?;
+    let password_purpose = "weles.browser.fill";
+    let password_resource = "origin:https://idmsa.apple.com/password";
+    let password_id = crate::deploy::host_capability::issue(
+        target,
+        &broker,
+        &crate::deploy::host_capability::Issuance {
+            agent: &agent,
+            purpose: password_purpose,
+            resource: password_resource,
+            capability_target: "weles",
+            ttl_seconds: &ttl,
+            max_uses: "1",
+            authorization_id: Some(&authorization_id),
+        },
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.0))?;
+    let challenge_purpose = "weles.apple.2fa";
+    let challenge_resource = format!("challenge:apple/{authorization_id}");
+    let challenge_id = crate::deploy::host_capability::issue(
+        target,
+        &broker,
+        &crate::deploy::host_capability::Issuance {
+            agent: &agent,
+            purpose: challenge_purpose,
+            resource: &challenge_resource,
+            capability_target: "weles",
+            ttl_seconds: &ttl,
+            max_uses: "1",
+            authorization_id: Some(&authorization_id),
+        },
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.0))?;
+
+    let capability_ref = |capability_id: String, purpose: &str, resource: &str| {
+        json!({
+            "capability_id": capability_id,
+            "purpose": purpose,
+            "resource": resource,
+            "target": "weles",
+            "authorization_id": authorization_id,
+        })
+    };
+    let receipt = json!({
+        "status": "issued",
+        "target": target.name,
+        "authorization_id": authorization_id,
+        "capabilities": {
+            "email": capability_ref(email_id, email_purpose, email_resource),
+            "password": capability_ref(password_id, password_purpose, password_resource),
+            "two_factor": {
+                "mode": "capability",
+                "capability": capability_ref(
+                    challenge_id,
+                    challenge_purpose,
+                    &challenge_resource
+                ),
+            },
+        },
+    });
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&receipt).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "issued one Apple login authorization on {} for {agent}",
+            target.name
+        );
+    }
+    Ok(())
 }
