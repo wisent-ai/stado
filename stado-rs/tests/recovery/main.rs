@@ -36,15 +36,21 @@ struct Harness {
     dir: tempfile::TempDir,
 }
 
-/// The remote program arrives on stdin. Rewrite only the tools these tests
-/// fake, plus the one directory tree launchd owns, and run it.
+/// A script operation arrives on stdin; a narrow privileged operation arrives
+/// as SSH's final command argument. Both run through the same host tools.
 ///
 /// `kill` is rewritten to an absolute path and the rest to bare names on
 /// purpose: `kill` is a bash builtin, so PATH cannot shadow it, while every
 /// other tool has to resolve through PATH for `host-bin` to mean anything.
 const FAKE_SSH: &str = r#"#!/bin/sh
 PATH="$STADO_FAKE_HOST_BIN:$PATH"; export PATH
-/usr/bin/sed \
+last=''
+for argument in "$@"; do last="$argument"; done
+if [ "$last" = "-s" ]; then
+  /bin/cat
+else
+  printf '%s\n' "$last"
+fi | /usr/bin/sed \
   -e "s#/Library/LaunchDaemons#$STADO_FAKE_STATE/LaunchDaemons#g" \
   -e "s#/bin/launchctl#launchctl#g" \
   -e "s#/usr/bin/plutil#plutil#g" \
@@ -542,24 +548,18 @@ fn service_restart_refuses_a_daemon_nothing_would_respawn() {
     assert_eq!(host.read_state("pids"), "471 root\n");
 }
 
-/// `service stop` of a system daemon used to report a stopped service that was
-/// still serving: `sudo -n launchctl bootout` failed silently, the sweep ended
-/// the process, launchd started another, and the end-state probe read the
-/// system domain it cannot read as "no job". It is a refusal now.
+/// A system daemon stop requires the declared host-account credential before
+/// it contacts launchd. Without one it refuses, and the process stays running.
 #[test]
-fn service_stop_refuses_a_system_daemon_it_cannot_boot_out() {
+fn service_stop_refuses_a_system_daemon_without_a_host_password() {
     let host = Harness::new();
 
     let out = host.stado(&["service", "stop", OBJECT_API, "--host", "fake-mini"]);
     assert!(!out.status.success(), "a refusal is not a success");
     assert!(
         stderr(&out).contains(
-            "com.wisent.always-on.stado-object-api on fake-mini is a system LaunchDaemon at \
-             /Library/LaunchDaemons/com.wisent.always-on.stado-object-api.plist; the approved \
-             channel is unprivileged and cannot boot it out, and ending its process is not a stop \
-             — launchd starts another one within seconds for a KeepAlive job. Stopping it needs \
-             one privileged command on the host: sudo launchctl bootout \
-             system/com.wisent.always-on.stado-object-api"
+            "com.wisent.always-on.stado-object-api on fake-mini is a system LaunchDaemon and \
+             fake-mini has no readable host-account password"
         ),
         "got: {}",
         stderr(&out)
