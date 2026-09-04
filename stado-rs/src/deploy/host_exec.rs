@@ -565,6 +565,15 @@ const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
 
 /// Total allocated KiB below the manual Figma export's fixed work tree.
 const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &["/usr/bin/du", "-sk", ".stado/work/figma-export"];
+/// Metadata for root's Cargo toolchain root and the complete membership of
+/// its binary directory.
+///
+/// `-d` keeps the first read on the `.cargo` directory entry itself, so a
+/// symlink is rendered with its target. `-a` makes the second read a complete
+/// directory inventory. Numeric ownership is stable across account names,
+/// and neither command opens file contents.
+const ROOT_CARGO_METADATA: &[&str] = &["/bin/ls", "-ldn", "/root/.cargo"];
+const ROOT_CARGO_BIN_METADATA: &[&str] = &["/bin/ls", "-lan", "/root/.cargo/bin"];
 
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
@@ -873,6 +882,21 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               from logging alone. The path, unit and recursion root are compile-time \
               constants, no operator word is appended, du stays within the managed account's \
               work tree, and the command writes nothing",
+    },
+    ApprovedCommand {
+        argv: ROOT_CARGO_METADATA,
+        why: "reports root's fixed Cargo directory entry with type, mode, numeric uid and gid, \
+              size, timestamp, and symlink target without dereferencing it. The absolute path \
+              and portable ls flags are compile-time constants, so no operator-supplied path \
+              reaches the host and no file contents are opened",
+    },
+    ApprovedCommand {
+        argv: ROOT_CARGO_BIN_METADATA,
+        why: "lists the complete membership of root's fixed Cargo bin directory, including \
+              hidden entries, with type, mode, numeric uid and gid, size, timestamp and \
+              symlink targets. The absolute path and portable ls flags are compile-time \
+              constants, so no operator-supplied path reaches the host and no file contents \
+              are opened",
     },
     ApprovedCommand {
         argv: &[
