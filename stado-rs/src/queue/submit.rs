@@ -292,6 +292,24 @@ pub fn submission_job_key(request_digest: &str, index: usize, command: &str) -> 
     }))
 }
 
+/// Prefix and digest width of every job id emitted by queue submission.
+pub const JOB_ID_PREFIX: &str = "job-";
+pub const JOB_ID_HEX_LEN: usize = 24;
+
+/// Whether `job_id` is byte-for-byte in the form queue submission emits.
+pub fn is_canonical_job_id(job_id: &str) -> bool {
+    job_id.strip_prefix(JOB_ID_PREFIX).is_some_and(|suffix| {
+        suffix.len() == JOB_ID_HEX_LEN
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn job_id_from_key(key: &str) -> String {
+    format!("{JOB_ID_PREFIX}{}", &key[..JOB_ID_HEX_LEN])
+}
+
 /// The complete immutable submission projection. These are the only fields
 /// excluded because Stado deliberately mutates them after admission:
 /// lifecycle state/timestamps; optimizer-owned provider placement; retry,
@@ -461,7 +479,7 @@ fn validate_run_manifest(
         let key = submission_job_key(request_digest, index, command);
         let identity_digest = legacy_request_digest.unwrap_or(request_digest);
         let identity_key = submission_job_key(identity_digest, index, command);
-        let job_id = format!("job-{}", &identity_key[..24]);
+        let job_id = job_id_from_key(&identity_key);
         if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
             || entry.get("command").and_then(Value::as_str) != Some(command.as_str())
             || entry.get("job_key").and_then(Value::as_str) != Some(key.as_str())
@@ -698,7 +716,7 @@ pub(crate) async fn migrate_v2_run_manifest(
                     SubmitError::Validation(format!("invalid v2 planned job: {error}"))
                 })?;
             let old_key = submission_job_key(&old_digest, index, &commands[index]);
-            let old_job_id = format!("job-{}", &old_key[..24]);
+            let old_job_id = job_id_from_key(&old_key);
             if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
                 || entry.get("command").and_then(Value::as_str) != Some(commands[index].as_str())
                 || entry.get("job_key").and_then(Value::as_str) != Some(old_key.as_str())
@@ -1109,7 +1127,7 @@ pub async fn submit_batch(
             let mut entries = Vec::with_capacity(commands.len());
             for (index, command) in commands.iter().enumerate() {
                 let key = submission_job_key(&request_digest, index, command);
-                let job_id = format!("job-{}", &key[..24]);
+                let job_id = job_id_from_key(&key);
                 let mut effective = options.clone();
                 effective.exclusive =
                     effective.exclusive && !activation_extraction_must_share_gpu(command);
