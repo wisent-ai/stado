@@ -5902,6 +5902,21 @@ impl UnitImageObservation {
     }
 }
 
+/// One row from the unit-image scan plus the exact argv used to join it to a
+/// live process.
+///
+/// The public observation predates the release revisit pass and remains the
+/// stable value consumed by doctor and the manual refresh command. The
+/// release pass additionally needs the subcommand to exclude units that
+/// recycle themselves. Keeping it beside the observation internally preserves
+/// that evidence from the same plist/process pass without widening the public
+/// struct or reading either source again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnitImageScan {
+    pub observation: UnitImageObservation,
+    pub arguments: Vec<String>,
+}
+
 /// Every managed unit on one host with the image its live process is
 /// executing.
 ///
@@ -5922,22 +5937,27 @@ impl UnitImageObservation {
 /// joined on the WHOLE argument vector rather than on `argv[0]`, because every
 /// stado unit on a host runs the same binary and the subcommand is the entire
 /// difference between them.
-pub fn observe_unit_images(
+pub(crate) fn observe_unit_image_scan(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
-) -> Vec<UnitImageObservation> {
-    let blank = |unit: &str, unit_path: &str, state: Option<ImageState>| UnitImageObservation {
-        host: target.name.clone(),
-        unit: unit.to_string(),
-        unit_path: unit_path.to_string(),
-        program: String::new(),
-        pid: None,
-        process_age_seconds: None,
-        installed_age_seconds: None,
-        running: None,
-        installed: None,
-        state,
+) -> Vec<UnitImageScan> {
+    let blank = |unit: &str, unit_path: &str, state: Option<ImageState>| UnitImageScan {
+        observation: UnitImageObservation {
+            host: target.name.clone(),
+            unit: unit.to_string(),
+            unit_path: unit_path.to_string(),
+            program: String::new(),
+            pid: None,
+            process_age_seconds: None,
+            installed_age_seconds: None,
+            running: None,
+            installed: None,
+            state,
+        },
+        // No argv: these rows report a host, or a unit file that could not be
+        // read or declares no program, so there is nothing that was matched.
+        arguments: Vec::new(),
     };
     let whole_host = |reason: String| {
         blank(
@@ -5976,8 +5996,20 @@ pub fn observe_unit_images(
 
     // One pass over the unit files, then one image read for every pid they
     // name.
-    let mut rows: Vec<UnitImageObservation> = Vec::new();
-    let mut pending: Vec<(String, String, String, u32, Option<i64>)> = Vec::new();
+    let mut rows: Vec<UnitImageScan> = Vec::new();
+    // One unit file joined to one live pid, with the argv the join was made
+    // on. A named struct rather than a tuple because the argv makes six
+    // fields, and a six-tuple threaded through two loops is how the wrong
+    // element gets read.
+    struct Matched {
+        label: String,
+        unit_path: String,
+        program: String,
+        arguments: Vec<String>,
+        pid: u32,
+        age: Option<i64>,
+    }
+    let mut pending: Vec<Matched> = Vec::new();
     for (label, unit_path) in local_launchd_units(target, &home) {
         let unread = |subject: String, reason: String| {
             blank(
@@ -6003,53 +6035,72 @@ pub fn observe_unit_images(
             ));
             continue;
         }
+        // Matched on the WHOLE argument vector, and the vector that matched
+        // travels with the row: every stado unit on a host runs the same
+        // binary, so the subcommand is the entire difference between them,
+        // and a caller that re-read the plist to recover it would be reading
+        // a different moment.
         let declared = unit.arguments.join(" ");
         for (pid, age, argv) in &processes {
             if argv == &declared {
-                pending.push((
-                    label.clone(),
-                    unit_path.clone(),
-                    unit.program.clone(),
-                    *pid,
-                    *age,
-                ));
+                pending.push(Matched {
+                    label: label.clone(),
+                    unit_path: unit_path.clone(),
+                    program: unit.program.clone(),
+                    arguments: unit.arguments.clone(),
+                    pid: *pid,
+                    age: *age,
+                });
             }
         }
     }
 
-    let pids: Vec<u32> = pending.iter().map(|(_, _, _, pid, _)| *pid).collect();
+    let pids: Vec<u32> = pending.iter().map(|matched| matched.pid).collect();
     let images = match running_images(&pids) {
         Ok(images) => images,
         Err(reason) => {
             // One row, not one per pid: the cause is a reader that would not
             // answer, and it is the same cause for every process.
             rows.push(whole_host(reason));
-            rows.sort_by(|left, right| left.unit.cmp(&right.unit));
+            rows.sort_by(|left, right| left.observation.unit.cmp(&right.observation.unit));
             return rows;
         }
     };
 
-    for (label, unit_path, program, pid, age) in pending {
-        let mut row = UnitImageObservation {
-            host: target.name.clone(),
-            unit: label.clone(),
-            unit_path: unit_path.clone(),
-            program: program.clone(),
-            pid: Some(pid),
-            process_age_seconds: age,
-            installed_age_seconds: None,
-            running: images.get(&pid).cloned(),
-            installed: None,
-            state: None,
+    for matched in pending {
+        let Matched {
+            label,
+            unit_path,
+            program,
+            arguments,
+            pid,
+            age,
+        } = matched;
+        let installed_read = installed_image(Path::new(&program));
+        let mut scan = UnitImageScan {
+            observation: UnitImageObservation {
+                host: target.name.clone(),
+                unit: label,
+                unit_path,
+                program,
+                pid: Some(pid),
+                process_age_seconds: age,
+                installed_age_seconds: None,
+                running: images.get(&pid).cloned(),
+                installed: None,
+                state: None,
+            },
+            arguments,
         };
-        let (installed, written_epoch) = match installed_image(Path::new(&program)) {
+        let row = &mut scan.observation;
+        let (installed, written_epoch) = match installed_read {
             Ok(read) => read,
             Err(reason) => {
                 row.state = Some(ImageState::Unread {
-                    subject: format!("{label}'s declared program {program}"),
+                    subject: format!("{}'s declared program {}", row.unit, row.program),
                     reason,
                 });
-                rows.push(row);
+                rows.push(scan);
                 continue;
             }
         };
@@ -6058,19 +6109,40 @@ pub fn observe_unit_images(
         row.installed = Some(installed.clone());
         let Some(running) = row.running.clone() else {
             row.state = Some(ImageState::Unread {
-                subject: format!("the image pid {pid} is executing for {label}"),
+                subject: format!("the image pid {pid} is executing for {}", row.unit),
                 reason: "no text mapping was readable for that pid: it exited between the \
                          process listing and this read, or it belongs to another account"
                     .to_string(),
             });
-            rows.push(row);
+            rows.push(scan);
             continue;
         };
         row.state = classify_image(&running, &installed, installed_age);
-        rows.push(row);
+        rows.push(scan);
     }
-    rows.sort_by(|left, right| left.unit.cmp(&right.unit).then(left.pid.cmp(&right.pid)));
+    rows.sort_by(|left, right| {
+        left.observation
+            .unit
+            .cmp(&right.observation.unit)
+            .then(left.observation.pid.cmp(&right.observation.pid))
+    });
     rows
+}
+
+/// The stable public projection of [`observe_unit_image_scan`].
+///
+/// Both callers receive rows produced by the same plist/process/image pass;
+/// only the internal release revisit keeps the matched argv it additionally
+/// needs.
+pub fn observe_unit_images(
+    target: &ComputeTarget,
+    local_units: Option<&str>,
+    now_epoch: i64,
+) -> Vec<UnitImageObservation> {
+    observe_unit_image_scan(target, local_units, now_epoch)
+        .into_iter()
+        .map(|scan| scan.observation)
+        .collect()
 }
 
 /// Managed units on one host whose live process is executing an image that is

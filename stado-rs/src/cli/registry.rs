@@ -2137,10 +2137,28 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         // `self_update::recycle_replaced_units` cycles a unit only inside the
         // invocation that replaced its bytes; an unrelated restart is what
         // ended it.
+        // The revisit ledger is one host-wide file answering one question, so
+        // it is opened once for the whole pass rather than once per finding.
+        // `None` unless this is the local host and some product authorised a
+        // unit on it, which is no host today.
+        let revisit =
+            crate::release_unit_image::annotations(&document, &target.name, local_host.as_deref());
         for image in
             service::units_running_replaced_images(target, local_host.as_deref(), now.timestamp())
         {
-            let mut finding = Finding::new(image.kind(), &target.name, image.sentence());
+            // The row that told an operator to restart the unit by hand is
+            // the row that has to say the release agent already tried and
+            // what came back. Same kind, same sentence, one clause longer: a
+            // repair that happens silently is the same defect as a failure
+            // that happens silently, and a new severity word for it would be
+            // a third vocabulary for one condition. Only for units an enabled
+            // policy explicitly owns, and `None` on every host today because
+            // no registry carries `release_unit_image_revisit`.
+            let mut sentence = image.sentence();
+            if let Some(clause) = revisit.as_ref().and_then(|revisit| revisit.clause(&image)) {
+                sentence.push_str(&clause);
+            }
+            let mut finding = Finding::new(image.kind(), &target.name, sentence);
             // The row that reports a whole host unread names no unit, and
             // attaching an empty label to it would let the `missing-plist`
             // de-duplication downstream match on the empty string.

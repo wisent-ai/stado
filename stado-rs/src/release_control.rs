@@ -397,7 +397,14 @@ pub fn verify_manifest(
         .map_err(|_| "release manifest signature verification failed".to_string())
 }
 
-fn identifier(value: &str) -> bool {
+/// A canonical coordinate: ASCII alphanumerics plus `.`, `_` and `-`, no
+/// surrounding whitespace, non-empty.
+///
+/// Crate-visible because the unit-image revisit policy validates launchd
+/// labels against exactly this shape, and a second spelling of "what a
+/// canonical name may contain" is a second answer waiting to disagree with
+/// this one.
+pub(crate) fn identifier(value: &str) -> bool {
     canonical_coordinate(value)
         && value
             .bytes()
@@ -420,7 +427,12 @@ fn safe_relative(value: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
-fn safe_absolute(value: &str) -> bool {
+/// An absolute path with no control characters and no `..` component.
+///
+/// Crate-visible for the same reason [`identifier`] is: the unit-image revisit
+/// policy declares its own `state_dir` and holds it to exactly this shape,
+/// and a second spelling of "a safe absolute path" is a second answer.
+pub(crate) fn safe_absolute(value: &str) -> bool {
     let path = Path::new(value);
     path.is_absolute()
         && !value.chars().any(char::is_control)
