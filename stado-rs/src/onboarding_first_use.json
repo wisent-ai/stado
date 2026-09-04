@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "product_id": "stado-cli",
+  "journey_id": "first-use",
+  "journey_version": "2026-09-03.1",
+  "entry_screen_id": "control-plane-map",
+  "first_success_fact": "product_catalog_listed",
+  "published_at": "2026-09-03T00:00:00Z",
+  "source_revision": "stado-cli-first-use-2026-09-03.1",
+  "screens": [
+    {
+      "screen_id": "control-plane-map",
+      "screen_kind": "explanation",
+      "title_key": "stado_cli.first_use.map.title",
+      "body_key": "stado_cli.first_use.map.body",
+      "required": true,
+      "actions": ["continue"],
+      "transitions": [
+        {
+          "next_screen_id": "read-before-change",
+          "reason_code": "control_plane_mapped",
+          "priority": 10
+        }
+      ],
+      "presentation": {
+        "title": "See the whole control plane from one command tree",
+        "body": "Stado is the operator entry point for the Wisent fleet: jobs and queues, hosts and services, releases, storage, credentials, and product installations all have their own command groups. Start with read commands such as status, list, show, catalog, and overview; commands that change the fleet say what they act on and expose their required target or apply flag."
+      }
+    },
+    {
+      "screen_id": "read-before-change",
+      "screen_kind": "explanation",
+      "title_key": "stado_cli.first_use.read.title",
+      "body_key": "stado_cli.first_use.read.body",
+      "required": true,
+      "actions": ["continue"],
+      "transitions": [
+        {
+          "next_screen_id": "list-product-catalog",
+          "reason_code": "read_path_understood",
+          "priority": 10
+        }
+      ],
+      "presentation": {
+        "title": "Inspect real state before changing it",
+        "body": "Use stado --help to discover the command tree, then ask a command group for its own help. Read-only commands return the same fleet and catalogue records that mutating operations use, so an inspection is not a demo or a separate sample configuration. This walkthrough never changes a host, service, product installation, or secret."
+      }
+    },
+    {
+      "screen_id": "list-product-catalog",
+      "screen_kind": "first_success",
+      "title_key": "stado_cli.first_use.catalog.title",
+      "body_key": "stado_cli.first_use.catalog.body",
+      "required": true,
+      "completion_evidence": {
+        "kind": "fact",
+        "fact": "product_catalog_listed",
+        "operator": "eq",
+        "value": true
+      },
+      "actions": ["list_product_catalog"],
+      "transitions": [],
+      "presentation": {
+        "title": "List the real Wisent product catalogue",
+        "body": "Run stado product catalog to read the catalogue used by Stado's product lifecycle commands. It prints the products and their installable surfaces without installing, updating, removing, or contacting a host. The journey completes only after that real command succeeds; merely viewing this screen does not record success.",
+        "command": "stado product catalog",
+        "result": "The canonical Wisent products and each product's installable surfaces"
+      }
+    }
+  ],
+  "analytics_contract": {
+    "contract_version": "1",
+    "surface": "cli_first_use",
+    "exposure_event": "onboarding_step_viewed",
+    "primary_action_event": "onboarding_step_completed",
+    "completion_event": "onboarding_completed",
+    "first_success_event": "onboarding_first_success_observed"
+  },
+  "experiment_contract": null
+}

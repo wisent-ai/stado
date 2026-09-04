@@ -44,6 +44,7 @@ pub mod job;
 pub mod machine;
 pub mod mail;
 pub mod overview;
+pub mod onboarding;
 pub mod placement;
 pub mod precheck_runner;
 pub mod product;
@@ -328,6 +329,13 @@ enum Commands {
     /// Print the installed crate data root for desktop provisioning.
     #[command(name = "package-root", hide = true)]
     PackageRoot,
+
+    /// Show the CLI first-use walkthrough.
+    Onboarding {
+        /// Discard recorded progress and evidence, then show the walkthrough again.
+        #[arg(long)]
+        reset: bool,
+    },
 
     /// List Stado capability families, variants, providers and active selections.
     Capabilities {
@@ -2740,6 +2748,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             println!("{}", crate::data_dir().display());
             Ok(())
         }
+        Commands::Onboarding { reset } => onboarding::run(reset),
         Commands::Capabilities { capability, json } => {
             capabilities::run(capability.as_deref(), json)
         }
