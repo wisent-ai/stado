@@ -2061,33 +2061,36 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Archive one unmanaged executable from TARGET without deleting its bytes.
+    /// Archive one obsolete executable or launchd declaration from TARGET
+    /// without deleting its bytes.
     ///
-    /// The source must be a direct child of `$HOME/.stado/bin`,
-    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`, and a regular non-symlink
-    /// file owned by the approved account. Stado moves it atomically into the
-    /// product backup tree and verifies its size, mode, and SHA-256 there.
+    /// User executables must be direct children of `$HOME/.stado/bin`,
+    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`. A system launchd declaration
+    /// must be one exact `/Library/LaunchDaemons/*.plist` file and is moved
+    /// under the host's approved sudo grant to a non-loadable sibling. Each
+    /// mutating path requires a handoff or dry-run receipt and verifies
+    /// its size, mode, and SHA-256 after the atomic move.
     #[command(name = "retire-file")]
     RetireFile {
         target: String,
-        /// Absolute path to one file in an approved user bin directory.
+        /// Absolute path to one approved user binary or system launchd plist.
         path: String,
-        /// Canonical product name owning the backup tree.
+        /// Canonical product name owning the retirement receipt.
         #[arg(long)]
         product: String,
         /// Inspect and report the exact source without moving it.
         #[arg(long)]
         dry_run: bool,
-        /// Dry-run transaction token binding an apply to its reviewed destination.
+        /// One-use transaction token from a handoff or dry-run receipt.
         #[arg(long)]
         transaction: Option<String>,
-        /// SHA-256 from the reviewed dry-run receipt.
+        /// SHA-256 from the same receipt.
         #[arg(long)]
         expected_sha256: Option<String>,
-        /// Byte count from the reviewed dry-run receipt.
+        /// Byte count from the same receipt.
         #[arg(long)]
         expected_size: Option<u64>,
-        /// Octal mode from the reviewed dry-run receipt.
+        /// Four-digit octal mode from the same receipt.
         #[arg(long)]
         expected_mode: Option<String>,
         /// Emit the retirement report as JSON.

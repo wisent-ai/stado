@@ -504,18 +504,16 @@ fn declared_doubled_prefix(target: &ComputeTarget, out: &mut Vec<Finding>, measu
 
 /// The same two rules, on the unit names a placement profile declares.
 ///
-/// The third population that declares a unit name, and the one both checks
-/// above still missed: `placement_profiles[].hosts[<host>].units` names a
-/// label and a path per service, and it is what `service remove` refuses
-/// against — a profile whose unit has no managed record is a document the
-/// validator will not accept. So a doubled name here is load-bearing twice
-/// over, and `com.wisent.compute.service.com.wisent.brama` sat in the
-/// `brama-skarbiec` profile for lukasz-macbook, carrying the fleet's own
-/// prefix onto a name that already had one, with no launchd job of that name
-/// on the host at all.
+/// The third population that declares a managed unit name, and the one both
+/// checks above still missed: managed
+/// `placement_profiles[].hosts[<host>].units` entries name a label and path per
+/// service. Release-controlled entries deliberately have neither and are not
+/// part of either naming population. A doubled managed name remains
+/// load-bearing because placement lifecycle commands address it directly.
 ///
-/// No command edits a profile, so the remediation names the exact key rather
-/// than a command that does not exist.
+/// `stado service handoff-release-control` is the only command that replaces a
+/// managed template with a release-controlled one. Other profile corrections
+/// still name the exact registry key because no general profile editor exists.
 fn profile_unit_names(
     registry: &Registry,
     out: &mut Vec<Finding>,
@@ -525,6 +523,9 @@ fn profile_unit_names(
     for profile in &registry.placement_profiles {
         for (host, placement) in &profile.hosts {
             for (service, unit) in &placement.units {
+                if unit.release_controlled() {
+                    continue;
+                }
                 let key = format!(
                     "placement_profiles[{}].hosts.{host}.units.{service}",
                     profile.name

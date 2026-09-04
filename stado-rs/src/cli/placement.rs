@@ -109,6 +109,18 @@ async fn evict(service: &str, host: &str, json: bool) -> Result<(), CmdError> {
                 "the directory declares no service named {service:?}"
             ))
         })?;
+    if let Some(profile_name) = entry.get("placement_profile").and_then(Value::as_str) {
+        let profile = placement::profiles(&document)
+            .map_err(CmdError::click)?
+            .into_iter()
+            .find(|profile| profile.name == profile_name)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "placement profile {profile_name:?} disappeared before eviction"
+                ))
+            })?;
+        ensure_profile_lifecycle_mutable(&profile)?;
+    }
     let active = entry
         .get("active_host")
         .and_then(Value::as_str)
@@ -192,6 +204,35 @@ fn deploy_error(error: DeployError) -> CmdError {
     CmdError::click(error.to_string())
 }
 
+fn release_controlled_refusal(unit: &PlacementUnit) -> CmdError {
+    let owner = unit
+        .release_controlled()
+        .expect("release-controlled refusal requires release-controlled unit");
+    CmdError::click(format!(
+        "release-controlled placement member {:?} for product {:?} is owned by controller \
+         \"release-control\"; placement lifecycle mutation is forbidden",
+        unit.name, owner.product
+    ))
+}
+
+fn managed_unit(unit: &PlacementUnit) -> Result<&crate::placement::ManagedPlacementUnit, CmdError> {
+    unit.managed()
+        .ok_or_else(|| release_controlled_refusal(unit))
+}
+
+fn ensure_profile_lifecycle_mutable(profile: &PlacementProfile) -> Result<(), CmdError> {
+    for logical in &profile.services {
+        for host in profile.hosts.values() {
+            if let Some(unit) = host.units.get(logical) {
+                if unit.release_controlled().is_some() {
+                    return Err(release_controlled_refusal(unit));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_registry(document: &Value) -> Result<Registry, CmdError> {
     let text = serde_json::to_string(document)?;
     targets::load_registry_from_str(&text).map_err(|error| CmdError::click(error.to_string()))
@@ -217,9 +258,11 @@ fn declared_profile_hosts(
             .units
             .values()
             .filter(|spec| {
-                declared
-                    .iter()
-                    .any(|managed| managed.matches(&spec.unit) || managed.matches(&spec.name))
+                spec.managed().is_some_and(|unit| {
+                    declared
+                        .iter()
+                        .any(|managed| managed.matches(&unit.unit) || managed.matches(&spec.name))
+                })
             })
             .count();
         if matched == profile.services.len() {
@@ -281,11 +324,12 @@ async fn run_host_script(
     Ok(output)
 }
 
-fn unit_script_head(spec: &PlacementUnit) -> String {
-    let unit = STANDARD.encode(spec.unit.as_bytes());
-    let path = STANDARD.encode(spec.path.as_bytes());
-    let kind = STANDARD.encode(spec.kind.as_bytes());
-    format!(
+fn unit_script_head(spec: &PlacementUnit) -> Result<String, CmdError> {
+    let managed = managed_unit(spec)?;
+    let unit = STANDARD.encode(managed.unit.as_bytes());
+    let path = STANDARD.encode(managed.path.as_bytes());
+    let kind = STANDARD.encode(managed.kind.as_bytes());
+    Ok(format!(
         r#"set -eu
 case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
 unit=$(printf '%s' '{unit}' | /usr/bin/base64 "$decode")
@@ -312,7 +356,7 @@ else
   exit 65
 fi
 "#
-    )
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -328,7 +372,7 @@ async fn probe_unit(
 ) -> Result<UnitStatus, CmdError> {
     let script = format!(
         "{}{}",
-        unit_script_head(spec),
+        unit_script_head(spec)?,
         r#"present=no
 loaded=no
 if [ -f "$unit_path" ]; then present=yes; fi
@@ -383,6 +427,7 @@ async fn act_on_unit(
     action: UnitAction,
     runner: &Runner,
 ) -> Result<(), CmdError> {
+    let managed = managed_unit(spec)?;
     let body = match action {
         UnitAction::Stop => {
             r#"if [ "$os" = Darwin ]; then
@@ -418,7 +463,7 @@ fi
     };
     let script = format!(
         "{}{}printf 'STADO_PLACEMENT_ACTION\\t{}\\tok\\n'\n",
-        unit_script_head(spec),
+        unit_script_head(spec)?,
         body,
         action.name()
     );
@@ -426,7 +471,7 @@ fi
         target,
         &script,
         runner,
-        &format!("{} {}", action.name(), spec.unit),
+        &format!("{} {}", action.name(), managed.unit),
     )
     .await?;
     if marker_line(
@@ -439,7 +484,7 @@ fi
             "{}: {} {} returned no success marker",
             target.name,
             action.name(),
-            spec.unit
+            managed.unit
         )));
     }
     Ok(())
@@ -704,30 +749,33 @@ async fn apply_routes(
 }
 
 async fn preflight(context: &MoveContext, runner: &Runner) -> Result<(), CmdError> {
+    ensure_profile_lifecycle_mutable(&context.profile)?;
     let source_profile = profile_host(&context.profile, &context.source.name)?;
     let destination_profile = profile_host(&context.profile, &context.destination.name)?;
 
     for logical in &context.profile.services {
         let source_spec = unit(source_profile, logical)?;
+        let source_unit = managed_unit(source_spec)?;
         let source_status = probe_unit(&context.source, source_spec, runner).await?;
         if !source_status.present || !source_status.loaded {
             return Err(CmdError::click(format!(
                 "{}: source unit {} must be installed and running before migration",
-                context.source.name, source_spec.unit
+                context.source.name, source_unit.unit
             )));
         }
         let destination_spec = unit(destination_profile, logical)?;
+        let destination_unit = managed_unit(destination_spec)?;
         let destination_status = probe_unit(&context.destination, destination_spec, runner).await?;
         if !destination_status.present {
             return Err(CmdError::click(format!(
                 "{}: destination unit file is missing: {}",
-                context.destination.name, destination_spec.path
+                context.destination.name, destination_unit.path
             )));
         }
         if destination_status.loaded {
             return Err(CmdError::click(format!(
                 "{}: destination unit {} is already running; refusing two active copies",
-                context.destination.name, destination_spec.unit
+                context.destination.name, destination_unit.unit
             )));
         }
     }
@@ -747,11 +795,12 @@ async fn preflight(context: &MoveContext, runner: &Runner) -> Result<(), CmdErro
     }
     for route in &context.profile.routing {
         let route_target = target(&context.registry, &route.host)?;
+        let route_unit = managed_unit(&route.unit)?;
         let status = probe_unit(route_target, &route.unit, runner).await?;
         if !status.present {
             return Err(CmdError::click(format!(
                 "{}: routing unit file is missing: {}",
-                route.host, route.unit.path
+                route.host, route_unit.path
             )));
         }
     }
@@ -779,27 +828,28 @@ fn destination_record(
     destination: &ComputeTarget,
     spec: &PlacementUnit,
     managed_since: &str,
-) -> ManagedService {
-    let mut managed = if spec.kind == "launchd" {
+) -> Result<ManagedService, CmdError> {
+    let unit = managed_unit(spec)?;
+    let mut managed = if unit.kind == "launchd" {
         service::launchd_service(
             &destination.name,
-            &spec.unit,
-            &spec.path,
+            &unit.unit,
+            &unit.path,
             SOURCE_REGISTRY,
             managed_since,
         )
     } else {
         service::systemd_service(
             &destination.name,
-            &spec.unit,
-            &spec.path,
+            &unit.unit,
+            &unit.path,
             SOURCE_REGISTRY,
             managed_since,
         )
     };
     managed.name = spec.name.clone();
     managed.host_heuristic = destination.host_heuristic.clone();
-    managed
+    Ok(managed)
 }
 
 fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> {
@@ -809,10 +859,11 @@ fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> 
     let managed_since = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     for logical in &context.profile.services {
         let source_spec = unit(source_profile, logical)?;
-        service::remove_service(&mut document, &context.source.name, &source_spec.unit)
+        let source_unit = managed_unit(source_spec)?;
+        service::remove_service(&mut document, &context.source.name, &source_unit.unit)
             .map_err(deploy_error)?;
         let destination_spec = unit(destination_profile, logical)?;
-        let managed = destination_record(&context.destination, destination_spec, &managed_since);
+        let managed = destination_record(&context.destination, destination_spec, &managed_since)?;
         service::add_service(&mut document, &managed).map_err(deploy_error)?;
     }
     crate::service_resolution::retarget_profile(
@@ -1036,12 +1087,13 @@ async fn move_services(
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let parsed_registry = parse_registry(&document)?;
+    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
+    ensure_profile_lifecycle_mutable(&profile)?;
     if delegate_to_registry_authority(&document, &parsed_registry, requested, to_host, json_output)
         .await?
     {
         return Ok(());
     }
-    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
     let _destination_profile = profile_host(&profile, to_host)?;
     let destination = target(&parsed_registry, to_host)?.clone();
     let sources = declared_profile_hosts(&parsed_registry, &profile)?;

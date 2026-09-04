@@ -2010,16 +2010,34 @@ pub struct PlacementState {
     pub extra: Map<String, Value>,
 }
 
-/// The launchd/systemd unit running one service on one host.
+/// One logical service's lifecycle on a placement host.
+///
+/// Managed units retain the original `unit` / `path` / `kind` representation.
+/// A release-controlled service instead carries `controller=release-control`
+/// and its exact release product; strict registry validation rejects every
+/// mixed or partial shape before this round-tripping model is constructed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacementUnit {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub unit: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
-    /// "launchd" | "systemd".
+    /// "launchd" | "systemd" for a managed unit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl PlacementUnit {
+    pub fn release_controlled(&self) -> bool {
+        self.controller.as_deref() == Some("release-control") && self.product.is_some()
+    }
 }
 
 /// A health check that proves a service came up on the host it moved to.
@@ -3626,6 +3644,9 @@ impl Registry {
         }
         let profile = self.placement_profile(service.placement_profile.as_deref()?)?;
         let unit = profile.hosts.get(host)?.units.get(name)?;
+        if unit.release_controlled() {
+            return None;
+        }
         [unit.unit.as_str(), unit.name.as_str()]
             .into_iter()
             .find(|label| !label.is_empty())

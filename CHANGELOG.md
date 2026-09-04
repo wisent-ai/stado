@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.24
+
+- **Release-controlled placement:** a placement service may now declare the exact external lifecycle `{"name":"<service>","controller":"release-control","product":"<product>"}` on every host template. Managed units retain their exact `name`/`unit`/`path`/`kind` record, routing units remain Stado-managed, and mixed or partial lifecycle records are rejected.
+- **Atomic handoff:** `stado service handoff-release-control SERVICE --host HOST --product PRODUCT` proves the desired committed release, stable proxy, readiness, inactive legacy label, exact regular non-symlink legacy file identities, and absence of an executable caller before one generation-bound compare-and-swap removes the target service row and legacy restore fields while externalizing every host template. It emits unique, one-use retirement receipts containing each file's SHA-256, byte count, four-digit mode, and safe transaction token. Placement mutations then refuse the whole release-controlled profile before any action.
+- **Safe residue retirement:** mutating `stado host retire-file` now requires all four binding fields from a handoff or reviewed dry-run receipt; it keeps its digest-, size-, mode-, and transaction-bound user-binary archive and also accepts one exact root-owned `/Library/LaunchDaemons/*.plist`, moved with approved sudo to a non-loadable sibling only while the receipt still matches.
+- **Migration:** install 0.15.24 on every registry reader and agent before publishing the external lifecycle shape. Perform the handoff once, then consume its receipts directly—without another dry-run—to retire the legacy plist first and convenience binary second as separately reported operations; routes, endpoints, consumers, profile state, and probes stay unchanged.
+- **Rollback boundary:** rollback before handoff is ordinary binary rollback. After handoff, an older reader cannot parse the external lifecycle and cannot safely own the service; restoring managed lifecycle requires a new generation-bound registry change plus restoring both archived files, and must not run alongside release-control.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation, clippy, registry static validation, and shell static checks cover this release, while publication supplies its signed two-platform manifests and exact fleet delivery receipts.
+
 ## 0.15.21
 
 - **Run retention:** the coordinator can retain an exact terminal job named by a validated durable run even when that historical job predates submission-linkage fields. Missing linkage is accepted only when all three linkage fields are absent and the remaining immutable job projection matches the manifest; partial or conflicting linkage still fails closed.
