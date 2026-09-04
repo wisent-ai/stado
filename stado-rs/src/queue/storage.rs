@@ -845,8 +845,35 @@ impl JobStorage {
         let Some((transition, _)) = self.read_job_transition(job_id).await? else {
             return Ok(false);
         };
-        if transition.state == "aborted" || transition.state == TRANSITION_RETIRED_STATE {
+        if transition.state == TRANSITION_RETIRED_STATE {
             return Ok(false);
+        }
+        if transition.state == "aborted" {
+            // `aborted` is a decision made from an earlier view of the two
+            // sides, not a terminal fact. A later placement rewrite can make
+            // that view stale while the destination remains the completed
+            // move. Upgrade only when the destination matches and the source
+            // is absent, fenced, or already cleaned for this generation.
+            let Some(destination) = self.read_job(&transition.to_prefix, job_id).await? else {
+                return Ok(false);
+            };
+            if crate::queue::submit::immutable_job_projection(&destination)
+                != crate::queue::submit::immutable_job_projection(&transition.destination_job)
+                || destination.state != prefix_state(&transition.to_prefix)
+            {
+                return Ok(false);
+            }
+            let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
+            if let Some(versioned) = self.read_text_versioned(&source_path).await? {
+                let source = Job::from_json(&versioned.content)?;
+                let fence_state = transition_fence_state(&transition.transition_id);
+                let cleaned_state = transition_cleaned_state(&transition.transition_id);
+                if source.state != fence_state && source.state != cleaned_state {
+                    return Ok(false);
+                }
+            }
+            self.set_transition_state(&transition, "completed").await?;
+            return self.finish_completed_transition(&transition).await;
         }
         let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
         let destination_path = format!("{}/{}.json", transition.to_prefix, job_id);
