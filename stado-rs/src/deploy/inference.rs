@@ -111,6 +111,22 @@ pub async fn install(
         shlex_quote(&STANDARD.encode(
             serde_json::to_vec(&reservation).map_err(|error| DeployError(error.to_string()))?,
         ));
+    // A compute process is a blocker when nothing in the registry accounts for
+    // it, not merely because it exists. The RTX host runs a declared game
+    // stream unit whose encoder holds a few hundred MiB of a 96 GiB board, and
+    // the blanket refusal made every deployment on that host impossible while
+    // reporting the state as "unmanaged" — which the registry contradicts.
+    // Anything the registry has never declared still refuses, so an unknown
+    // training run keeps its GPU.
+    let accounted = super::service::declared_services(target)
+        .into_iter()
+        .flat_map(|declared| [declared.unit, declared.label, declared.name])
+        .filter(|unit| !unit.trim().is_empty())
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
+        .collect::<Vec<String>>()
+        .join("\n");
+    let accounted = shlex_quote(&STANDARD.encode(accounted));
     let script = format!(
         r#"set -euo pipefail
 name={name}
@@ -124,10 +140,24 @@ chmod u=rwx,go= "$HOME/.stado/inference" "$root" "$cache_dir"
 if [ -f "$reservation" ] && ! grep -F '"deployment":"'"$name"'"' "$reservation" >/dev/null; then
   printf 'ERROR\tanother inference reservation exists\n'; exit 1
 fi
-if nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits | grep -E '[0-9]' >/dev/null; then
-  if ! docker ps --filter "name=^stado-inference-$name$" --format '{{{{.Names}}}}' | grep -Fx "stado-inference-$name" >/dev/null; then
-    printf 'ERROR\tGPU has an unmanaged active compute process\n'; exit 1
-  fi
+printf '%s' {accounted} | base64 --decode > "$root/accounted-units"
+chmod 600 "$root/accounted-units"
+own_pids=$(docker top "stado-inference-$name" -eo pid 2>/dev/null | tr -dc '0-9\n' || true)
+unaccounted=""
+for pid in $(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits | tr -dc '0-9\n'); do
+  if printf '%s\n' "$own_pids" | grep -Fxq "$pid"; then continue; fi
+  cgroup=$(cat "/proc/$pid/cgroup" 2>/dev/null || true)
+  if [ -z "$cgroup" ]; then unaccounted="$unaccounted $pid"; continue; fi
+  matched=""
+  while IFS= read -r accounted_unit; do
+    [ -n "$accounted_unit" ] || continue
+    case "$cgroup" in *"$accounted_unit"*) matched=yes; break ;; esac
+  done < "$root/accounted-units"
+  [ -n "$matched" ] || unaccounted="$unaccounted $pid"
+done
+if [ -n "$unaccounted" ]; then
+  printf 'ERROR\tGPU has an active compute process no registry unit accounts for:%s\n' "$unaccounted"
+  exit 1
 fi
 if ss -ltn | grep -F "$endpoint_host:{port} " >/dev/null; then
   if ! docker ps --filter "name=^stado-inference-$name$" --format '{{{{.Names}}}}' | grep -Fx "stado-inference-$name" >/dev/null; then
