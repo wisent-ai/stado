@@ -47,6 +47,7 @@ const BAD_FS: &[&str] = &[
     "fuse.gvfsd-fuse",
     "squashfs",
     "iso9660",
+    "overlay",
 ];
 
 static NVME_PART_RE: LazyLock<regex::Regex> =

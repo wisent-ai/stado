@@ -184,18 +184,30 @@ pub fn install_spec(ssh_target: &str) -> CommandSpec {
         ),
     ))
 }
-/// Resolve an already installed Stado binary when it is exactly the version
-/// declared for this host. `host release` owns artifact verification and
-/// activation; bootstrap owns the persistent units that run those bytes.
+/// Resolve an installed Stado binary when it is the registry's exact desired
+/// version, or a newer version recorded by `release install-local`'s durable
+/// handoff marker. The latter preserves a qualified candidate without trusting
+/// an arbitrary executable that merely answers `--version`.
 pub fn installed_spec(ssh_target: &str, expected_version: &str) -> CommandSpec {
     let script = format!(
         "set -eu\n\
          expected_version={}\n\
          stado_bin=\"$HOME/.stado/bin/stado\"\n\
+         marker=\"$HOME/.stado/bin/stado.release-version\"\n\
          [ -x \"$stado_bin\" ] || {{ echo \"installed stado is missing\" >&2; exit 1; }}\n\
-         actual_version=\"$(\"$stado_bin\" --version)\"\n\
-         [ \"$actual_version\" = \"stado $expected_version\" ] || {{ \
-           echo \"installed stado version mismatch: $actual_version\" >&2; exit 1; }}\n\
+         set -- $(\"$stado_bin\" --version)\n\
+         [ \"${{1:-}}\" = stado ] || {{ echo \"installed stado version is invalid\" >&2; exit 1; }}\n\
+         actual_version=\"${{2:-}}\"\n\
+         python3 -c 'import sys; s=sys.argv[1].split(\".\"); assert len(s) == 3 and all(x.isdigit() for x in s)' \
+           \"$actual_version\" >/dev/null 2>&1 || {{ echo \"installed stado version is invalid\" >&2; exit 1; }}\n\
+         if [ \"$actual_version\" != \"$expected_version\" ]; then\n\
+           marked_version=\"$(cat \"$marker\" 2>/dev/null || true)\"\n\
+           [ \"$actual_version\" = \"$marked_version\" ] || {{ \
+             echo \"installed stado candidate lacks its release marker\" >&2; exit 1; }}\n\
+           python3 -c 'import sys; p=lambda value: tuple(map(int, value.split(\".\"))); raise SystemExit(0 if p(sys.argv[1]) > p(sys.argv[2]) else 1)' \
+             \"$actual_version\" \"$expected_version\" || {{ \
+             echo \"release-marked stado is not newer than registry desired\" >&2; exit 1; }}\n\
+         fi\n\
          case \"$(uname -s)-$(uname -m)\" in\n\
            Linux-x86_64) platform=linux-amd64 ;;\n\
            Darwin-arm64) platform=darwin-arm64 ;;\n\
@@ -352,7 +364,7 @@ pub async fn provision_target(
     } else {
         let output = if let Some(expected_version) = target.declared_version("stado") {
             echo(&format!(
-                "[probe] {}: verify installed stado {expected_version} on {ssh_target}",
+                "[probe] {}: verify installed stado on {ssh_target}; registry stable is {expected_version}",
                 target.name
             ));
             let installed = runner(installed_spec(&ssh_target, expected_version))
@@ -360,13 +372,13 @@ pub async fn provision_target(
                 .map_err(DeployError)?;
             if installed.ok() {
                 echo(&format!(
-                    "[reuse] {}: installed stado matches the host declaration",
+                    "[reuse] {}: installed stado matches the registry or its release marker",
                     target.name
                 ));
                 installed
             } else {
                 echo(&format!(
-                    "[install] {}: installed stado does not match; download release binaries",
+                    "[install] {}: installed stado is missing or unmarked; download bootstrap release binaries",
                     target.name
                 ));
                 runner(install_spec(&ssh_target))
