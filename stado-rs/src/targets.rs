@@ -543,7 +543,7 @@ fn target_identities(
     Ok(identities)
 }
 
-fn is_product_identifier(value: &str) -> bool {
+pub(crate) fn is_product_identifier(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() <= 128
         && bytes.first().is_some_and(u8::is_ascii_alphabetic)
@@ -944,6 +944,13 @@ fn validate_registry_body(
     crate::placement::validate_registry_contract(data).map_err(RegistryValidationError)?;
     crate::service_resolution::validate_registry_contract(data).map_err(RegistryValidationError)?;
     crate::release_control::validate_registry_contract(data).map_err(RegistryValidationError)?;
+    // The unit-image revisit policy is a top-level, unmodelled key, so it
+    // round-trips through `Registry::extra` and older builds preserve it
+    // without reading it. Validating it here is what makes an operator learn
+    // at the write, and what makes a build that disagrees with the document
+    // report it through the existing `build-refuses-registry` finding rather
+    // than act on the part it understood.
+    crate::release_unit_image::validate_registry_contract(data).map_err(RegistryValidationError)?;
 
     if include_inference {
         crate::inference::schema::validate(data).map_err(RegistryValidationError)?;

@@ -25,10 +25,15 @@
 //!   a sweep across a fleet agent, a janitor and a stream writer is the whole
 //!   host.
 //!
-//! Nothing calls this on a schedule. Wiring the same predicate into the
-//! release agent is a separate change and needs a per-product opt-in and a
-//! one-unit-per-tick cap before it can be safe; this command deliberately does
-//! not anticipate it.
+//! The release agent's scheduled revisit pass now reuses this module's
+//! [`refresh_outcome`] and the same `observe_unit_images` predicate, so a
+//! manual refresh and an automatic one reach their verdict by one route. The
+//! two callers keep different blast radii and that is deliberate: this
+//! command is one named unit per invocation, typed by an operator who has
+//! read the row, and the scheduled caller may touch only the exact launchd
+//! labels the registry's top-level `release_unit_image_revisit` block
+//! authorises for that host — a key no registry carries today — one of them
+//! per tick. Neither widens the other.
 //!
 //! The predicate is not reimplemented here. `deploy::service::
 //! observe_unit_images` is the one pass `registry doctor` reads, so a unit this
@@ -79,7 +84,7 @@ pub async fn refresh_image(name: &str, json_output: bool) -> Result<(), CmdError
             CmdError::click(format!("{} was not restarted: {reason}", before.unit))
         })?;
 
-    let after = settle(local, &host, name, before.pid);
+    let after = settle(local, &host, name, before.pid).await;
     emit(&before, after.as_ref(), &service, json_output);
     verdict(&before, after.as_ref(), &running, &installed)
 }
@@ -158,7 +163,13 @@ fn refusal(row: &UnitImageObservation) -> String {
 ///
 /// `None` when nothing was executing that unit's argument vector by the end of
 /// the window — which is itself a failure, and is reported as one.
-fn settle(
+///
+/// Crate-visible and `async` because the release agent's scheduled revisit
+/// pass waits for exactly this and must reach the same answer: a second
+/// settle loop would be a second definition of "the unit came back". `async`
+/// rather than blocking so that a tick which is waiting thirty seconds for
+/// launchd is not a tick holding a runtime worker for thirty seconds.
+pub(crate) async fn settle(
     target: &crate::targets::ComputeTarget,
     host: &str,
     name: &str,
@@ -167,7 +178,7 @@ fn settle(
     let deadline = std::time::Instant::now() + RESTART_WINDOW;
     let mut last = None;
     while std::time::Instant::now() < deadline {
-        std::thread::sleep(POLL_INTERVAL);
+        tokio::time::sleep(POLL_INTERVAL).await;
         let now = chrono::Utc::now().timestamp();
         let found = service::observe_unit_images(target, Some(host), now)
             .into_iter()
@@ -275,6 +286,23 @@ impl RefreshOutcome {
     /// Whether this outcome is the command succeeding.
     pub fn succeeded(self) -> bool {
         matches!(self, Self::OnDeclaredFile)
+    }
+
+    /// The one word a report names this outcome by.
+    ///
+    /// Crate-visible because the release agent's scheduled revisit pass
+    /// records and prints these same five results, and a second set of words
+    /// for them would be a second vocabulary an operator has to learn to
+    /// compare a manual refresh with an automatic one. No caller outside the
+    /// crate needs it.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::OnDeclaredFile => "OnDeclaredFile",
+            Self::NotRunning => "NotRunning",
+            Self::Unread => "Unread",
+            Self::Unchanged => "Unchanged",
+            Self::StillWrong => "StillWrong",
+        }
     }
 }
 

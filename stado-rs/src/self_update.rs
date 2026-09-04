@@ -557,7 +557,13 @@ pub(crate) async fn recycle_replaced_units(
 
 /// Whether an argv belongs to the queue agent, which recycles itself through
 /// the installed-release handshake and must not be kicked mid-slot.
-fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
+///
+/// Crate-visible because it is the one place this exclusion is written down.
+/// `release_unit_image::revisit_plan` applies the same rule on a
+/// schedule, and the fleet agent is one of the units that goes stale, so a
+/// second spelling of "which units recycle themselves" is a second answer
+/// waiting to disagree with this one.
+pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
     argv.iter().skip(1).any(|token| token.as_ref() == "agent")
 }
 

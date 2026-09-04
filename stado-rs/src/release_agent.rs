@@ -210,28 +210,36 @@ fn proxy_state_path(target: &ReleaseTargetPolicy, product: &str) -> PathBuf {
     Path::new(&target.state_dir).join(format!("{product}-proxy.json"))
 }
 
-struct ProductReconcileLock {
+/// A non-blocking exclusive advisory lock on one file in a release state
+/// directory.
+///
+/// Crate-visible with a caller-supplied stem because the unit-image revisit
+/// pass needs one lock per HOST over its whole observe -> restart -> record
+/// sequence, and this is already the shape of that lock: same `fs2` advisory
+/// mode, same `O_NOFOLLOW`, same `WouldBlock` means another holder rather than
+/// a failure. A second implementation beside it would be a second answer to
+/// "is somebody already doing this".
+pub(crate) struct StateLock {
     file: File,
 }
 
-impl Drop for ProductReconcileLock {
+impl Drop for StateLock {
     fn drop(&mut self) {
         let _ = fs2::FileExt::unlock(&self.file);
     }
 }
 
-fn acquire_product_reconcile_lock(
-    target: &ReleaseTargetPolicy,
-    product: &str,
-) -> Result<Option<ProductReconcileLock>, String> {
-    let state_dir = Path::new(&target.state_dir);
+/// `Ok(None)` when another process holds it. The caller decides what a busy
+/// lock means; nothing here waits.
+pub(crate) fn acquire_state_lock(state_dir: &str, stem: &str) -> Result<Option<StateLock>, String> {
+    let state_dir = Path::new(state_dir);
     std::fs::create_dir_all(state_dir).map_err(|error| {
         format!(
             "cannot create release state directory {}: {error}",
             state_dir.display()
         )
     })?;
-    let path = state_dir.join(format!("{product}.reconcile.lock"));
+    let path = state_dir.join(format!("{stem}.lock"));
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -251,7 +259,7 @@ fn acquire_product_reconcile_lock(
         ));
     }
     match fs2::FileExt::try_lock_exclusive(&file) {
-        Ok(()) => Ok(Some(ProductReconcileLock { file })),
+        Ok(()) => Ok(Some(StateLock { file })),
         Err(error)
             if error.kind() == io::ErrorKind::WouldBlock
                 || matches!(
@@ -267,6 +275,13 @@ fn acquire_product_reconcile_lock(
             path.display()
         )),
     }
+}
+
+fn acquire_product_reconcile_lock(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+) -> Result<Option<StateLock>, String> {
+    acquire_state_lock(&target.state_dir, &format!("{product}.reconcile"))
 }
 
 /// The exact bytes one document is committed as: compact JSON and one trailing
@@ -289,7 +304,7 @@ pub fn state_document_bytes(state: &HostReleaseState) -> Result<Vec<u8>, String>
     document_bytes(state)
 }
 
-fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+pub(crate) fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("state path has no parent: {}", path.display()))?;
@@ -2091,11 +2106,22 @@ pub async fn reconcile_once(
         .await
         .map_err(|error| error.to_string())?;
     crate::release_control::validate_registry_contract(&document)?;
-    let Some(control) = crate::release_control::control(&document)? else {
-        return Ok(Vec::new());
-    };
+    // No `release_control` is zero rollout products, NOT the end of the tick.
+    //
+    // The unit-image revisit policy is a top-level registry key and names its
+    // own state directory, so it is entirely independent of whether this
+    // document declares any blue-green rollout — and the units it exists for
+    // are precisely the ones no rollout owns: the Stado release's own janitor
+    // and resolver, and a stream writer this catalogue does not carry.
+    // Returning here would have made the feature unreachable on exactly the
+    // hosts it was built for.
+    let control = crate::release_control::control(&document)?;
     let mut states = Vec::new();
-    for (product, policy) in &control.products {
+    for (product, policy) in control
+        .as_ref()
+        .map(|control| control.products.iter())
+        .unwrap_or_default()
+    {
         if product_filter.is_some_and(|selected| selected != product) {
             continue;
         }
@@ -2112,7 +2138,10 @@ pub async fn reconcile_once(
         let Some(_reconcile_lock) = acquire_product_reconcile_lock(target, product)? else {
             continue;
         };
-        let result = reconcile_product(&control, product, policy, target_name, target).await;
+        let control = control
+            .as_ref()
+            .ok_or_else(|| "release-control product resolved without its document".to_string())?;
+        let result = reconcile_product(control, product, policy, target_name, target).await;
         let mut state = match result {
             Ok(state) => state,
             Err(reason) => {
@@ -2128,6 +2157,51 @@ pub async fn reconcile_once(
             save_state(target, &mut state)?;
         }
         states.push(state);
+    }
+    // The revisit pass, after the rollouts and never instead of them.
+    //
+    // A tick's first duty is the release it was asked to deliver; putting a
+    // unit back on a file it already declares is repair work, and a repair
+    // that delayed a rollout by up to the settle window every tick would be
+    // paying for this feature out of the one this agent exists for.
+    //
+    // It takes the document THIS tick already resolved. A second registry
+    // read would be a behavioural change on a fleet that opted into nothing,
+    // and the absent-by-default bound promises exactly that it is not one:
+    // `release_unit_image::policy` returns `Ok(None)` whenever the document
+    // carries no `release_unit_image_revisit` block, before a process table,
+    // a unit file or a disk is read.
+    //
+    // A failure here is reported and never returned. The revisit pass is not
+    // the rollout, and a malformed policy or an unreadable ledger must not
+    // become a `Failed` phase on a product whose candidate is serving
+    // perfectly well. It must not be silent either: a policy block that will
+    // not parse, or a contract that will not resolve, is the reason no unit is
+    // being repaired, so it is said here — and `registry doctor` reports the
+    // same document through `build-refuses-registry`, because the validator
+    // that refuses it is wired into `validate_registry_body`.
+    let revisit = match crate::release_unit_image::validate_registry_contract(&document) {
+        Ok(()) => match crate::release_unit_image::policy(&document) {
+            Ok(Some(policy)) => {
+                crate::release_unit_image::revisit_once(
+                    &document,
+                    &policy,
+                    target_name,
+                    product_filter,
+                )
+                .await
+            }
+            Ok(None) => Ok(None),
+            Err(reason) => Err(reason),
+        },
+        Err(reason) => Err(reason),
+    };
+    match revisit {
+        Ok(Some(report)) => eprintln!("{}", report.line()),
+        Ok(None) => {}
+        Err(reason) => eprintln!(
+            "stado release agent unit-image revisit host={target_name} could not run: {reason}"
+        ),
     }
     Ok(states)
 }
