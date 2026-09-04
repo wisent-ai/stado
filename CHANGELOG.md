@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.3
+## 0.16.5
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
 - **Host disk diagnostics:** `stado host disk` now attributes Linux pressure inside the managed home, `/home`, `/mnt`, `/var`, and `/opt` instead of returning an empty inventory after a depth-two root report only named its parent directories.
@@ -8,6 +8,21 @@
 - **Migration:** no configuration or persisted-state migration is required.
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+
+## 0.16.4
+
+- **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.
+- **Recovery deadline:** the protected-read wait now uses 180 elapsed seconds rather than 180 potentially slow network attempts.
+- **Migration:** no configuration change is required; the existing `stado host recover-object-api TARGET` command resumes an interrupted recovery.
+- **Rollback boundary:** rolling back can leave recovery trying to kickstart an unloaded job and waiting beyond the host-channel deadline.
+- **Platforms and evidence:** the affected recovery command targets macOS; compilation and shell syntax checks cover the change, while its retained recovery report records the production outcome.
+
+## 0.16.3
+
+- **Release scheduling:** a live builder temporarily occupied by CPU, RAM, or an exclusive job can receive a queued release build when no builder is immediately available. Worker claim-time resource checks remain unchanged; disk, paused-queue, missing-measurement, and unexplained refusals still prevent selection.
+- **Migration:** no configuration or persisted-state rewrite is required. Existing release submissions can resume with the same source and version.
+- **Rollback boundary:** rolling back restores immediate submission failure when every matching builder is temporarily busy.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation covers this change, and release records retain the selected builder and its eventual build outcome.
 
 ## 0.16.2
 
