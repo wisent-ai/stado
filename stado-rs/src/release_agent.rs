@@ -669,7 +669,7 @@ fn process_executable_matches(pid: i32, expected: &Path) -> bool {
             return false;
         };
         let actual = actual.to_string_lossy();
-        return actual.strip_suffix(" (deleted)").unwrap_or(&actual) == expected.to_string_lossy();
+        actual.strip_suffix(" (deleted)").unwrap_or(&actual) == expected.to_string_lossy()
     }
     #[cfg(not(target_os = "linux"))]
     {
