@@ -96,23 +96,34 @@ pub(crate) async fn publish_entry(
 }
 
 fn scan(root: &Path, found: &mut Vec<PathBuf>) -> Result<(), CmdError> {
+    // A release declaration belongs to the checkout that contains it. Never
+    // descend into that checkout's build products or dependency clones: a
+    // copied dependency manifest is not another product checked out by the
+    // operator.
+    let manifest = root.join(PRODUCT_MANIFEST);
+    if manifest.is_file() {
+        found.push(manifest);
+        return Ok(());
+    }
+    if root.join(".git").exists() {
+        return Ok(());
+    }
+
     let mut entries: Vec<_> = std::fs::read_dir(root)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
-        let path = entry.path();
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if entry.file_type()?.is_dir() {
-            if matches!(
-                name.as_ref(),
-                ".git" | "target" | "node_modules" | ".venv" | "dist" | "build"
-            ) {
-                continue;
-            }
-            scan(&path, found)?;
-        } else if name == PRODUCT_MANIFEST {
-            found.push(path);
+        if matches!(
+            name.as_ref(),
+            ".build" | ".git" | "target" | "node_modules" | ".venv" | "dist" | "build"
+        ) {
+            continue;
         }
+        scan(&entry.path(), found)?;
     }
     Ok(())
 }
