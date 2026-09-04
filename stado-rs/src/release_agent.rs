@@ -1105,14 +1105,15 @@ pub(crate) fn active_binary(
         )
     })?;
     let directory = PathBuf::from(&active.release_dir);
-    let active_process_matches = release_processes(&policy.install_root)
-        .into_iter()
-        .any(|process| {
-            process.pid == active.pid
-                && process.version == active.version
-                && process.port == Some(active.port)
-                && process.release_dir == directory
-        });
+    let active_process_matches =
+        release_processes(&policy.install_root)
+            .into_iter()
+            .any(|process| {
+                process.pid == active.pid
+                    && process.version == active.version
+                    && process.port == Some(active.port)
+                    && process.release_dir == directory
+            });
     if !active_process_matches {
         return Err(format!(
             "{product} observed active process tuple pid={} version={} port={} release_dir={} does not match a live release process",
@@ -1256,7 +1257,9 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
         };
         let arguments: Vec<&str> = fields.collect();
         let Some((version, release_dir)) = arguments.iter().find_map(|argument| {
-            let path = argument.split_once('=').map_or(*argument, |(_, value)| value);
+            let path = argument
+                .split_once('=')
+                .map_or(*argument, |(_, value)| value);
             let (prefix, tail) = path.split_once(&marker)?;
             let mut components = tail.split('/');
             let version = components.next()?;
@@ -1285,6 +1288,87 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
         });
     }
     found
+}
+async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
+    let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
+    reqwest::Client::new()
+        .get(url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
+}
+
+/// Reconcile a proxy that survived an agent handoff before its pid reached the
+/// host state document.
+///
+/// The exact proxy argv belongs to this product and runs under the same
+/// per-product reconcile lock as the state update. A live upstream is the crash
+/// window: adopt the proxy rather than interrupting traffic. With no owned
+/// release process and a dead upstream, the proxy can only pin the stable bind
+/// to nowhere; retire it and let the declared legacy service reclaim the bind.
+async fn reconcile_stable_proxy(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+    install_root: &str,
+    readiness_timeout_seconds: u64,
+    state: &mut HostReleaseState,
+) -> Result<(), String> {
+    let serving = target.blue_green_serving()?;
+    let Some(proxy_pid) = exact_proxy_pid(target, &serving, product)? else {
+        return Ok(());
+    };
+    let upstream = proxy_upstream_port(target, product);
+    let upstream_is_owned = upstream.is_some_and(|upstream_port| {
+        release_processes(install_root)
+            .iter()
+            .any(|(_, _, port)| *port == Some(upstream_port))
+    });
+    if upstream_is_owned && stable_bind_ready(&serving).await {
+        state.proxy_pid = Some(proxy_pid);
+        save_state(target, state)?;
+        eprintln!(
+            "adopted {product} release proxy pid={proxy_pid} after interrupted handoff; \
+             upstream {upstream:?} is ready"
+        );
+        return Ok(());
+    }
+
+    let ownership_empty =
+        state.active.is_none() && state.candidate.is_none() && state.previous.is_none();
+    if !ownership_empty {
+        return Ok(());
+    }
+    let _ = kill(Pid::from_raw(proxy_pid), Signal::SIGTERM);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while pid_alive(proxy_pid) {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "orphaned {product} release proxy pid={proxy_pid} did not exit"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    restore_legacy(target)?;
+    if target.legacy_launchd_plist.is_some() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
+        while !stable_bind_ready(&serving).await {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "legacy {product} did not reclaim {} after orphaned proxy retirement",
+                    serving.stable_bind
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+    state.proxy_pid = None;
+    save_state(target, state)?;
+    eprintln!(
+        "retired orphaned {product} release proxy pid={proxy_pid}; upstream \
+         {upstream:?} had no ready owned release"
+    );
+    Ok(())
 }
 
 /// Terminate release processes the state file does not know about.
@@ -1811,6 +1895,17 @@ async fn reconcile_product(
     target: &ReleaseTargetPolicy,
 ) -> Result<HostReleaseState, String> {
     let mut state = load_state(target, product, target_name)?;
+    // Repair the stable bind before any desired/quarantine branch can return.
+    // `reconcile_once` holds the per-product lock across this state load,
+    // declaration/world reconciliation, and every persisted repair below.
+    reconcile_stable_proxy(
+        target,
+        product,
+        &policy.install_root,
+        policy.strategy.readiness_timeout_seconds,
+        &mut state,
+    )
+    .await?;
     // `reconcile_once` hands only blue-green policies to this function; ask
     // for the serving coordinates by name rather than re-checking the
     // validator's invariant, so a replace policy reaching here fails loudly
