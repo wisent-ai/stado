@@ -272,6 +272,108 @@ pub struct ReleaseTargetPolicy {
     pub legacy_launchd_plist: Option<String>,
 }
 
+fn valid_legacy_launchd_unit(label: &str, plist: &str) -> bool {
+    let path = Path::new(plist);
+    !label.is_empty()
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        && plist.starts_with("/Library/LaunchDaemons/")
+        && path.is_absolute()
+        && path.file_stem().and_then(|name| name.to_str()) == Some(label)
+        && path.extension().and_then(|extension| extension.to_str()) == Some("plist")
+}
+
+/// Fill an absent rollout-target legacy unit from the same host's exact
+/// service declaration.
+///
+/// Explicit rollout fields remain the compatibility override. Otherwise only
+/// a single service whose `name` equals [`ProductReleasePolicy::service`] can
+/// supply the unit; a different name is absence, never a heuristic match.
+pub fn hydrate_legacy_launchd_unit(
+    document: &Value,
+    target_name: &str,
+    policy: &ProductReleasePolicy,
+    target: &ReleaseTargetPolicy,
+) -> Result<ReleaseTargetPolicy, String> {
+    let mut hydrated = target.clone();
+    match (
+        target.legacy_launchd_label.as_deref(),
+        target.legacy_launchd_plist.as_deref(),
+    ) {
+        (Some(label), Some(plist)) => {
+            if !valid_legacy_launchd_unit(label, plist) {
+                return Err(format!(
+                    "release target {target_name} declares an invalid legacy launchd label or path"
+                ));
+            }
+            return Ok(hydrated);
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(format!(
+                "release target {target_name} declares only part of its legacy launchd unit"
+            ));
+        }
+        (None, None) => {}
+    }
+
+    let targets = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "registry.targets must be an array".to_string())?;
+    let mut declared_targets = targets
+        .iter()
+        .filter(|candidate| candidate.get("name").and_then(Value::as_str) == Some(target_name));
+    let declared_target = declared_targets
+        .next()
+        .ok_or_else(|| format!("registry declares no target named {target_name}"))?;
+    if declared_targets.next().is_some() {
+        return Err(format!(
+            "registry declares target {target_name} more than once"
+        ));
+    }
+    let services = declared_target
+        .get("services")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut matches = services.iter().filter(|service| {
+        service.get("name").and_then(Value::as_str) == Some(policy.service.as_str())
+    });
+    let Some(service) = matches.next() else {
+        return Ok(hydrated);
+    };
+    if matches.next().is_some() {
+        return Err(format!(
+            "target {target_name} declares service {} more than once",
+            policy.service
+        ));
+    }
+    if service.get("kind").and_then(Value::as_str) != Some("launchd") {
+        return Err(format!(
+            "target {target_name} service {} is not launchd",
+            policy.service
+        ));
+    }
+    let label = service
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let plist = service
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !valid_legacy_launchd_unit(label, plist) {
+        return Err(format!(
+            "target {target_name} service {} has an invalid launchd label or path",
+            policy.service
+        ));
+    }
+    hydrated.legacy_launchd_label = Some(label.to_string());
+    hydrated.legacy_launchd_plist = Some(plist.to_string());
+    Ok(hydrated)
+}
+
 /// The serving coordinates a blue-green rollout binds, probes and switches.
 /// [`validate_registry_contract`] guarantees all three are present on a
 /// `blue-green` target and absent on a `replace` one; consumers ask for this

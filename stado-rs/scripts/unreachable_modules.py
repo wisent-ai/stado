@@ -6,7 +6,7 @@ It is not compiled at all. `cargo check` passes, `cargo clippy` passes, the
 file sits in the tree, `git log` shows it landing, and nothing it contains
 runs. The only symptom is silence.
 
-Two ways that has already happened in this repository:
+One way this has already happened in this repository:
 
 - On 2026-08-31 at 15:48Z one commit replaced `src/cli/mod.rs` with a
   six-day-old copy, deleting nine `pub mod` declarations - `builds`,
@@ -15,11 +15,6 @@ Two ways that has already happened in this repository:
   stayed on disk. `main` stopped compiling, but not because a module was
   undeclared: it failed 27 errors away, in unrelated callers, and no
   diagnostic named a missing declaration. A file listing looked untouched.
-- `ce4e11cb`, fourteen seconds later, added a 279-line
-  `src/bin/stado_fleet/key/mod.rs` to fix `stado fleet key ls`. No `mod key;`
-  reaches it, so it has never been compiled, and the command it was written
-  to correct still enumerates by item-name prefix.
-
 So the declaration and the tree disagree and nothing compares them. This
 compares them: resolve every `mod` declaration from `src/lib.rs` and each
 `[[bin]]` path in `Cargo.toml`, then report any `.rs` file the walk never

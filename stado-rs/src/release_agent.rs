@@ -2269,29 +2269,35 @@ pub async fn reconcile_once(
             // switch between. The agent must not drive it.
             continue;
         }
-        let Some(target) = policy.targets.get(target_name) else {
+        let Some(declared_target) = policy.targets.get(target_name) else {
             continue;
         };
-        let Some(_reconcile_lock) = acquire_product_reconcile_lock(target, product)? else {
+        let target = crate::release_control::hydrate_legacy_launchd_unit(
+            &document,
+            target_name,
+            policy,
+            declared_target,
+        )?;
+        let Some(_reconcile_lock) = acquire_product_reconcile_lock(&target, product)? else {
             continue;
         };
         let control = control
             .as_ref()
             .ok_or_else(|| "release-control product resolved without its document".to_string())?;
-        let result = reconcile_product(control, product, policy, target_name, target).await;
+        let result = reconcile_product(control, product, policy, target_name, &target).await;
         let mut state = match result {
             Ok(state) => state,
             Err(reason) => {
-                let mut state = load_state(target, product, target_name)?;
+                let mut state = load_state(&target, product, target_name)?;
                 state.phase = RolloutPhase::Failed;
                 state.detail = reason;
-                save_state(target, &mut state)?;
+                save_state(&target, &mut state)?;
                 state
             }
         };
         if let Err(error) = publish_status(&state).await {
             state.detail = format!("{}; status publish failed: {error}", state.detail);
-            save_state(target, &mut state)?;
+            save_state(&target, &mut state)?;
         }
         states.push(state);
     }

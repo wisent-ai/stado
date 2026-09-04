@@ -275,16 +275,18 @@ target = targets[target_name]
 state_dir = target.get("state_dir") or ""
 stable_bind = target.get("stable_bind") or ""
 readiness_path = target.get("readiness_path") or ""
-legacy_plist = target.get("legacy_launchd_plist")
-legacy_label = target.get("legacy_launchd_label")
+legacy_plist = target.get("legacy_launchd_plist", "")
+legacy_label = target.get("legacy_launchd_label", "")
 candidate_ports = target.get("candidate_ports") or []
 timeout = strategy.get("readiness_timeout_seconds")
 required = (state_dir, stable_bind, readiness_path)
 if not all(isinstance(value, str) and value for value in required):
     raise SystemExit("skarbiec bootstrap refused: release target is incomplete")
 legacy_values = (legacy_plist, legacy_label)
-legacy_configured = all(isinstance(value, str) and value for value in legacy_values)
-if legacy_configured != any(isinstance(value, str) and value for value in legacy_values):
+if not all(isinstance(value, str) for value in legacy_values):
+    raise SystemExit("skarbiec bootstrap refused: legacy plist and label must be strings")
+legacy_configured = all(bool(value) for value in legacy_values)
+if legacy_configured != any(bool(value) for value in legacy_values):
     raise SystemExit(
         "skarbiec bootstrap refused: legacy plist and label must be declared together"
     )
@@ -302,8 +304,14 @@ if not 1 <= stable_port <= 65535:
     raise SystemExit("skarbiec bootstrap refused: stable bind port is invalid")
 if not readiness_path.startswith("/") or any(character.isspace() for character in readiness_path):
     raise SystemExit("skarbiec bootstrap refused: readiness path is invalid")
-if legacy_configured and not legacy_plist.startswith("/Library/LaunchDaemons/"):
-    raise SystemExit("skarbiec bootstrap refused: legacy plist is not a system daemon")
+if legacy_configured and (
+    not all(
+        character.isascii() and (character.isalnum() or character in ".-_")
+        for character in legacy_label
+    )
+    or legacy_plist != f"/Library/LaunchDaemons/{legacy_label}.plist"
+):
+    raise SystemExit("skarbiec bootstrap refused: legacy launchd identity is invalid")
 if (
     not isinstance(candidate_ports, list)
     or len(candidate_ports) != 2
