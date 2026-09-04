@@ -1242,6 +1242,23 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             })?;
     }
     let (commit, archive) = snapshot(&root)?;
+    // Reserve every platform coordinate before this submission can become the
+    // newest durable run. Delivery workers fence themselves against that
+    // newest run. When the claim lived only in `publish`, a second source tree
+    // could persist a newer run for the same version, fail later against the
+    // first tree's immutable claim, and still make every valid delivery from
+    // the first run refuse itself as superseded. Claiming in the manifest's
+    // stable platform order makes that incompatible submission fail before it
+    // can become a delivery fence.
+    for platform in m.platforms.keys() {
+        super::release_cmd::claim_release_coordinate(
+            &m.product,
+            &args.version,
+            platform,
+            &commit,
+        )
+        .await?;
+    }
     let source_sha = release_control::sha256_bytes(&archive);
     let manifest_sha = release_control::sha256_bytes(&manifest_bytes);
     let source_uri = format!("stado://sources/{}/{}/source.tar.gz", m.product, source_sha);
