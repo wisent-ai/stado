@@ -1140,7 +1140,11 @@ pub async fn disk_cleanup_policy(
     entry.insert("disk_cleanup".to_string(), policy.clone());
     // The whole registry, not the field: a policy is only valid in the
     // document that carries it, and the janitor refuses a document that does
-    // not validate as a whole.
+    // not validate as a whole. Remove declarations the current model
+    // intentionally retired (`slots`, `max_concurrent`, and
+    // `WC_LOCAL_SLOTS`) on this ordinary policy update instead of retaining a
+    // second capacity contract.
+    crate::targets::strip_legacy_capacity_declarations(&mut document);
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);

@@ -204,6 +204,24 @@ fn build_platform() -> &'static str {
 }
 
 #[test]
+#[ignore = "Probierz records the real capacity-config cutover journey"]
+fn registry_policy_rewrite_removes_legacy_fixed_capacity_declarations() {
+    let journey = Journey::new();
+    journey.invoke_ok(&["host", "disk-cleanup", TARGET, "--mode", "off", "--json"]);
+
+    let registry: Value =
+        serde_json::from_slice(&fs::read(journey.storage.join("registry.json")).unwrap()).unwrap();
+    let target = &registry["targets"][0];
+    assert!(target.get("slots").is_none());
+    assert!(target.get("max_concurrent").is_none());
+    assert!(
+        target["env_overrides"].get("WC_LOCAL_SLOTS").is_none(),
+        "a policy write must not retain the retired environment cap"
+    );
+    assert_eq!(target["disk_cleanup"]["mode"], "off");
+}
+
+#[test]
 #[ignore = "Probierz records the real local-worker capacity journey"]
 fn live_resources_admit_two_jobs_despite_legacy_single_slot_limits() {
     let mut journey = Journey::new();
