@@ -2544,6 +2544,15 @@ pub struct WebApiProduct {
     /// built or installed by `stado web`. What was missing was a public
     /// hostname with a certificate, which is the one thing the edge does.
     upstream_service: Option<String>,
+    /// A path prefix this product is mounted at, under a hostname another
+    /// declaration owns.
+    ///
+    /// `brama.wisent.com/docs` is that: Brama's 79 documentation pages are
+    /// versioned with Brama and served by a unit of their own, while the
+    /// hostname's catch-all belongs to Brama itself. A mount is an ordinary
+    /// unit product in every other way — built, released and deployed like
+    /// any other — and only its place in the edge's configuration differs.
+    path_prefix: Option<String>,
 }
 
 /// The one database a web product reads, and how its credential reaches the
@@ -2614,6 +2623,18 @@ impl WebApiProduct {
     /// unit half of `status` have nothing to do with either.
     pub fn owns_a_unit(&self) -> bool {
         self.redirect_to.is_none() && self.upstream_service.is_none()
+    }
+
+    /// The path prefix this product is mounted at, for a product that lives
+    /// under another declaration's hostname.
+    pub fn path_prefix(&self) -> Option<&str> {
+        self.path_prefix.as_deref()
+    }
+
+    /// Whether this product owns its hostname. A mount does not: the owner's
+    /// declaration holds the record, the certificate and the catch-all.
+    pub fn owns_its_hostname(&self) -> bool {
+        self.path_prefix.is_none()
     }
 
     pub fn is_redirect(&self) -> bool {
@@ -2707,6 +2728,24 @@ pub fn is_redirect_target(value: &str) -> bool {
     true
 }
 
+/// Whether one string can be the path prefix a product is mounted at.
+///
+/// Absolute, no trailing slash, and nothing that could change the meaning of
+/// the generated `handle_path` matcher: no wildcard of its own, no brace, no
+/// whitespace, no query or fragment. `/docs` mounts, `/docs/` does not,
+/// because the rendered matcher is `<prefix>*` and a trailing slash would
+/// stop `/docs` itself from matching.
+pub fn is_mount_prefix(value: &str) -> bool {
+    value.len() > 1
+        && value.starts_with('/')
+        && !value.ends_with('/')
+        && !value.contains("//")
+        && !value.contains("..")
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "{}*?#".contains(c))
+}
+
 /// Whether one string can name an environment variable.
 pub fn is_env_name(value: &str) -> bool {
     !value.is_empty()
@@ -2734,6 +2773,7 @@ pub(crate) fn parse_web_api_products(
     let mut problems = Vec::new();
     let mut products = BTreeMap::new();
     let mut hostnames = BTreeMap::new();
+    let mut mounts = BTreeMap::new();
     for (name, raw) in entries {
         let start = problems.len();
         if !canonical_machine_name(name) {
@@ -2759,6 +2799,7 @@ pub(crate) fn parse_web_api_products(
                     | "database"
                     | "redirect_to"
                     | "upstream_service"
+                    | "path_prefix"
             ) {
                 problems.push(format!(
                     "web_api.products.{name} contains unsupported key {key:?}"
@@ -2871,11 +2912,64 @@ pub(crate) fn parse_web_api_products(
                 String::new()
             }
         };
-        if !hostname.is_empty() {
-            if let Some(owner) = hostnames.insert(hostname.clone(), name.clone()) {
+        // A path prefix a product is mounted at, under a hostname another
+        // declaration owns. Written before the hostname bookkeeping below
+        // because that bookkeeping now depends on it: one hostname has
+        // exactly one owner and any number of mounts, and each mount holds a
+        // distinct prefix.
+        let path_prefix = match entry.get("path_prefix") {
+            Some(Value::String(prefix)) if is_mount_prefix(prefix) => Some(prefix.clone()),
+            Some(other) => {
                 problems.push(format!(
-                    "web_api.products.{name}.hostname {hostname:?} is already declared by {owner:?}"
+                    "web_api.products.{name}.path_prefix {other} must be an absolute path with no trailing slash, like \"/docs\""
                 ));
+                None
+            }
+            None => None,
+        };
+        // A mount is an ordinary unit product; what it must not be is one of
+        // the two hostname-only kinds. A redirect answers the whole hostname
+        // and an upstream service forwards the whole hostname, so neither can
+        // also be a path under someone else's.
+        if path_prefix.is_some() {
+            for (key, why) in [
+                ("redirect_to", "a redirect answers a whole hostname"),
+                (
+                    "upstream_service",
+                    "a hostname in front of a service forwards the whole hostname",
+                ),
+            ] {
+                if entry.contains_key(key) {
+                    problems.push(format!(
+                        "web_api.products.{name} declares path_prefix and {key}: {why}, so it cannot also be a path under another product's hostname"
+                    ));
+                }
+            }
+        }
+        if !hostname.is_empty() {
+            match &path_prefix {
+                // The owner: one per hostname, holding the record, the
+                // certificate and the catch-all.
+                None => {
+                    if let Some(owner) = hostnames.insert(hostname.clone(), name.clone()) {
+                        problems.push(format!(
+                            "web_api.products.{name}.hostname {hostname:?} is already declared by {owner:?}"
+                        ));
+                    }
+                }
+                // A mount: it shares the hostname, so the only thing it must
+                // not share is its prefix. Two mounts at one prefix would
+                // render two `handle_path` blocks for one path and the first
+                // would silently win.
+                Some(prefix) => {
+                    if let Some(owner) =
+                        mounts.insert((hostname.clone(), prefix.clone()), name.clone())
+                    {
+                        problems.push(format!(
+                            "web_api.products.{name} mounts {prefix:?} on {hostname:?}, which {owner:?} already mounts"
+                        ));
+                    }
+                }
             }
         }
         let consumer = match entry.get("consumer").and_then(Value::as_str) {
@@ -3015,8 +3109,21 @@ pub(crate) fn parse_web_api_products(
                     database,
                     redirect_to,
                     upstream_service,
+                    path_prefix,
                 },
             );
+        }
+    }
+    // A mount is rendered inside the site block of the declaration that owns
+    // its hostname, so a mount with no owner is a block with nowhere to go:
+    // the edge would order no certificate for that name and the path would
+    // answer from nothing. Checked after the loop because the owner may be
+    // declared after the mount in the document.
+    for ((hostname, prefix), name) in &mounts {
+        if !hostnames.contains_key(hostname) {
+            problems.push(format!(
+                "web_api.products.{name} mounts {prefix:?} on {hostname:?}, which no declaration owns: one product must declare that hostname without a path_prefix, and it is the one that holds the record and the certificate"
+            ));
         }
     }
     if problems.is_empty() {

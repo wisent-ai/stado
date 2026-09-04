@@ -3559,8 +3559,24 @@ const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     printf 'STADO_ERR\\t%s\\n' \"$err_log (empty)\"
   fi
 else
-  printf 'STADO_LOG\\tjournalctl --user -u %s\\n' \"$unit\"
-  /usr/bin/journalctl --user -u \"$unit\" -n @LINES@ --no-pager 2>&1
+  if [ \"$scope\" = \"system\" ]; then
+    printf 'STADO_LOG\\tjournalctl -u %s\\n' \"$unit\"
+    stado_root /usr/bin/journalctl -u \"$unit\" -n @LINES@ --no-pager 2>&1
+  else
+    printf 'STADO_LOG\\tjournalctl --user -u %s\\n' \"$unit\"
+    runtime=\"/run/user/$service_uid\"
+    if [ \"$service_uid\" = \"$uid\" ]; then
+      /usr/bin/env \
+        XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        /usr/bin/journalctl --user -u \"$unit\" -n @LINES@ --no-pager 2>&1
+    else
+      \"$sudo_bin\" -n -u \"$service_user\" /usr/bin/env \
+        XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        /usr/bin/journalctl --user -u \"$unit\" -n @LINES@ --no-pager 2>&1
+    fi
+  fi
 fi
 ";
 

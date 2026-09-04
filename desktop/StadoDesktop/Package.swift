@@ -20,7 +20,7 @@ let package = Package(
         .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", exact: "0.3.1"),
         // By url, not by sibling path: CI checks out this repository alone, and
         // a missing sibling makes the whole graph unresolvable there.
-        .package(url: "https://github.com/wisent-ai/echo.git", from: "0.1.2"),
+        .package(url: "https://github.com/wisent-ai/echo.git", exact: "0.3.0"),
     ],
     targets: [
         .executableTarget(
