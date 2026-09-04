@@ -351,7 +351,8 @@ PY
     return 1
   fi
 
-  /usr/bin/python3 - "$release_state" "$target_name" <<'PY'
+  ownership=$(
+    /usr/bin/python3 - "$release_state" "$target_name" <<'PY'
 import json, sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -359,9 +360,18 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 if state.get("product") != "skarbiec" or state.get("target") != sys.argv[2]:
     raise SystemExit("skarbiec bootstrap refused: release state identity differs")
 owned = [state.get(field) for field in ("active", "candidate", "previous")]
-if any(record is not None for record in owned) or state.get("proxy_pid") is not None:
-    raise SystemExit("skarbiec bootstrap refused: release state still records ownership")
+print("owned" if any(record is not None for record in owned) or state.get("proxy_pid") is not None else "unowned")
 PY
+  )
+  if [ "$ownership" = owned ]; then
+    if /usr/bin/curl --silent --show-error --fail --max-time 3 \
+      "http://$stable_bind$readiness_path" >/dev/null 2>&1; then
+      printf 'skarbiec_bootstrap active_release_owner stable=%s\n' "$stable_bind"
+      return 0
+    fi
+    printf 'skarbiec bootstrap refused: release state owns an unavailable stable proxy\n' >&2
+    return 1
+  fi
 
   upstream=$(
     /usr/bin/python3 - "$proxy_state" "$candidate_ports" <<'PY'

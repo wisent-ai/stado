@@ -10,14 +10,14 @@
 use crate::deploy::{host_channel, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-pub const CUA_DRIVER_VERSION: &str = "0.22.0";
+pub const CUA_DRIVER_VERSION: &str = "0.23.2";
 pub const CUA_DRIVER_BUNDLE_ID: &str = "com.trycua.driver";
 pub const CUA_DRIVER_APP: &str = "/Applications/CuaDriver.app";
 const CUA_DRIVER_EXECUTABLE: &str = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 pub const CUA_DRIVER_ARCHIVE_SHA256: &str =
-    "59603bc7e5f8d9d70f165d87158e577f99227ffcbb91d5fd9f9c688f4beb3727";
+    "9e521b16c8606896f20003f4d20ae62070a1cb3c8d33152d9d0593f62234fbb0";
 pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases/download/\
-    cua-driver-rs-v0.22.0/cua-driver-rs-0.22.0-darwin-universal.tar.gz";
+    cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-darwin-universal.tar.gz";
 
 pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "2";
 pub const APPLE_CHALLENGE_HELPER: &str = "/usr/local/libexec/stado-apple-challenge-capture";
@@ -961,7 +961,10 @@ async fn reconcile_app(
         false
     };
     if !archive_valid {
-        remove_if_present(target, &partial, false, runner).await?;
+        // The host channel has a bounded command window. Keep a verified
+        // version-scoped partial and resume it on the next reconciliation;
+        // deleting it first makes every slow GitHub download restart at byte
+        // zero and therefore guarantees the same timeout forever.
         run(
             target,
             &[
@@ -969,6 +972,8 @@ async fn reconcile_app(
                 "-fL",
                 "--retry",
                 "3",
+                "--continue-at",
+                "-",
                 "--output",
                 &partial,
                 CUA_DRIVER_ARCHIVE_URL,
