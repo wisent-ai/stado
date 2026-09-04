@@ -1236,9 +1236,8 @@ async fn active_binary(args: &ReleaseActiveBinaryArgs) -> Result<(), CmdError> {
             args.product
         ))
     })?;
-    let active =
-        crate::release_agent::active_binary(&args.product, target_name, policy, target)
-            .map_err(CmdError::click)?;
+    let active = crate::release_agent::active_binary(&args.product, target_name, policy, target)
+        .map_err(CmdError::click)?;
     if args.json {
         println!(
             "{}",
