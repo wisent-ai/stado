@@ -1728,6 +1728,24 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Report what one consumer's Skarbiec grant on TARGET holds.
+    ///
+    /// Prints the recorded capabilities as `item#field:action` and, when a
+    /// token file is named, whether the bearer in it is the one the vault
+    /// recorded. Records nothing: the verdict re-asserts a capability the
+    /// grant already holds, which Skarbiec answers without writing.
+    #[command(name = "grant-show")]
+    GrantShow {
+        target: String,
+        /// Exact Skarbiec consumer name.
+        consumer: String,
+        /// Consumer's bearer file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        token_file: Option<String>,
+        /// Emit the nonsecret report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Authorize one consumer to read one field of one item on TARGET.
     ///
     /// A Skarbiec grant is per item and per field. The consumer's bearer stays
@@ -3148,6 +3166,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 item_type,
                 json,
             } => host::vault_item_put(&target, &item, &item_type, json).await,
+            HostCommands::GrantShow {
+                target,
+                consumer,
+                token_file,
+                json,
+            } => host::grant_show(&target, &consumer, token_file.as_deref(), json).await,
             HostCommands::GrantItemRead {
                 target,
                 consumer,
