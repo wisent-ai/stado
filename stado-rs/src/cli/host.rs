@@ -5,6 +5,7 @@
 //! which have no Python original and live in `crate::deploy::host_*`.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsStr};
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -12,7 +13,6 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
