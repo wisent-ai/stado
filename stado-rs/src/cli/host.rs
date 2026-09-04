@@ -11096,12 +11096,7 @@ pub async fn config_set(
     remote_config(target, RemoteConfigAction::Set { key, value }).await?;
     warn_unbacked_object_namespace(target, key, value);
     if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(
-            service,
-            target,
-            &format!("managed configuration {key} changed"),
-        )
-        .await?;
+        super::service::reconcile_after_config_change(service, target).await?;
     }
     Ok(())
 }
@@ -11158,12 +11153,7 @@ pub async fn config_unset(
     }
     print!("{}", output.stdout);
     if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(
-            service,
-            &resolved.name,
-            &format!("managed configuration {key} retracted"),
-        )
-        .await?;
+        super::service::reconcile_after_config_change(service, &resolved.name).await?;
     }
     Ok(())
 }

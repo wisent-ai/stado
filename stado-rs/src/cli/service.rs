@@ -6587,41 +6587,12 @@ pub(crate) async fn ensure_local_dependency(
     .await
 }
 
-/// Re-render one declared service after its managed configuration changes,
-/// then restart it in place so the running process reads the new value.
+/// Reload an existing managed service after its configuration changes.
 ///
-/// The declaration half is the same idempotent reconciliation `stado service
-/// ensure` performs; config mutation must not grow a second lifecycle path
-/// that unloads a healthy unit directly.
-///
-/// The restart half is what makes `--reload-service` true. A config change is
-/// the one case where "already running the declared program" is not "already
-/// correct": the program is identical and its inputs are not. Every
-/// configuration reader in this binary — `config::object_api_namespaces`
-/// among them — is a `LazyLock` read once per process, so a unit `ensure`
-/// leaves untouched goes on serving the policy it started with. That is how
-/// granting the `service_audit/` prefix on charless-mac-mini printed
-/// `already_correct` for the object API and then refused the very next write.
-///
-/// `restart` is the in-place path — `launchctl kickstart -k` for a system
-/// LaunchDaemon, which never unloads the job — so this stays one lifecycle
-/// path rather than becoming the second one.
-pub(crate) async fn reconcile_after_config_change(
-    name: &str,
-    host: &str,
-    reason: &str,
-) -> Result<(), CmdError> {
-    ensure(EnsureOptions {
-        name,
-        host,
-        from: None,
-        args: &[],
-        reason,
-        as_daemon: true,
-        as_launch_agent: false,
-        as_json: false,
-    })
-    .await?;
+/// Configuration values are cached for the process lifetime. Native restart
+/// preserves the unit's current command, including adopted units that have no
+/// catalog recipe from which `ensure` could rebuild them.
+pub(crate) async fn reconcile_after_config_change(name: &str, host: &str) -> Result<(), CmdError> {
     restart(name, Some(host), None, None, false).await
 }
 
