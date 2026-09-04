@@ -385,12 +385,30 @@ fn mint_acquisition_token(
         )));
     }
     let launcher = skarbiec_launcher()?;
-    let scope = format!("{item}#{field}");
+    // Skarbiec's mint takes `--capabilities action:item[#field]`. This command
+    // passed `--acquisition-scopes`, a flag that no longer exists, so it failed
+    // with "--capabilities is required" and the 0.14.9 delivery's resume step
+    // could not re-mint the publisher's bootstrap token when the vault's
+    // recorded bearer no longer matched the file. The capability the fleet
+    // reads these files for is `read` on the exact item and field — that is
+    // what every working consumer's token in the operator vault carries.
+    let capability = format!("read:{item}#{field}");
+    // And into the OWNER vault, not whichever default the CLI would open. The
+    // keychain launcher sets no SKARBIEC_VAULT_FILE, so without this the grant
+    // landed in ~/.local/share/skarbiec/… while the control-plane broker serves
+    // ~/.stado/skarbiec.vault.json: the mint reported success, the file read
+    // verified against the wrong store, and the broker kept answering 403 for
+    // the consumer the fleet authenticates as. On 2026-09-04 that is what the
+    // 0.14.9 delivery's resume step died on. `credential_store::owner::vault`
+    // is the one declaration of where owner writes go.
+    let vault = crate::credential_store::owner::vault()
+        .map_err(|error| CmdError::click(format!("mint-acquisition-token: {error}")))?;
     let minted = std::process::Command::new(&launcher)
         .arg("token-mint")
         .arg(consumer)
-        .arg("--acquisition-scopes")
-        .arg(&scope)
+        .arg("--capabilities")
+        .arg(&capability)
+        .env("SKARBIEC_VAULT_FILE", &vault)
         .output()?;
     if !minted.status.success() {
         return Err(CmdError::click(format!(
@@ -432,7 +450,7 @@ fn mint_acquisition_token(
         )));
     }
     println!(
-        "minted request-only {scope} grant for {consumer} into {}",
+        "minted request-only {capability} grant for {consumer} into {}",
         output_path.display()
     );
     Ok(())
