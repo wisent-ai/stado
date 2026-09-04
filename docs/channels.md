@@ -250,6 +250,12 @@ stado service grant-sync <service> \
 
 `stado service auth-check` then sends that bearer from the host to a read-only loopback endpoint. With `--repair`, it synchronizes the named item field into the managed environment, restarts only the declared unit, and checks the endpoint again. `--take-over-listener` is a separate, explicit recovery for an unmanaged process occupying the declared port.
 
+## Items in a host's vault
+
+`stado host vault-item-put <target> <item> --type <kind>` stores one canonical item, reading the payload from stdin so no credential field enters a local or remote argument vector. `stado host vault-item-show <target> <item>` is its read: kind, schema, revision, tags, `updated_at`, and per field the name, byte length and SHA-256, narrowed with `--field <name>`. The decryption and the hashing both happen on the host, so comparing a digest against a local copy's answers "does the host hold what this declaration references" without either side sending the value.
+
+The read exists because its absence hid a whole migration's work in the wrong place. `skarbiec set-json` on a workstation writes that workstation's vault; the fleet reads the target's own live vault, and nothing pointed at the difference — `retag-vault-item` reports state, revision and tags but nothing about a payload, `stado credentials get` reads the local store, and `skarbiec get` is not a host-exec command. Seven environment bundles and twenty credential fields went into a laptop vault nothing on the fleet reads, and the only symptom was Brama answering `401` to a bearer it had never been told about.
+
 ## Failure ownership
 
 | Result | Meaning | Repair owner |

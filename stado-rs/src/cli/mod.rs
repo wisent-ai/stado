@@ -1728,6 +1728,34 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Report what one item in TARGET's vault holds, without its values.
+    ///
+    /// `vault-item-put` had no counterpart, and the absence was not cosmetic:
+    /// an operator who had just written an item could not confirm from a
+    /// workstation that the host held it. `retag-vault-item`'s read reports
+    /// state, revision and tags and nothing about the payload,
+    /// `stado credentials get` reads the local store, and `skarbiec get` is
+    /// not a host-exec command. A migration wrote seven bundles and twenty
+    /// credential fields into a workstation vault nothing on the fleet reads,
+    /// and only a 401 from Brama revealed it.
+    ///
+    /// Prints kind, schema, revision, tags, `updated_at`, and per field its
+    /// name, byte length and SHA-256. The decryption and the hashing both
+    /// happen on the host: comparing the digest against a local copy's
+    /// answers "does the host hold what this row references" without either
+    /// side sending the value.
+    #[command(name = "vault-item-show")]
+    VaultItemShow {
+        target: String,
+        /// Credential item id.
+        item: String,
+        /// Report only this field's length and digest.
+        #[arg(long)]
+        field: Option<String>,
+        /// Emit the nonsecret report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report what one consumer's Skarbiec grant on TARGET holds.
     ///
     /// Prints the recorded capabilities as `item#field:action` and, when a
@@ -3265,6 +3293,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 item_type,
                 json,
             } => host::vault_item_put(&target, &item, &item_type, json).await,
+            HostCommands::VaultItemShow {
+                target,
+                item,
+                field,
+                json,
+            } => host::vault_item_show(&target, &item, field.as_deref(), json).await,
             HostCommands::GrantShow {
                 target,
                 consumer,
