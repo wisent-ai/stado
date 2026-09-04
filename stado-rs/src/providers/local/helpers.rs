@@ -619,11 +619,11 @@ fn macos_memory_gb() -> Option<(f64, f64)> {
 
     let mut total_bytes = 0_u64;
     let mut total_size = std::mem::size_of::<u64>();
-    // SAFETY: the name is NUL-terminated and sysctlbyname writes at most the
-    // supplied u64-sized buffer.
+    // SAFETY: the C string is NUL-terminated and sysctlbyname writes at most
+    // the supplied u64-sized buffer.
     let total_status = unsafe {
         nix::libc::sysctlbyname(
-            b"hw.memsize\0".as_ptr().cast(),
+            c"hw.memsize".as_ptr(),
             (&mut total_bytes as *mut u64).cast(),
             &mut total_size,
             std::ptr::null_mut(),
@@ -644,7 +644,7 @@ fn macos_memory_gb() -> Option<(f64, f64)> {
 pub fn memory_gb() -> Option<(f64, f64)> {
     #[cfg(target_os = "macos")]
     {
-        return macos_memory_gb();
+        macos_memory_gb()
     }
     #[cfg(not(target_os = "macos"))]
     {

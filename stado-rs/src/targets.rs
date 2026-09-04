@@ -1238,7 +1238,7 @@ pub struct DiskCleanerPolicy {
     pub allow_missing_upload_proof: bool,
     /// Absolute path override for the cleaner's scan root (default: the
     /// cleaner's well-known location, e.g. ~/weles/recordings for weles).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
 }
 
@@ -2504,6 +2504,35 @@ fn name_is_truthy(value: &Value) -> bool {
         .is_some_and(|name| !name.is_empty())
 }
 
+fn strip_legacy_capacity_from_target(target: &mut Value) {
+    let Value::Object(fields) = target else {
+        return;
+    };
+    fields.remove("slots");
+    fields.remove("max_concurrent");
+    if let Some(Value::Object(overrides)) = fields.get_mut("env_overrides") {
+        overrides.remove("WC_LOCAL_SLOTS");
+    }
+}
+
+/// Remove the fixed worker-count declarations retired by live capacity.
+///
+/// Readers call the target-level half while accepting an old generation.
+/// Registry writers call this document-level half so the next ordinary
+/// compare-and-swap completes the cutover without hand-editing registry JSON.
+pub fn strip_legacy_capacity_declarations(document: &mut Value) {
+    let raw = match document {
+        Value::Object(map) => map.get_mut("targets"),
+        Value::Array(_) => Some(document),
+        _ => None,
+    };
+    if let Some(Value::Array(targets)) = raw {
+        for target in targets {
+            strip_legacy_capacity_from_target(target);
+        }
+    }
+}
+
 fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
     // Python: raw = data.get("targets") if isinstance(data, dict) else data
     let raw = match data {
@@ -2517,17 +2546,11 @@ fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
                 continue;
             }
             let mut normalized = item.clone();
-            if let Value::Object(fields) = &mut normalized {
-                // Fixed worker counts were never capacity: they were operator
-                // guesses copied into every agent process. Accept old registry
-                // documents during the rolling upgrade, but do not retain the
-                // obsolete declarations when the document is written again.
-                fields.remove("slots");
-                fields.remove("max_concurrent");
-                if let Some(Value::Object(overrides)) = fields.get_mut("env_overrides") {
-                    overrides.remove("WC_LOCAL_SLOTS");
-                }
-            }
+            // Fixed worker counts were never capacity: they were operator
+            // guesses copied into every agent process. Accept old registry
+            // documents during the rolling upgrade while presenting only the
+            // live-capacity model to every reader.
+            strip_legacy_capacity_from_target(&mut normalized);
             targets.push(
                 serde_json::from_value(normalized)
                     .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,
