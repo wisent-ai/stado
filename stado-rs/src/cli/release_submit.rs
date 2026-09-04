@@ -834,6 +834,7 @@ async fn enqueue(
     source_uri: &str,
     manifest_sha: &str,
     manifest_uri: &str,
+    prior_terminal_job_id: Option<&str>,
 ) -> Result<PlatformRun, CmdError> {
     let queue_control = crate::queue::control::read(store)
         .await
@@ -917,11 +918,26 @@ async fn enqueue(
     let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
     queue_immutable(&request_path, &bytes).await?;
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
+    let submission_run_id = match prior_terminal_job_id {
+        Some(prior_job_id) => stable_run_id(
+            "release-platform",
+            &format!("{id}\0{platform}\0{prior_job_id}"),
+        ),
+        None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
+    };
+    let output_uri = match prior_terminal_job_id {
+        Some(_) => run_uri(
+            &m.product,
+            id,
+            &format!("platforms/{platform}/attempts/{submission_run_id}/output"),
+        ),
+        None => run_uri(&m.product, id, &format!("platforms/{platform}/output")),
+    };
     let options = SubmitOptions {
         pinned_host: consumer,
         priority: crate::constants::RELEASE_JOB_PRIORITY,
-        run_id: stable_run_id("release-platform", &format!("{id}\0{platform}")),
-        output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
+        run_id: submission_run_id,
+        output_uri,
         input_artifacts: resolved.clone(),
         resolved_input_artifacts: resolved,
         secret_env: secret_refs(&recipe.secret_env),
@@ -1359,6 +1375,11 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             }
         }
         if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
+            let prior_terminal_job_id = run
+                .platforms
+                .get(p)
+                .filter(|platform| platform.state == PlatformRunState::Failed)
+                .map(|platform| platform.job_id.as_str());
             let r = match enqueue(
                 &store,
                 &id,
@@ -1370,6 +1391,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 &source_input_uri,
                 &manifest_sha,
                 &manifest_uri,
+                prior_terminal_job_id,
             )
             .await
             {
