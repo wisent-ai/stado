@@ -950,8 +950,7 @@ async fn ensure_active_proxy(
         proxy_pid
     } else {
         stop_legacy(target)?;
-        let spawned_pid =
-            start_proxy(target, serving, product, generation, active.port)?;
+        let spawned_pid = start_proxy(target, serving, product, generation, active.port)?;
         tokio::time::sleep(Duration::from_millis(200)).await;
         let proxy_pid = exact_proxy_pid(target, serving, product)
             .map_err(|why| format!("stable release proxy failed to start: {why}"))?
@@ -1404,15 +1403,7 @@ async fn rollback(
         let serving = target.blue_green_serving()?;
         let product = state.product.clone();
         let generation = state.rollout_generation;
-        ensure_active_proxy(
-            target,
-            &serving,
-            &product,
-            generation,
-            &previous,
-            state,
-        )
-        .await?;
+        ensure_active_proxy(target, &serving, &product, generation, &previous, state).await?;
         if let Some(record) = &failed {
             terminate(record);
         }
