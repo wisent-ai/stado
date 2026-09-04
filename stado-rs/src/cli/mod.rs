@@ -3174,13 +3174,15 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => {
                 host::retire_file(
                     &target,
-                    &path,
-                    &product,
-                    dry_run,
-                    transaction.as_deref(),
-                    expected_sha256.as_deref(),
-                    expected_size,
-                    expected_mode.as_deref(),
+                    host::RetireFileRequest {
+                        path: &path,
+                        product: &product,
+                        dry_run,
+                        transaction: transaction.as_deref(),
+                        expected_sha256: expected_sha256.as_deref(),
+                        expected_size,
+                        expected_mode: expected_mode.as_deref(),
+                    },
                     json,
                 )
                 .await
@@ -3195,13 +3197,15 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 expected_mode,
                 json,
             } => host::retire_file_local(
-                &path,
-                &product,
-                dry_run,
-                transaction.as_deref(),
-                expected_sha256.as_deref(),
-                expected_size,
-                expected_mode.as_deref(),
+                host::RetireFileRequest {
+                    path: &path,
+                    product: &product,
+                    dry_run,
+                    transaction: transaction.as_deref(),
+                    expected_sha256: expected_sha256.as_deref(),
+                    expected_size,
+                    expected_mode: expected_mode.as_deref(),
+                },
                 json,
             ),
             HostCommands::Cron {

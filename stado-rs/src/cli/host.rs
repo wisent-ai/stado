@@ -4619,6 +4619,17 @@ fn retire_refused(message: impl Into<String>) -> CmdError {
     CmdError::click(format!("retire-file refused: {}", message.into()))
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RetireFileRequest<'a> {
+    pub path: &'a str,
+    pub product: &'a str,
+    pub dry_run: bool,
+    pub transaction: Option<&'a str>,
+    pub expected_sha256: Option<&'a str>,
+    pub expected_size: Option<u64>,
+    pub expected_mode: Option<&'a str>,
+}
+
 #[derive(Debug)]
 struct RetireFileBinding {
     transaction: String,
@@ -4639,21 +4650,17 @@ fn safe_retirement_transaction(value: &str) -> bool {
 }
 
 fn retire_file_binding(
-    dry_run: bool,
-    transaction: Option<&str>,
-    expected_sha256: Option<&str>,
-    expected_size: Option<u64>,
-    expected_mode: Option<&str>,
+    request: &RetireFileRequest<'_>,
 ) -> Result<Option<RetireFileBinding>, CmdError> {
     match (
-        transaction,
-        expected_sha256,
-        expected_size,
-        expected_mode,
+        request.transaction,
+        request.expected_sha256,
+        request.expected_size,
+        request.expected_mode,
     ) {
         (None, None, None, None) => Ok(None),
         (Some(transaction), Some(expected_sha256), Some(expected_size), Some(expected_mode)) => {
-            if dry_run {
+            if request.dry_run {
                 return Err(CmdError::usage(
                     "preflight binding flags are accepted only by the mutating form",
                 ));
@@ -4695,7 +4702,7 @@ fn retire_file_binding(
 
 fn safe_backup_product(product: &str) -> bool {
     let bytes = product.as_bytes();
-    bytes.len() > 0
+    !bytes.is_empty()
         && bytes.len() <= 128
         && bytes[0].is_ascii_alphanumeric()
         && bytes
@@ -4989,11 +4996,15 @@ fn rollback_retirement(
 /// must resolve to the same inode, size, mode, and digest. Any mismatch triggers
 /// an atomic no-replace rollback before the command returns an error.
 fn retire_file_local_document(
-    path: &str,
-    product: &str,
-    dry_run: bool,
+    request: &RetireFileRequest<'_>,
     binding: Option<&RetireFileBinding>,
 ) -> Result<RetireFileOutcome, CmdError> {
+    let RetireFileRequest {
+        path,
+        product,
+        dry_run,
+        ..
+    } = *request;
     if !path.starts_with('/')
         || path.split('/').any(|component| component == "..")
         || path.chars().any(char::is_control)
@@ -5272,23 +5283,11 @@ fn retire_file_local_document(
 
 /// Hidden device-local endpoint used by the public target-resolving command.
 pub fn retire_file_local(
-    path: &str,
-    product: &str,
-    dry_run: bool,
-    transaction: Option<&str>,
-    expected_sha256: Option<&str>,
-    expected_size: Option<u64>,
-    expected_mode: Option<&str>,
+    request: RetireFileRequest<'_>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let binding = retire_file_binding(
-        dry_run,
-        transaction,
-        expected_sha256,
-        expected_size,
-        expected_mode,
-    )?;
-    let outcome = retire_file_local_document(path, product, dry_run, binding.as_ref())?;
+    let binding = retire_file_binding(&request)?;
+    let outcome = retire_file_local_document(&request, binding.as_ref())?;
     if json_output {
         println!("{}", serde_json::to_string(&outcome)?);
     } else {
@@ -5298,20 +5297,24 @@ pub fn retire_file_local(
 }
 
 /// Resolve TARGET and invoke the same installed Rust primitive locally or over
-/// its declared host channel. Remote cleanup therefore requires the 0.15.0
+/// its declared host channel. Remote cleanup therefore requires the 0.15.1
 /// Stado delivery to be installed before any residue is touched.
 async fn retire_file_document(
     target: &str,
-    path: &str,
-    product: &str,
-    dry_run: bool,
+    request: &RetireFileRequest<'_>,
     binding: Option<&RetireFileBinding>,
 ) -> Result<RetireFileOutcome, CmdError> {
+    let RetireFileRequest {
+        path,
+        product,
+        dry_run,
+        ..
+    } = *request;
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let mut outcome = if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        retire_file_local_document(path, product, dry_run, binding)?
+        retire_file_local_document(request, binding)?
     } else {
         let runner = crate::deploy::production_runner();
         let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
@@ -5394,23 +5397,11 @@ fn print_retire_file_outcome(outcome: &RetireFileOutcome) {
 /// `stado host retire-file TARGET PATH --product PRODUCT [--dry-run]`.
 pub async fn retire_file(
     target: &str,
-    path: &str,
-    product: &str,
-    dry_run: bool,
-    transaction: Option<&str>,
-    expected_sha256: Option<&str>,
-    expected_size: Option<u64>,
-    expected_mode: Option<&str>,
+    request: RetireFileRequest<'_>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let binding = retire_file_binding(
-        dry_run,
-        transaction,
-        expected_sha256,
-        expected_size,
-        expected_mode,
-    )?;
-    let outcome = retire_file_document(target, path, product, dry_run, binding.as_ref()).await?;
+    let binding = retire_file_binding(&request)?;
+    let outcome = retire_file_document(target, &request, binding.as_ref()).await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
