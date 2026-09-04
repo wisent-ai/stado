@@ -11016,6 +11016,10 @@ pub async fn config_set(
             "configuration key must be a non-empty dotted name",
         ));
     }
+    // Before the write, not after: a declaration whose item does not exist
+    // closes the host's release publication boundary the moment the unit
+    // reloads, and the cheapest place to say so is here.
+    refuse_unminted_publisher(target, key, value).await?;
     remote_config(target, Some((key, value))).await?;
     warn_unbacked_object_namespace(target, key, value);
     if let Some(service) = reload_service {
@@ -11027,6 +11031,146 @@ pub async fn config_set(
         .await?;
     }
     Ok(())
+}
+
+/// Retract one configuration key from a fleet host.
+///
+/// Setting a declaration to `null` is not a retraction: a key present with a
+/// null value and a key that is absent read alike through `jq` and differently
+/// through the code that iterates the object, which is how a publisher nobody
+/// meant to declare kept being counted.
+pub async fn config_unset(
+    target: &str,
+    key: &str,
+    reload_service: Option<&str>,
+) -> Result<(), CmdError> {
+    if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
+        return Err(CmdError::click(
+            "configuration key must be a non-empty dotted name",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!(
+        "set -euo pipefail\n\
+         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+         binary=\"$HOME/.stado/bin/stado\"\n\
+         test -x \"$binary\"\n\
+         key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+         \"$binary\" config unset \"$key\"\n\
+         \"$binary\" config show\n",
+        STANDARD.encode(key.as_bytes())
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        // The host's own sentence, not just its last line: `stado config
+        // unset` prints why it refused and a tracing banner after it, so
+        // reporting the last line reports the banner and loses the reason.
+        let detail = output.detail().trim().to_string();
+        return Err(CmdError::click(if detail.is_empty() {
+            "remote Stado configuration command failed".to_string()
+        } else {
+            detail
+        }));
+    }
+    print!("{}", output.stdout);
+    if let Some(service) = reload_service {
+        super::service::reconcile_after_config_change(
+            service,
+            &resolved.name,
+            &format!("managed configuration {key} retracted"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Refuse a publisher declaration whose Skarbiec item the host does not hold.
+///
+/// `release_api.publishers.<product>` names an item the host's release verifier
+/// must be able to read. The host computes its grant's item set from that
+/// declaration and compares the two as sets, so one declaration whose item was
+/// never minted takes the WHOLE release publication boundary down: every
+/// `/api/object` read of a `system/release-catalog/*` key then answers 401 or
+/// 503, for every product, including the ones publishing perfectly.
+///
+/// That happened on `charless-mac-mini`: `weles-client` and
+/// `wisent-cost-tracker` were declared with no
+/// `weles-client-release-publisher` or `wisent-cost-tracker-release-publisher`
+/// in the vault, and the boundary reported
+/// `release verifier grant item set mismatch (missing=[...], unexpected=[...])`
+/// on the host and nowhere an operator was looking. A publisher declaration
+/// whose item does not exist is the defect, never the missing item: mint the
+/// item first, then declare it.
+async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Result<(), CmdError> {
+    let Some(product) = key.strip_prefix("release_api.publishers.") else {
+        return Ok(());
+    };
+    if product.is_empty() || product.contains('.') {
+        return Ok(());
+    }
+    let Some(item) = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|declared| {
+            declared
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    else {
+        return Ok(());
+    };
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the vault path could not be read, so it cannot be said whether {item} exists: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let vault = environment.stdout.trim().to_string();
+    if vault.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: the vault path is empty",
+            resolved.name
+        )));
+    }
+    let record = read_vault_phase(&resolved, &vault, &item, &runner)
+        .await
+        .map_err(CmdError::click)?;
+    if record.state != "absent" {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{host} does not hold Skarbiec item {item:?}, so declaring publisher {product:?} would \
+         close that host's whole release publication boundary: its release verifier compares the \
+         declared publisher set against its grant's item set, and one unmintable name makes them \
+         unequal for every product, answering 401 or 503 to every release-catalog read on the \
+         fleet. Mint the item on {host} first - `stado host vault-item-put {host} {item} --type \
+         token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
+         {product}`.",
+        host = resolved.name
+    )))
 }
 
 /// Say, at declaration time, what an object namespace without a grant costs.
