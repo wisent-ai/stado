@@ -128,7 +128,7 @@ fn coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry()
     terminal_object.insert("state".into(), Value::from("completed"));
     terminal_object.insert(
         "completed_at".into(),
-        Value::from("2026-09-04T17:00:00+00:00"),
+        Value::from(chrono::Utc::now().to_rfc3339()),
     );
     terminal_object.insert("run_id".into(), Value::from(""));
     terminal_object.insert("submission_request_digest".into(), Value::from(""));
