@@ -26,6 +26,9 @@
           "label": "com.wisent.stado.release-agent"
         },
         {
+          "label": "com.wisent.always-on.stado-object-api"
+        },
+        {
           "label": "com.wisent.compute.service.stado-local-control-plane"
         },
         {
