@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.14
+
+- **Host probes:** `host exec` now approves the exact Appium, Android Debug Bridge, Git, tmux, Cua Driver bundle, and iOS Simulator spellings emitted by desktop-capture preflight while keeping each request normalized to the canonical read-only command.
+- **Object verifier:** reconciliation first compares the target's complete object namespace declaration with the local declaration and refuses before changing a grant when either input is incomplete; it no longer reports an exact match from a partial view.
+- **Job progress:** status for long-running jobs measures durable work progress instead of treating process liveness as completion evidence.
+- **Release recovery:** resubmitting a release whose platform build failed creates a distinct deterministic retry with attempt-scoped outputs, while stable queue admission remains fenced by every durable lifecycle transition.
+- **Migration:** no persisted-state migration is required.
+- **Rollback boundary:** rolling back removes the complete-declaration guard and exact desktop probe approvals, and restores terminal platform-job reuse that can leave a release unable to recover.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; release CI supplies the qualification evidence before publication and required delivery receipts for all three fleet hosts.
+
 ## 0.15.13
 
 - **Release identity:** `release active-binary` now binds the exact serving executable to the process group Stado recorded at spawn. This accepts the payload child supervised by macOS `sudo` without accepting an unrelated process that merely shares its version or port.
