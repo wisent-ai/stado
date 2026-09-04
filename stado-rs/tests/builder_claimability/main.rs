@@ -13,7 +13,11 @@ use stado::deploy::host_gates::{
     DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
 };
 
-fn publication(accepting_jobs: Option<Value>, available_cpu_cores: Option<i64>, diag: Value) -> Value {
+fn publication(
+    accepting_jobs: Option<Value>,
+    available_cpu_cores: Option<i64>,
+    diag: Value,
+) -> Value {
     let mut payload = json!({
         "consumer_id": "local-charless-mac-mini.local",
         "kind": "local",
@@ -101,17 +105,15 @@ fn an_explicit_refusal_without_a_reason_stays_a_refusal() {
         }
     );
     assert!(!verdict.eligible());
-    assert_eq!(verdict.describe(), "not accepting jobs; no reason published");
+    assert_eq!(
+        verdict.describe(),
+        "not accepting jobs; no reason published"
+    );
 }
 
 #[test]
 fn a_rolling_upgrade_publication_without_a_decision_is_unstated() {
-    for legacy_shape in [
-        json!({"cpu": 0}),
-        json!({"cpu": 4}),
-        json!({}),
-        Value::Null,
-    ] {
+    for legacy_shape in [json!({"cpu": 0}), json!({"cpu": 4}), json!({}), Value::Null] {
         let mut payload = publication(None, None, json!({"storage_backend": "stado"}));
         payload["free_slots"] = legacy_shape;
         let verdict = claimability(&payload);

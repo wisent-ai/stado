@@ -65,7 +65,6 @@ pub struct CapacitySnapshot {
     pub diag: Map<String, Value>,
 }
 
-
 /// Write this worker's current measured resource snapshot.
 ///
 /// `accepting_jobs` is the admission decision consumed by dispatchers. The
@@ -111,10 +110,7 @@ pub async fn publish_capacity(
         ),
     );
     payload.insert("free_vram_gb".into(), Value::from(snapshot.free_vram_gb));
-    payload.insert(
-        "total_vram_gb".into(),
-        Value::from(snapshot.total_vram_gb),
-    );
+    payload.insert("total_vram_gb".into(), Value::from(snapshot.total_vram_gb));
     if let Some(value) = snapshot.free_ram_gb {
         payload.insert("free_ram_gb".into(), Value::from(value));
     }
@@ -305,8 +301,7 @@ pub fn total_available_accelerators(
             continue;
         };
         for (accelerator, count) in available {
-            *totals.entry(accelerator.clone()).or_insert(0) +=
-                count.as_i64().unwrap_or_default();
+            *totals.entry(accelerator.clone()).or_insert(0) += count.as_i64().unwrap_or_default();
         }
     }
     totals
