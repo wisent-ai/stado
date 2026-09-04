@@ -440,6 +440,76 @@ reports `no-unit`, leaving the service running. A `stado web` command
 stopping Brama because someone removed a hostname in front of it would be
 this plane reaching into a service it does not own.
 
+### A path under another product's hostname
+
+`brama.wisent.com` is two things. Its catch-all belongs to Brama, published
+by the declaration above; `/docs` is 79 documentation pages, versioned with
+Brama in `vercel-ingress/docs/`, which the retiring Vercel ingress served
+through 57 `/docs*` rewrites onto static HTML. Brama does not serve them
+itself, so the hostname needs two answers.
+
+A mount is an ordinary unit product — built, released and deployed like any
+other — whose hostname belongs to a different declaration:
+
+```console
+stado web declare brama-docs \
+  --hostname brama.wisent.com \
+  --path-prefix /docs \
+  --host charless-mac-mini \
+  --port 3220 \
+  --consumer brama-docs-web
+stado release submit brama --channel stable
+stado web deploy brama-docs
+stado web route brama-docs
+```
+
+The edge renders it inside the owner's site block, ahead of whatever answers
+the rest:
+
+```
+brama.wisent.com {
+	handle_path /docs* {
+		reverse_proxy http://charless-mac-mini:3220
+	}
+	reverse_proxy http://charless-mac-mini:18081
+}
+```
+
+`handle_path`, not `handle`: it strips the matched prefix before proxying, so
+`/docs/core` arrives at the unit as `/core` — which is the unit's own path,
+because the unit is a site whose pages start at `/`. `handle` would forward
+`/docs/core` unchanged and every page would answer 404. The matcher is
+`<prefix>*` so the prefix itself matches too, and the order inside the block
+is the semantics: Caddy takes the first matching route, so a catch-all
+rendered before the mount would answer `/docs` itself and the mount would
+never be reached. Several mounts on one hostname are rendered longest prefix
+first, so `/docs/api` cannot be swallowed by a `/docs` beside it.
+
+The prefix is absolute with no trailing slash — the matcher is `<prefix>*`,
+and `/docs/` would stop `/docs` itself from matching — and carries no
+wildcard, brace or whitespace of its own, because those would rewrite the
+matcher into something nobody declared. A mount may not also declare
+`--redirect-to` or `--upstream-service`: both of those answer a whole
+hostname.
+
+What the configuration plane refuses: a mount whose hostname no declaration
+owns, because a mount is rendered inside its owner's block and one without an
+owner is a block with nowhere to go — the hostname would get no certificate
+at all; two mounts at the same prefix on one hostname, because that renders
+two `handle_path` blocks for one path and the first would silently win; and
+a second declaration owning a hostname that is already owned, which was
+already true.
+
+`stado web route` for a mount **writes no DNS record**. The hostname's A
+record belongs to the declaration that owns it and already points at this
+edge; a second writer of one name is how a mount's removal would look like it
+should take the record with it. It verifies `https://<hostname><prefix>/`
+instead of the owner's readiness path, because the owner's `readyz` is a path
+on the owner's application and says nothing about whether `/docs` reaches
+this unit. `stado web remove` retracts the mount only: one `handle_path`
+block comes out of the owner's site block, the record stays, and every other
+mount under that hostname stays.
+
 ## The command sequence
 
 Stand up the edge once for the whole fleet:

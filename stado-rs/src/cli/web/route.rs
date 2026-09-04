@@ -108,6 +108,50 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
             "refused": cloudflare_unavailable(declared.hostname()),
         })),
         "stado" => {
+            // A mount does not own the hostname, so retracting it must not
+            // touch the record: the owner still answers there and every other
+            // mount under it still does too. What comes out is one
+            // `handle_path` block, and nothing else.
+            if let Some(prefix) = declared.path_prefix() {
+                let edge = match crate::config::web_api_edge() {
+                    Ok(edge) => edge,
+                    Err(_) => {
+                        return Ok(json!({
+                            "hostname": declared.hostname(),
+                            "path_prefix": prefix,
+                            "change": "unchanged",
+                            "record": Value::Null,
+                            "edge": Value::Null,
+                        }))
+                    }
+                };
+                let mounted = super::edge::mount(
+                    declared.hostname(),
+                    prefix,
+                    declared.host(),
+                    declared.port(),
+                )?;
+                let routes: Vec<(String, Vec<String>)> = super::edge::stado_routes()
+                    .await?
+                    .into_iter()
+                    .map(|(hostname, mut block)| {
+                        if hostname == declared.hostname() {
+                            block.retain(|directive| directive != &mounted.1);
+                        }
+                        (hostname, block)
+                    })
+                    .collect();
+                let edge_report = super::edge::deliver(edge, &routes, true).await?;
+                return Ok(json!({
+                    "hostname": declared.hostname(),
+                    "path_prefix": prefix,
+                    "change": "removed",
+                    // The record belongs to whichever declaration owns this
+                    // hostname, and it is still published there.
+                    "record": Value::Null,
+                    "edge": edge_report,
+                }));
+            }
             let record = crate::cli::dns::remove_record(
                 declared.hostname(),
                 RECORD_TYPE,
@@ -130,7 +174,7 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
                     }))
                 }
             };
-            let routes: Vec<(String, String)> = super::edge::stado_routes()
+            let routes: Vec<(String, Vec<String>)> = super::edge::stado_routes()
                 .await?
                 .into_iter()
                 .filter(|(hostname, _)| hostname != declared.hostname())
@@ -146,6 +190,20 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
         other => Err(CmdError::click(format!(
             "web product {name} declares edge {other:?}, and no retraction path implements it"
         ))),
+    }
+}
+
+/// The URL a product's publication is proved by.
+///
+/// A mount is proved at its own prefix: the owner's `readyz` is a path on the
+/// owner's application and says nothing about whether `/docs` reaches this
+/// unit. The trailing slash is deliberate — `/docs` and `/docs/` both match
+/// the mount's matcher, and the slash is what the mount's own root resolves
+/// to.
+fn verify_url(declared: &WebApiProduct) -> String {
+    match declared.path_prefix() {
+        Some(prefix) => format!("https://{}{prefix}/", declared.hostname()),
+        None => format!("https://{}{}", declared.hostname(), declared.readyz()),
     }
 }
 
@@ -193,17 +251,31 @@ async fn publish(
         };
     }
 
-    let record = crate::cli::dns::ensure_record(
-        declared.hostname(),
-        RECORD_TYPE,
-        edge.address(),
-        RECORD_TTL,
-        None,
-        REGISTRAR_CREDENTIAL,
-    )
-    .await?;
+    // A mount writes no record. The hostname's A record belongs to the
+    // declaration that owns it and already points at this edge; writing it
+    // again from here would be a second writer of one name, and removing this
+    // mount would then look like it should take the record with it.
+    let record = if declared.path_prefix().is_some() {
+        json!({
+            "change": "unchanged",
+            "detail": format!(
+                "{} is owned by another declaration, whose record already points at this edge",
+                declared.hostname()
+            ),
+        })
+    } else {
+        crate::cli::dns::ensure_record(
+            declared.hostname(),
+            RECORD_TYPE,
+            edge.address(),
+            RECORD_TTL,
+            None,
+            REGISTRAR_CREDENTIAL,
+        )
+        .await?
+    };
     let served = verify(declared).await?;
-    let report = json!({
+    let mut report = json!({
         "product": name,
         "hostname": declared.hostname(),
         "edge": edge_report,
@@ -211,17 +283,19 @@ async fn publish(
         "served": served,
         "change": "published",
     });
+    if let Some(prefix) = declared.path_prefix() {
+        report["path_prefix"] = json!(prefix);
+    }
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
-            "https://{}{} answers {} from {} (edge {}, record {})",
-            declared.hostname(),
-            declared.readyz(),
+            "{} answers {} from {} (edge {}, record {})",
+            verify_url(declared),
             served["status"].as_u64().unwrap_or_default(),
             served["server"].as_str().unwrap_or("an unnamed server"),
-            edge_report["change"].as_str().unwrap_or_default(),
-            record["change"].as_str().unwrap_or_default(),
+            report["edge"]["change"].as_str().unwrap_or_default(),
+            report["record"]["change"].as_str().unwrap_or_default(),
         );
     }
     Ok(())
@@ -310,7 +384,7 @@ fn zone_of(hostname: &str) -> String {
 /// never retried away is the finding: when the budget is spent the refusal
 /// carries the last observed status, `server` and `x-vercel-id`.
 async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> {
-    let url = format!("https://{}{}", declared.hostname(), declared.readyz());
+    let url = verify_url(declared);
     let client = reqwest::Client::builder()
         .timeout(VERIFY_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
