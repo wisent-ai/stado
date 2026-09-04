@@ -43,27 +43,14 @@
 //! question.
 //!
 //! Nothing here computes capacity. It republishes verbatim what the tick last
-//! published, so a host cannot advertise a slot the tick has not measured.
+//! published, so a host cannot advertise resources the tick has not measured.
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{Map, Value};
-
 use crate::constants;
-use crate::queue::capacity::publish_capacity;
+use crate::queue::capacity::{publish_capacity, CapacitySnapshot};
 use crate::queue::JobStorage;
-
-/// Exactly what the tick last published, ready to be said again.
-#[derive(Clone)]
-pub struct CapacitySnapshot {
-    pub free_slots: BTreeMap<String, i64>,
-    pub free_vram_gb: i64,
-    pub total_vram_gb: i64,
-    pub diag: Map<String, Value>,
-}
-
 struct Shared {
     snapshot: Option<CapacitySnapshot>,
     tick_started: Instant,
@@ -160,21 +147,14 @@ impl CapacityHeartbeat {
                     continue;
                 }
                 announced_stall = false;
-                match publish_capacity(
-                    &store,
-                    &consumer_id,
-                    &kind,
-                    &snapshot.free_slots,
-                    Some(snapshot.free_vram_gb),
-                    Some(snapshot.total_vram_gb),
-                    Some(snapshot.diag.clone()),
-                )
-                .await
-                {
+                match publish_capacity(&store, &consumer_id, &kind, &snapshot).await {
                     Ok(()) => log_fn(&format!(
-                        "heartbeat: republished free_vram_gb={} free_slots={} while the tick works",
-                        snapshot.free_vram_gb,
-                        snapshot.free_slots.values().sum::<i64>()
+                        "heartbeat: republished accepting_jobs={} running_jobs={} \
+                         available_cpu_cores={} free_vram_gb={} while the tick works",
+                        snapshot.accepting_jobs,
+                        snapshot.running_jobs,
+                        snapshot.available_cpu_cores,
+                        snapshot.free_vram_gb
                     )),
                     Err(exc) => log_fn(&format!(
                         "heartbeat: capacity republish REFUSED by the store: {exc}"

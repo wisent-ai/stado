@@ -1,6 +1,6 @@
-//! Local GPU agent main loop: polls the queue, runs jobs in concurrent
-//! slots, respects Vast.ai renters, broadcasts capacity, and cooperatively
-//! yields lower-priority slots for higher-priority queued work.
+//! Local worker agent: polls the queue, runs jobs concurrently when measured
+//! CPU, RAM, disk, and accelerator resources allow it, and cooperatively
+//! yields lower-priority jobs for higher-priority queued work.
 //!
 //! The runtime contract is framework-neutral:
 //!   * no Python package is imported before claim;
@@ -17,12 +17,12 @@
 //! remains an explicit operator restart.
 //!
 //! The janitor-owned disk-cleanup engine IS ported ([`super::disk_cleanup`]):
-//! this loop runs `run_cleanup_once` every tick, holds a shared workload
-//! lock per live slot, and publishes zero capacity while disk pressure is
-//! unresolved. One behavioral simplification: Python releases a finished
-//! slot's workload lock explicitly and logs release failures; the Rust
-//! port lets the [`ActiveSlot`]'s `Drop` close the lock file (flock is
-//! released on close), which cannot fail in a way worth logging.
+//! this loop runs `run_cleanup_once` every tick, holds a shared workload lock
+//! per running job, and refuses new jobs while disk pressure is unresolved.
+//! One behavioral simplification: Python releases a finished job's workload
+//! lock explicitly and logs release failures; the Rust port lets the
+//! [`ActiveSlot`]'s `Drop` close the lock file (flock is released on close),
+//! which cannot fail in a way worth logging.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,7 +35,7 @@ use serde_json::{Map, Value};
 use crate::config::estimate_gpu_memory;
 use crate::constants;
 use crate::models::{activation_extraction_must_share_gpu, isoformat_utc};
-use crate::queue::capacity::publish_capacity;
+use crate::queue::capacity::{publish_capacity, CapacitySnapshot};
 use crate::queue::control;
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
@@ -61,8 +61,7 @@ pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = constants::MIN_RUNTIME_BEFORE_YIELD_
 pub const CUDA_PROBE_CACHE_S: u64 = constants::CUDA_PROBE_CACHE_S;
 
 /// Claimable jobs one poll asks the queue for. It is a window over work this
-/// agent may actually admit, not over the queue: the per-tick claim count is
-/// bounded by slots, VRAM and `WC_LOCAL_MAX_CLAIMS_PER_TICK` further down.
+/// agent may actually admit; CPU, RAM, VRAM, and disk budgets stop the scan.
 const CLAIM_CANDIDATE_WINDOW: usize = 2_000;
 
 /// Candidates the cooperative-yield scan considers before deciding what to
@@ -96,17 +95,6 @@ pub fn vram_safety_buffer_gb(total_vram_gb: i64) -> i64 {
         .max((total_vram_gb as f64 * constants::VRAM_SAFETY_BUFFER_FRACTION).ceil() as i64)
 }
 
-/// Python `int(os.environ.get(key, "0") or 0)`: unset or empty -> default;
-/// a non-integer value panics (Python's ValueError crashes the agent).
-fn env_i64(key: &str, default: i64) -> i64 {
-    match std::env::var(key) {
-        Ok(raw) if !raw.is_empty() => raw
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("{key} must be an int (Python int() parity): {raw}")),
-        _ => default,
-    }
-}
 
 /// Python `float(os.environ.get(key, default) or default)`.
 fn env_f64(key: &str, default: f64) -> f64 {
@@ -669,7 +657,7 @@ async fn queued_gpu_job_for_inference(
     total_vram_gb: i64,
     kind: &str,
     consumer_id: &str,
-    active_slot_count: usize,
+    active_job_count: usize,
     pinned_only: bool,
 ) -> Result<Option<(String, i64)>, StorageError> {
     let listed = store
@@ -686,7 +674,7 @@ async fn queued_gpu_job_for_inference(
                         total_vram_gb,
                         kind,
                         consumer_id,
-                        active_slot_count,
+                        active_job_count,
                         pinned_only,
                     )
                 },
@@ -720,7 +708,7 @@ async fn queued_gpu_job_for_inference(
                 total_vram_gb,
                 kind,
                 consumer_id,
-                active_slot_count,
+                active_job_count,
                 pinned_only,
             )
         {
@@ -786,14 +774,6 @@ async fn set_inference_container_running(deployment: &str, running: bool) -> Res
 // run_agent
 // ---------------------------------------------------------------------------
 
-/// The previous tick's capacity snapshot, republished at the top of the
-/// next tick as a keep-alive (Python `_last_cap`).
-struct LastCap {
-    free_slots: BTreeMap<String, i64>,
-    free_vram_gb: i64,
-    total_vram_gb: i64,
-    diag: Map<String, Value>,
-}
 
 fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
     [
@@ -812,6 +792,73 @@ fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
         ),
     ]
 }
+fn measured_capacity(
+    running: &[ActiveSlot],
+    policy_allows_jobs: bool,
+    policy_reason: Option<&str>,
+    available_accelerators: BTreeMap<String, i64>,
+    free_vram_gb: i64,
+    total_vram_gb: i64,
+    mut diag: Map<String, Value>,
+) -> CapacitySnapshot {
+    let requested_cpu = running
+        .iter()
+        .map(|active| helpers::requested_cpu_cores(&active.slot.job))
+        .sum();
+    let total_cpu_cores = helpers::total_cpu_cores();
+    let available_cpu_cores = helpers::available_cpu_cores(requested_cpu);
+    let memory = helpers::memory_gb();
+    let free_ram_gb = memory.map(|(free, _)| free);
+    let total_ram_gb = memory.map(|(_, total)| total);
+    let ram_reserve_gb = total_ram_gb
+        .map(|total| {
+            (constants::RAM_SAFETY_BUFFER_MIN_GB as f64)
+                .max(total * constants::RAM_SAFETY_BUFFER_FRACTION)
+        })
+        .unwrap_or(constants::RAM_SAFETY_BUFFER_MIN_GB as f64);
+    let exclusive_running = running
+        .iter()
+        .any(|active| helpers::slot_is_exclusive(&active.slot));
+    let resource_reason = if !policy_allows_jobs {
+        policy_reason
+    } else if exclusive_running {
+        Some("exclusive_job_running")
+    } else if available_cpu_cores == 0 {
+        Some("cpu_busy")
+    } else if free_ram_gb.is_none() {
+        Some("memory_measurement_unavailable")
+    } else if free_ram_gb.is_some_and(|free| free < ram_reserve_gb + 1.0) {
+        Some("ram_headroom_low")
+    } else {
+        None
+    };
+    if let Some(reason) = resource_reason {
+        diag.insert("admission_reason".into(), Value::from(reason));
+    } else {
+        diag.remove("admission_reason");
+    }
+    diag.insert(
+        "cpu_load_1m".into(),
+        helpers::load_average_1m().map_or(Value::Null, Value::from),
+    );
+    diag.insert(
+        "ram_safety_buffer_gb".into(),
+        Value::from(ram_reserve_gb),
+    );
+    CapacitySnapshot {
+        accepting_jobs: resource_reason.is_none(),
+        running_jobs: running.len(),
+        total_cpu_cores,
+        available_cpu_cores,
+        available_accelerators,
+        free_ram_gb,
+        total_ram_gb,
+        free_vram_gb,
+        total_vram_gb,
+        diag,
+    }
+}
+
 
 /// Publish one capacity broadcast and say, in the log, which branch of the loop
 /// produced it and whether the store accepted it.
@@ -829,33 +876,23 @@ fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
 /// with nothing to say reports. The result is returned to the caller, and the
 /// failure is logged here either way, because a broadcast nobody accepted is the
 /// one event this process exists to perform.
-#[allow(clippy::too_many_arguments)]
 async fn publish_branch(
     store: &JobStorage,
     consumer_id: &str,
     kind: &str,
     branch: &str,
-    free_slots: &BTreeMap<String, i64>,
-    free_vram_gb: Option<i64>,
-    total_vram_gb: Option<i64>,
-    diag: Option<Map<String, Value>>,
+    snapshot: &CapacitySnapshot,
     log_fn: &mut dyn FnMut(&str),
 ) -> Result<(), StorageError> {
-    let outcome = publish_capacity(
-        store,
-        consumer_id,
-        kind,
-        free_slots,
-        free_vram_gb,
-        total_vram_gb,
-        diag,
-    )
-    .await;
+    let outcome = publish_capacity(store, consumer_id, kind, snapshot).await;
     match &outcome {
         Ok(()) => log_fn(&format!(
-            "loop: {branch}: published free_vram_gb={} free_slots={}",
-            free_vram_gb.unwrap_or_default(),
-            free_slots.values().sum::<i64>()
+            "loop: {branch}: published accepting_jobs={} running_jobs={} \
+             available_cpu_cores={} free_vram_gb={}",
+            snapshot.accepting_jobs,
+            snapshot.running_jobs,
+            snapshot.available_cpu_cores,
+            snapshot.free_vram_gb
         )),
         Err(exc) => log_fn(&format!(
             "loop: {branch}: capacity publish REFUSED by the store: {exc}"
@@ -954,8 +991,8 @@ fn installed_stado_release_mismatch(log_fn: &mut impl FnMut(&str)) -> Option<Str
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
 ///
-/// idle_shutdown=true: exit cleanly once both: (a) no slots are active and
-/// (b) no queued job is eligible for this consumer's free VRAM. The scheduler
+/// idle_shutdown=true: exit cleanly once both: (a) no jobs are active and
+/// (b) no queued job fits this consumer's measured resources. The scheduler
 /// observes the stopped capacity heartbeat and releases ephemeral machines
 /// through their owning provider adapters.
 ///
@@ -971,10 +1008,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         gpu_type = helpers::detect_gpu_type().await;
     }
     let mut total_vram_gb = helpers::detect_local_vram_gb().await.max(1);
-    let hard_slot_cap = env_i64("WC_LOCAL_SLOTS", 0);
-    // No default cap: local admission is governed by live VRAM/RAM/disk gates.
     log_fn(&format!(
-        "Agent started. kind={kind}  GPU: {gpu_type}  vram_gb={total_vram_gb}  hard_slot_cap={hard_slot_cap}"
+        "Agent started. kind={kind} GPU={gpu_type} vram_gb={total_vram_gb} \
+         cpu_cores={} capacity=live-resources",
+        helpers::total_cpu_cores()
     ));
     super::disk_staging::setup_agent_staging(log_fn).await;
 
@@ -1022,7 +1059,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         .filter(|path| !path.trim().is_empty());
     let mut last_fleet_flush = Instant::now();
 
-    let mut last_cap: Option<LastCap> = None;
+    let mut last_cap: Option<CapacitySnapshot> = None;
     let mut gpu_power_limit_state: Option<GpuPowerLimitState> = None;
     let mut placement_policy_state: Option<PlacementPolicyState> = None;
     let mut pinned_only = false; // registry ComputeTarget.pinned_only, refreshed per poll
@@ -1042,9 +1079,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     let janitor_reports = crate::providers::local::agent_janitor::JanitorReports::new();
     let _janitor = janitor_reports.spawn_janitor(
         std::time::Duration::from_secs(crate::constants::POLL_INTERVAL_S),
-        |active_slots| async move {
+        |active_jobs| async move {
             disk_cleanup::run_cleanup_once(
-                active_slots,
+                active_jobs,
                 false,
                 disk_cleanup::CleanupWriter::AgentTick,
                 &mut |msg: &str| agent_log(msg),
@@ -1071,14 +1108,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // published, `last_cap` holds it, so the heartbeat repeats the tick's
         // own most recent measurement and never a figure of its own.
         if let Some(cap) = &last_cap {
-            heartbeat.record_published(
-                crate::providers::local::agent_heartbeat::CapacitySnapshot {
-                    free_slots: cap.free_slots.clone(),
-                    free_vram_gb: cap.free_vram_gb,
-                    total_vram_gb: cap.total_vram_gb,
-                    diag: cap.diag.clone(),
-                },
-            );
+            heartbeat.record_published(cap.clone());
         }
         // Every broadcast says which store wrote it. A reader holding a frozen
         // row could not tell a stopped agent from a running one publishing
@@ -1184,7 +1214,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // `release submit` refused a healthy, correctly declared builder.
         // Publication must happen at the heartbeat interval whatever the
         // janitor is doing, so nothing on this line may ever wait for it.
-        janitor_reports.set_active_slots(slots.len() as i64);
+        janitor_reports.set_active_jobs(slots.len() as i64);
         if let Some(cleanup_report) = janitor_reports.latest() {
             if let Some(reported_low) = disk_cleanup::validated_report_low_bytes(&cleanup_report) {
                 disk_low_bytes = Some(reported_low);
@@ -1282,7 +1312,15 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         );
         agent_diag.insert("disk_pressure_active".into(), Value::from(pressure_active));
         if readings_incomplete {
-            let zero_diag = agent_diag.clone();
+            let snapshot = measured_capacity(
+                &slots,
+                false,
+                Some("disk_policy_unreadable"),
+                BTreeMap::new(),
+                0,
+                total_vram_gb,
+                agent_diag.clone(),
+            );
             log_fn(&format!(
                 "loop: disk-policy-unreadable: low watermark {} and free space {} -- failing \
                  admission closed until both are known",
@@ -1294,19 +1332,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 &consumer_id,
                 kind,
                 "disk-policy-unreadable",
-                &BTreeMap::new(),
-                Some(0),
-                Some(total_vram_gb),
-                Some(zero_diag.clone()),
+                &snapshot,
                 log_fn,
             )
             .await;
-            last_cap = Some(LastCap {
-                free_slots: BTreeMap::new(),
-                free_vram_gb: 0,
-                total_vram_gb,
-                diag: zero_diag,
-            });
+            last_cap = Some(snapshot);
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
@@ -1317,10 +1347,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 &consumer_id,
                 kind,
                 "keep-alive-republish",
-                &cap.free_slots,
-                Some(cap.free_vram_gb),
-                Some(cap.total_vram_gb),
-                Some(cap.diag.clone()),
+                cap,
                 log_fn,
             )
             .await;
@@ -1488,18 +1515,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             }
         }
         if !gpu_power_policy_ok {
+            let snapshot = measured_capacity(
+                &slots,
+                false,
+                Some("gpu_power_policy_unmet"),
+                BTreeMap::new(),
+                0,
+                total_vram_gb,
+                agent_diag.clone(),
+            );
             publish_branch(
                 &store,
                 &consumer_id,
                 kind,
                 "gpu-power-policy-unmet",
-                &BTreeMap::new(),
-                Some(0),
-                Some(total_vram_gb),
-                Some(agent_diag.clone()),
+                &snapshot,
                 log_fn,
             )
             .await?;
+            last_cap = Some(snapshot);
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
@@ -1518,18 +1552,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         }
         let inference_reservation = crate::inference::reservation::active();
         if vast_active {
+            let snapshot = measured_capacity(
+                &slots,
+                false,
+                Some("vast_renter_active"),
+                BTreeMap::new(),
+                0,
+                total_vram_gb,
+                agent_diag.clone(),
+            );
             publish_branch(
                 &store,
                 &consumer_id,
                 kind,
                 "vast-renter-active",
-                &BTreeMap::new(),
-                Some(0),
-                Some(total_vram_gb),
-                Some(agent_diag.clone()),
+                &snapshot,
                 log_fn,
             )
             .await?;
+            last_cap = Some(snapshot);
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
@@ -1615,18 +1656,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     Ok(false) if !should_yield && slots.is_empty() => {
                         agent_diag
                             .insert("inference_runtime_state".into(), Value::from("resuming"));
+                        let snapshot = measured_capacity(
+                            &slots,
+                            false,
+                            Some("inference_resuming"),
+                            BTreeMap::new(),
+                            0,
+                            total_vram_gb,
+                            agent_diag.clone(),
+                        );
                         publish_branch(
                             &store,
                             &consumer_id,
                             kind,
                             "inference-resuming",
-                            &BTreeMap::new(),
-                            Some(0),
-                            Some(total_vram_gb),
-                            Some(agent_diag.clone()),
+                            &snapshot,
                             log_fn,
                         )
                         .await?;
+                        last_cap = Some(snapshot);
                         log_fn(&format!(
                             "yieldable inference '{}': GPU queue drained; resuming service",
                             reservation.deployment
@@ -1664,18 +1712,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let (refuse_disk, disk_diag) = disk_gate::gate_and_maybe_evict(log_fn);
         agent_diag.extend(diag_map(&disk_diag));
         if refuse_disk {
+            let snapshot = measured_capacity(
+                &slots,
+                false,
+                Some("disk_gate_refused"),
+                BTreeMap::new(),
+                0,
+                total_vram_gb,
+                agent_diag.clone(),
+            );
             publish_branch(
                 &store,
                 &consumer_id,
                 kind,
                 "disk-gate-refused",
-                &BTreeMap::new(),
-                Some(0),
-                Some(total_vram_gb),
-                Some(agent_diag.clone()),
+                &snapshot,
                 log_fn,
             )
             .await?;
+            last_cap = Some(snapshot);
             tokio::time::sleep(Duration::from_secs(10)).await;
             continue;
         }
@@ -1688,27 +1743,28 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         }
         if !settling_ids.is_empty() {
             agent_diag.insert(
-                "settling_slot_ids".into(),
+                "settling_job_ids".into(),
                 Value::Array(settling_ids.into_iter().map(Value::String).collect()),
+            );
+            let snapshot = measured_capacity(
+                &slots,
+                false,
+                Some("jobs_settling_for_vram"),
+                BTreeMap::new(),
+                0,
+                total_vram_gb,
+                agent_diag.clone(),
             );
             publish_branch(
                 &store,
                 &consumer_id,
                 kind,
-                "slots-settling-for-vram",
-                &BTreeMap::new(),
-                Some(0),
-                Some(total_vram_gb),
-                Some(agent_diag.clone()),
+                "jobs-settling-for-vram",
+                &snapshot,
                 log_fn,
             )
             .await?;
-            last_cap = Some(LastCap {
-                free_slots: BTreeMap::new(),
-                free_vram_gb: 0,
-                total_vram_gb,
-                diag: agent_diag.clone(),
-            });
+            last_cap = Some(snapshot);
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
@@ -1720,21 +1776,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // below still reject anything needing VRAM we don't have.
             agent_diag.insert("vram_buffer_gb".into(), Value::from(vram_buffer_gb));
             agent_diag.insert("vram_buffer_free_gb".into(), Value::from(free_vram_gb));
-            publish_branch(
-                &store,
-                &consumer_id,
-                kind,
-                "vram-below-safety-buffer",
-                &BTreeMap::new(),
-                Some(0),
-                Some(total_vram_gb),
-                Some(agent_diag.clone()),
-                log_fn,
-            )
-            .await?;
-            // Python also stamps _last_cap here, but the normal publish
-            // below overwrites it in the same iteration on every path
-            // (the cuda-fail continue stamps its own) — dead in both.
         }
         if free_vram_gb > 0 && slots.is_empty() && gpu_type.starts_with("nvidia") {
             let (cuda_ok, cuda_detail) = gpu_driver_available().await;
@@ -1746,29 +1787,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             );
             if !cuda_ok {
                 log_fn(&format!(
-                    "NVIDIA driver probe failed; publishing zero capacity: {}",
+                    "NVIDIA driver probe failed; GPU jobs disabled while CPU jobs remain eligible: {}",
                     cuda_detail.chars().take(160).collect::<String>()
                 ));
-                publish_branch(
-                    &store,
-                    &consumer_id,
-                    kind,
-                    "nvidia-driver-probe-failed",
-                    &BTreeMap::new(),
-                    Some(0),
-                    Some(total_vram_gb),
-                    Some(agent_diag.clone()),
-                    log_fn,
-                )
-                .await?;
-                last_cap = Some(LastCap {
-                    free_slots: BTreeMap::new(),
-                    free_vram_gb: 0,
-                    total_vram_gb,
-                    diag: agent_diag.clone(),
-                });
-                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
-                continue;
+                free_vram_gb = 0;
+                cards.clear();
             }
         }
         // A policy refusal above sets `free_vram_gb` to 0 and falls through to
@@ -1789,56 +1812,41 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     .collect::<Vec<_>>(),
             ),
         );
-        let free_slots = helpers::with_cpu_capacity(
-            helpers::build_capacity_dict_per_card(&gpu_type, &broadcast_cards, total_vram_gb),
-            hard_slot_cap,
-            slots.len(),
-        );
-        publish_branch(
-            &store,
-            &consumer_id,
-            kind,
-            "claim-loop-open",
-            &free_slots,
-            Some(free_vram_gb),
-            Some(total_vram_gb),
-            Some(agent_diag.clone()),
-            log_fn,
-        )
-        .await?;
-        last_cap = Some(LastCap {
-            free_slots: free_slots.clone(),
-            free_vram_gb,
-            total_vram_gb,
-            diag: agent_diag.clone(),
-        });
+        let available_accelerators =
+            helpers::build_capacity_dict_per_card(&gpu_type, &broadcast_cards, total_vram_gb);
 
-        // Maintenance-mode gate (queue::control — read that module for the
-        // full semantics). A paused queue means this agent starts NOTHING
-        // new, so the entire admission half of the tick is skipped: no
-        // cooperative yield (evicting a running job to free VRAM for a
-        // claim that can never happen would destroy work for nothing), no
-        // queue listing, no claim. Everything above this point has already
-        // run — advance_slot drove every live slot, heartbeats went out,
-        // and capacity was published — so jobs already in running/ finish
-        // normally and `stado queue drain --wait` can terminate.
+        // Maintenance mode is read before the publication: the row must report
+        // the same admission decision the loop will enforce below. Jobs already
+        // running were advanced earlier and continue normally.
         //
-        // Re-read every iteration, never cached: `stado queue resume` has
-        // to reach a running agent without an operator restarting it.
-        //
-        // Bounded like every other store read in this tick: the NEXT capacity
-        // publication is behind it, so an unbounded read here takes the host
-        // off the fleet just as surely as one ahead of the publication does.
-        // A lapsed budget claims nothing this tick, which is always the safe
-        // direction -- an agent that skips a claim loses a poll interval; an
-        // agent whose broadcast goes stale loses the fleet's belief that it
-        // exists.
+        // Re-read every iteration, never cached: `stado queue resume` has to
+        // reach a running agent without restarting it. The read shares the
+        // tick's store budget; a timeout publishes an explicit refusal rather
+        // than leaving the previous accepting decision live.
         let Ok(queue_control) =
             tokio::time::timeout(claim_budget_left(), control::read(&store)).await
         else {
+            let snapshot = measured_capacity(
+                &slots,
+                false,
+                Some("queue_control_unavailable"),
+                available_accelerators.clone(),
+                free_vram_gb,
+                total_vram_gb,
+                agent_diag.clone(),
+            );
+            let _ = publish_branch(
+                &store,
+                &consumer_id,
+                kind,
+                "queue-control-unavailable",
+                &snapshot,
+                log_fn,
+            )
+            .await;
+            last_cap = Some(snapshot);
             log_fn(&format!(
-                "loop: queue-control read exhausted this tick's {}s store budget; claiming nothing this tick and \
-                 publishing again",
+                "loop: queue-control read exhausted this tick's {}s store budget; claiming nothing this tick",
                 constants::AGENT_CLAIM_STORE_BUDGET_S
             ));
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
@@ -1868,6 +1876,33 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             "agent_source_revision".into(),
             Value::from(crate::build_identity::SOURCE_REVISION),
         );
+        let policy_reason = if queue_control.paused {
+            Some("queue_paused")
+        } else if pressure_active {
+            Some("disk_pressure_active")
+        } else {
+            None
+        };
+        let snapshot = measured_capacity(
+            &slots,
+            policy_reason.is_none(),
+            policy_reason,
+            available_accelerators,
+            free_vram_gb,
+            total_vram_gb,
+            agent_diag.clone(),
+        );
+        let accepting_jobs = snapshot.accepting_jobs;
+        publish_branch(
+            &store,
+            &consumer_id,
+            kind,
+            "admission-measured",
+            &snapshot,
+            log_fn,
+        )
+        .await?;
+        last_cap = Some(snapshot);
         if queue_control.paused {
             agent_diag.insert(
                 "queue_pause_reason".into(),
@@ -1877,14 +1912,26 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 "Queue paused ({}); claiming nothing",
                 queue_control.pause_summary()
             ));
-            // An ephemeral cloud agent with no slots left is idle while paused.
-            // Exit so the capacity heartbeat stops; dispatch is paused, and the
-            // owning provider adapter reaps the machine without replacing it.
+            // An ephemeral cloud agent with no running jobs is idle while
+            // paused. Exit so the capacity heartbeat stops; the owning provider
+            // adapter reaps the machine without replacing it.
             if idle_shutdown && slots.is_empty() {
-                log_fn("idle_shutdown: no slots + queue paused; exiting");
+                log_fn("idle_shutdown: no running jobs + queue paused; exiting");
                 self_terminate(kind, log_fn).await;
                 return Ok(());
             }
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
+        }
+        if !accepting_jobs && !pressure_active {
+            let reason = last_cap
+                .as_ref()
+                .and_then(|capacity| capacity.diag.get("admission_reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("resources_busy");
+            log_fn(&format!(
+                "admission refused by live resources: {reason}; skipping claims"
+            ));
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
             continue;
         }
@@ -1915,31 +1962,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             continue; // re-loop: recompute free VRAM, then claim the freed room
         }
 
-        let all_active_share_gpu = |slots: &[ActiveSlot]| {
-            slots
-                .iter()
-                .all(|s| activation_extraction_must_share_gpu(&s.slot.job.command))
-        };
-        let slot_cap_reached = hard_slot_cap > 0 && slots.len() as i64 >= hard_slot_cap;
-        if slot_cap_reached && !all_active_share_gpu(&slots) {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            continue;
-        }
-        // MemAvailable already excludes RAM resident in every non-agent
-        // process. Adding those processes' RSS again double-reserves the same
-        // memory and can permanently wedge a healthy host once its baseline
-        // load exceeds half of physical RAM. Keep only the dynamic headroom;
-        // per-job memory remains represented by Job::memory_gb.
-        let fr = helpers::free_ram_gb();
-        let ram_reserve = helpers::ram_safety_buffer_gb();
-        if (0.0..ram_reserve).contains(&fr) {
-            log_fn(&format!(
-                "RAM gate: {} GB free < {} GB reserve; skipping claims",
-                fr as i64, ram_reserve as i64
-            ));
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            continue;
-        }
 
         // Centralized assignment writes job.assigned_to on the queue blob, so
         // the listing itself applies this agent's full admission rule: the
@@ -2064,6 +2086,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let mut diag_eligibility_rejected = 0i64;
         let mut diag_eligible = 0i64;
         let mut diag_claim_errors = 0i64;
+        let mut diag_cpu_rejected = 0i64;
+        let mut diag_ram_rejected = 0i64;
+        let mut available_cpu_cores = last_cap
+            .as_ref()
+            .map(|capacity| capacity.available_cpu_cores)
+            .unwrap_or_default();
+        let mut available_ram_gb = last_cap
+            .as_ref()
+            .and_then(|capacity| {
+                capacity.free_ram_gb.map(|free| {
+                    let reserve = capacity
+                        .diag
+                        .get("ram_safety_buffer_gb")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(constants::RAM_SAFETY_BUFFER_MIN_GB as f64);
+                    (free - reserve).max(0.0)
+                })
+            })
+            .unwrap_or_default();
         // These keys describe one completed scan. The previous scan was
         // already published before this point; carrying its last error into a
         // later clean scan would turn a historical refusal into current state.
@@ -2074,7 +2115,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         ] {
             agent_diag.remove(key);
         }
-        let max_claims = env_i64("WC_LOCAL_MAX_CLAIMS_PER_TICK", 0);
         let raw_reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
         let raw_min_free = env_f64_chain(
             "WISENT_RAW_CLAIM_MIN_FREE_GB",
@@ -2117,9 +2157,14 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 );
                 continue;
             }
-            let share_now = all_active_share_gpu(&slots);
-            let cap_reached = hard_slot_cap > 0 && slots.len() as i64 >= hard_slot_cap;
-            if cap_reached && !(share_now && is_raw_share) {
+            let requested_cpu_cores = helpers::requested_cpu_cores(job);
+            if requested_cpu_cores > available_cpu_cores {
+                diag_cpu_rejected += 1;
+                continue;
+            }
+            let requested_memory_gb = helpers::requested_memory_gb(job);
+            if requested_memory_gb > available_ram_gb {
+                diag_ram_rejected += 1;
                 continue;
             }
             // Sizing comes out of the store too. A lapsed budget skips THIS
@@ -2320,7 +2365,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 continue;
             };
             new_slot.disk_cleanup_lock = Some(workload_lock);
+            let exclusive_started = helpers::slot_is_exclusive(&new_slot.slot);
             slots.push(new_slot);
+            available_cpu_cores =
+                available_cpu_cores.saturating_sub(requested_cpu_cores);
+            available_ram_gb = (available_ram_gb - requested_memory_gb).max(0.0);
             free_vram_gb -= need;
             if let Some(uuid) = &placement {
                 if let Some(entry) = card_budget.iter_mut().find(|(id, _)| id == uuid) {
@@ -2339,22 +2388,18 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 "last_started_at".into(),
                 Value::from(isoformat_utc(Utc::now())),
             );
-            if !is_raw_share {
-                break;
-            }
-            if max_claims > 0 && started >= max_claims {
-                break;
-            }
-            // DEVIATION: Python references a bare VRAM_SAFETY_BUFFER_GB
-            // that does not exist in local_agent.py (latent NameError on
-            // this raw multi-claim path). The computed dynamic buffer is
-            // the obviously intended value.
-            if free_vram_gb <= vram_buffer_gb {
+            if exclusive_started
+                || available_cpu_cores == 0
+                || available_ram_gb < 1.0
+                || free_vram_gb <= vram_buffer_gb
+            {
                 break;
             }
         }
         agent_diag.insert("queue_scanned".into(), Value::from(queued.len() as i64));
         agent_diag.insert("vram_rejected".into(), Value::from(diag_vram_rejected));
+        agent_diag.insert("cpu_rejected".into(), Value::from(diag_cpu_rejected));
+        agent_diag.insert("ram_rejected".into(), Value::from(diag_ram_rejected));
         agent_diag.insert(
             "raw_disk_rejected".into(),
             Value::from(diag_raw_disk_rejected),

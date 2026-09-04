@@ -15,7 +15,6 @@ cd "$WORK"
 export WISENT_DTYPE=auto
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONUNBUFFERED=1
-export WC_LOCAL_SLOTS=0
 # Pin numba threads BEFORE numba is imported. wisent code sets this to 1 in
 # 8 modules but the import order on the agent's subprocess path lets numba
 # initialise with the system cpu count first, and the later os.environ

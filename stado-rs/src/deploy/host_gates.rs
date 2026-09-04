@@ -4,8 +4,7 @@
 //! NO Python original. The incident it exists for: the Mac mini's data volume
 //! sat at roughly 2 GiB free against a 55 GiB registry policy. Its queue agent
 //! computes [`disk_cleanup::disk_pressure_unresolved`] every tick, publishes
-//! that word in its capacity broadcast, and fails admission CLOSED while it is
-//! true — zero free slots, no claim, deliberately
+//! true — `accepting_jobs: false`, no new job, deliberately
 //! ([`crate::providers::local::agent`]). So the host claimed nothing for
 //! hours, every release build queued behind it, and no command in this CLI
 //! said any of it: `host disk` printed the free bytes and the policy but never
@@ -20,8 +19,8 @@
 //!   `diag` words are reported VERBATIM. A blocker an operator reads here has
 //!   to be greppable in the agent that published it, otherwise the CLI has
 //!   invented a second vocabulary for the same condition;
-//! - the registry target: its declared `slots`, and its
-//!   [`crate::targets::DiskCleanupPolicy`] serialized as it stands;
+//! - the registry target and its [`crate::targets::DiskCleanupPolicy`]
+//!   serialized as they stand;
 //! - `df -Pk /` and the janitor's own state file, read with the exact script
 //!   [`crate::deploy::host_disk`] sends, so `host gates` and `host disk` can
 //!   never disagree about how much space this host has;
@@ -41,6 +40,8 @@
 //! read. Nothing restarts, nothing cycles, nothing is deleted. The write
 //! half — actually getting the space back — is
 //! [`crate::deploy::host_reclaim`].
+
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
@@ -228,9 +229,9 @@ const STALL_INTERVALS: i64 = 4;
 pub struct HostGates {
     /// The registry target name, not the operator's spelling of it.
     pub host: String,
-    /// `blockers.is_empty()`. Busy slots are NOT a blocker: a host running
-    /// work claims nothing more and is perfectly healthy, and calling that
-    /// blocked would make this command cry wolf on every loaded box.
+    /// `blockers.is_empty()`. A host currently using all measured resources is
+    /// busy, not broken; `accepting_jobs` reports that transient state without
+    /// turning it into an operational blocker.
     pub claiming: bool,
     pub blockers: Vec<String>,
     pub disk_pressure_unresolved: bool,
@@ -265,10 +266,17 @@ pub struct HostGates {
     pub policy_mode: Option<String>,
     pub published_at: Option<String>,
     pub age_seconds: Option<i64>,
-    /// Free slots summed over accelerator types, or `None` when this host has
-    /// published nothing.
-    pub free_slots: Option<i64>,
-    pub slots_declared: i64,
+    /// The worker's current admission decision and the measured resources that
+    /// explain it. `None` means this host published no corresponding value.
+    pub accepting_jobs: Option<bool>,
+    pub running_jobs: Option<i64>,
+    pub available_cpu_cores: Option<i64>,
+    pub total_cpu_cores: Option<i64>,
+    pub available_accelerators: BTreeMap<String, i64>,
+    pub free_ram_gb: Option<f64>,
+    pub total_ram_gb: Option<f64>,
+    pub free_vram_gb: Option<i64>,
+    pub total_vram_gb: Option<i64>,
     /// The storage backend this host's own installed binary resolves from the
     /// config its services consume, or `None` when the host would not answer
     /// with one ([`AGENT_STORE_UNREADABLE`]). Reported beside
@@ -639,8 +647,31 @@ pub fn assemble(
         policy_mode: policy.map(|policy| policy.mode.clone()),
         published_at,
         age_seconds,
-        free_slots: payload.map(|p| free_slots(p, target.gpu_type.as_deref())),
-        slots_declared: target.slots,
+        accepting_jobs: payload
+            .and_then(|value| value.get("accepting_jobs"))
+            .and_then(Value::as_bool),
+        running_jobs: payload
+            .and_then(|value| value.get("running_jobs"))
+            .and_then(Value::as_i64),
+        available_cpu_cores: payload
+            .and_then(|value| value.get("available_cpu_cores"))
+            .and_then(Value::as_i64),
+        total_cpu_cores: payload
+            .and_then(|value| value.get("total_cpu_cores"))
+            .and_then(Value::as_i64),
+        available_accelerators: payload.map(accelerator_availability).unwrap_or_default(),
+        free_ram_gb: payload
+            .and_then(|value| value.get("free_ram_gb"))
+            .and_then(Value::as_f64),
+        total_ram_gb: payload
+            .and_then(|value| value.get("total_ram_gb"))
+            .and_then(Value::as_f64),
+        free_vram_gb: payload
+            .and_then(|value| value.get("free_vram_gb"))
+            .and_then(Value::as_i64),
+        total_vram_gb: payload
+            .and_then(|value| value.get("total_vram_gb"))
+            .and_then(Value::as_i64),
         agent_store_backend: agent_store.map(str::to_string),
         fleet_store_backend: crate::config::wc_storage_backend().to_string(),
         notes,
@@ -707,22 +738,20 @@ fn diag_flag(payload: Option<&Value>, key: &str) -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
-/// Free slots of this host's own accelerator shape, not a sum across every
-/// sizing tier the broadcast also carries: those entries describe how many
-/// jobs of *each* footprint fit, and adding a 2 GB tier to a 48 GB tier to a
-/// whole-card count produced "44 free slots of 2 declared" on the RTX PRO
-/// 6000. Fall back to the sum only when the broadcast carries no entry named
-/// by the host's gpu_type, which is the shape older agents publish.
-fn free_slots(payload: &Value, gpu_type: Option<&str>) -> i64 {
-    let Some(slots) = payload.get("free_slots").and_then(Value::as_object) else {
-        return 0;
-    };
-    if let Some(gpu_type) = gpu_type {
-        if let Some(own) = slots.get(gpu_type).and_then(Value::as_i64) {
-            return own;
-        }
-    }
-    slots.values().filter_map(Value::as_i64).sum::<i64>()
+/// Available placements by accelerator class, derived by the worker from live
+/// per-card VRAM.
+fn accelerator_availability(payload: &Value) -> BTreeMap<String, i64> {
+    payload
+        .get("available_accelerators")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|entries| entries.iter())
+        .filter_map(|(accelerator, count)| {
+            count
+                .as_i64()
+                .map(|count| (accelerator.clone(), count))
+        })
+        .collect()
 }
 
 /// This host's capacity publication, stale ones included.
@@ -828,8 +857,15 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
         json!({
             "published_at": gates.published_at,
             "age_seconds": gates.age_seconds,
-            "free_slots": gates.free_slots,
-            "slots_declared": gates.slots_declared,
+            "accepting_jobs": gates.accepting_jobs,
+            "running_jobs": gates.running_jobs,
+            "available_cpu_cores": gates.available_cpu_cores,
+            "total_cpu_cores": gates.total_cpu_cores,
+            "available_accelerators": gates.available_accelerators,
+            "free_ram_gb": gates.free_ram_gb,
+            "total_ram_gb": gates.total_ram_gb,
+            "free_vram_gb": gates.free_vram_gb,
+            "total_vram_gb": gates.total_vram_gb,
         }),
     );
     report.insert(

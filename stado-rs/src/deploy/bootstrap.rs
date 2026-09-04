@@ -7,9 +7,9 @@
 //! ([`crate::config::stado_release_api_url`]) into
 //! `~/.stado/bin/` on the remote host (platform picked by remote uname:
 //! Linux x86_64 -> linux-amd64, Darwin arm64 -> darwin-arm64), writes a
-//! systemd unit that runs `stado agent` with the configured WC_LOCAL_SLOTS
-//! (WC_PYTHON points at the host's python3 — job payloads still run as
-//! Python, only the orchestration binary changes), and enables it so the
+//! systemd unit that runs `stado agent` and measures capacity from current
+//! CPU, RAM, disk, and accelerator state (`WC_PYTHON` points at the host's
+//! python3 — job payloads still run as Python), then enables it so the
 //! agent comes back up on reboot. Targets with ssh=null are listed as
 //! unprovisioned.
 //!
@@ -121,13 +121,7 @@ pub const WC_BIN_FALLBACK: &str = "$HOME/.stado/bin/stado";
 pub const WC_PYTHON_FALLBACK: &str = "python3";
 
 /// The remote agent systemd unit.
-pub fn agent_unit_text(
-    name: &str,
-    slots: i64,
-    stado_bin: &str,
-    wc_python: &str,
-    user: &str,
-) -> String {
+pub fn agent_unit_text(name: &str, stado_bin: &str, wc_python: &str, user: &str) -> String {
     format!(
         "[Unit]\n\
          Description=Wisent Compute local GPU agent ({name})\n\
@@ -136,7 +130,6 @@ pub fn agent_unit_text(
          \n\
          [Service]\n\
          Type=simple\n\
-         Environment=WC_LOCAL_SLOTS={slots}\n\
          Environment=PYTHONUNBUFFERED=1\n\
          Environment=WC_PYTHON={wc_python}\n\
          ExecStart={stado_bin} agent --target {name}\n\
@@ -290,7 +283,7 @@ pub fn unit_installs(
     wc_python: &str,
 ) -> Vec<(String, String, CommandSpec)> {
     let user = remote_user(ssh_target);
-    let agent_text = agent_unit_text(&target.name, target.slots, stado_bin, wc_python, &user);
+    let agent_text = agent_unit_text(&target.name, stado_bin, wc_python, &user);
     let watchdog_text = watchdog_unit_text(
         &target.name,
         &sibling_bin(stado_bin, "stado-watchdog"),
@@ -586,8 +579,8 @@ pub async fn provision_target(
     ));
     run_unit_install(&installs[1].2, runner).await?;
     echo(&format!(
-        "[ok]   {}: enabled, agent running with WC_LOCAL_SLOTS={}",
-        target.name, target.slots
+        "[ok]   {}: enabled, agent running with live resource admission",
+        target.name
     ));
     Ok(())
 }

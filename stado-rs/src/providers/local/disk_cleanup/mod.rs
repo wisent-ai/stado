@@ -350,7 +350,7 @@ pub struct CleanupReport {
     pub backup_twins: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
-    pub active_slot_count: i64,
+    pub active_job_count: i64,
     pub last_success_at: Option<String>,
     /// Whether this pass reached its cleaners at all.
     ///
@@ -403,7 +403,7 @@ pub struct CleanupReport {
 }
 
 impl CleanupReport {
-    pub fn base(active_slot_count: i64, hostname: &str) -> Self {
+    pub fn base(active_job_count: i64, hostname: &str) -> Self {
         Self {
             hostname: targets::normalize_hostname(hostname),
             target_name: None,
@@ -430,7 +430,7 @@ impl CleanupReport {
             backup_twins: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
-            active_slot_count: active_slot_count.max(0),
+            active_job_count: active_job_count.max(0),
             last_success_at: None,
             scanned: false,
             unscanned_cleaners: Vec::new(),
@@ -543,7 +543,7 @@ impl CleanupReport {
                 "deadline": self.caps.deadline,
             },
             "lock_busy": self.lock_busy,
-            "active_slot_count": self.active_slot_count,
+            "active_job_count": self.active_job_count,
             "last_success_at": self.last_success_at,
             "build_caches_resume_from": self.builds_resume_from,
             "errors": self.errors,
@@ -1084,7 +1084,7 @@ const PUBLIC_OUTCOMES: [&str; 11] = [
     "interval_noop",
     "healthy_noop",
     "report_only",
-    "blocked_active",
+    "blocked_running_jobs",
     "reclaimed_target",
     "cap_reached",
     "partial_error",
@@ -1095,7 +1095,7 @@ const PUBLIC_OUTCOMES: [&str; 11] = [
 /// `active_run`, `escapes_root`, and `item_cap` are deliberately absent
 /// (they never leave the host), exactly as in the Python source.
 const PUBLIC_SKIP_REASONS: [&str; 16] = [
-    "active_slots",
+    "active_jobs",
     "blob_link_count_uncertain",
     "byte_cap",
     "cache_locked",
@@ -1279,7 +1279,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             "deadline": cap("deadline"),
         },
         "lock_busy": lock_busy || get("lock_busy") == Some(&Value::Bool(true)),
-        "active_slot_count": public_nonnegative(get("active_slot_count")).unwrap_or(0),
+        "active_job_count": public_nonnegative(get("active_job_count")).unwrap_or(0),
         "last_success_at": public_timestamp(get("last_success_at")),
         "errors": safe_errors,
     })
@@ -1910,7 +1910,7 @@ fn run_with_lock(
     if let Err(exc) = hf::run_hf(
         home,
         &policy,
-        report.active_slot_count,
+        report.active_job_count,
         attempted_at,
         share(
             policy.max_scan_items,
@@ -2116,8 +2116,8 @@ fn run_with_lock(
         report.outcome = "cap_reached".to_string();
     } else if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
-    } else if report.active_slot_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
-        report.outcome = "blocked_active".to_string();
+    } else if report.active_job_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
+        report.outcome = "blocked_running_jobs".to_string();
     } else if after >= policy.target_free_gb * GIB {
         report.outcome = "reclaimed_target".to_string();
     } else if report.caps.any() {
@@ -2179,12 +2179,12 @@ impl CleanupWriter {
 /// Python `run_cleanup_once`. Never fails: every failure mode lands in
 /// the returned report (the agent mirrors Python's outcome handling).
 pub async fn run_cleanup_once(
-    active_slot_count: i64,
+    active_job_count: i64,
     force: bool,
     writer: CleanupWriter,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
-    cleanup_once(active_slot_count, force, false, writer, log_fn).await
+    cleanup_once(active_job_count, force, false, writer, log_fn).await
 }
 
 /// Resolve canonical policy, plan one bounded pass, and delete NOTHING.
@@ -2215,7 +2215,7 @@ pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
 async fn cleanup_once(
-    active_slot_count: i64,
+    active_job_count: i64,
     force: bool,
     preview: bool,
     writer: CleanupWriter,
@@ -2224,7 +2224,7 @@ async fn cleanup_once(
     let started = Instant::now();
     let attempted_at = epoch_now();
     let hostname = crate::providers::vast::system_hostname();
-    let mut report = CleanupReport::base(active_slot_count, &hostname);
+    let mut report = CleanupReport::base(active_job_count, &hostname);
     report.writer = writer.as_str();
     report.writer_version = crate::build_identity::BUILD_IDENTITY;
 

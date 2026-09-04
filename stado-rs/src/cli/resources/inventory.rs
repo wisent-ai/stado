@@ -711,7 +711,7 @@ fn print_human(report: &ResourcesReport) {
                 text(target, "name"),
                 text(target, "kind"),
                 text(target, "gpu_type"),
-                number(target, "slots"),
+                text(target, "release_platform"),
                 text(target, "region"),
                 target
                     .get("hostnames")
@@ -729,7 +729,7 @@ fn print_human(report: &ResourcesReport) {
         .collect();
     if !target_rows.is_empty() {
         table::print(
-            &["TARGET", "KIND", "GPU", "SLOTS", "REGION", "HOSTNAMES"],
+            &["TARGET", "KIND", "GPU", "PLATFORM", "REGION", "HOSTNAMES"],
             &target_rows,
         );
     }

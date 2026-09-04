@@ -230,18 +230,18 @@ pub async fn load_quotas(store: &JobStorage, provider_name: &str) -> Result<Valu
     load_quotas_from_live(store, provider_name, live).await
 }
 
-/// Count available GPU slots: total - reserved - running (Python
-/// `get_available_slots`).
-pub async fn get_available_slots(
+/// Count additional GPU instances allowed by provider quota:
+/// total - reserved - running.
+pub async fn get_available_instances(
     store: &JobStorage,
     provider: &dyn Provider,
     provider_name: &str,
 ) -> Result<BTreeMap<String, i64>, QuotaError> {
     let quotas = load_quotas(store, provider_name).await?;
-    available_slots_from_quotas(provider, provider_name, &quotas).await
+    available_instances_from_quotas(provider, provider_name, &quotas).await
 }
 
-async fn available_slots_from_quotas(
+async fn available_instances_from_quotas(
     provider: &dyn Provider,
     provider_name: &str,
     quotas: &Value,

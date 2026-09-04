@@ -21,7 +21,7 @@ struct CleanupReport: Codable, Sendable {
     let cleaners: CleanupCleaners
     let caps: CleanupCaps
     let lockBusy: Bool
-    let activeSlotCount: Int
+    let activeJobCount: Int
     let lastSuccessAt: String?
     let errors: [String]
 
@@ -36,7 +36,7 @@ struct CleanupReport: Codable, Sendable {
         case targetBytes = "target_bytes"
         case pressureActive = "pressure_active"
         case lockBusy = "lock_busy"
-        case activeSlotCount = "active_slot_count"
+        case activeJobCount = "active_job_count"
         case lastSuccessAt = "last_success_at"
     }
 
@@ -57,8 +57,8 @@ struct CleanupReport: Codable, Sendable {
             OutcomePresentation(title: "Checked recently", detail: "The registry-controlled interval has not elapsed.", symbol: "clock.fill", severity: .neutral)
         case "report_only":
             OutcomePresentation(title: "Report only", detail: "Policy observed pressure without deleting data.", symbol: "doc.text.magnifyingglass", severity: .warning)
-        case "blocked_active":
-            OutcomePresentation(title: "Waiting for active work", detail: "Cleanup is blocked while compute slots are active.", symbol: "pause.circle.fill", severity: .warning)
+        case "blocked_running_jobs":
+            OutcomePresentation(title: "Waiting for active work", detail: "Cleanup is blocked while jobs are running.", symbol: "pause.circle.fill", severity: .warning)
         case "cap_reached":
             OutcomePresentation(title: "Pass limit reached", detail: "Pressure remains after a bounded cleanup pass.", symbol: "gauge.with.dots.needle.67percent", severity: .warning)
         case "no_eligible_items":

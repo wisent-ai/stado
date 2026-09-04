@@ -125,14 +125,14 @@ pub fn run_pass(
     th: &TempHome,
     registry: Value,
     hostname: &str,
-    active_slot_count: i64,
+    active_job_count: i64,
     force: bool,
 ) -> Value {
     let state_dir = super::ensure_state_dir(&th.home).expect("state dir");
     let lock = acquire_lock(&state_dir)
         .expect("lock io")
         .expect("lock busy");
-    let report = CleanupReport::base(active_slot_count, hostname);
+    let report = CleanupReport::base(active_job_count, hostname);
     let mut logs: Vec<String> = Vec::new();
     run_with_lock(
         &th.home,

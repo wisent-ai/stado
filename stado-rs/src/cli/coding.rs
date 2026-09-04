@@ -162,10 +162,10 @@ fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
         .iter()
         .map(|host| crate::targets::normalize_hostname(host))
         .collect::<Vec<_>>();
-    let live_slots = capacity
+    let live = capacity
         .iter()
         .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("local"))
-        .filter(|entry| {
+        .find(|entry| {
             let consumer = entry
                 .get("consumer_id")
                 .and_then(Value::as_str)
@@ -176,23 +176,23 @@ fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
                         .strip_prefix("local-")
                         .is_some_and(|value| crate::targets::normalize_hostname(value) == *host)
             })
-        })
-        .flat_map(|entry| {
-            entry
-                .get("free_slots")
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(|slots| slots.values())
-        })
-        .filter_map(Value::as_i64)
-        .sum::<i64>();
-    let live_bonus = if live_slots > 0 { 1_000_000 } else { 0 };
+        });
+    let accepting = live
+        .and_then(|entry| entry.get("accepting_jobs"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let available_cpu_cores = live
+        .and_then(|entry| entry.get("available_cpu_cores"))
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+        .max(0);
+    let live_bonus = if accepting { 1_000_000 } else { 0 };
     let local_bonus = if host_channel::target_is_this_host(target) {
         1
     } else {
         0
     };
-    live_bonus + live_slots.saturating_mul(1_000) + target.slots.max(0) + local_bonus
+    live_bonus + available_cpu_cores.saturating_mul(1_000) + local_bonus
 }
 
 async fn attach(target: ComputeTarget, workspace: &str, checkout: &str) -> Result<(), CmdError> {

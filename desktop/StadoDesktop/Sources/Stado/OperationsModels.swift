@@ -87,7 +87,13 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
     let hostnames: [String]
     let gpuType: String?
     let role: String?
-    let freeSlots: [String: Int]
+    let acceptingJobs: Bool?
+    let runningJobs: Int?
+    let availableCPUCores: Int?
+    let totalCPUCores: Int?
+    let availableAccelerators: [String: Int]
+    let freeRAMGB: Double?
+    let totalRAMGB: Double?
     let freeVRAMGB: Double?
     let totalVRAMGB: Double?
     let publishedAt: String?
@@ -107,13 +113,15 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
         return "Unnamed worker"
     }
 
-    var availableSlots: Int {
-        freeSlots.values.reduce(0, +)
-    }
 
     enum CodingKeys: String, CodingKey {
         case targetName, consumerID = "consumerId", declared, status, availabilityReason
-        case kind, hostnames, gpuType, role, freeSlots, publishedAt, ageSeconds
+        case kind, hostnames, gpuType, role, acceptingJobs, runningJobs
+        case availableCPUCores = "availableCpuCores"
+        case totalCPUCores = "totalCpuCores"
+        case availableAccelerators, publishedAt, ageSeconds
+        case freeRAMGB = "freeRamGb"
+        case totalRAMGB = "totalRamGb"
         case freeVRAMGB = "freeVramGb"
         case totalVRAMGB = "totalVramGb"
     }
@@ -130,7 +138,14 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
         hostnames = try values.decodeIfPresent([String].self, forKey: .hostnames) ?? []
         gpuType = try values.decodeIfPresent(String.self, forKey: .gpuType)
         role = try values.decodeIfPresent(String.self, forKey: .role)
-        freeSlots = try values.decodeIfPresent([String: Int].self, forKey: .freeSlots) ?? [:]
+        acceptingJobs = try values.decodeIfPresent(Bool.self, forKey: .acceptingJobs)
+        runningJobs = try values.decodeIfPresent(Int.self, forKey: .runningJobs)
+        availableCPUCores = try values.decodeIfPresent(Int.self, forKey: .availableCPUCores)
+        totalCPUCores = try values.decodeIfPresent(Int.self, forKey: .totalCPUCores)
+        availableAccelerators =
+            try values.decodeIfPresent([String: Int].self, forKey: .availableAccelerators) ?? [:]
+        freeRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeRAMGB)
+        totalRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalRAMGB)
         freeVRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeVRAMGB)
         totalVRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalVRAMGB)
         publishedAt = try values.decodeIfPresent(String.self, forKey: .publishedAt)
@@ -187,30 +202,26 @@ struct FailedJob: Decodable, Identifiable, Sendable {
 struct Throughput: Decodable, Sendable {
     let averageWallSecondsPerCompletedJob: Double?
     let samples: Int
-    let liveTotalFreeSlots: Int
     let projectedRemainingSeconds: Double?
 
     static let unavailable = Throughput(
         averageWallSecondsPerCompletedJob: nil,
         samples: 0,
-        liveTotalFreeSlots: 0,
         projectedRemainingSeconds: nil
     )
 
     enum CodingKeys: String, CodingKey {
         case averageWallSecondsPerCompletedJob = "avgWallSecondsPerCompletedJob"
-        case samples, liveTotalFreeSlots, projectedRemainingSeconds
+        case samples, projectedRemainingSeconds
     }
 
     init(
         averageWallSecondsPerCompletedJob: Double?,
         samples: Int,
-        liveTotalFreeSlots: Int,
         projectedRemainingSeconds: Double?
     ) {
         self.averageWallSecondsPerCompletedJob = averageWallSecondsPerCompletedJob
         self.samples = samples
-        self.liveTotalFreeSlots = liveTotalFreeSlots
         self.projectedRemainingSeconds = projectedRemainingSeconds
     }
 
@@ -218,7 +229,6 @@ struct Throughput: Decodable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         averageWallSecondsPerCompletedJob = try values.decodeIfPresent(Double.self, forKey: .averageWallSecondsPerCompletedJob)
         samples = try values.decodeIfPresent(Int.self, forKey: .samples) ?? 0
-        liveTotalFreeSlots = try values.decodeIfPresent(Int.self, forKey: .liveTotalFreeSlots) ?? 0
         projectedRemainingSeconds = try values.decodeIfPresent(Double.self, forKey: .projectedRemainingSeconds)
     }
 }
@@ -452,22 +462,44 @@ struct HostGatesDisk: Decodable, Sendable {
 struct HostGatesCapacity: Decodable, Sendable {
     let publishedAt: String?
     let ageSeconds: Double?
-    let freeSlots: Int?
-    let slotsDeclared: Int?
+    let acceptingJobs: Bool?
+    let runningJobs: Int?
+    let availableCPUCores: Int?
+    let totalCPUCores: Int?
+    let availableAccelerators: [String: Int]
+    let freeRAMGB: Double?
+    let totalRAMGB: Double?
+    let freeVRAMGB: Double?
+    let totalVRAMGB: Double?
 
     enum CodingKeys: String, CodingKey {
         case publishedAt = "published_at"
         case ageSeconds = "age_seconds"
-        case freeSlots = "free_slots"
-        case slotsDeclared = "slots_declared"
+        case acceptingJobs = "accepting_jobs"
+        case runningJobs = "running_jobs"
+        case availableCPUCores = "available_cpu_cores"
+        case totalCPUCores = "total_cpu_cores"
+        case availableAccelerators = "available_accelerators"
+        case freeRAMGB = "free_ram_gb"
+        case totalRAMGB = "total_ram_gb"
+        case freeVRAMGB = "free_vram_gb"
+        case totalVRAMGB = "total_vram_gb"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         publishedAt = try values.decodeIfPresent(String.self, forKey: .publishedAt)
         ageSeconds = try values.decodeIfPresent(Double.self, forKey: .ageSeconds)
-        freeSlots = try values.decodeIfPresent(Int.self, forKey: .freeSlots)
-        slotsDeclared = try values.decodeIfPresent(Int.self, forKey: .slotsDeclared)
+        acceptingJobs = try values.decodeIfPresent(Bool.self, forKey: .acceptingJobs)
+        runningJobs = try values.decodeIfPresent(Int.self, forKey: .runningJobs)
+        availableCPUCores = try values.decodeIfPresent(Int.self, forKey: .availableCPUCores)
+        totalCPUCores = try values.decodeIfPresent(Int.self, forKey: .totalCPUCores)
+        availableAccelerators =
+            try values.decodeIfPresent([String: Int].self, forKey: .availableAccelerators) ?? [:]
+        freeRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeRAMGB)
+        totalRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalRAMGB)
+        freeVRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeVRAMGB)
+        totalVRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalVRAMGB)
     }
 }
 

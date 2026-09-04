@@ -385,7 +385,7 @@ struct HostsView: View {
                 ConsoleHeaderCell("Claiming", width: 92),
                 ConsoleHeaderCell("Why not"),
                 ConsoleHeaderCell("Free disk", width: 136, trailing: true),
-                ConsoleHeaderCell("Slots", width: 62, trailing: true),
+                ConsoleHeaderCell("CPU free", width: 72, trailing: true),
                 ConsoleHeaderCell("Reported", width: 112, trailing: true),
                 ConsoleHeaderCell("State", width: 104, trailing: true),
             ]) {
@@ -407,8 +407,8 @@ struct HostsView: View {
                             tone: diskTone(host)
                         )
                         ConsoleCell(
-                            text: slotsCell(host),
-                            width: 62,
+                            text: cpuCell(host),
+                            width: 72,
                             trailing: true,
                             digits: true
                         )
@@ -465,7 +465,11 @@ struct HostsView: View {
                     label: "Hostnames",
                     value: host.hostnames.isEmpty ? "Not reported" : host.hostnames.joined(separator: ", ")
                 )
-                WisentField(label: "Free slots", value: slots(host))
+                WisentField(label: "Admission", value: admission(host))
+                WisentField(label: "Running jobs", value: host.runningJobs?.formatted(.number) ?? "Not reported")
+                WisentField(label: "CPU", value: cpu(host))
+                WisentField(label: "RAM", value: ram(host))
+                WisentField(label: "Accelerators available", value: accelerators(host))
                 WisentField(label: "VRAM", value: vram(host))
                 WisentField(label: "Last capacity report", value: ConsoleFormat.age(host.ageSeconds))
                 if host.status == .live {
@@ -586,14 +590,36 @@ struct HostsView: View {
         }
     }
 
-    private func slots(_ host: WorkerNode) -> String {
-        guard !host.freeSlots.isEmpty else {
-            return host.status == .unavailable ? "No capacity report" : "Not reported"
+    private func admission(_ host: WorkerNode) -> String {
+        switch host.acceptingJobs {
+        case true: "Accepting jobs"
+        case false: "Busy or gated"
+        case nil: "Not reported"
         }
-        return host.freeSlots
+    }
+
+    private func accelerators(_ host: WorkerNode) -> String {
+        guard !host.availableAccelerators.isEmpty else {
+            return "None currently available"
+        }
+        return host.availableAccelerators
             .sorted { $0.key < $1.key }
             .map { "\($0.key) \($0.value)" }
-            .joined(separator: " ")
+            .joined(separator: " · ")
+    }
+
+    private func cpu(_ host: WorkerNode) -> String {
+        guard let available = host.availableCPUCores, let total = host.totalCPUCores else {
+            return "Not reported"
+        }
+        return "\(available.formatted(.number)) available of \(total.formatted(.number)) cores"
+    }
+
+    private func ram(_ host: WorkerNode) -> String {
+        guard let free = host.freeRAMGB, let total = host.totalRAMGB else {
+            return "Not reported"
+        }
+        return "\(StadoFormat.decimal(free)) free of \(StadoFormat.decimal(total)) GB"
     }
 
     private func vram(_ host: WorkerNode) -> String {
@@ -853,7 +879,7 @@ struct HostsView: View {
                 value: ConsoleFormat.age(gates.capacity?.ageSeconds),
                 tone: (gates.capacity?.ageSeconds ?? 0) > 900 ? .warning : .neutral
             )
-            WisentField(label: "Slots", value: slotDescription(gates.capacity))
+            WisentField(label: "Capacity", value: capacityDescription(gates.capacity))
             WisentActionButton(
                 action: WisentAction(
                     "Reclaim disk…",
@@ -1216,11 +1242,11 @@ struct HostsView: View {
         hostGates(host)?.disk?.isBelowWatermark == true ? .danger : .neutral
     }
 
-    private func slotsCell(_ host: WorkerNode) -> String {
-        if let free = hostGates(host)?.capacity?.freeSlots {
-            return free.formatted(.number)
+    private func cpuCell(_ host: WorkerNode) -> String {
+        if let available = hostGates(host)?.capacity?.availableCPUCores {
+            return available.formatted(.number)
         }
-        return host.status == .unavailable ? "—" : host.availableSlots.formatted(.number)
+        return host.availableCPUCores?.formatted(.number) ?? "—"
     }
 
     /// The capacity report's own age when the host published one, and the
@@ -1242,18 +1268,27 @@ struct HostsView: View {
         return text
     }
 
-    private func slotDescription(_ capacity: HostGatesCapacity?) -> String {
+    private func capacityDescription(_ capacity: HostGatesCapacity?) -> String {
         guard let capacity else { return "Not reported" }
-        switch (capacity.freeSlots, capacity.slotsDeclared) {
-        case let (free?, declared?):
-            return "\(free.formatted(.number)) free of \(declared.formatted(.number)) declared"
-        case let (free?, nil):
-            return "\(free.formatted(.number)) free"
-        case let (nil, declared?):
-            return "\(declared.formatted(.number)) declared"
-        case (nil, nil):
-            return "Not reported"
+        let admission = switch capacity.acceptingJobs {
+        case true: "Accepting jobs"
+        case false: "Busy or gated"
+        case nil: "Admission not reported"
         }
+        let running = capacity.runningJobs.map { "\($0.formatted(.number)) running" } ?? "running unknown"
+        let cpu: String
+        if let available = capacity.availableCPUCores, let total = capacity.totalCPUCores {
+            cpu = "\(available.formatted(.number))/\(total.formatted(.number)) CPU cores available"
+        } else {
+            cpu = "CPU not reported"
+        }
+        let ram: String
+        if let free = capacity.freeRAMGB, let total = capacity.totalRAMGB {
+            ram = "\(StadoFormat.decimal(free))/\(StadoFormat.decimal(total)) GB RAM free"
+        } else {
+            ram = "RAM not reported"
+        }
+        return "\(admission) · \(running) · \(cpu) · \(ram)"
     }
 }
 

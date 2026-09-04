@@ -32,21 +32,12 @@ async fn apply_registry_target(
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }
-        let env_slots = std::env::var("WC_LOCAL_SLOTS")
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if t.slots > 0 || env_slots.is_empty() {
-            std::env::set_var("WC_LOCAL_SLOTS", t.slots.to_string());
-        }
         for (k, v) in &t.env_overrides {
             std::env::set_var(k, env_value_str(v));
         }
-        let effective_slots =
-            std::env::var("WC_LOCAL_SLOTS").unwrap_or_else(|_| t.slots.to_string());
         println!(
-            "agent --auto: target={} gpu_type={gpu_type} slots={effective_slots} registry_slots={}",
-            t.name, t.slots
+            "agent --auto: target={} gpu_type={gpu_type} capacity=live-resources",
+            t.name
         );
     } else if let Some(target) = target {
         let t = local_agent::lookup_auto(target)
@@ -62,18 +53,9 @@ async fn apply_registry_target(
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }
-        let env_slots = std::env::var("WC_LOCAL_SLOTS")
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if t.slots > 0 || env_slots.is_empty() {
-            std::env::set_var("WC_LOCAL_SLOTS", t.slots.to_string());
-        }
-        let effective_slots =
-            std::env::var("WC_LOCAL_SLOTS").unwrap_or_else(|_| t.slots.to_string());
         println!(
-            "agent: target={} gpu_type={gpu_type} slots={effective_slots} registry_slots={}",
-            t.name, t.slots
+            "agent: target={} gpu_type={gpu_type} capacity=live-resources",
+            t.name
         );
     }
     Ok(gpu_type)

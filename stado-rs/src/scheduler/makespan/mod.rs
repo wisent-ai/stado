@@ -55,24 +55,19 @@ fn estimate_runtime(
     history.get(&(model, task)).copied()
 }
 
-/// Live-agent projection state. Python `_live_agents` value dict.
+/// Live-worker projection state.
 #[derive(Debug, Default)]
 pub struct AgentInfo {
     pub kind: String,
-    pub free_slots: BTreeMap<String, i64>,
+    pub available_accelerators: BTreeMap<String, i64>,
     pub total_vram_gb: i64,
-    /// (finish_offset_seconds, vram_gb) per projected active slot.
-    pub active_slots: Vec<(f64, i64)>,
+    /// (finish_offset_seconds, vram_gb) per projected active job.
+    pub active_jobs: Vec<(f64, i64)>,
 }
 
-/// Python `_live_agents`: {consumer_id: info} for capacity broadcasts
-/// younger than [`HEARTBEAT_TTL_S`].
-///
-/// Capacity guard: assign_one gates on total_vram_gb only, so a
-/// wedged agent (free_vram_gb=0 / free_slots={} but total 80) was a
-/// valid target and the 127 gpt-oss-20b jobs dead-pinned to agents
-/// that could never claim them (q pinned 348, c frozen 14069,
-/// 2026-05-17). Skip an agent with no free VRAM AND no free slots.
+/// Workers with a fresh publication and an explicit positive admission
+/// decision. A live row alone is not capacity: a worker can keep publishing
+/// while disk, RAM, CPU, or accelerator state prevents another claim.
 async fn live_agents(
     store: &JobStorage,
     now: DateTime<Utc>,
@@ -101,22 +96,20 @@ async fn live_agents(
         if age > HEARTBEAT_TTL_S {
             continue;
         }
-        let free_vram = doc
-            .get("free_vram_gb")
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
-            .unwrap_or(0);
-        let free_slots: BTreeMap<String, i64> = doc
-            .get("free_slots")
+        if doc.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let available_accelerators: BTreeMap<String, i64> = doc
+            .get("available_accelerators")
             .and_then(Value::as_object)
             .map(|obj| {
                 obj.iter()
-                    .map(|(k, v)| (k.clone(), v.as_i64().unwrap_or(0)))
+                    .map(|(accelerator, count)| {
+                        (accelerator.clone(), count.as_i64().unwrap_or_default())
+                    })
                     .collect()
             })
             .unwrap_or_default();
-        if free_vram <= 0 && free_slots.is_empty() {
-            continue;
-        }
         let kind = doc
             .get("kind")
             .and_then(Value::as_str)
@@ -130,9 +123,9 @@ async fn live_agents(
             cid,
             AgentInfo {
                 kind,
-                free_slots,
+                available_accelerators,
                 total_vram_gb,
-                active_slots: vec![],
+                active_jobs: vec![],
             },
         );
     }
@@ -216,7 +209,7 @@ async fn seed_running_jobs(
             .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
             .unwrap_or(0);
         if let Some(info) = agents.get_mut(cid) {
-            info.active_slots.push((remaining, vram));
+            info.active_jobs.push((remaining, vram));
         }
     }
     Ok(())
@@ -260,9 +253,9 @@ fn compat_accel_types(local_vram_gb: i64) -> Vec<&'static str> {
     accels
 }
 
-/// Pick the eligible agent that finishes this job earliest; update
-/// its active_slots in place. Returns the chosen consumer_id, or None
-/// if no agent has enough total VRAM to host the job.
+/// Pick the eligible worker that finishes this job earliest; update its active
+/// jobs in place. Returns the chosen consumer_id, or `None` if no worker has
+/// enough total VRAM.
 /// Python `_assign_one`.
 fn assign_one(
     job: &Job,
@@ -289,12 +282,12 @@ fn assign_one(
         }
         let accel = job.gpu_type.as_str();
         if !accel.is_empty()
-            && !info.free_slots.contains_key(accel)
+            && !info.available_accelerators.contains_key(accel)
             && !compat_accel_types(info.total_vram_gb).contains(&accel)
         {
             continue;
         }
-        let start = earliest_start(&info.active_slots, vram, info.total_vram_gb);
+        let start = earliest_start(&info.active_jobs, vram, info.total_vram_gb);
         let finish = start + runtime;
         if best_finish.is_none_or(|best| finish < best) {
             best_finish = Some(finish);
@@ -305,7 +298,7 @@ fn assign_one(
     let best_finish = best_finish?;
     agents
         .get_mut(&best_cid)?
-        .active_slots
+        .active_jobs
         .push((best_finish, vram));
     Some(best_cid)
 }

@@ -1168,7 +1168,7 @@ const GIB: i64 = 1024 * 1024 * 1024;
 pub fn run_hf(
     home: &Path,
     policy: &DiskCleanupPolicy,
-    active_slot_count: i64,
+    active_job_count: i64,
     now: f64,
     // This cleaner's share of the pass's scan budget, not the whole cap. It
     // runs first, and taking `policy.max_scan_items` here is how a
@@ -1181,8 +1181,8 @@ pub fn run_hf(
     let Some(configured) = policy.cleaners.get("huggingface_cache") else {
         return Ok((0, 0));
     };
-    if active_slot_count > 0 {
-        report.skip_hf("active_slots", 1);
+    if active_job_count > 0 {
+        report.skip_hf("active_jobs", 1);
         return Ok((0, 0));
     }
 

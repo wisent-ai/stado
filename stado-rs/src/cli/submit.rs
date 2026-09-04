@@ -128,16 +128,15 @@ pub struct SubmitArgs {
     /// reverses COMPLETED->FAILED. Catches silent-success failure modes.
     #[arg(long, default_value = "")]
     verify: String,
-    /// Claim the WHOLE GPU. Agent only claims this job on an
-    /// empty slot and refuses to admit any other job while it runs.
-    /// Use for diffusion training / full-finetunes whose peak VRAM
-    /// can't be safely co-tenanted.
+    /// Claim the whole GPU. The worker starts this job only while idle and
+    /// admits no other job until it finishes. Use for diffusion training and
+    /// full finetunes whose peak VRAM cannot be safely shared.
     #[arg(long)]
     exclusive: bool,
-    /// Background job: the local agent may EVICT this slot for a
-    /// strictly-higher-priority queued job that doesn't otherwise
-    /// fit. Requires --on-yield. The agent runs that hook (with
-    /// WC_JOB_PID set), waits --yield-grace, then requeues the job
+    /// Background job: the local worker may evict this job for a
+    /// strictly-higher-priority queued job that does not otherwise fit.
+    /// Requires --on-yield. The worker runs that hook (with WC_JOB_PID set),
+    /// waits --yield-grace, then requeues the job.
     /// (resumes from wherever the hook saved state).
     #[arg(long)]
     yieldable: bool,

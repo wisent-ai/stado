@@ -1162,9 +1162,6 @@ pub fn box_capabilities() -> &'static TargetCapabilities {
 // __init__.py — data models
 // ---------------------------------------------------------------------------
 
-fn default_slots() -> i64 {
-    1
-}
 
 fn default_runtime() -> String {
     "daemon".to_string()
@@ -1397,8 +1394,6 @@ pub struct ComputeTarget {
     pub release_platform: String,
     #[serde(default)]
     pub gpu_type: Option<String>,
-    #[serde(default = "default_slots")]
-    pub slots: i64,
     #[serde(default)]
     pub ssh: Option<String>,
     /// Ordered alternative network routes for the same SSH host channel.
@@ -1413,8 +1408,6 @@ pub struct ComputeTarget {
     pub region: Option<String>,
     #[serde(default)]
     pub spot: bool,
-    #[serde(default)]
-    pub max_concurrent: Option<i64>,
     #[serde(default)]
     pub team_id: Option<i64>,
     /// Stable placement class used by operators and service declarations.
@@ -2524,8 +2517,20 @@ fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
             if !name_is_truthy(item) {
                 continue;
             }
+            let mut normalized = item.clone();
+            if let Value::Object(fields) = &mut normalized {
+                // Fixed worker counts were never capacity: they were operator
+                // guesses copied into every agent process. Accept old registry
+                // documents during the rolling upgrade, but do not retain the
+                // obsolete declarations when the document is written again.
+                fields.remove("slots");
+                fields.remove("max_concurrent");
+                if let Some(Value::Object(overrides)) = fields.get_mut("env_overrides") {
+                    overrides.remove("WC_LOCAL_SLOTS");
+                }
+            }
             targets.push(
-                serde_json::from_value(item.clone())
+                serde_json::from_value(normalized)
                     .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,
             );
         }

@@ -225,15 +225,18 @@ pub async fn sweep(runner: &Runner) -> Sweep {
     // runs even when every host is unreachable.
     replica_addressing(&mut result);
     // Declared-name checks are answered from the registry alone, so they run
-    // for every target: hosts with no slots, and hosts that answer nothing.
-    // Deliberately not inside `host_findings`, which returns before any of its
-    // checks when the host's loaded-unit read fails — and a host carrying a
-    // doubled unit name is exactly the host whose units cannot be read, so
-    // placing it there measured zero subjects on the two hosts that had the
-    // defect. A check that only runs where the defect is absent is the shape
-    // this module exists to refuse.
+    // for every target, including hosts that answer nothing. Deliberately not
+    // inside `host_findings`, which returns before any of its checks when the
+    // host's loaded-unit read fails — and a host carrying a doubled unit name
+    // is exactly the host whose units cannot be read, so placing it there
+    // measured zero subjects on the two hosts that had the defect. A check that
+    // only runs where the defect is absent is the shape this module refuses.
     declared_names(&registry, &mut result);
-    for target in registry.targets.iter().filter(|target| target.slots > 0) {
+    for target in registry
+        .targets
+        .iter()
+        .filter(|target| crate::capabilities::ProviderId::Local.matches(&target.kind))
+    {
         sweep_host(&registry, target, runner, &mut result).await;
     }
     result

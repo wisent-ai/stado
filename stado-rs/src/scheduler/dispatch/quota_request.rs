@@ -7,8 +7,8 @@
 //! quota-increase request per (provider, region) across every provider in
 //! WC_PROVIDERS. Co-located in scheduler/dispatch/ because submitting a
 //! quota preference is the write-side mirror of dispatch's read-side
-//! get_available_slots: both treat per-(provider, region, accel) GPU
-//! ceilings as the unit of work.
+//! `get_available_instances`: both treat per-(provider, region, accelerator)
+//! GPU ceilings as the unit of work.
 //!
 //! GCP: the newer Cloud Quotas API expresses GPU quotas as a single
 //! quota_id `GPUS-PER-GPU-FAMILY-per-project-region` parameterized by a

@@ -195,7 +195,6 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
             "kind": "local",
             "hostnames": hostnames,
             "release_platform": release_platform,
-            "slots": policy_unit,
             "disk_cleanup": {
                 "mode": "off",
                 "check_interval_seconds": i64::try_from(

@@ -167,9 +167,9 @@ struct FleetPosture {
                 tone: liveHosts.isEmpty ? .warning : .success
             ),
             WisentSignal(
-                "Free slots",
-                value: snapshot.throughput.liveTotalFreeSlots.formatted(.number),
-                tone: .neutral
+                "Accepting jobs",
+                value: snapshot.workers.count { $0.acceptingJobs == true }.formatted(.number),
+                tone: snapshot.workers.contains { $0.acceptingJobs == true } ? .success : .warning
             ),
         ]
         if let report {

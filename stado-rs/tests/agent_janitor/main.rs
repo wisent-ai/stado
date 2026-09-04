@@ -88,14 +88,14 @@ async fn a_long_cleanup_pass_does_not_delay_capacity_publication() {
     let counted = Arc::clone(&passes);
     let pass_duration = HEARTBEAT * PASS_HEARTBEATS;
 
-    let janitor = reports.spawn_janitor(HEARTBEAT, move |active_slots| {
+    let janitor = reports.spawn_janitor(HEARTBEAT, move |active_jobs| {
         let counted = Arc::clone(&counted);
         async move {
             // Exactly what the real pass did to the fleet: take far longer than
             // the heartbeat while producing a verdict that freed nothing.
             tokio::time::sleep(pass_duration).await;
             counted.fetch_add(1, Ordering::Relaxed);
-            json!({"outcome": "healthy_noop", "active_slots": active_slots})
+            json!({"outcome": "healthy_noop", "active_jobs": active_jobs})
         }
     });
 
@@ -106,7 +106,7 @@ async fn a_long_cleanup_pass_does_not_delay_capacity_publication() {
     let started = Instant::now();
     let window = pass_duration * 2;
     while started.elapsed() < window {
-        reports.set_active_slots(3);
+        reports.set_active_jobs(3);
         let _diag = reports.latest();
         publications.push(Instant::now());
         tokio::time::sleep(HEARTBEAT).await;
@@ -181,9 +181,9 @@ async fn reading_the_latest_report_never_waits_for_a_pass_in_flight() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_completed_pass_becomes_the_report_the_tick_publishes() {
     let reports = JanitorReports::new();
-    reports.set_active_slots(7);
-    let janitor = reports.spawn_janitor(HEARTBEAT, move |active_slots| async move {
-        json!({"outcome": "healthy_noop", "active_slots": active_slots})
+    reports.set_active_jobs(7);
+    let janitor = reports.spawn_janitor(HEARTBEAT, move |active_jobs| async move {
+        json!({"outcome": "healthy_noop", "active_jobs": active_jobs})
     });
 
     let deadline = Instant::now() + scaled_stale() * 4;
@@ -200,9 +200,9 @@ async fn a_completed_pass_becomes_the_report_the_tick_publishes() {
     let report = seen.expect("a fast pass must produce a report the tick can read");
     assert_eq!(report["outcome"], json!("healthy_noop"));
     assert_eq!(
-        report["active_slots"],
+        report["active_jobs"],
         json!(7),
-        "the pass must be told the slot count the tick recorded"
+        "the pass must be told the job count the tick recorded"
     );
     assert!(reports.completed_passes() >= 1);
 }

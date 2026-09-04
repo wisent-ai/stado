@@ -99,9 +99,9 @@ impl Blocker {
 pub struct HostVerdict {
     /// The registry target name.
     pub host: String,
-    /// `blockers.is_empty()`. A host with free slots it is not using and a
-    /// host with every slot busy both claim: busy is a moving queue, and
-    /// calling it blocked would make this report cry wolf on every loaded
+    /// `blockers.is_empty()`. A host running at its current resource limit and
+    /// a host with spare resources both claim: active work is a moving queue,
+    /// and calling it blocked would make this report cry wolf on every loaded
     /// box (the same rule [`host_gates::HostGates::claiming`] follows).
     pub claiming: bool,
     pub blockers: Vec<Blocker>,

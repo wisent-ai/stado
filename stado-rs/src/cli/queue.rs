@@ -156,7 +156,7 @@ async fn drain(wait: bool, timeout_s: u64) -> Result<(), CmdError> {
         return Ok(());
     }
 
-    // Poll at the agent's own cadence: a slot leaves running/ when its
+    // Poll at the agent's own cadence: a job leaves running/ when its
     // agent notices the child exited, which happens once per
     // `constants::POLL_INTERVAL_S`. Listing faster only adds storage
     // traffic to a fleet that is trying to go quiet.

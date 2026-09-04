@@ -561,53 +561,14 @@ fn identity(
 }
 /// What one capacity publication says about its host's ability to TAKE work,
 /// as opposed to its ability to talk.
+/// Whether a fresh worker publication says it can accept another job.
 ///
-/// # Why this exists
-///
-/// [`builder`] used to select purely on the presence of a live capacity
-/// publication, and the pin it writes into `pinned_host` is fixed for the
-/// job's lifetime. On 2026-09-03 that pinned release run 987591db to
-/// charless-mac-mini at 16:59Z: the host was publishing every ~21 seconds and
-/// well inside the 180s staleness cutoff, while its gates refused every job
-/// with `charless-mac-mini is claiming nothing: disk_cleanup_stalled`. The
-/// queue does not re-choose -- it honours a pin already written -- so the
-/// build job sat unclaimed indefinitely and the submit reported nothing at
-/// all. Publishing and claiming are two different facts and only one of them
-/// was being checked.
-///
-/// # Why it is read from the publication and not from the host
-///
-/// `deploy::host_gates::read_host_gates` gives the fuller verdict, but it
-/// reaches the host over the managed channel: it costs an SSH round trip per
-/// candidate and it fails when the host is unreachable -- and a selector that
-/// refuses every candidate whose gates it cannot read would take the whole
-/// fleet offline exactly as thoroughly as the old one let jobs queue forever.
-/// The publication [`builder`] already holds carries the same decisive number
-/// the gates print, `free_slots`, and it is already filtered to the freshness
-/// window, so the cheap read is also the safe one. `host_gates` is CALLED for
-/// its blocker vocabulary and never edited here.
+/// The worker's explicit admission decision is authoritative. Missing data is
+/// kept eligible during rolling upgrades because silence is not a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Claimability {
-    /// The host publishes at least one free slot: it can take work now.
-    Claimable { free_slots: i64 },
-    /// The host published a slot table and every slot is taken or withheld.
-    /// This is a positive statement by the host that it will accept nothing,
-    /// which is what a gate-blocked agent broadcasts.
+    Claimable { available_cpu_cores: i64 },
     Refusing { blockers: Vec<String> },
-    /// The publication carries no readable slot table, or an empty one.
-    ///
-    /// Deliberately NOT a refusal. A missing field is the host failing to say,
-    /// not the host saying no, and inventing a refusal from silence is how a
-    /// selector takes a fleet offline. An EMPTY table is the same silence with
-    /// braces around it: `build_capacity_dict_per_card` returns an empty map
-    /// for every host whose `gpu_type` is absent or `cpu`, so both Macs have
-    /// always published `"free_slots": {}` while claiming and running CPU work
-    /// — including every release-worker job of this fleet. Reading that as a
-    /// positive refusal closed both `darwin-arm64` builders on 2026-09-04 and
-    /// with them every product release, under the sentence "0 free slot(s), no
-    /// blocker declared", which is the selector describing its own inference.
-    /// Such a candidate stays eligible and the receipt records that it was
-    /// chosen without a claimability statement.
     Unstated,
 }
 
@@ -617,78 +578,36 @@ impl Claimability {
         !matches!(self, Self::Refusing { .. })
     }
 
-    /// One phrase for the refusal message, so a caller reads the same words
-    /// `host gates` would have shown them.
     pub fn describe(&self) -> String {
         match self {
-            Self::Claimable { free_slots } => format!("{free_slots} free slot(s)"),
+            Self::Claimable {
+                available_cpu_cores,
+            } => format!("accepting jobs ({available_cpu_cores} CPU core(s) available)"),
             Self::Refusing { blockers } if blockers.is_empty() => {
-                "0 free slot(s), no blocker declared".to_string()
+                "not accepting jobs; no reason published".to_string()
             }
             Self::Refusing { blockers } => {
-                format!("0 free slot(s), blockers: {}", blockers.join(", "))
+                format!("not accepting jobs; reasons: {}", blockers.join(", "))
             }
-            Self::Unstated => "published no slot table".to_string(),
+            Self::Unstated => "published no admission decision".to_string(),
         }
     }
 }
 
-/// Judge one publication. Never reaches the host and never fails.
+/// Judge one publication without reaching the host.
 pub fn claimability(publication: &Value) -> Claimability {
-    use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
-
-    // The agent deliberately keeps publishing its last slot table while disk
-    // pressure is active so the fleet can distinguish a live host from a dead
-    // one. It accepts only signed Stado release deliveries in that mode, not
-    // this platform build. On 2026-09-04 the mini therefore advertised one CPU
-    // slot while refusing a build pinned to it; the selector must honor the
-    // explicit admission mode before trusting the stale slot count.
-    if publication_flag(publication, DISK_PRESSURE_ACTIVE) == Some(true) {
-        return Claimability::Refusing {
+    match publication.get("accepting_jobs").and_then(Value::as_bool) {
+        Some(true) => Claimability::Claimable {
+            available_cpu_cores: publication
+                .get("available_cpu_cores")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+        },
+        Some(false) => Claimability::Refusing {
             blockers: publication_blockers(publication),
-        };
+        },
+        None => Claimability::Unstated,
     }
-
-    let Some(slots) = publication.get("free_slots").and_then(Value::as_object) else {
-        return Claimability::Unstated;
-    };
-    let free: i64 = slots.values().filter_map(Value::as_i64).sum();
-    if free > 0 {
-        return Claimability::Claimable { free_slots: free };
-    }
-    // A table with keys and nothing free is the host saying no: every declared
-    // slot is taken or withheld.
-    if !slots.is_empty() {
-        return Claimability::Refusing {
-            blockers: publication_blockers(publication),
-        };
-    }
-    // From here the table is EMPTY, which two different hosts mean two
-    // different things by, and only the publication itself can tell them
-    // apart.
-    let blockers = publication_blockers(publication);
-    if !blockers.is_empty() {
-        return Claimability::Refusing { blockers };
-    }
-    // A host that holds VRAM and publishes no slot for it is the wedged shape
-    // `monitor` reaps on: fresh publication, `free_vram_gb` at zero, table
-    // empty. That host is refused, which is the 2026-09-03 incident this
-    // judgement was written for.
-    if publication
-        .get("total_vram_gb")
-        .and_then(Value::as_i64)
-        .unwrap_or_default()
-        > 0
-    {
-        return Claimability::Refusing { blockers };
-    }
-    // A host with no VRAM has no slot to publish and never had one:
-    // `build_capacity_dict_per_card` returns an empty map for every `gpu_type`
-    // that is absent or `cpu`. Both Macs of this fleet have published `{}`
-    // continuously while claiming and running CPU work, so the empty table is
-    // silence and reading it as a refusal closed both `darwin-arm64` builders
-    // on 2026-09-04, and with them every product release.
-    Claimability::Unstated
 }
 fn publication_flag(publication: &Value, name: &str) -> Option<bool> {
     publication
@@ -731,6 +650,15 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
         == Some("lock_busy")
     {
         blockers.push(format!("{DISK_CLEANUP_STALLED} (janitor pass lock_busy)"));
+    }
+    if let Some(reason) = publication
+        .get("diag")
+        .and_then(|diag| diag.get("admission_reason"))
+        .and_then(Value::as_str)
+    {
+        if !blockers.iter().any(|blocker| blocker == reason) {
+            blockers.push(reason.to_string());
+        }
     }
     blockers
 }

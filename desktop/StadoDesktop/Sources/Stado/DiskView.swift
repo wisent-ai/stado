@@ -185,9 +185,9 @@ struct DiskView: View {
                 tone: .neutral
             ),
             WisentSignal(
-                "Active slots",
-                value: report.activeSlotCount.formatted(.number),
-                tone: report.activeSlotCount > 0 ? .warning : .neutral
+                "Running jobs",
+                value: report.activeJobCount.formatted(.number),
+                tone: report.activeJobCount > 0 ? .warning : .neutral
             ),
             WisentSignal(
                 "Last success",
@@ -254,7 +254,7 @@ struct DiskView: View {
         default:
             lines.append("The service did not report a cleanup mode, so the registry policy in force decides whether anything is deleted.")
         }
-        lines.append("The pass is bounded by the registry's byte, item, scan, and time limits, and it refuses to run while compute slots are active.")
+        lines.append("The pass is bounded by the registry's byte, item, scan, and time limits, and it refuses to run while jobs are active.")
         return lines
     }
 }

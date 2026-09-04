@@ -347,7 +347,7 @@ struct QueueView: View {
             tone: .warning,
             title: "Resubmit job \(record.jobID)?",
             lines: [
-                "Stado resubmits the exact recorded specification for this job. It claims a worker slot and bills whichever provider runs it.",
+                "Stado resubmits the exact recorded specification for this job. A worker admits it when live CPU, memory, disk, and accelerator capacity allow, and the provider that runs it is billed.",
                 "The failed record stays in the dashboard's recent-failure list; a rerun does not clear it.",
             ],
             reasonCode: record.kind == .failed ? "job_failed" : nil,

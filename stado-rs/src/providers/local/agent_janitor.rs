@@ -67,10 +67,10 @@ pub struct JanitorReports {
     /// operator can tell "no pass has finished yet" from "the janitor is
     /// wedged".
     completed: Arc<AtomicI64>,
-    /// The active slot count the next pass should be told about, written by the
+    /// The active job count the next pass should be told about, written by the
     /// tick and read by the janitor. Shared as a number rather than passed in,
     /// because the pass outlives the tick that started it.
-    active_slots: Arc<AtomicI64>,
+    active_jobs: Arc<AtomicI64>,
 }
 
 impl JanitorReports {
@@ -97,15 +97,15 @@ impl JanitorReports {
         self.completed.load(Ordering::Relaxed)
     }
 
-    /// Tell the janitor how many slots are active, for the next pass it starts.
-    pub fn set_active_slots(&self, count: i64) {
-        self.active_slots.store(count, Ordering::Relaxed);
+    /// Tell the janitor how many jobs are active for the next pass it starts.
+    pub fn set_active_jobs(&self, count: i64) {
+        self.active_jobs.store(count, Ordering::Relaxed);
     }
 
     /// What the next pass should be told. Public for the janitor body and for
     /// tests that drive one.
-    pub fn active_slots(&self) -> i64 {
-        self.active_slots.load(Ordering::Relaxed)
+    pub fn active_jobs(&self) -> i64 {
+        self.active_jobs.load(Ordering::Relaxed)
     }
 
     fn record(&self, report: Value) {
@@ -129,7 +129,7 @@ impl JanitorReports {
     /// coupling this module exists to remove. Its own thread costs one thread
     /// and decouples the two completely.
     ///
-    /// The pass is handed the active slot count at the moment it starts. A pass
+    /// The pass is handed the active job count at the moment it starts. A pass
     /// that runs long delays only the next pass, never a publication.
     pub fn spawn_janitor<F, Fut>(&self, interval: Duration, mut pass: F) -> JanitorTask
     where
@@ -160,7 +160,7 @@ impl JanitorReports {
                 };
                 runtime.block_on(async move {
                     while !stop_signal.load(Ordering::Relaxed) {
-                        let report = pass(reports.active_slots()).await;
+                        let report = pass(reports.active_jobs()).await;
                         reports.record(report);
                         tokio::time::sleep(interval).await;
                     }

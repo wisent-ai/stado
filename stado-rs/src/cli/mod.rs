@@ -428,19 +428,19 @@ enum Commands {
     #[command(subcommand)]
     Job(job::JobCommands),
 
-    /// Run local GPU agent. Polls queue, respects Vast.ai renters.
+    /// Run local worker agent using live CPU, RAM, disk, and accelerator state.
     Agent {
         /// GPU type (auto-detected if --target/--auto absent)
         #[arg(long, default_value = "")]
         gpu_type: String,
-        /// Pull gpu_type/slots from registry by name.
+        /// Pull the target's accelerator and policy from the registry by name.
         #[arg(long)]
         target: Option<String>,
         /// Look up self in registry by hostname; no manual config.
         #[arg(long)]
         auto: bool,
-        /// Exit (and self-delete the GCE VM) when no slots active and no
-        /// queued job is eligible. Use on ephemeral cloud-VM agents.
+        /// Exit (and self-delete the GCE VM) when no jobs are active and no
+        /// queued job is eligible. Use on ephemeral cloud VMs.
         #[arg(long)]
         idle_shutdown: bool,
         /// Consumer label in capacity broadcasts: "local" (physical box,

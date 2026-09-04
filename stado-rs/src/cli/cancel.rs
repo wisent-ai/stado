@@ -22,7 +22,7 @@ enum Termination {
         instance_ref: String,
         source: String,
     },
-    /// The reference names a local agent slot, not a cloud resource.
+    /// The reference names execution on a local worker, not a cloud resource.
     Local { instance_ref: String },
     /// Neither the job document nor the provider lease names an instance.
     /// `expected` is true where that is the correct state — a job still in
@@ -95,7 +95,7 @@ fn report(outcome: &Termination, job_id: &str) {
         }
         Termination::Local { instance_ref } => {
             println!(
-                "{instance_ref} is a local agent slot, not a cloud instance — \
+                "{instance_ref} is local worker execution, not a cloud instance — \
                  nothing to delete"
             );
         }

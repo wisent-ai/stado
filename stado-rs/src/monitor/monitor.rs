@@ -616,14 +616,12 @@ pub async fn reap_dead_agents(
     //     broadcast. Covers crashed agents + startup-script failures.
     //   Branch B (never-worked): age > IDLE_GRACE AND broadcasting AND zero
     //     completions in completed/ for this instance_ref.
-    //   Branch C (wedged): broadcasting fresh capacity BUT free_vram_gb<=0
-    //     AND free_slots={} AND last claim/start (diag) stale AND no job on
-    //     this VM heartbeating. A hung claimed subprocess pins VRAM forever
-    //     (advance_slot only retires on proc.poll() != None), free_vram_gb=0
-    //     short-circuits the agent loop before the diag write, and the
-    //     top-of-loop re-publish keeps capacity fresh — so the VM is invisible
-    //     to Branch A (capacity fresh) AND Branch B (historical completions
-    //     keep it in completed_refs). Confirmed live 2026-05-17
+    //   Branch C (wedged): broadcasting fresh capacity BUT not accepting jobs,
+    //     free_vram_gb<=0, last claim/start (diag) stale, and no job on this VM
+    //     heartbeating. A hung claimed subprocess pins VRAM forever while the
+    //     top-of-loop heartbeat keeps the worker publication fresh, so it is
+    //     invisible to Branch A (capacity fresh) and Branch B (historical
+    //     completions keep it in completed_refs). Confirmed live 2026-05-17
     //     (gcp-wisent-agent-80gb-1778921111-0: free_vram_gb=0, last_started_at
     //     frozen 2026-05-16T09:17:32, 127 gpt-oss-20b jobs dead-pinned hours).
     // BOOT/IDLE 1800s: 900s reaped real 14m boots (3ef705b2/931b865e/f3fd41fb
@@ -762,23 +760,18 @@ pub async fn reap_dead_agents(
             requeue_jids_after_reap(store, &jids_b, "VM reaped (never-worked)").await?;
             continue;
         }
-        // Branch C (wedged): fresh capacity but structurally stuck. ALL of:
-        // free_vram_gb<=0 AND empty free_slots, diag last_started_at /
-        // last_claim_attempt_at older than HB_THRESHOLD, no fresh heartbeat
-        // for any job on this VM. The heartbeat guard protects a healthy long
-        // trainer whose broadcast tick is merely starved; the diag-stale
-        // guard protects an agent that is actively claiming.
+        // Branch C (wedged): fresh publication, explicit admission refusal,
+        // no free VRAM, stale claim/start diagnostics, and no fresh job
+        // heartbeat. The heartbeat guard protects a healthy long trainer; the
+        // diagnostic-age guard protects a worker that is actively claiming.
         let empty_payload = Value::Null;
         let payload = live.get(&consumer_id).unwrap_or(&empty_payload);
         let free_vram_gb = payload
             .get("free_vram_gb")
             .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
             .unwrap_or(0);
-        let free_slots_empty = payload
-            .get("free_slots")
-            .and_then(Value::as_object)
-            .is_none_or(|o| o.is_empty());
-        if free_vram_gb <= 0 && free_slots_empty {
+        let refusing_jobs = payload.get("accepting_jobs").and_then(Value::as_bool) == Some(false);
+        if free_vram_gb <= 0 && refusing_jobs {
             let diag = payload.get("diag").and_then(Value::as_object);
             let last = diag
                 .and_then(|d| d.get("last_started_at"))
@@ -826,8 +819,8 @@ pub async fn reap_dead_agents(
             }
             provider.delete_instance(&instance_ref_full).await?;
             log(&format!(
-                "reaped wedged VM {instance_ref_full} (capacity fresh but free_vram_gb<=0 \
-                 & no free_slots, last claim/start {last_str} stale \
+                "reaped wedged VM {instance_ref_full} (capacity fresh but not accepting jobs \
+                 and free_vram_gb<=0, last claim/start {last_str} stale \
                  > {HB_THRESHOLD}s, no fresh job heartbeat)"
             ));
             deleted += 1;

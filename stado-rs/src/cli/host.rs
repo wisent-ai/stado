@@ -1760,25 +1760,46 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         ),
     }
     match gates.published_at.as_deref() {
-        Some(published) => println!(
-            "capacity: {} free slot(s) of {} declared, published {} ({})",
-            gates
-                .free_slots
-                .map_or_else(|| "-".to_string(), |slots| slots.to_string()),
-            gates.slots_declared,
-            gates.age_seconds.map_or_else(
-                || "at an unknown time".to_string(),
-                |age| format!(
-                    "{} ago",
-                    super::registry::human_age(chrono::TimeDelta::seconds(age))
-                )
-            ),
-            published,
-        ),
+        Some(published) => {
+            let admission = match gates.accepting_jobs {
+                Some(true) => "accepting jobs",
+                Some(false) => "busy or gated",
+                None => "admission unstated",
+            };
+            let cpu = gates
+                .available_cpu_cores
+                .zip(gates.total_cpu_cores)
+                .map_or_else(|| "-/-".to_string(), |(free, total)| format!("{free}/{total}"));
+            let ram = gates
+                .free_ram_gb
+                .zip(gates.total_ram_gb)
+                .map_or_else(|| "-/-".to_string(), |(free, total)| format!("{free:.1}/{total:.1}"));
+            let vram = gates
+                .free_vram_gb
+                .zip(gates.total_vram_gb)
+                .map_or_else(|| "-/-".to_string(), |(free, total)| format!("{free}/{total}"));
+            println!(
+                "capacity: {admission}, {} running job(s), CPU {cpu} cores available/total, \
+                 RAM {ram} GiB free/total, VRAM {vram} GiB free/total; published {} ({published})",
+                gates.running_jobs.unwrap_or_default(),
+                gates.age_seconds.map_or_else(
+                    || "at an unknown time".to_string(),
+                    |age| format!(
+                        "{} ago",
+                        super::registry::human_age(chrono::TimeDelta::seconds(age))
+                    )
+                ),
+            );
+            if !gates.available_accelerators.is_empty() {
+                println!(
+                    "accelerators: {}",
+                    serde_json::to_string(&gates.available_accelerators)
+                        .unwrap_or_else(|_| "{}".to_string())
+                );
+            }
+        }
         None => println!(
-            "capacity: nothing published for this host, so the scheduler cannot \
-             see it at all ({} slot(s) declared)",
-            gates.slots_declared
+            "capacity: nothing published for this host, so the scheduler cannot see it"
         ),
     }
     // The consequence beside the cause: what this host's refusal is starving,

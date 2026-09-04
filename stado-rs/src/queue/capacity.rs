@@ -1,18 +1,23 @@
-//! Capacity broadcast channel between wisent-compute consumers.
+//! Live resource broadcasts from workers.
 //!
-//! Port of `stado/queue/capacity.py`.
-//!
-//! Each consumer (cloud function dispatcher, local agent, vast.ai worker, ...)
-//! publishes its current free-slots-by-accelerator-type to the bucket on every
-//! poll/tick. Other consumers read all live (non-stale) publications to
-//! decide whether to yield to a peer that has more capacity.
+//! Each worker publishes whether it can accept another job together with the
+//! measured resources behind that decision. Nothing in this document is a
+//! configured concurrency allowance: CPU availability comes from the host's
+//! logical processors and current load, RAM and VRAM come from the operating
+//! system and accelerator driver, and accelerator counts are derived from the
+//! memory each workload class requires.
 //!
 //! Scheme:
 //!   <bucket>/capacity/<consumer_id>.json
 //!   {
 //!     "consumer_id": "local-rtx-pro-6000-1",
-//!     "kind": "local",                       # or "gcp", "aws", ...
-//!     "free_slots": {"nvidia-tesla-a100": 1, "nvidia-l4": 0},
+//!     "kind": "local",
+//!     "accepting_jobs": true,
+//!     "running_jobs": 2,
+//!     "available_cpu_cores": 20,
+//!     "available_accelerators": {"nvidia-tesla-a100": 1},
+//!     "free_ram_gb": 81.4,
+//!     "free_vram_gb": 63,
 //!     "published_at": "2026-04-25T17:42:00.000Z"
 //!   }
 //!
@@ -45,68 +50,78 @@ pub const CAPACITY_STALE_SECONDS: u64 = constants::CAPACITY_STALE_SECONDS;
 const CAPACITY_GC_AGE_SECONDS: i64 = 3600;
 /// GC is capped per tick so the Cloud Function never spends its budget on GC.
 const CAPACITY_GC_CAP_PER_TICK: usize = 200;
+/// Resources measured by one worker at one point in time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapacitySnapshot {
+    pub accepting_jobs: bool,
+    pub running_jobs: usize,
+    pub total_cpu_cores: i64,
+    pub available_cpu_cores: i64,
+    pub available_accelerators: BTreeMap<String, i64>,
+    pub free_ram_gb: Option<f64>,
+    pub total_ram_gb: Option<f64>,
+    pub free_vram_gb: i64,
+    pub total_vram_gb: i64,
+    pub diag: Map<String, Value>,
+}
 
-/// Write this consumer's current capacity snapshot. Python
-/// `publish_capacity`.
+
+/// Write this worker's current measured resource snapshot.
 ///
-/// `free_vram_gb` is the authoritative admission signal for local consumers:
-/// the scheduler yields a queued job whose gpu_mem_gb fits in this number,
-/// instead of decrementing a flat per-accel slot counter that ignores the
-/// job's actual memory footprint. `free_slots` is kept for backward compat
-/// with consumers that haven't been upgraded yet.
-///
-/// `diag` carries per-tick claim-loop telemetry so a reaper or dashboard can
-/// see why a broadcasting agent isn't claiming. Keys:
-///   queue_scanned         # of queued jobs the agent inspected this loop
-///   vram_rejected         # rejected because need > free_vram_gb
-///   eligibility_rejected  # rejected by _job_eligible (incl. LOCAL_ONLY)
-///   eligible_count        # passed both gates
-///   claimed_this_loop     # actually start_slot()'d this iteration
-///   last_started_job_id   # most recent job_id this agent moved to running/
-///   last_started_at       # ISO ts of last successful start_slot
-///   last_claim_attempt_at # ISO ts of this loop iteration
-///   queue_paused          # true while `stado queue pause` is in effect
-///   queue_pause_reason    # the pause summary, only present when paused
-///
-/// Python also broadcasts `stado_version` (importlib.metadata, the version
-/// pip actually installed) — here the crate version is the equivalent — and
-/// `vast_bridge_active` / `vast_api_key_present` from the providers.vast
-/// module, which is not ported yet (TODO(phase-2)); those two keys are
-/// omitted rather than reported as false.
+/// `accepting_jobs` is the admission decision consumed by dispatchers. The
+/// remaining fields explain it and let GPU placement compare a job's declared
+/// needs with live hardware state; none is an operator-set concurrency limit.
 pub async fn publish_capacity(
     store: &JobStorage,
     consumer_id: &str,
     kind: &str,
-    free_slots: &BTreeMap<String, i64>,
-    free_vram_gb: Option<i64>,
-    total_vram_gb: Option<i64>,
-    diag: Option<Map<String, Value>>,
+    snapshot: &CapacitySnapshot,
 ) -> Result<(), StorageError> {
     let mut payload = Map::new();
     payload.insert("consumer_id".into(), Value::String(consumer_id.to_string()));
     payload.insert("kind".into(), Value::String(kind.to_string()));
     payload.insert(
-        "free_slots".into(),
-        Value::Object(
-            free_slots
-                .iter()
-                .map(|(accel, n)| (accel.clone(), Value::from(*n)))
-                .collect(),
-        ),
-    );
-    payload.insert(
         "published_at".into(),
         Value::String(Utc::now().to_rfc3339()),
     );
-    if let Some(v) = free_vram_gb {
-        payload.insert("free_vram_gb".into(), Value::from(v));
+    payload.insert(
+        "accepting_jobs".into(),
+        Value::from(snapshot.accepting_jobs),
+    );
+    payload.insert(
+        "running_jobs".into(),
+        Value::from(snapshot.running_jobs as i64),
+    );
+    payload.insert(
+        "total_cpu_cores".into(),
+        Value::from(snapshot.total_cpu_cores),
+    );
+    payload.insert(
+        "available_cpu_cores".into(),
+        Value::from(snapshot.available_cpu_cores),
+    );
+    payload.insert(
+        "available_accelerators".into(),
+        Value::Object(
+            snapshot
+                .available_accelerators
+                .iter()
+                .map(|(accelerator, count)| (accelerator.clone(), Value::from(*count)))
+                .collect(),
+        ),
+    );
+    payload.insert("free_vram_gb".into(), Value::from(snapshot.free_vram_gb));
+    payload.insert(
+        "total_vram_gb".into(),
+        Value::from(snapshot.total_vram_gb),
+    );
+    if let Some(value) = snapshot.free_ram_gb {
+        payload.insert("free_ram_gb".into(), Value::from(value));
     }
-    if let Some(v) = total_vram_gb {
-        payload.insert("total_vram_gb".into(), Value::from(v));
+    if let Some(value) = snapshot.total_ram_gb {
+        payload.insert("total_ram_gb".into(), Value::from(value));
     }
-    if let Some(diag) = diag {
-        payload.insert("diag".into(), Value::Object(diag));
-    }
+    payload.insert("diag".into(), Value::Object(snapshot.diag.clone()));
     payload.insert(
         "stado_version".into(),
         Value::String(env!("CARGO_PKG_VERSION").to_string()),
@@ -266,25 +281,32 @@ async fn read_consumer_capacity_at(
     Ok(out)
 }
 
-/// Sum free_slots across consumers (optionally filtered by kind). Python
-/// `total_free_by_accel`.
-pub fn total_free_by_accel(
+/// Sum available accelerator placements across accepting workers, optionally
+/// filtered by worker kind.
+pub fn total_available_accelerators(
     consumers: &BTreeMap<String, Value>,
     kinds: Option<&[&str]>,
 ) -> BTreeMap<String, i64> {
     let mut totals: BTreeMap<String, i64> = BTreeMap::new();
     for payload in consumers.values() {
+        if payload.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
         if let Some(kinds) = kinds {
             let kind = payload.get("kind").and_then(Value::as_str).unwrap_or("");
             if !kinds.contains(&kind) {
                 continue;
             }
         }
-        let Some(slots) = payload.get("free_slots").and_then(Value::as_object) else {
+        let Some(available) = payload
+            .get("available_accelerators")
+            .and_then(Value::as_object)
+        else {
             continue;
         };
-        for (accel, n) in slots {
-            *totals.entry(accel.clone()).or_insert(0) += n.as_i64().unwrap_or(0);
+        for (accelerator, count) in available {
+            *totals.entry(accelerator.clone()).or_insert(0) +=
+                count.as_i64().unwrap_or_default();
         }
     }
     totals

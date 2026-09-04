@@ -400,11 +400,11 @@ fn broadcast_accel(
     provider: &str,
     vm_name: &str,
 ) -> Option<String> {
-    let slots = live
+    let available = live
         .get(&format!("{provider}-{vm_name}"))?
-        .get("free_slots")?
+        .get("available_accelerators")?
         .as_object()?;
-    let joined = slots.keys().cloned().collect::<Vec<String>>().join(",");
+    let joined = available.keys().cloned().collect::<Vec<String>>().join(",");
     (!joined.is_empty()).then_some(joined)
 }
 

@@ -536,7 +536,7 @@ struct BuildsView: View {
                     ? "Enqueue a build of \(recipe.name) now?"
                     : "Enqueue \(recipe.platforms.count) builds of \(recipe.name) now?",
                 lines: [
-                    "One job per platform is enqueued immediately — \(BuildsStore.platformList(recipe)) — without waiting for the poller to see a new commit. Each claims a worker slot on its own platform, clones \(recipe.repo) at \(recipe.ref), runs the build command, and uploads the declared artifacts under the job's results.",
+                    "One job per platform is enqueued immediately — \(BuildsStore.platformList(recipe)) — without waiting for the poller to see a new commit. Each is admitted from the worker's live CPU, memory, disk, and accelerator capacity on its own platform, clones \(recipe.repo) at \(recipe.ref), runs the build command, and uploads the declared artifacts under the job's results.",
                     "Each job also records the version: the semver tag on the built commit, or none when the commit carries no tag.",
                     declarationLine(recipe),
                 ],

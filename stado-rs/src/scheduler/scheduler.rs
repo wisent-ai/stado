@@ -34,7 +34,7 @@ use crate::queue::control;
 use crate::queue::{JobStorage, StorageError};
 use crate::scheduler::cost;
 use crate::scheduler::dispatch::agent::{dispatch_agent_vms, AgentDispatchInputs};
-use crate::scheduler::quota::{get_available_slots, QuotaError};
+use crate::scheduler::quota::{get_available_instances, QuotaError};
 
 /// Backoff schedule by attempt count; index = attempt count.
 /// Each entry is the minimum minutes since last_dispatch_attempt before we
@@ -374,11 +374,14 @@ async fn schedule_queued_jobs_inner(
         return Ok(i64::default());
     }
 
-    let available = get_available_slots(store, provider, provider_name).await?;
-    log(&format!("Available slots: {}", py_dict_i64(&available)));
+    let available = get_available_instances(store, provider, provider_name).await?;
+    log(&format!(
+        "Available GPU instances by accelerator: {}",
+        py_dict_i64(&available)
+    ));
 
-    if available.values().all(|v| *v == 0) {
-        log("No GPU slots available");
+    if available.values().all(|count| *count == 0) {
+        log("Provider quota allows no additional GPU instances");
         return Ok(0);
     }
 
@@ -445,19 +448,21 @@ async fn schedule_queued_jobs_inner(
         (per_tick_cap + n - 1).div_euclid(n).max(1)
     };
 
-    // Read live consumer capacity. Any local agent reporting a free slot
-    // for an accelerator is a free-hardware peer we should yield to before
-    // paying for a fresh GCE VM. We track yields by accel so a job we
-    // yielded in this tick doesn't burn the local agent's capacity in our
-    // internal book before it actually claims.
+    // Read live worker capacity. An accepting local worker with room for an
+    // accelerator class is a free-hardware peer we should use before paying
+    // for a fresh GCE VM. We track placements by accelerator so a job yielded
+    // in this tick does not spend the same live resource twice.
     let consumer_caps = capacity::read_consumer_capacity(store).await?;
     let local_provider = [crate::capabilities::ProviderId::Local.as_str()];
-    let local_free = capacity::total_free_by_accel(&consumer_caps, Some(local_provider.as_slice()));
+    let local_free = capacity::total_available_accelerators(
+        &consumer_caps,
+        Some(local_provider.as_slice()),
+    );
     let local_vram_pool =
         capacity::consumers_by_free_vram(&consumer_caps, Some(local_provider.as_slice()));
     if !local_free.is_empty() {
         log(&format!(
-            "Live local-agent slots: {}",
+            "Live local accelerator availability: {}",
             py_dict_i64(&local_free)
         ));
     }

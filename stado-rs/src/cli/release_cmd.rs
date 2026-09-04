@@ -1423,7 +1423,7 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     })?;
     // The installed coordinate is the cheap, persistent handshake between the
     // delivery child and already-running queue agents. Agents launched from
-    // this managed path finish their current slot, compare this file with their
+    // this managed path finish their current jobs, compare this file with their
     // compiled version, then let their declared supervisor recreate them.
     let release_version_stage =
         if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {

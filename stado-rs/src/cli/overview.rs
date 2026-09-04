@@ -149,7 +149,16 @@ fn fleet_snapshot(
                 "kind": kind,
                 "published_at": payload.get("published_at").cloned().unwrap_or(Value::Null),
                 "stado_version": payload.get("stado_version").cloned().unwrap_or(Value::Null),
-                "free_slots": payload.get("free_slots").cloned().unwrap_or_else(|| json!({})),
+                "accepting_jobs": payload.get("accepting_jobs").cloned().unwrap_or(Value::Null),
+                "running_jobs": payload.get("running_jobs").cloned().unwrap_or(Value::Null),
+                "available_cpu_cores": payload.get("available_cpu_cores").cloned().unwrap_or(Value::Null),
+                "total_cpu_cores": payload.get("total_cpu_cores").cloned().unwrap_or(Value::Null),
+                "available_accelerators": payload
+                    .get("available_accelerators")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+                "free_ram_gb": payload.get("free_ram_gb").cloned().unwrap_or(Value::Null),
+                "total_ram_gb": payload.get("total_ram_gb").cloned().unwrap_or(Value::Null),
                 "free_vram_gb": payload.get("free_vram_gb").cloned().unwrap_or(Value::Null),
                 "total_vram_gb": payload.get("total_vram_gb").cloned().unwrap_or(Value::Null),
             })
@@ -184,8 +193,6 @@ fn fleet_snapshot(
                 "kind": target.kind,
                 "active_worker": active_worker,
                 "gpu_type": target.gpu_type,
-                "slots": target.slots,
-                "max_concurrent": target.max_concurrent,
                 "pinned_only": target.pinned_only,
                 // Absent means nothing has measured this host, which is a
                 // different statement from a capability measured false.

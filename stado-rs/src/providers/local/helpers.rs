@@ -261,10 +261,9 @@ fn names_this_consumer(identity: &str, consumer_id: &str, kind: &str) -> bool {
 /// claim. Empty assigned_to means unassigned and any-eligible-agent may
 /// claim (pre-0.4.100 back-compat).
 ///
-/// NEW (0.4.131): job.exclusive=True is only eligible on an agent with
-/// zero active slots. Caller passes its current slot count via
-/// active_slot_count so this filter runs at the agent-side claim loop
-/// without needing the slot dict here.
+/// NEW (0.4.131): job.exclusive=True is only eligible when no other job is
+/// running. The caller passes its current job count so this filter runs at the
+/// agent-side claim loop without needing the process table here.
 ///
 /// NEW (0.4.379): job.pinned_host is an operator hard-pin from submit
 /// time; only the named consumer may ever claim it. pinned_only=True
@@ -290,7 +289,7 @@ pub fn job_eligible(
     vram_gb: i64,
     kind: &str,
     consumer_id: &str,
-    active_slot_count: usize,
+    active_job_count: usize,
     pinned_only: bool,
 ) -> bool {
     eligibility_refusal(
@@ -299,7 +298,7 @@ pub fn job_eligible(
         vram_gb,
         kind,
         consumer_id,
-        active_slot_count,
+        active_job_count,
         pinned_only,
     )
     .is_none()
@@ -325,7 +324,7 @@ pub fn eligibility_refusal(
     vram_gb: i64,
     kind: &str,
     consumer_id: &str,
-    active_slot_count: usize,
+    active_job_count: usize,
     pinned_only: bool,
 ) -> Option<&'static str> {
     let pin_matches = names_this_consumer(&job.pinned_host, consumer_id, kind);
@@ -340,8 +339,8 @@ pub fn eligibility_refusal(
     if pinned_only && !pin_matches && !assigned_matches {
         return Some("host claims pinned work only and this job names nobody");
     }
-    if job.exclusive && active_slot_count > 0 {
-        return Some("job is exclusive and a slot is active");
+    if job.exclusive && active_job_count > 0 {
+        return Some("job is exclusive and another job is running");
     }
     // This host's own release platform, from the one place the rest of the
     // build learns it — the same word the registry records as the target's
@@ -463,33 +462,40 @@ pub fn build_capacity_dict_per_card(
     out
 }
 
-/// Add the CPU slots a host is still willing to run to its slot table.
-///
-/// A host with no card to offer still runs CPU work -- release builds,
-/// probierz runs, smoke checks -- and the claim loop takes that work
-/// regardless of what the table says. But the table is not advisory for
-/// everyone: `release submit` reads a present-but-empty map as the host
-/// positively refusing work and never pins it, which is how both darwin
-/// builders disappeared from selection on 2026-09-03 while sitting idle --
-/// an apple-mps host reports ~1 GB of VRAM, the safety buffer then zeroes
-/// its card offer, and `build_capacity_dict_per_card` has nothing to say.
-///
-/// The loop caps itself by `hard_slot_cap` (WC_LOCAL_SLOTS); with no cap
-/// configured the honest answer is the unchanged map, not an invented
-/// number.
-pub fn with_cpu_capacity(
-    mut free_slots: BTreeMap<String, i64>,
-    hard_slot_cap: i64,
-    active_slots: usize,
-) -> BTreeMap<String, i64> {
-    if free_slots.values().any(|free| *free > 0) || hard_slot_cap <= 0 {
-        return free_slots;
-    }
-    let remaining = hard_slot_cap - active_slots as i64;
-    if remaining > 0 {
-        free_slots.insert("cpu".to_string(), remaining);
-    }
-    free_slots
+/// CPU cores the current process may schedule on. This respects cgroup and
+/// affinity limits through [`std::thread::available_parallelism`].
+pub fn total_cpu_cores() -> i64 {
+    std::thread::available_parallelism()
+        .map(|count| count.get() as i64)
+        .unwrap_or(1)
+}
+
+/// One-minute host load, or `None` when the operating system cannot provide it.
+pub fn load_average_1m() -> Option<f64> {
+    let mut values = [0.0_f64; 1];
+    // SAFETY: `values` has the one writable element requested from getloadavg.
+    let read = unsafe { nix::libc::getloadavg(values.as_mut_ptr(), values.len() as i32) };
+    (read == 1 && values[0].is_finite() && values[0] >= 0.0).then_some(values[0])
+}
+
+/// CPU capacity derived from hardware, current load, and jobs already owned by
+/// this agent. Every job reserves at least one core; an explicit `cpu_cores`
+/// declaration reserves more.
+pub fn available_cpu_cores(active_requested_cores: i64) -> i64 {
+    let observed_busy = load_average_1m()
+        .map(|load| load.ceil() as i64)
+        .unwrap_or_default();
+    total_cpu_cores()
+        .saturating_sub(active_requested_cores.max(observed_busy))
+        .max(0)
+}
+
+pub fn requested_cpu_cores(job: &Job) -> i64 {
+    job.cpu_cores.max(1)
+}
+
+pub fn requested_memory_gb(job: &Job) -> f64 {
+    job.memory_gb.max(1) as f64
 }
 
 /// Python `_slot_is_exclusive`.
@@ -575,27 +581,83 @@ pub fn parse_meminfo_gb(text: &str, key: &str) -> Option<f64> {
     None
 }
 
-fn meminfo_gb(key: &str) -> f64 {
-    std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|text| parse_meminfo_gb(&text, key))
-        .unwrap_or(-1.0)
+#[cfg(not(target_os = "macos"))]
+fn linux_memory_gb() -> Option<(f64, f64)> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    Some((
+        parse_meminfo_gb(&text, "MemAvailable:")?,
+        parse_meminfo_gb(&text, "MemTotal:")?,
+    ))
 }
 
-/// Free host RAM (GB) from /proc/meminfo MemAvailable; -1.0 if unreadable
-/// (e.g. non-Linux) — caller treats <0 as 'unknown, do not gate'.
-/// Python `_free_ram_gb`.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn macos_memory_gb() -> Option<(f64, f64)> {
+    let mut stats: nix::libc::vm_statistics64_data_t = unsafe { std::mem::zeroed() };
+    let mut count = nix::libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: both pointers reference initialized, correctly sized writable
+    // storage and Mach writes at most HOST_VM_INFO64_COUNT integer words.
+    let status = unsafe {
+        nix::libc::host_statistics64(
+            nix::libc::mach_host_self(),
+            nix::libc::HOST_VM_INFO64,
+            (&mut stats as *mut nix::libc::vm_statistics64_data_t)
+                .cast::<nix::libc::integer_t>(),
+            &mut count,
+        )
+    };
+    if status != nix::libc::KERN_SUCCESS {
+        return None;
+    }
+    let page_size = unsafe { nix::libc::vm_page_size } as f64;
+    if page_size <= 0.0 {
+        return None;
+    }
+    let available_pages = u64::from(stats.free_count)
+        + u64::from(stats.inactive_count)
+        + u64::from(stats.speculative_count)
+        + u64::from(stats.purgeable_count);
+
+    let mut total_bytes = 0_u64;
+    let mut total_size = std::mem::size_of::<u64>();
+    // SAFETY: the name is NUL-terminated and sysctlbyname writes at most the
+    // supplied u64-sized buffer.
+    let total_status = unsafe {
+        nix::libc::sysctlbyname(
+            b"hw.memsize\0".as_ptr().cast(),
+            (&mut total_bytes as *mut u64).cast(),
+            &mut total_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if total_status != 0 || total_size != std::mem::size_of::<u64>() {
+        return None;
+    }
+    const GIB: f64 = (1024_u64 * 1024 * 1024) as f64;
+    Some((available_pages as f64 * page_size / GIB, total_bytes as f64 / GIB))
+}
+
+/// Available and total host RAM in GiB, measured from the operating system.
+pub fn memory_gb() -> Option<(f64, f64)> {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_memory_gb();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        linux_memory_gb()
+    }
+}
+
+/// Free host RAM in GiB; `-1.0` means the operating system did not answer.
 pub fn free_ram_gb() -> f64 {
-    meminfo_gb("MemAvailable:")
+    memory_gb().map(|(free, _)| free).unwrap_or(-1.0)
 }
 
-/// Total host RAM (GB) from /proc/meminfo MemTotal; -1.0 if unreadable.
-/// The sum-based admission gate bounds anonymous slot RSS against THIS,
-/// not MemAvailable — MemAvailable counts reclaimable staging page-cache
-/// as free, so it masked the real footprint and the agent over-admitted to
-/// a status=1 OOM at ~100G on a 123G box. Python `_total_ram_gb`.
+/// Total host RAM in GiB; `-1.0` means the operating system did not answer.
 pub fn total_ram_gb() -> f64 {
-    meminfo_gb("MemTotal:")
+    memory_gb().map(|(_, total)| total).unwrap_or(-1.0)
 }
 
 /// Pure parser for /proc/<pid>/status: first VmRSS value in kB.
@@ -714,7 +776,7 @@ pub async fn no_eligible_in_queue(
     free_vram_gb: i64,
     kind: &str,
     consumer_id: &str,
-    active_slot_count: usize,
+    active_job_count: usize,
 ) -> Result<bool, StorageError> {
     let queued = store.list_jobs("queue", 0).await?;
     for job in queued {
@@ -730,7 +792,7 @@ pub async fn no_eligible_in_queue(
             total_vram_gb,
             kind,
             consumer_id,
-            active_slot_count,
+            active_job_count,
             false,
         ) {
             continue;

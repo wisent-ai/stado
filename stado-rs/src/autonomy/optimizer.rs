@@ -37,7 +37,7 @@ pub struct PlacementCandidate {
     pub machine_type: String,
     pub accelerator_type: String,
     pub vram_gb: i64,
-    pub available_slots: i64,
+    pub available_instances: i64,
     pub existing_capacity: bool,
     pub preemptible: bool,
     pub startup_seconds: f64,
@@ -73,7 +73,7 @@ struct CapacityOffer {
     accelerator_type: String,
     machine_type: String,
     free_vram_gb: i64,
-    free_slots: i64,
+    available_instances: i64,
     existing: bool,
 }
 
@@ -249,7 +249,7 @@ fn reserve_offer(offers: &mut [CapacityOffer], selected: &PlacementCandidate) {
     if let Some(offer) = offers.iter_mut().find(|offer| {
         offer.target_id == selected.target_id && offer.accelerator_type == selected.accelerator_type
     }) {
-        offer.free_slots = offer.free_slots.saturating_sub(true as i64);
+        offer.available_instances = offer.available_instances.saturating_sub(1);
     }
 }
 
@@ -278,16 +278,19 @@ async fn collect_offers(
         if !policy.placement.allowed_providers.contains(&provider) {
             continue;
         }
+        if payload.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
         let free_vram = payload
             .get("free_vram_gb")
             .and_then(Value::as_i64)
             .unwrap_or_default();
-        let slots = payload
-            .get("free_slots")
+        let available = payload
+            .get("available_accelerators")
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        if slots.is_empty() && free_vram > i64::default() {
+        if available.is_empty() && free_vram > i64::default() {
             let accelerator = payload_text(&payload, "gpu_type").unwrap_or("");
             offers.push(CapacityOffer {
                 target_id: consumer_id,
@@ -304,12 +307,12 @@ async fn collect_offers(
                     })
                     .unwrap_or_default(),
                 free_vram_gb: free_vram,
-                free_slots: true as i64,
+                available_instances: 1,
                 existing: true,
             });
             continue;
         }
-        for (accelerator, count) in slots {
+        for (accelerator, count) in available {
             let count = count.as_i64().unwrap_or_default();
             if count <= i64::default() {
                 continue;
@@ -329,7 +332,7 @@ async fn collect_offers(
                     })
                     .unwrap_or_default(),
                 free_vram_gb: free_vram,
-                free_slots: count,
+                available_instances: count,
                 existing: true,
             });
         }
@@ -341,9 +344,9 @@ async fn collect_offers(
         if !policy.placement.allowed_providers.contains(&provider_id) {
             continue;
         }
-        match crate::scheduler::quota::get_available_slots(store, provider.as_ref(), name).await {
-            Ok(slots) => {
-                for (accelerator, count) in slots {
+        match crate::scheduler::quota::get_available_instances(store, provider.as_ref(), name).await {
+            Ok(available) => {
+                for (accelerator, count) in available {
                     if count <= i64::default() {
                         continue;
                     }
@@ -357,7 +360,7 @@ async fn collect_offers(
                         accelerator_type: accelerator,
                         machine_type: machine,
                         free_vram_gb: vram,
-                        free_slots: count,
+                        available_instances: count,
                         existing: false,
                     });
                 }
@@ -501,8 +504,8 @@ fn candidate(
     if let Some(reason) = deadline_rejection {
         rejected.push(reason);
     }
-    if offer.free_slots <= i64::default() {
-        rejected.push("no available slots".to_string());
+    if offer.available_instances <= i64::default() {
+        rejected.push("no available instances".to_string());
     }
     if offer.free_vram_gb > i64::default() && offer.free_vram_gb < job.gpu_mem_gb {
         rejected.push(format!(
@@ -617,7 +620,7 @@ fn candidate(
         machine_type: offer.machine_type.clone(),
         accelerator_type: offer.accelerator_type.clone(),
         vram_gb: offer.free_vram_gb,
-        available_slots: offer.free_slots,
+        available_instances: offer.available_instances,
         existing_capacity: offer.existing,
         preemptible,
         startup_seconds: startup,
