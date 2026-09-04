@@ -5254,9 +5254,7 @@ async fn reconciler_report_id(store: &JobStorage) -> Result<Option<String>, CmdE
     .map_err(|error| CmdError::click(error.to_string()))
 }
 
-async fn capture_reconciler_fence(
-    document: &Value,
-) -> Result<Option<ReconcilerFence>, CmdError> {
+async fn capture_reconciler_fence(document: &Value) -> Result<Option<ReconcilerFence>, CmdError> {
     let Some(interval) = active_coordinator_interval(document) else {
         return Ok(None);
     };
@@ -5577,7 +5575,6 @@ fn document_contains_string(value: &Value, needle: &str) -> bool {
             .iter()
             .any(|value| document_contains_string(value, needle)),
         Value::Object(values) => values
-
             .values()
             .any(|value| document_contains_string(value, needle)),
         _ => false,
@@ -5642,9 +5639,7 @@ fn registry_has_intended_handoff(
     service_name: &str,
     product: &str,
     host: &str,
-    legacy_label: &str,
-    legacy_plist: &str,
-    legacy_program: &str,
+    legacy_identities: [&str; 3],
 ) -> bool {
     let units_external = document
         .get("placement_profiles")
@@ -5680,7 +5675,7 @@ fn registry_has_intended_handoff(
             target.get("legacy_launchd_label").is_none()
                 && target.get("legacy_launchd_plist").is_none()
         });
-    let legacy_unreachable = [legacy_label, legacy_plist, legacy_program]
+    let legacy_unreachable = legacy_identities
         .into_iter()
         .all(|identity| !identity.is_empty() && !document_contains_string(document, identity));
     units_external && legacy_removed && legacy_unreachable
@@ -5929,9 +5924,7 @@ async fn handoff_release_control(
             service_name,
             product,
             host,
-            receipt_label,
-            receipt_plist,
-            receipt_program,
+            [receipt_label, receipt_plist, receipt_program],
         ) {
             let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
             return finish_committed_handoff(
@@ -5994,7 +5987,6 @@ async fn handoff_release_control(
              {legacy_plist}"
         )));
     }
-
 
     with_service_mutation_lease(&legacy, || async {
     let runner = production_runner();
