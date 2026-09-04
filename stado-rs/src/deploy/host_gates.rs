@@ -406,9 +406,13 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
 /// where that agent publishes, and must say so rather than imply the store is
 /// fine.
 async fn agent_store_backend(target: &ComputeTarget, runner: &Runner) -> Option<String> {
-    let stdout = crate::cli::host::remote_config_output(target, None, runner)
-        .await
-        .ok()?;
+    let stdout = crate::cli::host::remote_config_output(
+        target,
+        crate::cli::host::RemoteConfigAction::Show,
+        runner,
+    )
+    .await
+    .ok()?;
     serde_json::from_str::<Value>(&stdout)
         .ok()?
         .get("resolved")?

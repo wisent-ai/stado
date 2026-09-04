@@ -536,7 +536,7 @@ enum Commands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect or change stado configuration: show | validate | init | set | unset.
+    /// Inspect or change stado configuration: show | validate | init | migrate | set | unset.
     Config {
         #[arg(default_value = "show")]
         sub: String,
@@ -2536,6 +2536,8 @@ enum HostCommands {
     },
     /// Read TARGET's effective Stado configuration through its fleet channel.
     ConfigShow { target: String },
+    /// Migrate TARGET's legacy configuration, preserving its exact prior file.
+    ConfigMigrate { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
     ConfigSet {
         target: String,
@@ -3581,6 +3583,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 host::mobile_placement(family.as_deref(), json).await
             }
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
+            HostCommands::ConfigMigrate { target } => host::config_migrate(&target).await,
             HostCommands::ConfigSet {
                 target,
                 key,

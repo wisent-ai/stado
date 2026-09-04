@@ -75,6 +75,12 @@ receipt evidence before restoring the run's prior state; failure preserves the
 previous passed delivery while recording the terminal failure and restoring the
 run state.
 
+Before editing an older worker's deployment profile, use
+`stado host config-migrate TARGET`. Its installed binary performs the same
+migration as `stado config migrate` and preserves the exact prior file beside
+the profile. Subsequent `host config-set --reload-service SERVICE` changes can
+then pass schema validation and activate through the declared service policy.
+
 ## Release publication authority
 
 The publisher command reads the bearer named by `release_api.publishers` through

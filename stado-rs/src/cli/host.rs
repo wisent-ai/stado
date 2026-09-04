@@ -7333,8 +7333,12 @@ async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdErro
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout =
-        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Show,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
             "object_verifier_reconcile_host_declaration_unreadable: {error}"
@@ -7430,8 +7434,12 @@ pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Resu
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout =
-        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Show,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
             "release_verifier_reconcile_host_declaration_unreadable: {error}"
@@ -11056,7 +11064,13 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
 /// Read the effective configuration on a fleet host using the same installed
 /// Stado binary and config path its services consume.
 pub async fn config_show(target: &str) -> Result<(), CmdError> {
-    remote_config(target, None).await
+    remote_config(target, RemoteConfigAction::Show).await
+}
+
+/// Run the installed binary's schema migration on a fleet host. The local
+/// migration preserves the exact prior profile and refuses future schemas.
+pub async fn config_migrate(target: &str) -> Result<(), CmdError> {
+    remote_config(target, RemoteConfigAction::Migrate).await
 }
 
 /// Persist one configuration field on a fleet host. Values travel base64
@@ -11079,7 +11093,7 @@ pub async fn config_set(
     // closes the host's release publication boundary the moment the unit
     // reloads, and the cheapest place to say so is here.
     refuse_unminted_publisher(target, key, value).await?;
-    remote_config(target, Some((key, value))).await?;
+    remote_config(target, RemoteConfigAction::Set { key, value }).await?;
     warn_unbacked_object_namespace(target, key, value);
     if let Some(service) = reload_service {
         super::service::reconcile_after_config_change(
@@ -11297,16 +11311,22 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
     );
 }
 
-async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {
+pub(crate) enum RemoteConfigAction<'a> {
+    Show,
+    Migrate,
+    Set { key: &'a str, value: &'a str },
+}
+
+async fn remote_config(target: &str, action: RemoteConfigAction<'_>) -> Result<(), CmdError> {
     let target = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout = remote_config_output(&target, update, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(&target, action, &crate::deploy::production_runner()).await?;
     print!("{stdout}");
     Ok(())
 }
 
-/// One `stado config show` on a fleet host — the effective configuration its
+/// One Stado configuration action on a fleet host — the effective configuration its
 /// own installed binary resolves, from its own `STADO_CONFIG` — returned
 /// instead of printed.
 ///
@@ -11325,12 +11345,15 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
 /// the whole time; nothing that judged the host asked it.
 pub(crate) async fn remote_config_output(
     target: &ComputeTarget,
-    update: Option<(&str, &str)>,
+    action: RemoteConfigAction<'_>,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
-    let action = match update {
-        None => "\"$binary\" config show".to_string(),
-        Some((key, value)) => format!(
+    let action = match action {
+        RemoteConfigAction::Show => "\"$binary\" config show".to_string(),
+        RemoteConfigAction::Migrate => {
+            "\"$binary\" config migrate\n\"$binary\" config show".to_string()
+        }
+        RemoteConfigAction::Set { key, value } => format!(
             "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              \"$binary\" config set \"$key\" \"$value\"\n\
