@@ -199,8 +199,7 @@ const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
 const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
 pub const LOCAL_EVIDENCE_ROOT: &str = ".stado/work/host-reclaim-local-evidence";
-pub const LOCAL_TERMINALITY_GRACE_SECONDS: i64 =
-    crate::config::HEARTBEAT_STALE_MINUTES * 60;
+pub const LOCAL_TERMINALITY_GRACE_SECONDS: i64 = crate::config::HEARTBEAT_STALE_MINUTES * 60;
 
 /// The fixed remote program.
 ///
@@ -694,7 +693,11 @@ pub fn remote_script(
         .replace(LIVE_JOBS_MARK, &live_words)
         .replace(
             LOCAL_EVIDENCE_MODE_MARK,
-            if live_jobs.is_some() { "store" } else { "local" },
+            if live_jobs.is_some() {
+                "store"
+            } else {
+                "local"
+            },
         )
         .replace(LOCAL_EVIDENCE_ROOT_MARK, LOCAL_EVIDENCE_ROOT)
         .replace(
@@ -810,17 +813,8 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
             ["STADO_RECLAIM_REFUSED", stage, item, detail] => {
                 refused.push(((*stage).to_string(), format!("{item}: {detail}")));
             }
-            [
-                "STADO_RECLAIM_LOCAL_EVIDENCE",
-                stage,
-                job_id,
-                path,
-                decision,
-                process_absent,
-                lease_expired,
-                tree_age_seconds,
-                absence_age_seconds,
-            ] => {
+            ["STADO_RECLAIM_LOCAL_EVIDENCE", stage, job_id, path, decision, process_absent, lease_expired, tree_age_seconds, absence_age_seconds] =>
+            {
                 local_evidence.push((
                     (*stage).to_string(),
                     json!({
