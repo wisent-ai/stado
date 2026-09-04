@@ -1103,9 +1103,9 @@ pub(crate) fn active_binary(
     }
 
     let serving = target.blue_green_serving()?;
-    let proxy_pid = state.proxy_pid.ok_or_else(|| {
-        format!("{product} observed active release has no recorded stable proxy")
-    })?;
+    let proxy_pid = state
+        .proxy_pid
+        .ok_or_else(|| format!("{product} observed active release has no recorded stable proxy"))?;
     if !proxy_process_matches(proxy_pid, target, &serving, product)? {
         return Err(format!(
             "{product} recorded stable proxy pid {proxy_pid} does not match the exact executable and arguments"
