@@ -990,28 +990,6 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               what would repair it. `doctor` opens no application and grants nothing itself",
     },
     ApprovedCommand {
-        argv: &[
-            "/Applications/CuaDriver.app/Contents/MacOS/cua-driver",
-            "doctor",
-            "--json",
-        ],
-        why: "runs the installed Cua Driver bundle's read-only self-check at the lowercase \
-              executable spelling Spis probes. The generic candidate resolver knows this path, \
-              but policy matches the requested argv before candidate selection, so leaving this \
-              exact spelling out made a declared desktop precondition impossible to ask",
-    },
-    ApprovedCommand {
-        argv: &[
-            "/Applications/CuaDriver.app/Contents/MacOS/CuaDriver",
-            "doctor",
-            "--json",
-        ],
-        why: "runs the installed Cua Driver bundle's read-only self-check at the capitalized \
-              executable spelling Spis probes as the bundle-layout alternative. It is an \
-              alternative to the lowercase bundle executable, not permission to run arbitrary \
-              driver commands",
-    },
-    ApprovedCommand {
         argv: &[CARGO_CLI, "--version"],
         why: "prints the installed Rust toolchain's cargo version from the paths this fleet \
               installs Rust at, shared-toolchain prefix first. Every Spis crawl worker runs \
