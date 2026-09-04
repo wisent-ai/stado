@@ -11,8 +11,9 @@
 
 - **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.
 - **Recovery deadline:** the protected-read wait now uses 180 elapsed seconds rather than 180 potentially slow network attempts.
-- **Migration:** no configuration change is required; the existing `stado host recover-object-api TARGET` command resumes an interrupted recovery.
-- **Rollback boundary:** rolling back can leave recovery trying to kickstart an unloaded job and waiting beyond the host-channel deadline.
+- **Executable ownership:** the object API now runs the host's canonical delivered `$HOME/.stado/bin/stado`, whose version is governed by `targets[].managed_versions.stado`, instead of an independently content-addressed service image whose source checksum was not retained in the service declaration. The catalog, physical-store recovery definition, registry reconciliation, and Stado product unit ownership agree on that one path; release activation restarts the object unit only on a host whose registry service set declares its exact label.
+- **Migration:** run the existing `stado host recover-object-api TARGET` to repoint and recover the physical unit, then reconcile the managed service declaration with `stado service ensure --from $HOME/.stado/bin/stado`, the existing dashboard argv, and the unit's explicit recovered environment. Recovery alone does not rewrite the registry.
+- **Rollback boundary:** rolling back can leave recovery trying to kickstart an unloaded job, waiting beyond the host-channel deadline, or pointing the object service back at an independently owned content-addressed image that the service declaration cannot restore.
 - **Platforms and evidence:** the affected recovery command targets macOS; compilation and shell syntax checks cover the change, while its retained recovery report records the production outcome.
 
 ## 0.16.3
