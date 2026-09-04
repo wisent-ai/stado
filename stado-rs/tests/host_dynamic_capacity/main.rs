@@ -101,8 +101,8 @@ impl Journey {
             "available_accelerators": {"apple-m2-max": 1},
             "free_ram_gb": 18.5,
             "total_ram_gb": 64.0,
-            "free_vram_gb": 7.5,
-            "total_vram_gb": 32.0,
+            "free_vram_gb": 7,
+            "total_vram_gb": 32,
             "published_at": chrono::Utc::now().to_rfc3339(),
             "diag": {
                 "disk_pressure_unresolved": false,
@@ -150,8 +150,8 @@ fn host_gates_use_live_resources_and_never_fixed_slots() {
     assert_eq!(report["capacity"]["total_cpu_cores"], 12);
     assert_eq!(report["capacity"]["free_ram_gb"], 18.5);
     assert_eq!(report["capacity"]["total_ram_gb"], 64.0);
-    assert_eq!(report["capacity"]["free_vram_gb"], 7.5);
-    assert_eq!(report["capacity"]["total_vram_gb"], 32.0);
+    assert_eq!(report["capacity"]["free_vram_gb"], 7);
+    assert_eq!(report["capacity"]["total_vram_gb"], 32);
     assert_eq!(
         report["capacity"]["available_accelerators"]["apple-m2-max"],
         1
