@@ -1866,8 +1866,8 @@ impl RemoteObjectApi {
         })?;
         // A newly declared product's publisher item is readable by nobody:
         // writing an item grants nothing, because a Skarbiec grant is per item
-        // and per field. `stado host reconcile-release-verifier --product P T`
-        // settles the release verifier's own grant, and this settles the
+        // and per field. `stado host reconcile-release-verifier T` settles the
+        // release verifier's exact publisher grant, and this settles the
         // consumer a store-routed read authenticates as, which is the other of
         // the two identities this read can travel under. Both are needed and
         // neither implies the other, which is why declaring a product used to

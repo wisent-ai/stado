@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.27
+
+- **Release verifier:** `stado host reconcile-release-verifier TARGET` now compares the caller's publisher declarations with the target's effective configuration and binds the existing verifier bearer to the complete exact item set. Retired publishers no longer leave stale capabilities that close the release publication boundary.
+- **Migration:** run the reconciler once on the release-object host. The command preserves the bearer and expiry, copies current publisher shadows, and removes only capabilities absent from the exact shared declaration.
+- **Rollback boundary:** rolling back restores additive, product-at-a-time reconciliation, so a retired publisher capability can close publication again.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation and the live exact verifier report cover this repair, while release publication supplies signed platform manifests and delivery receipts.
+
 ## 0.15.26
 
 - **Release-store retention:** the host janitor now reclaims immutable product versions only after preserving every host-owned, active-pipeline, recently completed, quarantined, and newest rollback coordinate. It walks the canonical product/run layout without following links, enforces the declared byte and item limits, and reports every reason a version stayed.
