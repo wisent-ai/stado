@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.7
+
+- **Exact storage-root evidence:** `stado host backup-audit TARGET --object STADO_URI` compares only the named existing object in the host's declared local primary and backup roots. The read-only report returns each side's state, byte count, and SHA-256 without returning object content or walking either store; repeat `--object` for additional coordinates.
+- **Safety boundary:** exact-object mode accepts validated `stado://` object references, conflicts with replica reclamation, and stops hashing at the existing read-only deadline with an explicit `deadline_unproven` state instead of allowing the host channel to truncate. The existing whole-replica classification and same-pass `--reclaim-twins --apply` behavior are unchanged.
+- **Migration and rollback:** no stored data changes. Rolling back removes exact root comparison and leaves operators unable to distinguish an authority switch from lifecycle deletion without a broad replica scan.
+- **Platforms and evidence:** the diagnostic uses the existing host channel on the supported native platforms. Formatting, locked all-target compilation, and Clippy cover the source change; release publication supplies native manifests and source provenance.
+
 ## 0.16.6
 
 - **Terminal workdir retention:** disk cleanup keeps its listing-only live-job scan, then reads lifecycle bodies only for bounded on-disk candidates whose names overlap live and terminal prefixes. Only a typed retired transition, a matching terminal destination, and no live, fenced, malformed, or unknown document authorize removal. Cleaned sources must retain the expected immutable submission identity; the current source must name the current transition, while valid historical cleaned transitions in other prefixes remain supported.

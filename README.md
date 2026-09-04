@@ -581,6 +581,19 @@ the primary. Mutations commit there first and are then mirrored best-effort to
 the compatible backup, which is never promoted to writer. Queue migrations use
 pause, drain, copy, verification, fencing, and explicit cutover.
 
+To distinguish an authority switch from deletion without reading object
+content or walking either store, compare an existing coordinate in the fixed
+host roots:
+
+```console
+stado host backup-audit TARGET --object stado://probierz/queue/JOB.json --json
+```
+
+Repeat `--object` to compare more coordinates. Exact-object mode reports each
+side's state, byte count, and SHA-256, and reports `deadline_unproven` if the
+existing read-only hashing budget expires. It cannot be combined with replica
+reclamation. Omitting `--object` retains the whole-replica classification.
+
 Provider resources are mutable only when their ownership and expected state
 match the approved plan. Report-only is the default autonomy level.
 
