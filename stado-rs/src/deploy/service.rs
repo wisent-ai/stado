@@ -3037,10 +3037,10 @@ fi
 ///   `/Library/LaunchDaemons` on an ssh login with no Aqua session, which is
 ///   the case `deploy` fails on with `Could not switch to audit session ...
 ///   Operation not permitted`, having installed nothing.
-/// - It leaves a matching loaded job alone. A changed environment requires
-///   reloading launchd's cached definition, so that path preserves the prior
-///   unit and restores it if activation fails. A changed program remains a
-///   conflict rather than silently replacing the running service.
+/// - It compares the plist, launchd's retained Program and argument vector,
+///   and the running executable. A differing retained definition is reloaded
+///   only after executable and rendered-unit preflight, with the prior unit
+///   restored if activation fails and launchd's readback verified on success.
 ///
 /// There is deliberately no fallback to `launchctl submit` or to a bare
 /// background process. Those two are how a host comes to run a program no
@@ -3055,6 +3055,22 @@ argv=@ARGV@
 # with a live pid, and still failed with `postcondition unobserved`, because the
 # probe that would have confirmed the success had been unhooked by the cleanup.
 staged=''
+stado_loaded_identity() {
+  loaded_program=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*program[[:space:]]*$/ { print $2; exit }')
+  loaded_arguments_rc=0
+  loaded_argv=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '
+    /^[[:space:]]*arguments[[:space:]]*=[[:space:]]*\\{/ { seen=1; collecting=1; argv=\"\"; next }
+    collecting && /^[[:space:]]*\\}/ { complete=1; sub(/^ /, \"\", argv); print argv; exit }
+    collecting { line=$0; sub(/^[[:space:]]+/, \"\", line); sub(/[[:space:]]+$/, \"\", line); if (line != \"\") argv = argv \" \" line }
+    END { if (!seen) exit 3; if (!complete) exit 4 }') || loaded_arguments_rc=$?
+  loaded_program=$(printf '%s' \"$loaded_program\" | /usr/bin/sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  loaded_arguments_valid=yes
+  case \"$loaded_arguments_rc\" in
+    0) loaded_argv=$(printf '%s' \"$loaded_argv\" | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//') ;;
+    3) loaded_argv=\"$loaded_program\" ;;
+    *) loaded_arguments_valid=no; loaded_argv='' ;;
+  esac
+}
 bail() {
   if [ -n \"$staged\" ]; then /bin/rm -f \"$staged\" \"$staged.rendered\"; fi
   say 'ensure_failed' \"$1\"
@@ -3089,6 +3105,7 @@ if [ \"$os\" = \"Darwin\" ]; then
   stado_launchd_state
   had_unit=\"$pc_loaded\"
   pid=\"$pc_pid\"
+  stado_loaded_identity
 else
   if [ -f \"$unit_path\" ]; then
     had_unit=yes
@@ -3116,10 +3133,11 @@ if [ \"$serves\" = no ]; then
       ;;
   esac
 fi
-# Compare the whole unit, including its environment, on both init systems.
-# A kickstart reuses launchd's cached definition; only bootstrap reads new env.
+# Compare the whole desired unit, including its environment, on both init
+# systems. A loaded launchd definition can outlive a removed plist, but the
+# desired declaration is still complete enough to render and safely reload it.
 rendered=''
-if [ -f \"$unit_path\" ]; then
+if [ -f \"$unit_path\" ] || { [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ]; }; then
   staged=\"$HOME/.stado/$unit.ensure.$$\"
   if [ \"$os\" = Linux ]; then
     /bin/cat > \"$staged\" <<'@HEREDOC@'
@@ -3138,6 +3156,11 @@ if [ -f \"$unit_path\" ]; then
   account=$(/usr/bin/id -un)
   /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
   rendered=\"$staged.rendered\"
+  if [ \"$os\" = Darwin ]; then
+    rc=0
+    detail=$(/usr/bin/plutil -lint \"$rendered\" 2>&1) || rc=$?
+    if [ \"$rc\" -ne 0 ]; then bail \"plutil preflight exited $rc: ${detail:-no detail}\"; fi
+  fi
 fi
 stado_install_unit() {
   if [ \"$os\" = Darwin ] && [ \"$domain\" = system ]; then
@@ -3153,20 +3176,45 @@ stado_install_unit() {
   fi
 }
 stado_activate_definition() {
+  activation_failure=''
   if [ \"$os\" = Darwin ]; then
     stado_launchd_state
     if [ \"$pc_loaded\" = yes ]; then
-      $launch bootout \"$domain/$unit\" || return 1
+      activation_detail=$($launch bootout \"$domain/$unit\" 2>&1)
+      activation_rc=$?
+      if [ \"$activation_rc\" -ne 0 ]; then
+        activation_failure=\"launchctl bootout exited $activation_rc: ${activation_detail:-no detail}\"
+        return 1
+      fi
       attempts=0
       while $launch print \"$domain/$unit\" >/dev/null 2>&1; do
         attempts=$((attempts + 1))
-        [ \"$attempts\" -lt 150 ] || return 1
+        if [ \"$attempts\" -ge 150 ]; then
+          activation_failure=\"launchctl bootout exited 0 but $domain/$unit remained loaded\"
+          return 1
+        fi
         /bin/sleep 0.1
       done
     fi
-    $launch bootstrap \"$domain\" \"$unit_path\" || return 1
+    activation_detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
+    activation_rc=$?
+    if [ \"$activation_rc\" -ne 0 ]; then
+      activation_failure=\"launchctl bootstrap exited $activation_rc: ${activation_detail:-no detail}\"
+      return 1
+    fi
   else
-    stado_systemctl daemon-reload && stado_systemctl restart \"$unit\" || return 1
+    activation_detail=$(stado_systemctl daemon-reload 2>&1)
+    activation_rc=$?
+    if [ \"$activation_rc\" -ne 0 ]; then
+      activation_failure=\"systemctl daemon-reload exited $activation_rc: ${activation_detail:-no detail}\"
+      return 1
+    fi
+    activation_detail=$(stado_systemctl restart \"$unit\" 2>&1)
+    activation_rc=$?
+    if [ \"$activation_rc\" -ne 0 ]; then
+      activation_failure=\"systemctl restart exited $activation_rc: ${activation_detail:-no detail}\"
+      return 1
+    fi
   fi
   attempts=0
   while [ \"$attempts\" -lt 150 ]; do
@@ -3182,28 +3230,81 @@ stado_activate_definition() {
     attempts=$((attempts + 1))
     /bin/sleep 0.1
   done
+  activation_failure=\"activation exited 0 but $unit did not acquire a live pid\"
   return 1
 }
-if [ \"$declared_argv\" = \"$argv\" ] && [ -n \"$rendered\" ] \
-  && ! /bin/cmp -s \"$rendered\" \"$unit_path\"; then
-  previous=\"$staged.previous\"
-  /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
-  /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
+loaded_drift=no
+if [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ]; then
+  if [ -z \"$loaded_program\" ] || [ \"$loaded_arguments_valid\" != yes ]; then
+    /bin/rm -f \"$staged\" \"$rendered\"
+    say 'loaded_definition_unknown' \"$domain/$unit launchctl readback did not expose a valid Program and complete arguments definition\"
+    exit 0
+  fi
+  if [ \"$loaded_program\" != \"$program\" ] || [ \"$loaded_argv\" != \"$argv\" ]; then
+    loaded_drift=yes
+  fi
+fi
+unit_drift=no
+if [ -n \"$rendered\" ] && { [ ! -f \"$unit_path\" ] || ! /bin/cmp -s \"$rendered\" \"$unit_path\"; }; then
+  unit_drift=yes
+fi
+reload_needed=no
+reload_action=converged
+if [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ] \
+  && { [ \"$loaded_drift\" = yes ] || [ \"$unit_drift\" = yes ]; }; then
+  reload_needed=yes
+  if [ \"$loaded_drift\" = yes ]; then reload_action=reloaded; fi
+elif [ \"$declared_argv\" = \"$argv\" ] && [ \"$unit_drift\" = yes ]; then
+  reload_needed=yes
+fi
+if [ \"$reload_needed\" = yes ]; then
+  [ -n \"$rendered\" ] || bail 'cannot reload a definition without rendered configuration'
+  previous=''
+  if [ -f \"$unit_path\" ]; then
+    previous=\"$staged.previous\"
+    /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
+    /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
+  fi
   if ! stado_install_unit \"$rendered\"; then
-    stado_install_unit \"$previous\" || bail \"unit write failed; rollback failed; prior unit is $previous\"
-    /bin/rm -f \"$previous\"
-    bail 'unit write failed; prior unit restored'
+    if [ -n \"$previous\" ]; then
+      stado_install_unit \"$previous\" || bail \"unit write failed; rollback failed; prior unit is $previous\"
+      /bin/rm -f \"$previous\"
+      bail 'unit write failed; prior unit restored'
+    fi
+    bail 'unit write failed; no prior unit file existed'
   fi
   if ! stado_activate_definition; then
-    if stado_install_unit \"$previous\" && stado_activate_definition; then
+    replacement_failure=\"$activation_failure\"
+    if [ -n \"$previous\" ] && stado_install_unit \"$previous\" && stado_activate_definition; then
       /bin/rm -f \"$previous\"
-      bail 'new unit did not start; prior unit restored and running'
+      bail \"replacement activation failed ($replacement_failure); prior unit restored and running\"
     fi
-    bail \"new unit did not start; rollback failed; prior unit is $previous\"
+    bail \"replacement activation failed ($replacement_failure); rollback failed; prior unit is ${previous:-absent}\"
+  fi
+  verification_failure=''
+  if [ \"$os\" = Darwin ]; then
+    stado_loaded_identity
+    if [ -z \"$loaded_program\" ] || [ \"$loaded_arguments_valid\" != yes ]; then
+      verification_failure='launchctl readback after reload did not expose a valid Program and complete arguments definition'
+    elif [ \"$loaded_program\" != \"$program\" ] || [ \"$loaded_argv\" != \"$argv\" ]; then
+      verification_failure=\"launchctl retained program [$loaded_program] argv [$loaded_argv]; expected program [$program] argv [$argv]\"
+    else
+      running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+      if [ \"$running\" != \"$program\" ]; then
+        verification_failure=\"$domain/$unit pid $pid executes [$running]; expected [$program]\"
+      fi
+    fi
+  fi
+  if [ -n \"$verification_failure\" ]; then
+    if [ -n \"$previous\" ] && stado_install_unit \"$previous\" && stado_activate_definition; then
+      /bin/rm -f \"$previous\"
+      bail \"replacement verification failed ($verification_failure); prior unit restored and running\"
+    fi
+    bail \"replacement verification failed ($verification_failure); rollback failed; prior unit is ${previous:-absent}\"
   fi
   /bin/rm -f \"$previous\" \"$staged\" \"$rendered\"
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
-  say 'converged' \"$unit_path reloaded and running\"
+  say \"$reload_action\" \"$unit_path reloaded and verified\"
   exit 0
 fi
 if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
@@ -3217,11 +3318,7 @@ if [ \"$declared_argv\" = \"$argv\" ]; then
   rendered=''
 fi
 if [ \"$declared_argv\" != \"$argv\" ]; then
-  if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
-    /bin/rm -f \"$staged\" \"$rendered\"
-    say 'conflict' \"$domain/$unit is loaded running [$declared_argv] and the declaration says [$argv]; launchd holds its own copy of the argv and an in-place kick re-execs that copy, so neither restart nor ensure can carry this change: run 'stado service stop' then 'stado service ensure' to unload the job and bootstrap it from the file\"
-    exit 0
-  fi
+
   if [ \"$os\" = \"Darwin\" ]; then
     /bin/rm -f \"$staged\" \"$rendered\"
     /bin/mkdir -p \"$HOME/.stado/logs\" >/dev/null 2>&1 || bail 'cannot create the log directory'
@@ -5175,6 +5272,9 @@ pub const ACTION_ALREADY_CORRECT: &str = "already_correct";
 /// until they are deleted by hand. This action reports convergence without the
 /// window that bootout then bootstrap leaves.
 pub const ACTION_CONVERGED: &str = "converged";
+/// launchd held a stale program or argument vector and this pass reloaded the
+/// already-preflighted definition, then verified launchd's own readback.
+pub const ACTION_RELOADED: &str = "reloaded";
 
 /// launchd's system domain: `/Library/LaunchDaemons`, reached with sudo, and
 /// the only domain that exists on an ssh login with no Aqua session.
@@ -5185,9 +5285,9 @@ pub const DOMAIN_USER: &str = "user";
 /// What one `ensure` pass found and did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnsureOutcome {
-    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`], [`ACTION_ALREADY_CORRECT`] or
-    /// [`ACTION_CONVERGED`]; any other word is a failure the remote program
-    /// named.
+    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`], [`ACTION_ALREADY_CORRECT`],
+    /// [`ACTION_CONVERGED`] or [`ACTION_RELOADED`]; any other word is a failure
+    /// the remote program named.
     pub action: String,
     /// The domain the unit ended up in, as launchd spells it.
     pub domain: String,
@@ -5201,8 +5301,8 @@ pub struct EnsureOutcome {
 }
 
 impl EnsureOutcome {
-    /// True when the pass reached one of the four intended actions AND the
-    /// host was observed with the unit loaded and running afterwards.
+    /// True when the pass reached one of the intended actions AND the host was
+    /// observed with the unit loaded and running afterwards.
     ///
     /// [`ACTION_CONVERGED`] belongs here. It was added as a success action —
     /// a drifted unit file rewritten and kicked in place, deliberately
@@ -5217,7 +5317,11 @@ impl EnsureOutcome {
     pub fn succeeded(&self) -> bool {
         matches!(
             self.action.as_str(),
-            ACTION_CREATED | ACTION_RESTARTED | ACTION_ALREADY_CORRECT | ACTION_CONVERGED
+            ACTION_CREATED
+                | ACTION_RESTARTED
+                | ACTION_ALREADY_CORRECT
+                | ACTION_CONVERGED
+                | ACTION_RELOADED
         ) && self.report.postcondition_held()
     }
 
@@ -5260,8 +5364,9 @@ pub fn ensure_unit_path(plan: &DeployPlan) -> String {
     }
 }
 
-/// `service ensure` on one host: install the unit only where the host is not
-/// already running it, and never unload anything.
+/// `service ensure` on one host: leave a matching loaded definition untouched,
+/// kick a matching definition when needed, and perform one preflighted
+/// definition reload when launchd retains a different Program or argv.
 pub async fn ensure_service(
     target: &ComputeTarget,
     plan: &DeployPlan,
