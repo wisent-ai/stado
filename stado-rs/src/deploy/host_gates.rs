@@ -746,11 +746,7 @@ fn accelerator_availability(payload: &Value) -> BTreeMap<String, i64> {
         .and_then(Value::as_object)
         .into_iter()
         .flat_map(|entries| entries.iter())
-        .filter_map(|(accelerator, count)| {
-            count
-                .as_i64()
-                .map(|count| (accelerator.clone(), count))
-        })
+        .filter_map(|(accelerator, count)| count.as_i64().map(|count| (accelerator.clone(), count)))
         .collect()
 }
 

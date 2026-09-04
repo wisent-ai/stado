@@ -95,7 +95,6 @@ pub fn vram_safety_buffer_gb(total_vram_gb: i64) -> i64 {
         .max((total_vram_gb as f64 * constants::VRAM_SAFETY_BUFFER_FRACTION).ceil() as i64)
 }
 
-
 /// Python `float(os.environ.get(key, default) or default)`.
 fn env_f64(key: &str, default: f64) -> f64 {
     match std::env::var(key) {
@@ -774,7 +773,6 @@ async fn set_inference_container_running(deployment: &str, running: bool) -> Res
 // run_agent
 // ---------------------------------------------------------------------------
 
-
 fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
     [
         ("free_disk_gb".to_string(), Value::from(d.free_disk_gb)),
@@ -841,10 +839,7 @@ fn measured_capacity(
         "cpu_load_1m".into(),
         helpers::load_average_1m().map_or(Value::Null, Value::from),
     );
-    diag.insert(
-        "ram_safety_buffer_gb".into(),
-        Value::from(ram_reserve_gb),
-    );
+    diag.insert("ram_safety_buffer_gb".into(), Value::from(ram_reserve_gb));
     CapacitySnapshot {
         accepting_jobs: resource_reason.is_none(),
         running_jobs: running.len(),
@@ -858,7 +853,6 @@ fn measured_capacity(
         diag,
     }
 }
-
 
 /// Publish one capacity broadcast and say, in the log, which branch of the loop
 /// produced it and whether the store accepted it.
@@ -1962,7 +1956,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             continue; // re-loop: recompute free VRAM, then claim the freed room
         }
 
-
         // Centralized assignment writes job.assigned_to on the queue blob, so
         // the listing itself applies this agent's full admission rule: the
         // window must count jobs this host may claim. Counting jobs that
@@ -2367,8 +2360,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             new_slot.disk_cleanup_lock = Some(workload_lock);
             let exclusive_started = helpers::slot_is_exclusive(&new_slot.slot);
             slots.push(new_slot);
-            available_cpu_cores =
-                available_cpu_cores.saturating_sub(requested_cpu_cores);
+            available_cpu_cores = available_cpu_cores.saturating_sub(requested_cpu_cores);
             available_ram_gb = (available_ram_gb - requested_memory_gb).max(0.0);
             free_vram_gb -= need;
             if let Some(uuid) = &placement {

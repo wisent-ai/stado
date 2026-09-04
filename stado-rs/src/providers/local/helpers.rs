@@ -601,8 +601,7 @@ fn macos_memory_gb() -> Option<(f64, f64)> {
         nix::libc::host_statistics64(
             nix::libc::mach_host_self(),
             nix::libc::HOST_VM_INFO64,
-            (&mut stats as *mut nix::libc::vm_statistics64_data_t)
-                .cast::<nix::libc::integer_t>(),
+            (&mut stats as *mut nix::libc::vm_statistics64_data_t).cast::<nix::libc::integer_t>(),
             &mut count,
         )
     };
@@ -635,7 +634,10 @@ fn macos_memory_gb() -> Option<(f64, f64)> {
         return None;
     }
     const GIB: f64 = (1024_u64 * 1024 * 1024) as f64;
-    Some((available_pages as f64 * page_size / GIB, total_bytes as f64 / GIB))
+    Some((
+        available_pages as f64 * page_size / GIB,
+        total_bytes as f64 / GIB,
+    ))
 }
 
 /// Available and total host RAM in GiB, measured from the operating system.
