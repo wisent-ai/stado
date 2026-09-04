@@ -5813,15 +5813,31 @@ async fn reconcile_verifier(
     Ok(report)
 }
 
-/// Recover a local Skarbiec audit-lock stall and restart only its loaded dependants.
+/// Recover a Skarbiec audit-lock stall on TARGET and restart only its loaded
+/// dependants.
+///
+/// The helper runs on TARGET, so the endpoints it probes must be TARGET's. Its
+/// own defaults are this fleet's operator laptop -- Skarbiec on 8787, the
+/// object API on 18765 -- and on 2026-09-03 that refused a real audit-lock
+/// stall on `charless-mac-mini`, where Skarbiec answers 8895 and the object API
+/// 8765, with "did not report an audit-lock failure": the script had asked a
+/// port nothing serves on that host and read the silence as health. The
+/// registry already states where each service answers per asking machine, so
+/// resolve TARGET's own endpoints and hand them over rather than letting a
+/// hard-coded default decide which host the operator meant.
 pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(), CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
+    let probes = target_health_probes(&resolved.name).await;
+    let script = format!(
+        "{probes}{}",
+        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh")
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
-        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh"),
+        &script,
         std::time::Duration::from_secs(90),
         &runner,
     )
@@ -5848,6 +5864,46 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
         println!("{}: {detail}", resolved.name);
     }
     Ok(())
+}
+
+/// Shell prologue exporting the health endpoints TARGET itself serves on, read
+/// from the registry's service directory.
+///
+/// The directory keys every endpoint by the asking machine because these
+/// services bind loopback on their own host, so "where is Skarbiec" has a
+/// different true answer on every machine. A helper that runs ON the target is
+/// the target asking, which is why the lookup is `address_for(target)` and not
+/// this laptop's own row.
+///
+/// Missing rows export nothing and leave the script's defaults alone: a
+/// recovery that cannot name the endpoint should refuse on the endpoint it
+/// documents rather than on one this function invented.
+async fn target_health_probes(target: &str) -> String {
+    let Ok(registry) = super::registry::read_registry().await else {
+        return String::new();
+    };
+    let Some(directory) = registry.service_directory.as_ref() else {
+        return String::new();
+    };
+    let mut prologue = String::new();
+    for (service, variable, path) in [
+        ("skarbiec", "SKARBIEC_HEALTH_URL", "/health"),
+        ("stado-object-api", "STADO_OBJECT_HEALTH_URL", "/healthz"),
+    ] {
+        let Some(url) = directory
+            .services
+            .get(service)
+            .and_then(|entry| entry.address_for(target))
+            .map(|endpoint| endpoint.url.trim_end_matches('/').to_string())
+        else {
+            continue;
+        };
+        prologue.push_str(&format!(
+            "{variable}=${{{variable}:-{}}}\nexport {variable}\n",
+            crate::deploy::shlex_quote(&format!("{url}{path}"))
+        ));
+    }
+    prologue
 }
 
 /// Recover stale per-user GnuPG daemons after Skarbiec reports a keybox stall.

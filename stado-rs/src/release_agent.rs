@@ -546,6 +546,27 @@ fn spawn_release(
     command
         .args(["-n", "-u", &target.run_as_user, "-H", "/usr/bin/env"])
         .arg(format!("HOME={}", target.home))
+        // `sudo` replaces PATH with its own `secure_path`, which carries no
+        // Homebrew prefix, and a candidate started with that PATH cannot find
+        // the helpers its product shells out to. `ask_wall` already sets this
+        // exact list for the same reason -- "the decrypt helper lives there,
+        // and without it every answer would be an unreachable one" -- and the
+        // managed launchd units this rollout replaces carry it too, so a
+        // candidate without it is the only shape of the process that has ever
+        // run without a PATH.
+        //
+        // It cost this fleet three days. Every skarbiec candidate from
+        // 2026-09-01 onward failed readiness with `stored item cannot be
+        // decrypted: spawn gpg: No such file or directory`, was quarantined,
+        // and left the vault unreadable; the object plane's verifiers read
+        // Skarbiec, so the whole control plane answered `503 object
+        // authorization unavailable`, and every Brama agent identity 401'd
+        // behind it. The launchd unit had the PATH, the rollout did not, and
+        // nothing compared the two declarations.
+        //
+        // `policy.environment` is applied after this, so a product that needs
+        // a different PATH still declares one and wins.
+        .arg("PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
         .arg(format!("STADO_RELEASE_PRODUCT={product}"))
         .arg(format!("STADO_RELEASE_VERSION={}", manifest.version))
         .arg(format!("STADO_RELEASE_PLATFORM={}", manifest.platform))
@@ -690,7 +711,14 @@ fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
         ])
         .status()
         .map_err(|error| format!("cannot disable legacy launchd service {label}: {error}"))?;
-    if status.success() || status.code() == Some(3) || status.code() == Some(5) {
+    // This asks for a state, not an action: the legacy unit must not hold the
+    // port before the proxy binds it. launchd answers 113 ("Could not find
+    // specified service") when the label is not loaded, which IS that state,
+    // and refusing it stopped the proxy step dead on 2026-09-03 -- both
+    // candidates healthy on their candidate ports, nothing serving either
+    // stable bind, and the control plane 503 behind that. 3 and 5 were
+    // already tolerated for exactly this reason; 113 belongs with them.
+    if status.success() || matches!(status.code(), Some(3) | Some(5) | Some(113)) {
         Ok(())
     } else {
         Err(format!(
