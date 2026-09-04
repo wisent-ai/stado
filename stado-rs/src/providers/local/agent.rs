@@ -1119,12 +1119,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // nothing this tick"; nothing mutating is inside either deadline.
         let tick_store_deadline =
             Instant::now() + Duration::from_secs(constants::AGENT_TICK_STORE_BUDGET_S);
-        let store_budget_left =
-            || tick_store_deadline.saturating_duration_since(Instant::now());
+        let store_budget_left = || tick_store_deadline.saturating_duration_since(Instant::now());
         let claim_store_deadline =
             Instant::now() + Duration::from_secs(constants::AGENT_CLAIM_STORE_BUDGET_S);
-        let claim_budget_left =
-            || claim_store_deadline.saturating_duration_since(Instant::now());
+        let claim_budget_left = || claim_store_deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(
             store_budget_left(),
             crate::config::refresh_model_policy(&store),
@@ -1214,22 +1212,18 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // refusal, which is a different fact from a slow route: the registry
         // fetch already falls back to its last-known-good copy and to the
         // bundled snapshot before it errors at all.
-        let registry_target = match tokio::time::timeout(
-            store_budget_left(),
-            lookup_self_auto(&hostname),
-        )
-        .await
-        {
-            Ok(result) => result?,
-            Err(_) => {
-                log_fn(&format!(
+        let registry_target =
+            match tokio::time::timeout(store_budget_left(), lookup_self_auto(&hostname)).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    log_fn(&format!(
                     "loop: canonical registry target did not answer within {}s; keeping the last \
                      known disk watermark and pinned-only state for this tick",
                     constants::AGENT_TICK_STORE_BUDGET_S
                 ));
-                None
-            }
-        };
+                    None
+                }
+            };
         if let Some(declared_low) = registry_target
             .as_ref()
             .and_then(|target| target.disk_cleanup.as_ref())
@@ -1839,7 +1833,8 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // direction -- an agent that skips a claim loses a poll interval; an
         // agent whose broadcast goes stale loses the fleet's belief that it
         // exists.
-        let Ok(queue_control) = tokio::time::timeout(claim_budget_left(), control::read(&store)).await
+        let Ok(queue_control) =
+            tokio::time::timeout(claim_budget_left(), control::read(&store)).await
         else {
             log_fn(&format!(
                 "loop: queue-control read exhausted this tick's {}s store budget; claiming nothing this tick and \
@@ -2132,9 +2127,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // the declared figure is the floor, and admitting a job on it when
             // the measured estimate is unknown is how a host claims work that
             // does not fit.
-            let Ok(estimated) =
-                tokio::time::timeout(claim_budget_left(), estimate_gpu_memory(&cmd, &sizing, &store))
-                    .await
+            let Ok(estimated) = tokio::time::timeout(
+                claim_budget_left(),
+                estimate_gpu_memory(&cmd, &sizing, &store),
+            )
+            .await
             else {
                 log_fn(&format!(
                     "loop: VRAM estimate for {} exhausted this tick's {}s store budget; not claiming it this tick",

@@ -151,9 +151,7 @@ impl StadoObjectBackend {
     fn shared_client(ca_file: &str) -> Result<Client, StorageError> {
         static CLIENTS: std::sync::LazyLock<
             std::sync::Mutex<std::collections::HashMap<String, Client>>,
-        > = std::sync::LazyLock::new(|| {
-            std::sync::Mutex::new(std::collections::HashMap::new())
-        });
+        > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
         let key = ca_file.trim().to_string();
         let mut clients = CLIENTS
             .lock()
