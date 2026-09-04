@@ -246,6 +246,61 @@ async fn login_user(target: &ComputeTarget, runner: &Runner) -> Result<String, D
     Ok(user)
 }
 
+/// The macOS users this host's registry identity bindings name, each with the identity
+/// it holds.
+///
+/// `IdentityBinding::user` exists because these identities are per-user: an Apple
+/// account signed into one macOS user does not make the Mac's other users trusted. A
+/// notification for it is delivered into that user's session and is unreadable from
+/// every other one.
+fn declared_gui_bindings(target: &ComputeTarget) -> Vec<(String, String)> {
+    let mut named: Vec<(String, String)> = Vec::new();
+    for binding in &target.identities {
+        let Some(user) = binding.user.as_deref() else {
+            continue;
+        };
+        if user.is_empty() || named.iter().any(|(existing, _)| existing == user) {
+            continue;
+        }
+        named.push((user.to_string(), binding.identity.clone()));
+    }
+    named
+}
+
+/// Is the session we are about to automate one the registry declares an identity in?
+fn automates_declared_session(target: &ComputeTarget, user: &str) -> bool {
+    let declared = declared_gui_bindings(target);
+    declared.is_empty() || declared.iter().any(|(named, _)| named == user)
+}
+
+/// Refuse to enable automation for a session that holds none of the declared
+/// identities.
+///
+/// Without this the resolution is silent and plausible: `login_user` answers with
+/// whoever is at `/dev/console`, every step succeeds against that user, and `status`
+/// ends with `gui-ready yes`. On charless-mac-mini on 2026-09-04 that sentence was
+/// true about the `charles` session and useless about the fleet: the Apple account the
+/// registry places there is signed into `controlyourai-relay`, whose prompts the
+/// `charles` session cannot see. Enabling the wrong session is not partial progress
+/// towards reading a code; it is a certainty of never reading one.
+fn require_declared_session(target: &ComputeTarget, user: &str) -> Result<(), DeployError> {
+    if automates_declared_session(target, user) {
+        return Ok(());
+    }
+    let named = declared_gui_bindings(target)
+        .iter()
+        .map(|(named, identity)| format!("{named} holds {identity}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(DeployError(format!(
+        "{}: the GUI session available for automation is {user}'s, and this host's \
+         registry declares {named}. An identity signed into one macOS user is invisible \
+         to the others, so automating {user} cannot read a prompt for it. Put the \
+         declared user at the console, or correct the host's identity binding.",
+        target.name
+    )))
+}
+
 async fn remove_if_present(
     target: &ComputeTarget,
     path: &str,
@@ -1101,7 +1156,23 @@ async fn status_inner(
         if socket_ready { "ready" } else { "absent" }.to_string(),
     ));
     let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
-    let gui_ready = console_ready && state == "granted" && runtime == "running" && socket_ready;
+    // Whose session this is belongs in the readiness answer, not beside it. A host can
+    // hold a driver, a grant and a live socket in one user's session while the identity
+    // the fleet placed here lives in another, and `gui-ready yes` would then be a true
+    // sentence about the wrong user.
+    for (named, held) in declared_gui_bindings(target) {
+        items.push((format!("identity-user:{held}"), named));
+    }
+    let declared_session = automates_declared_session(target, &user);
+    items.push((
+        "automated-session-declared".to_string(),
+        if declared_session { "yes" } else { "no" }.to_string(),
+    ));
+    let gui_ready = console_ready
+        && declared_session
+        && state == "granted"
+        && runtime == "running"
+        && socket_ready;
     items.push((
         "gui-ready".to_string(),
         if gui_ready { "yes" } else { "no" }.to_string(),
@@ -1277,6 +1348,12 @@ pub async fn enable(
 ) -> GuiAutomationReport {
     let mut items = Vec::new();
     let result = async {
+        // Resolved and checked before the first change, not after: autologin, a
+        // kcpassword file, a TCC grant and a launchd job all name one user, and the
+        // wrong user is four writes to undo.
+        let user = login_user(target, runner).await?;
+        require_declared_session(target, &user)?;
+        items.push(("automated-session".to_string(), user));
         reconcile_app(target, &mut items, runner).await?;
         reconcile_autologin(target, password, &mut items, runner).await?;
         grant_accessibility_inner(target, &mut items, runner).await?;
@@ -1289,6 +1366,9 @@ pub async fn enable(
 pub async fn grant_accessibility(target: &ComputeTarget, runner: &Runner) -> GuiAutomationReport {
     let mut items = Vec::new();
     let result = async {
+        let user = login_user(target, runner).await?;
+        require_declared_session(target, &user)?;
+        items.push(("automated-session".to_string(), user));
         grant_accessibility_inner(target, &mut items, runner).await?;
         reconcile_runtime(target, &mut items, runner).await
     }
