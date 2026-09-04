@@ -139,10 +139,37 @@ struct Verdict {
 }
 
 /// Everything one product's report needs, gathered from the four readers.
+/// What the service plane says about the unit behind an upstream hostname.
+///
+/// Read out of the same fleet-wide beacon join every other row uses, looked
+/// up by service name. This command's job here is to report the service
+/// plane's answer beside the hostname, not to form a second opinion about a
+/// unit somebody else owns.
+fn upstream_service_state(service: &str, managed: &[ServiceStatus]) -> Value {
+    match managed.iter().find(|row| row.service.matches(service)) {
+        Some(row) => json!({
+            "service": service,
+            "host": row.service.host,
+            "state": row.state,
+            "reported_at": row.reported_at,
+        }),
+        // Not a verdict about the service: the beacon join simply carries no
+        // row for it, which is what an undeclared or never-deployed service
+        // looks like from here.
+        None => json!({
+            "service": service,
+            "state": "undeclared",
+            "detail": format!("the managed service set carries no row for {service:?}"),
+        }),
+    }
+}
+
+/// Everything one product's report needs, gathered from the four readers.
 async fn examine(
     name: &str,
     declared: &WebApiProduct,
     managed: Option<&ServiceStatus>,
+    managed_all: &[ServiceStatus],
     runner: &Runner,
 ) -> Verdict {
     // A redirect has no unit, no port and no host to ask. Its whole state is
@@ -170,6 +197,44 @@ async fn examine(
                 VERDICT_SERVING
             } else {
                 VERDICT_NOT_DEPLOYED
+            },
+        };
+    }
+    // A hostname in front of an existing service has no unit of its own
+    // either. Its two questions are whether the hostname resolves to the edge
+    // and whether the service behind it is up — and the second is answered by
+    // the service plane, which is the only thing that knows, rather than by
+    // asking a host about `com.wisent.web.<product>`, a unit that does not
+    // exist and never will.
+    if let Some(service) = declared.upstream_service() {
+        let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
+        let expected = expected_address(declared);
+        let published = expected
+            .as_ref()
+            .is_some_and(|address| addresses.iter().any(|found| found == address));
+        let upstream = upstream_service_state(service, managed_all);
+        let up = upstream
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| state == service::STATE_ACTIVE);
+        return Verdict {
+            row: json!({
+                "product": name,
+                "kind": "upstream-service",
+                "upstream_service": service,
+                "upstream": upstream,
+                "hostname": declared.hostname(),
+                "edge": declared.edge(),
+                "dns": dns_state,
+                "addresses": addresses,
+                "expected_address": expected,
+            }),
+            word: if published && up {
+                VERDICT_SERVING
+            } else if up {
+                VERDICT_NOT_DEPLOYED
+            } else {
+                VERDICT_UNIT_DOWN
             },
         };
     }
@@ -390,7 +455,7 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
         let row = managed
             .iter()
             .find(|row| row.service.matches(product) || row.service.matches(&unit));
-        let verdict = examine(product, declared, row, &runner).await;
+        let verdict = examine(product, declared, row, &managed, &runner).await;
         if verdict.word != VERDICT_SERVING {
             broken.push(format!("{product}: {}", verdict.word));
         }

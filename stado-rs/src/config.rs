@@ -2536,6 +2536,14 @@ pub struct WebApiProduct {
     secrets: BTreeMap<String, String>,
     database: Option<WebApiDatabase>,
     redirect_to: Option<String>,
+    /// A registry service this hostname is published in front of, instead of
+    /// a unit this product owns.
+    ///
+    /// `brama.wisent.com` is that: Brama already runs as a managed service on
+    /// the mini, it is not a Node web product, and nothing about it should be
+    /// built or installed by `stado web`. What was missing was a public
+    /// hostname with a certificate, which is the one thing the edge does.
+    upstream_service: Option<String>,
 }
 
 /// The one database a web product reads, and how its credential reaches the
@@ -2593,9 +2601,21 @@ impl WebApiProduct {
         self.redirect_to.as_deref()
     }
 
-    /// Whether this declaration describes a running unit. A redirect lives
-    /// entirely in the edge's configuration, so `deploy`, `status` and the
-    /// release pipeline have nothing to do with it.
+    /// The registry service this hostname is published in front of.
+    pub fn upstream_service(&self) -> Option<&str> {
+        self.upstream_service.as_deref()
+    }
+
+    /// Whether this declaration describes a unit `stado web` owns.
+    ///
+    /// A redirect lives entirely in the edge's configuration; a hostname in
+    /// front of an existing service belongs to whoever declared that service.
+    /// Neither has a web release, so `deploy`, the release pipeline and the
+    /// unit half of `status` have nothing to do with either.
+    pub fn owns_a_unit(&self) -> bool {
+        self.redirect_to.is_none() && self.upstream_service.is_none()
+    }
+
     pub fn is_redirect(&self) -> bool {
         self.redirect_to.is_some()
     }
@@ -2738,6 +2758,7 @@ pub(crate) fn parse_web_api_products(
                     | "secrets"
                     | "database"
                     | "redirect_to"
+                    | "upstream_service"
             ) {
                 problems.push(format!(
                     "web_api.products.{name} contains unsupported key {key:?}"
@@ -2770,6 +2791,39 @@ pub(crate) fn parse_web_api_products(
                 }
             }
         }
+        // A hostname in front of an existing service names that service and
+        // nothing about a unit: the service directory already says which host
+        // it is active on and which address it answers, and repeating either
+        // here would be a second copy that goes stale the day the service
+        // moves.
+        let upstream_service = match entry.get("upstream_service") {
+            Some(Value::String(service)) if canonical_machine_name(service) => {
+                Some(service.clone())
+            }
+            Some(other) => {
+                problems.push(format!(
+                    "web_api.products.{name}.upstream_service {other} must be a canonical registry service name"
+                ));
+                None
+            }
+            None => None,
+        };
+        if upstream_service.is_some() {
+            for key in [
+                "host", "port", "consumer", "readyz", "env", "secrets", "database",
+            ] {
+                if entry.contains_key(key) {
+                    problems.push(format!(
+                        "web_api.products.{name} declares upstream_service and {key}: the service directory answers where that service runs, so this declaration has no {key}"
+                    ));
+                }
+            }
+        }
+        if upstream_service.is_some() && redirect_to.is_some() {
+            problems.push(format!(
+                "web_api.products.{name} declares both redirect_to and upstream_service: a hostname either answers with a redirect or forwards to a service, never both"
+            ));
+        }
         let host = match entry.get("host").and_then(Value::as_str) {
             Some(host) if canonical_machine_name(host) => host.to_string(),
             Some(other) => {
@@ -2781,7 +2835,7 @@ pub(crate) fn parse_web_api_products(
             // A redirect runs nowhere, so it names no host. The keys are
             // refused above when both are present, so this arm only ever
             // sees a declaration that is a redirect and says so.
-            None if redirect_to.is_some() => String::new(),
+            None if redirect_to.is_some() || upstream_service.is_some() => String::new(),
             None => {
                 problems.push(format!("web_api.products.{name}.host is required"));
                 String::new()
@@ -2798,7 +2852,7 @@ pub(crate) fn parse_web_api_products(
                 ));
                 0
             }
-            None if redirect_to.is_some() => 0,
+            None if redirect_to.is_some() || upstream_service.is_some() => 0,
             None => {
                 problems.push(format!("web_api.products.{name}.port is required"));
                 0
@@ -2834,7 +2888,7 @@ pub(crate) fn parse_web_api_products(
             }
             // A redirect declares no consumer, and asking for one would be
             // asking for a vault identity nothing authenticates as.
-            None if redirect_to.is_some() => String::new(),
+            None if redirect_to.is_some() || upstream_service.is_some() => String::new(),
             None => {
                 problems.push(format!("web_api.products.{name}.consumer is required"));
                 String::new()
@@ -2960,6 +3014,7 @@ pub(crate) fn parse_web_api_products(
                     secrets,
                     database,
                     redirect_to,
+                    upstream_service,
                 },
             );
         }

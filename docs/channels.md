@@ -234,3 +234,117 @@ The channel boundaries above are defended by:
 - `tests/domain/`, `tests/link/`, `tests/removefile/` — host-channel identity, declaration, and guarded mutation.
 
 Probierz is the execution and evidence boundary when it is operational. The test source remains in this repository. A passing parser, dry run, mock server, or successful process start is not channel evidence; the journey must observe the promised final state in the real connected component.
+
+## When the stable bind is gone
+
+A Wisent product on a Darwin host serves on two ports, not one.
+`release_control.products.<product>.targets.<host>` declares a `stable_bind`
+and a pair of `candidate_ports`: for Skarbiec on `charless-mac-mini` those are
+`127.0.0.1:8895` and `[18895, 18896]`, and for Brama `127.0.0.1:8080` and
+`[18080, 18081]`. Every consumer's configuration names the stable bind and
+nothing else. The candidate is where the release itself listens, and the
+stable bind is a proxy held by the release agent, which is what makes a
+blue-green rollout invisible to the callers: the agent brings a candidate up,
+probes its `readiness_path`, and moves the stable proxy over.
+
+**The release agent is the only thing that publishes a stable bind.** The
+legacy launchd daemon named by `legacy_launchd_label` does not: in a settled
+blue-green state that daemon *is* the live candidate, so restarting it moves
+nothing and only interrupts the running service. `stado host recover` reports
+`candidate_live:<port>` for exactly that case and touches nothing.
+
+### Why a namespace declared without its grant takes the stable binds down
+
+The agent learns which ports to publish from `release_control` in the
+canonical registry, which it reads through the object API. The object API
+gates every non-release object read on its object authorization boundary, and
+that boundary is open only while the host's object verifier holds a read on
+the Skarbiec item of **every** namespace in `object_api.namespaces`. One
+namespace declared without its item in the grant closes the whole boundary,
+and the host's log says so:
+
+```text
+object authorization boundary revalidation failed: Skarbiec deployment configuration:
+object verifier grant item set mismatch (missing=[spis-crawls-object-api], unexpected=[])
+```
+
+Nothing fails at that moment, which is the trap. Existing processes keep
+serving from cached tokens and the last-known-good registry. The bill arrives
+at the next restart of anything that reads the registry — and a version roll
+restarts the release agent. The agent then cannot read `release_control`,
+publishes no stable bind, and the ports every consumer names go quiet. On
+2026-09-03 that sequence left `https://brama.wisent.com/health` answering 502
+for hours while two `stado host release` runs reported `ok` with every step
+`ok`, because the object API needs Skarbiec's stable bind to open the very
+boundary that was closed.
+
+### The repair
+
+Read the boundary's own reason first, because it names the item:
+
+```console
+stado host unit-log <host> com.wisent.always-on.stado-object-api --lines 300 | grep 'object authorization boundary'
+```
+
+Then declare the missing namespace on the machine you are running from —
+`reconcile-object-verifier` computes the item set from the local
+configuration, so a namespace that exists only on the host can never be
+satisfied from elsewhere — and reconcile the host's grant:
+
+```console
+stado config set object_api.namespaces.<ns> '<the same JSON the host declares>'
+stado host reconcile-object-verifier <host> --json
+```
+
+`exact: true` with the item in the list is the answer. The boundary opens, the
+release agent starts on its next tick, and the stable binds come back on their
+own. Verify in this order:
+
+```console
+stado storage stat stado://<queue-namespace>/registry.json      # state present, no 503
+stado host exec <host> -- lsof -nP -iTCP -sTCP:LISTEN           # every stable bind held
+stado host unit-log <host> com.wisent.stado.release-agent       # no infra_down loop
+stado service verify --host <host>
+```
+
+`stado host config-set` warns at declaration time when a namespace names an
+item the local configuration does not cover, so this does not have to be
+learned twice.
+
+### The fallback, and its reversal
+
+When the boundary cannot be opened quickly and a serving port must come back
+now, point the host's verifiers at the product's **declared candidate** —
+which is a legitimate blue-green address, not an invented one — and reverse it
+in the same session:
+
+```console
+stado host config-set <host> release_api.skarbiec.url http://127.0.0.1:18895
+stado host config-set <host> service_api.skarbiec.url http://127.0.0.1:18895
+stado host config-set <host> secrets.skarbiec.url     http://127.0.0.1:18895
+stado host config-set <host> object_api.skarbiec.url  http://127.0.0.1:18895 \
+  --reload-service com.wisent.always-on.stado-object-api
+```
+
+One reload covers the release, object and service verifiers: `stado dashboard`
+is the single process serving `/api/object`, `/api/release/object` and
+`/api/service/*`. `secrets.skarbiec.url` belongs to the control plane and
+takes `--reload-service com.wisent.compute.service.stado-local-control-plane`;
+restarting it is safe only while Skarbiec is answering at the address you just
+set, which is the point of setting it first. Reverse every one of the four to
+the stable bind once the agent has published it again, with the same reloads,
+and verify with the same four commands.
+
+### What now prevents the recurrence
+
+- The release agent falls back to this host's last-known-good `release_control`
+  when the authority cannot be read, the way the resolver already did for
+  `service_directory`, and says `release agent recovery: …` when it does. A
+  closed boundary no longer takes the stable binds with it.
+- `stado host release` polls every declared stable bind of the units it
+  restarted, for up to 120 seconds, and reports `stable_binds` with a verdict
+  per port. It refuses to report `ok` while one is `absent`, so a roll can no
+  longer succeed on paper through an outage.
+- `stado host recover` reports every declared stable bind as `already_bound`,
+  `candidate_live:<port>` or `refused:<reason>`, and bootstraps only a
+  declared bind that nothing at all is holding.

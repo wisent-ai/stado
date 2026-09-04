@@ -352,6 +352,28 @@ pub struct CleanupReport {
     /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
     /// non-run this was.
     pub scanned: bool,
+    /// Declared cleaners this pass never scanned, because the scan share or
+    /// the pass deadline was spent before their turn came.
+    ///
+    /// [`scanned`](Self::scanned) says whether a pass reached its cleaners at
+    /// all; this says which of them it never reached, and it exists for the
+    /// same reason: the table publishes `scanned 0, eligible 0, deleted 0`
+    /// for a cleaner that was never given a turn, which is byte-for-byte what
+    /// a cleaner that looked and found nothing emits. On `charless-mac-mini`
+    /// the cleaners run in a fixed order with `backup_twins` last, the policy
+    /// declared no `max_pass_seconds` so every pass took the janitor's own 30
+    /// seconds against a `$HOME` holding 103.9 GiB under `~/.stado` alone,
+    /// and `build_caches` — which walks all of `$HOME` by design — ended the
+    /// pass inside itself. `backup_twins` reported zeros with
+    /// `skipped {scan_cap: 1, scan_deadline: 1}` for as long as anyone had
+    /// looked, under real pressure, while the host refused every ordinary job
+    /// for eleven days. The outcome was `cap_reached`, which is true, names
+    /// the budget and not the cleaner, and reads like a finished look at the
+    /// disk.
+    ///
+    /// Empty when every declared cleaner had its turn, so a reader can tell
+    /// "nothing was eligible" from "nobody looked".
+    pub unscanned_cleaners: Vec<String>,
     /// Where the build-cache walk stopped, relative to its scan root, or
     /// `None` when it crossed the whole tree. Carried across passes through
     /// the state file: see [`build_caches::scan_build_caches`].
@@ -366,7 +388,7 @@ impl CleanupReport {
             target_name: None,
             policy_digest: None,
             writer: "unknown",
-            writer_version: env!("CARGO_PKG_VERSION"),
+            writer_version: crate::build_identity::BUILD_IDENTITY,
             policy_defaulted: false,
             mode: None,
             check_interval_seconds: None,
@@ -390,6 +412,7 @@ impl CleanupReport {
             active_slot_count: active_slot_count.max(0),
             last_success_at: None,
             scanned: false,
+            unscanned_cleaners: Vec::new(),
             builds_resume_from: None,
             errors: Vec::new(),
         }
@@ -491,6 +514,7 @@ impl CleanupReport {
             "target_bytes": self.target_bytes,
             "pressure_active": self.pressure_active,
             "cleaners": cleaners,
+            "unscanned_cleaners": self.unscanned_cleaners,
             "caps": {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
@@ -1061,6 +1085,29 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             ),
         }),
     };
+    // The declared cleaners the pass never reached, kept in the public form
+    // because the reader that needs it is `stado host disk` on another
+    // machine. Filtered to the six known cleaner names: this crosses a host
+    // boundary into an operator's terminal, and every other field here is
+    // bounded for the same reason.
+    let public_unscanned: Vec<Value> = get("unscanned_cleaners")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|name| {
+                    matches!(
+                        *name,
+                        "huggingface_cache" | "weles_recordings" | "build_caches"
+                    ) || *name == chromium_clones::CLEANER
+                        || *name == queue_workdirs::CLEANER
+                        || *name == backup_twins::CLEANER
+                })
+                .map(Value::from)
+                .collect()
+        })
+        .unwrap_or_default();
     serde_json::json!({
         "version": STATE_VERSION,
         "mode": mode,
@@ -1075,6 +1122,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         "target_bytes": public_nonnegative(get("target_bytes")),
         "pressure_active": get("pressure_active").and_then(Value::as_bool),
         "cleaners": public_cleaners,
+        "unscanned_cleaners": public_unscanned,
         "caps": {
             "bytes": cap("bytes"),
             "items": cap("items"),
@@ -1858,6 +1906,34 @@ fn run_with_lock(
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
+    // Which declared cleaners never got a turn. Every counter needed for this
+    // was already in hand here and nothing said it: a cleaner whose share ran
+    // out publishes the same three zeros as one that looked and found nothing,
+    // and `cap_reached` names the budget rather than the cleaner it stopped.
+    //
+    // Keyed on the two skips a budget produces — `scan_cap` and
+    // `scan_deadline` — and never on a zero count alone: a cleaner whose root
+    // does not exist on this host also scans nothing, reports `root_absent`,
+    // and is not waiting for a turn. Calling that one unscanned would be this
+    // field committing the error it exists to report. The order is the run
+    // order, so the answer reads as "the pass ended before these".
+    let budget_stopped = |cleaner: &CleanerReport| {
+        cleaner.scanned_items == 0
+            && (cleaner.skipped.contains_key("scan_cap")
+                || cleaner.skipped.contains_key("scan_deadline"))
+    };
+    report.unscanned_cleaners = [
+        ("huggingface_cache", &report.hf),
+        ("weles_recordings", &report.weles),
+        ("build_caches", &report.builds),
+        (chromium_clones::CLEANER, &report.clones),
+        (queue_workdirs::CLEANER, &report.workdirs),
+        (backup_twins::CLEANER, &report.backup_twins),
+    ]
+    .into_iter()
+    .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
+    .map(|(name, _)| name.to_string())
+    .collect();
 
     let after = match free_bytes(home) {
         Ok(free) => free,
@@ -2001,7 +2077,7 @@ async fn cleanup_once(
     let hostname = crate::providers::vast::system_hostname();
     let mut report = CleanupReport::base(active_slot_count, &hostname);
     report.writer = writer.as_str();
-    report.writer_version = env!("CARGO_PKG_VERSION");
+    report.writer_version = crate::build_identity::BUILD_IDENTITY;
 
     // Python's outer `except BaseException` half: any failure before the
     // policy resolves lands in `runtime` and leaves the default outcome.

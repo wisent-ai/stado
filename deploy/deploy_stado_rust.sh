@@ -124,12 +124,25 @@ export STADO_RELEASE_VERSION
 # few lines later with a sentence that says so; this write stays quiet until
 # there is a file to write, rather than failing the deploy with a confusing
 # config error before that refusal is reached.
+#
+# And it never decides the delivery. `config set` validates the WHOLE profile,
+# so an unrelated defect elsewhere in it refuses this write — on 2026-09-03 the
+# 0.14.5 train published both platforms and then died here on
+# "release.version rejected, config unchanged: object_api.namespaces.probierz
+# does not grant the queue prefix(es) job-transitions/", a finding about the
+# queue's own grants and not about the version being recorded. The release gate
+# downstream reads the coordinate from the environment this script exports, not
+# from the file, so a refused declaration is reported and the deploy carries on.
 if [ -n "${STADO_CONFIG:-}" ] && [ -r "${STADO_CONFIG:-}" ]; then
     DECLARED_VERSION="$(env -u STADO_RELEASE_VERSION "$STADO_BIN" config show 2>/dev/null |
         jq -r '.resolved.stado_release_version // ""' 2>/dev/null || true)"
     if [ "$DECLARED_VERSION" != "$STADO_RELEASE_VERSION" ]; then
-        "$STADO_BIN" config set release.version "$STADO_RELEASE_VERSION"
-        echo "declared release.version=$STADO_RELEASE_VERSION (was ${DECLARED_VERSION:-unset})"
+        if "$STADO_BIN" config set release.version "$STADO_RELEASE_VERSION"; then
+            echo "declared release.version=$STADO_RELEASE_VERSION (was ${DECLARED_VERSION:-unset})"
+        else
+            echo "WARNING: the profile still declares release.version=${DECLARED_VERSION:-unset};" \
+                "the refusal above says why. The gate verifies $STADO_RELEASE_VERSION either way."
+        fi
     fi
 fi
 

@@ -1423,6 +1423,26 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
                  than the state of the host"
             );
         }
+        // Which declared cleaners the pass never reached. `cap_reached` above
+        // says a budget stopped the pass and cannot say whom it stopped, and
+        // the per-cleaner table prints the same three zeros for a cleaner that
+        // never got a turn as for one that looked and found nothing. On
+        // charless-mac-mini `backup_twins` sat at zeros under real pressure
+        // for as long as anyone had looked, behind a `build_caches` walk of
+        // the whole of `$HOME`, while the host refused every ordinary job.
+        let unscanned: Vec<&str> = state
+            .and_then(|value| value.get("unscanned_cleaners"))
+            .and_then(Value::as_array)
+            .map(|names| names.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !unscanned.is_empty() {
+            println!(
+                "the pass ended before these declared cleaner(s) scanned anything: {} — raise \
+                 `max_pass_seconds` or `max_scan_items` with `stado host disk-cleanup`, or narrow \
+                 an earlier cleaner's root, or their zeros mean nobody looked",
+                unscanned.join(", ")
+            );
+        }
     } else {
         println!(
             "\ncleanup state: no state file at {} — the janitor has never \
@@ -8987,6 +9007,7 @@ pub async fn config_set(
         ));
     }
     remote_config(target, Some((key, value))).await?;
+    warn_unbacked_object_namespace(target, key, value);
     if let Some(service) = reload_service {
         super::service::reconcile_after_config_change(
             service,
@@ -8996,6 +9017,71 @@ pub async fn config_set(
         .await?;
     }
     Ok(())
+}
+
+/// Say, at declaration time, what an object namespace without a grant costs.
+///
+/// `object_api.namespaces.<ns>` names a Skarbiec item, and the host's object
+/// verifier must hold a read on it or the whole object authorization boundary
+/// closes — not just that namespace. On 2026-09-03 `spis-crawls` was declared
+/// on `charless-mac-mini` with its item `spis-crawls-object-api` outside the
+/// verifier's grant. Nothing complained. The boundary closed, every non-release
+/// object read answered `503 object authorization unavailable`, and the fault
+/// stayed invisible until the next restart of the release agent — which then
+/// could not read `release_control`, published no stable bind, and left
+/// `brama.wisent.com/health` answering 502 for hours. The log line that named
+/// it, `object verifier grant item set mismatch (missing=[spis-crawls-object-api])`,
+/// existed the whole time on the host and nowhere an operator was looking.
+///
+/// So the warning is emitted here, where the declaration is made, and it names
+/// the second half of the trap too: `reconcile-object-verifier` computes the
+/// item set from the configuration of the machine running it, so a namespace
+/// that exists only on the host can never be satisfied from here. That is why
+/// the sentence asks for the declaration on both sides.
+fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
+    let Some(namespace) = key.strip_prefix("object_api.namespaces.") else {
+        return;
+    };
+    if namespace.is_empty() || namespace.contains('.') {
+        return;
+    }
+    let item = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|declared| {
+            declared
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let Some(item) = item else {
+        return;
+    };
+    let covered = crate::config::object_api_namespaces()
+        .map(|namespaces| {
+            crate::config::object_verifier_items(namespaces)
+                .iter()
+                .any(|held| held == &item)
+        })
+        .unwrap_or(false);
+    if covered {
+        eprintln!(
+            "note: {target}'s object verifier grant must cover {item:?} for namespace \
+             {namespace:?}; this machine declares it too, so reconcile the host with: stado host \
+             reconcile-object-verifier {target}"
+        );
+        return;
+    }
+    eprintln!(
+        "warning: namespace {namespace:?} on {target} names Skarbiec item {item:?}, and this \
+         machine's own object_api.namespaces does not declare it. Until the host's object verifier \
+         grant covers that item its WHOLE object authorization boundary closes — every \
+         /api/object read answers 503, not just this namespace — and the failure surfaces at the \
+         next restart of anything that reads the registry, including the release agent that \
+         publishes every stable bind. `stado host reconcile-object-verifier {target}` computes the \
+         item set from THIS machine's configuration, so declare the namespace here as well and \
+         then run it: stado config set {key} '<the same JSON>' && stado host \
+         reconcile-object-verifier {target}"
+    );
 }
 
 async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {
