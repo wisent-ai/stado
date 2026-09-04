@@ -259,6 +259,77 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
 }
 
 #[test]
+#[ignore = "Probierz records the real busy-lock state-preservation journey"]
+fn busy_lock_preserves_the_reclaim_hysteresis_and_scan_cursor() {
+    let journey = Journey::new();
+    let state_dir = journey.state_dir();
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(
+        journey.state_path(),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "last_attempt_at": 0.0,
+            "report": {
+                "target_name": "cleanup-runner",
+                "policy_digest": "continuing-policy",
+                "policy_defaulted": false,
+                "mode": "enforce",
+                "check_interval_seconds": 60,
+                "low_bytes": 1073741824_i64,
+                "target_bytes": 2147483648_i64,
+                "pressure_active": true,
+                "last_success_at": "2026-09-04T00:00:00+00:00",
+                "build_caches_resume_from": "project/target",
+                "unscanned_cleaners": ["build_caches"]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let held = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state_dir.join("disk-cleanup.lock"))
+        .unwrap();
+    held.lock_exclusive().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    fs::write(
+        state_dir.join("disk-cleanup.lock.holder"),
+        serde_json::to_vec(&json!({
+            "pid": std::process::id(),
+            "acquired_at": now,
+            "deadline_at": now + 3600.0,
+            "writer": "active-agent",
+            "writer_version": "current"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    assert_eq!(report["outcome"], "lock_busy");
+    assert_eq!(report["policy_digest"], "continuing-policy");
+    assert_eq!(report["pressure_active"], true);
+    assert_eq!(report["build_caches_resume_from"], "project/target");
+    assert_eq!(report["unscanned_cleaners"], json!(["build_caches"]));
+    let persisted: Value =
+        serde_json::from_slice(&fs::read(journey.state_path()).unwrap()).unwrap();
+    assert_eq!(persisted["report"]["policy_digest"], "continuing-policy");
+    assert_eq!(persisted["report"]["pressure_active"], true);
+    assert_eq!(
+        persisted["report"]["build_caches_resume_from"],
+        "project/target"
+    );
+
+    FileExt::unlock(&held).unwrap();
+}
+
+#[test]
 #[ignore = "Probierz records the disk-cleanup CLI refusal"]
 fn once_and_watch_are_refused_with_the_public_usage_sentence() {
     let journey = Journey::new();

@@ -2601,20 +2601,62 @@ async fn cleanup_once(
                     report.outcome = "lock_busy_unattributed".to_string();
                 }
             }
-            // Carry the last SUCCESS forward. It is read after the lock
-            // elsewhere, so a tick that merely could not get the lock used to
-            // report `last_success_at: null` — "this host has never completed
-            // a pass" — and `deploy::host_gates` reads exactly that as a stall.
-            // So one busy lock made a host that cleaned successfully minutes
-            // earlier look like one that never has, and refused claiming on
-            // the strength of it. Found by object-api-deploy while the fleet
-            // sat behind that gate.
+            // A busy observation must not erase the state the holder is
+            // continuing. `continuing_reclaim` below relies on the previous
+            // policy digest plus `pressure_active`, and the build-cache walker
+            // relies on its resume cursor. Replacing those with null made the
+            // next writer stop at the low watermark instead of finishing at
+            // the declared target, and made every interrupted scan restart at
+            // the root.
             if let Ok(previous) = read_state(&state_dir) {
-                report.last_success_at = previous
-                    .get("report")
-                    .filter(|value| value.is_object())
-                    .and_then(|value| value.get("last_success_at"))
-                    .and_then(|value| value.as_str().map(str::to_string));
+                if let Some(previous) = previous.get("report").and_then(Value::as_object) {
+                    report.last_success_at = previous
+                        .get("last_success_at")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    report.target_name = previous
+                        .get("target_name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    report.policy_digest = previous
+                        .get("policy_digest")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    report.policy_defaulted = previous
+                        .get("policy_defaulted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    report.mode = previous
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    report.check_interval_seconds = previous
+                        .get("check_interval_seconds")
+                        .and_then(Value::as_i64);
+                    report.low_bytes = previous.get("low_bytes").and_then(Value::as_i64);
+                    report.target_bytes = previous.get("target_bytes").and_then(Value::as_i64);
+                    report.pressure_active =
+                        previous.get("pressure_active").and_then(Value::as_bool);
+                    report.builds_resume_from = previous
+                        .get("build_caches_resume_from")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    report.unscanned_cleaners = previous
+                        .get("unscanned_cleaners")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                }
+            }
+            if let Ok(free) = free_bytes(&home) {
+                report.free_bytes_before = Some(free);
+                report.free_bytes_after = Some(free);
             }
             // `persist`, not `None`: a pass prevented by a live holder is the
             // fact the stall arithmetic needs most, and without it forty
