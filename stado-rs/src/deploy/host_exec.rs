@@ -432,6 +432,9 @@ const BRAMA_LAUNCHER: &str = "~/.stado/bin/start-with-skarbiec";
 /// pinned one in a script.
 const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 
+/// The registry-managed Stado binary on either supported host platform.
+const STADO_CLI: &str = "~/.stado/bin/stado";
+
 /// The uv package installer, at the two absolute paths every reader in this
 /// fleet probes for it — including Weles's kimi login trajectory, whose pinned
 /// CLI install depends on one of them existing.
@@ -639,6 +642,12 @@ struct AccountProgram {
 /// Every program in the table that the managed account owns.
 const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
     AccountProgram {
+        program: STADO_CLI,
+        candidates: &[STADO_CLI],
+        environment: &[],
+        timeout_seconds: 180,
+    },
+    AccountProgram {
         program: BRAMA_LAUNCHER,
         // The launcher is part of the release bundle, and the live bundle is the
         // `current` link the service unit itself runs through -- never a pinned
@@ -743,6 +752,14 @@ fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
 /// touching a length. Ordered roughly by how often an operator reaches for
 /// it while a box is misbehaving.
 pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
+    ApprovedCommand {
+        argv: &[STADO_CLI, "registry", "doctor"],
+        why: "reads the installed build's registry verdict and the unit images on the \
+              machine that owns them. A workstation cannot inspect another host's \
+              executing images; the diagnostic must run there. This fixed command \
+              changes no service, accepts no path or repair flag, and reports the \
+              host's own findings without treating an unread image as agreement",
+    },
     ApprovedCommand {
         argv: &["/usr/bin/uptime"],
         why: "reads kernel uptime and load counters; takes no argument and writes nothing",

@@ -39,10 +39,23 @@ and automatic repairs. `$HOME`, `$STADO_HOST`, and `$STADO_PLATFORM` expand
 against the target, not the caller. Credentials still use `secret-sync`, never
 `--env`.
 
+If a loaded unit's arguments match but its rendered environment differs,
+`ensure` saves the prior definition and loads the new one. On macOS this requires
+bootout and bootstrap: kickstart alone would reuse launchd's old environment.
+If the new definition fails to start, `ensure` restores and starts the previous
+definition and reports failure; it never reports the requested environment as
+applied after rollback. A different executable or argument vector remains an
+explicit conflict on a loaded macOS unit.
+
 For an independently managed instance outside a release policy's target map,
 `registry doctor` accepts pinned environment only when both the registry record
 and the local unit file contain the product's exact required values. A remote
 unit that was not read is not treated as agreeing.
+
+Run `stado host exec <target> -- stado registry doctor` to measure those
+host-local facts through Stado. The fixed read-only command uses the target's
+installed binary and returns its own registry and executing-image findings;
+running the doctor on a workstation cannot establish them for another host.
 
 ### Release-controlled placement handoff
 
