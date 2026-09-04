@@ -151,26 +151,80 @@ pub async fn record_terminal_outcome(
     if job.run_id.is_empty() || job.submission_request_digest.is_empty() {
         return Ok(());
     }
-    crate::queue::submit::validate_run_id(&job.run_id)
+    record_terminal_outcome_for_entry(store, &job.run_id, index, job, prefix).await
+}
+
+fn terminal_job_projection(job: &crate::models::Job) -> Value {
+    let mut projection = crate::queue::submit::immutable_job_projection(job);
+    let object = projection
+        .as_object_mut()
+        .expect("Job projection serializes as an object");
+    for field in [
+        "run_id",
+        "submission_request_digest",
+        "submission_command_index",
+    ] {
+        object.remove(field);
+    }
+    projection
+}
+
+fn terminal_job_matches_entry(
+    job: &crate::models::Job,
+    planned: &crate::models::Job,
+    run_id: &str,
+    index: usize,
+) -> bool {
+    let exact_linkage = job.run_id == run_id
+        && job.submission_request_digest == planned.submission_request_digest
+        && job.submission_command_index == Some(index);
+    let legacy_unlinked = job.run_id.is_empty()
+        && job.submission_request_digest.is_empty()
+        && job.submission_command_index.is_none();
+    planned.run_id == run_id
+        && planned.submission_command_index == Some(index)
+        && job.job_id == planned.job_id
+        && (exact_linkage || legacy_unlinked)
+        && terminal_job_projection(job) == terminal_job_projection(planned)
+}
+
+/// Retain one terminal job against the durable manifest entry that names it.
+///
+/// Reaping supplies the manifest identity explicitly so runs migrated after a
+/// legacy terminal transition can retain their exact outcome. Such a terminal
+/// job may omit all three submission-linkage fields, but a partial or
+/// conflicting linkage is still rejected.
+pub(crate) async fn record_terminal_outcome_for_entry(
+    store: &JobStorage,
+    run_id: &str,
+    index: usize,
+    job: &crate::models::Job,
+    prefix: &str,
+) -> Result<(), StorageError> {
+    if !TERMINAL_PREFIXES.contains(&prefix) {
+        return Err(StorageError::Other(format!(
+            "{prefix} is not a terminal job prefix"
+        )));
+    }
+    crate::queue::submit::validate_run_id(run_id)
         .map_err(|error| StorageError::Other(error.to_string()))?;
-    let path = format!("{RUN_PREFIX}/{}.json", job.run_id);
-    crate::queue::submit::migrate_v2_run_manifest(store, &job.run_id)
+    let path = format!("{RUN_PREFIX}/{run_id}.json");
+    crate::queue::submit::migrate_v2_run_manifest(store, run_id)
         .await
         .map_err(|error| StorageError::Other(error.to_string()))?;
     for _ in 0..16 {
         let versioned = store.read_text_versioned(&path).await?.ok_or_else(|| {
             StorageError::Other(format!(
-                "durable run manifest {} disappeared before terminal transition",
-                job.run_id
+                "durable run manifest {run_id} disappeared before terminal transition"
             ))
         })?;
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
-        crate::queue::submit::validate_stored_run_manifest(&manifest, &job.run_id)
+        crate::queue::submit::validate_stored_run_manifest(&manifest, run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
         if manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v3") {
             return Err(StorageError::Other(format!(
-                "durable run manifest {} does not match terminal job {}",
-                job.run_id, job.job_id
+                "durable run manifest {run_id} does not match terminal job {}",
+                job.job_id
             )));
         }
         let entry = manifest
@@ -180,23 +234,19 @@ pub async fn record_terminal_outcome(
             .and_then(Value::as_object_mut)
             .ok_or_else(|| {
                 StorageError::Other(format!(
-                    "durable run manifest {} has no entry {index}",
-                    job.run_id
+                    "durable run manifest {run_id} has no entry {index}"
                 ))
             })?;
         if entry.get("job_id").and_then(Value::as_str) != Some(job.job_id.as_str()) {
             return Err(StorageError::Other(format!(
-                "durable run manifest {} maps entry {index} to a different job",
-                job.run_id
+                "durable run manifest {run_id} maps entry {index} to a different job"
             )));
         }
         let planned: crate::models::Job =
             serde_json::from_value(entry.get("planned_job").cloned().ok_or_else(|| {
                 StorageError::Other("durable run entry has no planned job".into())
             })?)?;
-        if crate::queue::submit::immutable_job_projection(&planned)
-            != crate::queue::submit::immutable_job_projection(job)
-        {
+        if !terminal_job_matches_entry(job, &planned, run_id, index) {
             return Err(StorageError::Other(format!(
                 "terminal job {} does not match its immutable run projection",
                 job.job_id
@@ -243,8 +293,8 @@ pub async fn record_terminal_outcome(
         }
     }
     Err(StorageError::StorageConflict(format!(
-        "run manifest {} remained contended while recording job {}",
-        job.run_id, job.job_id
+        "run manifest {run_id} remained contended while recording job {}",
+        job.job_id
     )))
 }
 

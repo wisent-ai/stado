@@ -19,7 +19,7 @@ use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::queue::runs::{
-    list_runs, read_run, record_terminal_outcome, run_status, ALL_PREFIXES, RUN_PREFIX,
+    list_runs, read_run, record_terminal_outcome_for_entry, run_status, ALL_PREFIXES, RUN_PREFIX,
     TERMINAL_PREFIXES,
 };
 use crate::queue::{JobStorage, StorageError};
@@ -209,7 +209,7 @@ pub async fn reap_terminal_runs(
             .ok_or_else(|| {
                 StorageError::Other(format!("run manifest {run_id} missing durable entries"))
             })?;
-        for entry in entries {
+        for (index, entry) in entries.iter().enumerate() {
             if entry.get("outcome").is_some_and(Value::is_object) {
                 continue;
             }
@@ -228,7 +228,7 @@ pub async fn reap_terminal_runs(
                     "terminal job {job_id} disappeared before run {run_id} retained its outcome"
                 )));
             };
-            record_terminal_outcome(store, &job, prefix).await?;
+            record_terminal_outcome_for_entry(store, &run_id, index, &job, prefix).await?;
         }
 
         let Some(versioned) = store.read_text_versioned(&path).await? else {

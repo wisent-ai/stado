@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.20
+
+- **Run retention:** the coordinator can retain an exact terminal job named by a validated durable run even when that historical job predates submission-linkage fields. Missing linkage is accepted only when all three linkage fields are absent and the remaining immutable job projection matches the manifest; partial or conflicting linkage still fails closed.
+- **Migration:** no persisted-state rewrite is required. Existing affected manifests are repaired by the normal run reaper on its next successful coordinator tick.
+- **Rollback boundary:** rolling back restores the coordinator failure `terminal entry without retained outcome` for a migrated run whose terminal job lacks submission linkage.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the run-retention journey drives the built coordinator against the historical terminal state, and release CI supplies the remaining qualification evidence before publication.
+
 ## 0.15.19
 
 - **Dynamic capacity:** hosts no longer declare a static job count. Admission now uses the CPU, memory, disk, accelerator, and active-workload measurements the host publishes, and the CLI, desktop fleet view, documentation, and behavior tests use the same model.
