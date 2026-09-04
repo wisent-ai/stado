@@ -112,7 +112,10 @@ impl Journey {
             .arg(&directory)
             .status()
             .unwrap();
-        assert!(touched.success(), "fixture directory mtime was not backdated");
+        assert!(
+            touched.success(),
+            "fixture directory mtime was not backdated"
+        );
         directory
     }
 
@@ -146,7 +149,10 @@ fn dry_run_reports_eligible_cache_without_deleting_or_persisting() {
     assert_eq!(report["active_job_count"], 0);
     assert!(tagged.is_dir(), "preview must preserve an eligible cache");
     assert!(untagged.is_dir(), "preview must preserve unrelated source");
-    assert!(!journey.state_path().exists(), "preview must write no janitor state");
+    assert!(
+        !journey.state_path().exists(),
+        "preview must write no janitor state"
+    );
 }
 
 #[test]
@@ -163,7 +169,10 @@ fn enforce_deletes_only_tagged_cache_and_persists_reclaimed_progress() {
     assert_eq!(report["cleaners"]["build_caches"]["eligible_items"], 1);
     assert_eq!(report["cleaners"]["build_caches"]["deleted_items"], 1);
     assert_eq!(report["errors"], json!([]));
-    assert!(!tagged.exists(), "enforcement must remove the eligible cache");
+    assert!(
+        !tagged.exists(),
+        "enforcement must remove the eligible cache"
+    );
     assert!(
         untagged.join("valuable-source.txt").is_file(),
         "enforcement must preserve an untagged source directory"
