@@ -179,6 +179,40 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// `stado host beacon-units` — the unit ids the registry declares for this
+/// machine, one per line.
+///
+/// The list the health beacon must ask systemd or launchd about. Answered from
+/// the registry rather than assembled in the collector, because the registry
+/// is already the one place that says what a host runs and a second list in
+/// shell would be a second answer to that question. That second list existed:
+/// `WC_HEALTH_UNITS`, typed per host, and on ubuntu-server-rtx-pro-6000 it
+/// named `wisent-agent.service` alone while the registry declared
+/// `stado-resolver` there. The declared unit was never asked about, so the
+/// beacon carried no entry for it and `registry doctor` reported it as a unit
+/// the host does not have — while it was active with a live pid.
+///
+/// Never fails the caller. A machine that is not in the registry, or a
+/// registry that cannot be read, prints nothing and exits zero: the beacon
+/// then reports the operator's own list, and a collector that died here would
+/// report nothing at all.
+pub async fn beacon_units() -> Result<(), CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let Ok(Some(target)) = crate::providers::local::agent::lookup_self_auto(&hostname).await else {
+        return Ok(());
+    };
+    for service in crate::deploy::service::declared_services(&target) {
+        let unit = service.unit_id();
+        // A unit id carrying a space or a comma would break the collector's
+        // own comma-separated list, and nothing in this fleet has one.
+        if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
+            continue;
+        }
+        println!("{unit}");
+    }
+    Ok(())
+}
+
 fn valid_beacon_host(host: &str) -> bool {
     let bytes = host.as_bytes();
     !bytes.is_empty()
@@ -355,28 +389,34 @@ pub async fn recover(
             .await
             .map_err(|exc| CmdError::click(exc.to_string()))?
     };
-    let resolved = registry
-        .lookup(target)
-        .cloned()
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
-    // Repair the authority before any release catalog read. This path uses the
-    // already loaded registry identity and the host's physical local store, so
-    // the object API does not need to be available in order to recover itself.
-    let object_api = recover_object_api_on_target(&resolved, &runner).await?;
-    let mut report = match release {
+    let (report, object_api) = match release {
         Some(version) => {
-            crate::deploy::host_recovery_release::recover(&registry, target, version, &runner).await
+            let resolved = registry
+                .lookup(target)
+                .cloned()
+                .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+            // A signed recovery release is fetched through the object API.
+            // Repair that authority first without depending on the authority
+            // itself. An ordinary host recovery reads no release object and
+            // must not mutate an unrelated object-API service.
+            let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+            (
+                crate::deploy::host_recovery_release::recover(&registry, target, version, &runner)
+                    .await,
+                Some(object_api),
+            )
         }
-        None => {
+        None => (
             crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
-                .await
-        }
-    }
-    .map_err(|exc| CmdError::click(exc.to_string()))?;
-    if let Some(object) = report.as_object_mut() {
+                .await,
+            None,
+        ),
+    };
+    let mut report = report.map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let (Some(object), Some(detail)) = (report.as_object_mut(), object_api) {
         object.insert(
             "object_api".to_string(),
-            json!({"status": "healthy", "detail": object_api}),
+            json!({"status": "healthy", "detail": detail}),
         );
     }
     println!(
@@ -1387,6 +1427,26 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
                 "that pass was written by {writer} running {version}; this file \
                  has more than one writer, so OUTCOME is the last pass rather \
                  than the state of the host"
+            );
+        }
+        // Which declared cleaners the pass never reached. `cap_reached` above
+        // says a budget stopped the pass and cannot say whom it stopped, and
+        // the per-cleaner table prints the same three zeros for a cleaner that
+        // never got a turn as for one that looked and found nothing. On
+        // charless-mac-mini `backup_twins` sat at zeros under real pressure
+        // for as long as anyone had looked, behind a `build_caches` walk of
+        // the whole of `$HOME`, while the host refused every ordinary job.
+        let unscanned: Vec<&str> = state
+            .and_then(|value| value.get("unscanned_cleaners"))
+            .and_then(Value::as_array)
+            .map(|names| names.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !unscanned.is_empty() {
+            println!(
+                "the pass ended before these declared cleaner(s) scanned anything: {} — raise \
+                 `max_pass_seconds` or `max_scan_items` with `stado host disk-cleanup`, or narrow \
+                 an earlier cleaner's root, or their zeros mean nobody looked",
+                unscanned.join(", ")
             );
         }
     } else {
@@ -2612,6 +2672,24 @@ pub async fn reclaim(
     let (target, reclamation) = crate::deploy::host_reclaim::reclaim_host(host, apply, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
+    // A skipped stage is an infrastructure failure that the command survived,
+    // so the classification line `main_entry` emits on the error path never
+    // fires for it — and a stage nobody could judge, reported only as a row
+    // in a human table, is the silence that cost the release train three
+    // attempts. The store's own sentence rides in the reason, so `HTTP 502`
+    // classes as `infra_down`, `retryable=true` here instead of the
+    // `unknown`, `retryable=false` a discarded error used to produce. The
+    // point and service are the two `cli/mod.rs` would derive for this
+    // command: `failure_point` walks the subcommand names, `failure_service`
+    // maps `host` to `fleet`.
+    for (stage, reason) in &reclamation.skipped {
+        crate::failure::log_failure(
+            "cli.host.reclaim",
+            "fleet",
+            crate::failure::classify_message(reason),
+            &format!("{stage}: {reason}"),
+        );
+    }
     let audited = match reason {
         Some(reason) if apply => Some(
             crate::deploy::host_reclaim::record_audit(
@@ -2707,11 +2785,26 @@ fn gib(blocks: i64) -> f64 {
 
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
 /// command (`docs/missing-commands.md` item six).
+///
+/// The failure keeps whatever
+/// [`crate::deploy::host_exec::ExecRefusal`] already knew about itself:
+/// an allowlist refusal reaches the operator as the code it stated, its
+/// approved spellings as help beside it, and — when `--json` was asked
+/// for — as a document rather than as prose the caller cannot parse.
 pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_exec::exec_host(target, &words, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(|exc| {
+            let mut error = CmdError::click(exc.message).machine_readable(json);
+            if let Some(code) = exc.code {
+                error = error.stating(code);
+            }
+            if let Some(help) = exc.help {
+                error = error.helping(help);
+            }
+            error
+        })?;
     let expected = crate::deploy::host_exec::OK_STATUS;
     if json {
         print_json(&report);
@@ -5162,6 +5255,31 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
+    remote_skarbiec_json_at(target, arguments, None).await
+}
+
+/// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
+/// the target account's home.
+///
+/// `sync_dir()` in Skarbiec's own `net::sync` reads `SKARBIEC_SYNC_DIR` and
+/// otherwise takes `$HOME/.skarbiec-sync`, and the file inside it is always
+/// `vault.enc.json`. Naming it here is what lets the preview list the mirror's
+/// items with the same read-only `list` the live vault answers.
+const SKARBIEC_MIRROR_RELATIVE: &str = ".skarbiec-sync/vault.enc.json";
+
+/// [`remote_skarbiec_json`], optionally against a vault file other than the
+/// target's live one.
+///
+/// The override exists for the sync preview and for nothing else: the only way
+/// to say what a pull would change is to read the mirror as a vault, and
+/// Skarbiec answers that question for whatever `SKARBIEC_VAULT_FILE` names.
+/// The path is built from the target's own `$HOME`, never from an operator
+/// argument, so this widens what Stado can read and not who can choose it.
+async fn remote_skarbiec_json_at(
+    target: &str,
+    arguments: &[String],
+    vault_relative: Option<&str>,
+) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
         .first()
         .map(String::as_str)
@@ -5198,7 +5316,10 @@ async fn remote_skarbiec_json(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
-    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let vault_environment = match vault_relative {
+        Some(relative) => format!("SKARBIEC_VAULT_FILE={home}/{relative}"),
+        None => format!("SKARBIEC_VAULT_FILE={vault}"),
+    };
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let tool_path = skarbiec_tool_path(&home);
     let mut invocation = vec![
@@ -5228,12 +5349,172 @@ async fn remote_skarbiec_json(
     Ok((resolved, report))
 }
 
+/// One item as the target's own `skarbiec list` reports it, reduced to what a
+/// sync verdict turns on.
+struct MirrorItem {
+    revision: i64,
+    updated_at: String,
+    deleted: bool,
+}
+
+fn mirror_items(
+    report: &Value,
+) -> Result<std::collections::BTreeMap<String, MirrorItem>, CmdError> {
+    let rows = report
+        .as_array()
+        .ok_or_else(|| CmdError::click("Skarbiec list did not answer an array of items"))?;
+    let mut items = std::collections::BTreeMap::new();
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        items.insert(
+            id.to_string(),
+            MirrorItem {
+                revision: row.get("revision").and_then(Value::as_i64).unwrap_or(-1),
+                updated_at: row
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                deleted: row.get("deleted").and_then(Value::as_bool) == Some(true),
+            },
+        );
+    }
+    Ok(items)
+}
+
+/// What `stado host sync-vault` would do to TARGET, without doing any of it.
+///
+/// This preview exists because the operation it previews is not a merge, and
+/// its name invites everyone to read it as one. `skarbiec sync-pull` copies the
+/// mirror file over the live vault whole (`net::sync`: "A pull replaces the
+/// whole live vault"), and merging is refused by design because "mirror and
+/// live vault may be encrypted to different recipient sets". The only guard is
+/// a refusal when a live item id is absent from the mirror; an id present on
+/// both sides with different content is replaced by the mirror's copy with no
+/// comment at all. So the interesting number is not how many items would be
+/// added — it is how many would be replaced, and which of those something on
+/// the host reads.
+///
+/// The comparison is `skarbiec list` against the live vault and against the
+/// mirror file, both read-only, both over the same host channel. It reports the
+/// mirror **as it currently sits on the host**: `sync-pull` runs `git pull`
+/// first, so a mirror the target has not fetched yet can carry more than this
+/// says. That is stated in the output rather than papered over, because a
+/// preview that silently assumed a fetch would be a preview of a different
+/// operation.
+async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let list = vec![String::from("list")];
+    let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
+    let (_, mirror_report) =
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE)).await?;
+    let live = mirror_items(&live_report)?;
+    let mirror = mirror_items(&mirror_report)?;
+
+    let mut rows = Vec::new();
+    let mut conflicts = 0usize;
+    let mut lost = 0usize;
+    let mut new = 0usize;
+    let mut same = 0usize;
+    for (id, mirrored) in &mirror {
+        match live.get(id) {
+            None => {
+                new += 1;
+                rows.push(json!({
+                    "item": id,
+                    "verdict": "new",
+                    "mirror_revision": mirrored.revision,
+                }));
+            }
+            Some(current)
+                if current.revision == mirrored.revision
+                    && current.updated_at == mirrored.updated_at =>
+            {
+                same += 1;
+            }
+            Some(current) => {
+                conflicts += 1;
+                rows.push(json!({
+                    "item": id,
+                    "verdict": "conflict",
+                    "host_revision": current.revision,
+                    "mirror_revision": mirrored.revision,
+                    "host_updated_at": current.updated_at,
+                    "mirror_updated_at": mirrored.updated_at,
+                }));
+            }
+        }
+    }
+    // The same set Skarbiec's own `items_missing_from_mirror` computes, and for
+    // the same reason it ignores tombstones: losing a soft-deleted item is not
+    // losing data, and a pull that would drop a live one is refused outright.
+    for (id, current) in &live {
+        if current.deleted || mirror.contains_key(id) {
+            continue;
+        }
+        lost += 1;
+        rows.push(json!({
+            "item": id,
+            "verdict": "lost",
+            "host_revision": current.revision,
+        }));
+    }
+
+    let would_apply = lost == 0;
+    let report = json!({
+        "target": resolved.name,
+        "mirror": format!("$HOME/{SKARBIEC_MIRROR_RELATIVE}"),
+        "mirror_freshness": "as it sits on the host; sync-pull fetches first, so an unfetched mirror can carry more",
+        "host_items": live.len(),
+        "mirror_items": mirror.len(),
+        "counts": {"new": new, "same": same, "conflict": conflicts, "lost": lost},
+        "items": rows,
+        "would_apply": would_apply,
+        "detail": if would_apply {
+            "sync-pull would replace the live vault file with the mirror; every shared item takes the mirror's copy"
+        } else {
+            "sync-pull would refuse: the live vault carries items the mirror does not"
+        },
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: {} host item(s), {} mirror item(s) — {new} new, {same} same, {conflicts} conflict, {lost} lost",
+            resolved.name,
+            live.len(),
+            mirror.len()
+        );
+        for row in &rows {
+            println!(
+                "  {:<8} {}",
+                row["verdict"].as_str().unwrap_or_default(),
+                row["item"].as_str().unwrap_or_default()
+            );
+        }
+        println!("  {}", report["detail"].as_str().unwrap_or_default());
+    }
+    if conflicts == 0 && lost == 0 {
+        Ok(())
+    } else {
+        Err(CmdError::silent(1))
+    }
+}
+
 /// Pull the encrypted Skarbiec mirror into TARGET's live vault.
 ///
-/// Skarbiec performs the destructive comparison itself: a remote vault with
-/// local-only items is backed up and refused rather than overwritten. Stado
-/// supplies the managed host channel and deliberately exposes no force path.
-pub async fn sync_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Not a merge, whatever the name suggests. `skarbiec sync-pull` copies the
+/// mirror over the live vault whole; Skarbiec backs the live vault up first
+/// and refuses when a live item id is absent from the mirror, and Stado
+/// deliberately exposes no force path. An id on both sides takes the mirror's
+/// copy with no comment, which is why `--check` exists and should be run
+/// first: it names every item that would be replaced and every one that would
+/// be lost.
+pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<(), CmdError> {
+    if check {
+        return preview_vault_sync(target, json_output).await;
+    }
     let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-pull")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         let reason = report
@@ -5893,15 +6174,31 @@ async fn reconcile_verifier(
     Ok(report)
 }
 
-/// Recover a local Skarbiec audit-lock stall and restart only its loaded dependants.
+/// Recover a Skarbiec audit-lock stall on TARGET and restart only its loaded
+/// dependants.
+///
+/// The helper runs on TARGET, so the endpoints it probes must be TARGET's. Its
+/// own defaults are this fleet's operator laptop -- Skarbiec on 8787, the
+/// object API on 18765 -- and on 2026-09-03 that refused a real audit-lock
+/// stall on `charless-mac-mini`, where Skarbiec answers 8895 and the object API
+/// 8765, with "did not report an audit-lock failure": the script had asked a
+/// port nothing serves on that host and read the silence as health. The
+/// registry already states where each service answers per asking machine, so
+/// resolve TARGET's own endpoints and hand them over rather than letting a
+/// hard-coded default decide which host the operator meant.
 pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(), CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
+    let probes = target_health_probes(&resolved.name).await;
+    let script = format!(
+        "{probes}{}",
+        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh")
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
-        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh"),
+        &script,
         std::time::Duration::from_secs(90),
         &runner,
     )
@@ -5928,6 +6225,46 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
         println!("{}: {detail}", resolved.name);
     }
     Ok(())
+}
+
+/// Shell prologue exporting the health endpoints TARGET itself serves on, read
+/// from the registry's service directory.
+///
+/// The directory keys every endpoint by the asking machine because these
+/// services bind loopback on their own host, so "where is Skarbiec" has a
+/// different true answer on every machine. A helper that runs ON the target is
+/// the target asking, which is why the lookup is `address_for(target)` and not
+/// this laptop's own row.
+///
+/// Missing rows export nothing and leave the script's defaults alone: a
+/// recovery that cannot name the endpoint should refuse on the endpoint it
+/// documents rather than on one this function invented.
+async fn target_health_probes(target: &str) -> String {
+    let Ok(registry) = super::registry::read_registry().await else {
+        return String::new();
+    };
+    let Some(directory) = registry.service_directory.as_ref() else {
+        return String::new();
+    };
+    let mut prologue = String::new();
+    for (service, variable, path) in [
+        ("skarbiec", "SKARBIEC_HEALTH_URL", "/health"),
+        ("stado-object-api", "STADO_OBJECT_HEALTH_URL", "/healthz"),
+    ] {
+        let Some(url) = directory
+            .services
+            .get(service)
+            .and_then(|entry| entry.address_for(target))
+            .map(|endpoint| endpoint.url.trim_end_matches('/').to_string())
+        else {
+            continue;
+        };
+        prologue.push_str(&format!(
+            "{variable}=${{{variable}:-{}}}\nexport {variable}\n",
+            crate::deploy::shlex_quote(&format!("{url}{path}"))
+        ));
+    }
+    prologue
 }
 
 /// Recover stale per-user GnuPG daemons after Skarbiec reports a keybox stall.
@@ -7016,6 +7353,171 @@ pub async fn weles_browser_runtime(
         Some(reason) => Err(CmdError::click(reason)),
         None => Ok(()),
     }
+}
+
+/// `stado host mobile-runtime TARGET [--repair] [--json]` — verify, and
+/// optionally install, the mobile automation runtime a host declares.
+///
+/// A host that declares no runtime exits zero after saying so. That is not a
+/// pass rounded out of silence: `mobile_runtime` absent means the host is not
+/// a mobile placement, and the alternative — failing every host in the fleet
+/// against a runtime two of them need — is how an operator learns to write
+/// `|| true` after the command, which is the argument
+/// [`crate::host_software`] makes about programs nothing declares.
+pub async fn mobile_runtime(target: &str, repair: bool, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let Some(declared) = crate::deploy::mobile_runtime::requirement(&resolved).cloned() else {
+        if json {
+            print_json(&json!({
+                "status": crate::deploy::mobile_runtime::OK_STATUS,
+                "target": resolved.name,
+                "runtime": "undeclared",
+                "components": [],
+            }));
+        } else {
+            println!(
+                "{}: declares no mobile_runtime, so nothing is required of it here. Declare one \
+                 in the registry target to place a mobile capture family on this host",
+                resolved.name
+            );
+        }
+        return Ok(());
+    };
+    let mut report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    let mut installed: Vec<String> = Vec::new();
+    if repair {
+        installed = crate::deploy::mobile_runtime::repair(&resolved, &declared, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // Re-verify: the host's own answer decides, not the installer's.
+        report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+
+    if json {
+        let mut object = report.to_report(&resolved.name);
+        object.insert("repaired".to_string(), json!(installed));
+        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
+    } else {
+        println!("host:     {}", resolved.name);
+        println!("runtime:  {}", report.verdict());
+        for line in &installed {
+            println!("repair:   {line}");
+        }
+        super::table::print(
+            &["COMPONENT", "DECLARED", "OBSERVED", "STATE", "RESOLVED AT"],
+            &report
+                .components
+                .iter()
+                .map(|component| {
+                    vec![
+                        component.name.clone(),
+                        component.declared.clone(),
+                        if component.observed.is_empty() {
+                            "-".to_string()
+                        } else {
+                            component.observed.clone()
+                        },
+                        component.state.clone(),
+                        component.path.clone(),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    match report.failure(&resolved.name) {
+        Some(reason) => Err(CmdError::click(reason)),
+        None => Ok(()),
+    }
+}
+
+/// `stado host mobile-placement [--family ios|android] [--json]` — which
+/// hosts a mobile capture family may be placed on.
+///
+/// Read out of the registry's declarations and nothing else, contacting no
+/// host. That is the point of it: before this existed, the way to find out
+/// whether a host could take the iOS family was to ask the host, and a
+/// refusal from a machine that cannot run the family at all was
+/// indistinguishable from a fleet-wide policy gap — which is exactly how the
+/// four crawl families spent 2026-09-03 blocked on a question nobody could
+/// answer. A host that declares no runtime for the family is not in the
+/// answer, so it is never asked.
+///
+/// An empty answer exits non-zero and names the capability: no host declaring
+/// the family is a state to act on, not a quiet zero.
+pub async fn mobile_placement(family: Option<&str>, json: bool) -> Result<(), CmdError> {
+    if let Some(asked) = family {
+        if crate::deploy::mobile_runtime::family_driver(asked).is_none() {
+            return Err(CmdError::usage(format!(
+                "{asked:?} is not a mobile capture family; this build carries {}",
+                crate::deploy::mobile_runtime::FAMILIES
+                    .iter()
+                    .map(|(name, driver)| format!("{name} (driver {driver})"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )));
+        }
+    }
+    let registry = load_registry_by_source("auto").await?;
+    let placements = crate::deploy::mobile_runtime::placements(&registry, family);
+    if json {
+        print_json(&json!({
+            "status": "mobile_placement",
+            "capability": crate::deploy::mobile_runtime::CAPABILITY_ID,
+            "family": family,
+            "placements": placements,
+        }));
+    } else if placements.is_empty() {
+        println!(
+            "no registry host declares the {} capability for {}",
+            crate::deploy::mobile_runtime::CAPABILITY_ID,
+            family.unwrap_or("any mobile capture family"),
+        );
+    } else {
+        super::table::print(
+            &[
+                "FAMILY",
+                "HOST",
+                "DRIVER",
+                "APPIUM",
+                "RESOLVE APPIUM AT",
+                "RESOLVE ADB AT",
+            ],
+            &placements
+                .iter()
+                .map(|placement| {
+                    vec![
+                        placement.family.clone(),
+                        placement.host.clone(),
+                        placement.driver.clone(),
+                        placement.appium.clone(),
+                        placement.appium_paths.join(" "),
+                        if placement.adb_paths.is_empty() {
+                            "-".to_string()
+                        } else {
+                            placement.adb_paths.join(" ")
+                        },
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    if placements.is_empty() {
+        return Err(CmdError::click(format!(
+            "no host declares {} for {}; declare targets[].mobile_runtime with the family's \
+             driver on a host that can carry it",
+            crate::deploy::mobile_runtime::CAPABILITY_ID,
+            family.unwrap_or("any mobile capture family"),
+        )));
+    }
+    Ok(())
 }
 
 /// What one `host capability-route` invocation asks for.
@@ -8846,6 +9348,7 @@ pub async fn config_set(
         ));
     }
     remote_config(target, Some((key, value))).await?;
+    warn_unbacked_object_namespace(target, key, value);
     if let Some(service) = reload_service {
         super::service::reconcile_after_config_change(
             service,
@@ -8855,6 +9358,71 @@ pub async fn config_set(
         .await?;
     }
     Ok(())
+}
+
+/// Say, at declaration time, what an object namespace without a grant costs.
+///
+/// `object_api.namespaces.<ns>` names a Skarbiec item, and the host's object
+/// verifier must hold a read on it or the whole object authorization boundary
+/// closes — not just that namespace. On 2026-09-03 `spis-crawls` was declared
+/// on `charless-mac-mini` with its item `spis-crawls-object-api` outside the
+/// verifier's grant. Nothing complained. The boundary closed, every non-release
+/// object read answered `503 object authorization unavailable`, and the fault
+/// stayed invisible until the next restart of the release agent — which then
+/// could not read `release_control`, published no stable bind, and left
+/// `brama.wisent.com/health` answering 502 for hours. The log line that named
+/// it, `object verifier grant item set mismatch (missing=[spis-crawls-object-api])`,
+/// existed the whole time on the host and nowhere an operator was looking.
+///
+/// So the warning is emitted here, where the declaration is made, and it names
+/// the second half of the trap too: `reconcile-object-verifier` computes the
+/// item set from the configuration of the machine running it, so a namespace
+/// that exists only on the host can never be satisfied from here. That is why
+/// the sentence asks for the declaration on both sides.
+fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
+    let Some(namespace) = key.strip_prefix("object_api.namespaces.") else {
+        return;
+    };
+    if namespace.is_empty() || namespace.contains('.') {
+        return;
+    }
+    let item = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|declared| {
+            declared
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let Some(item) = item else {
+        return;
+    };
+    let covered = crate::config::object_api_namespaces()
+        .map(|namespaces| {
+            crate::config::object_verifier_items(namespaces)
+                .iter()
+                .any(|held| held == &item)
+        })
+        .unwrap_or(false);
+    if covered {
+        eprintln!(
+            "note: {target}'s object verifier grant must cover {item:?} for namespace \
+             {namespace:?}; this machine declares it too, so reconcile the host with: stado host \
+             reconcile-object-verifier {target}"
+        );
+        return;
+    }
+    eprintln!(
+        "warning: namespace {namespace:?} on {target} names Skarbiec item {item:?}, and this \
+         machine's own object_api.namespaces does not declare it. Until the host's object verifier \
+         grant covers that item its WHOLE object authorization boundary closes — every \
+         /api/object read answers 503, not just this namespace — and the failure surfaces at the \
+         next restart of anything that reads the registry, including the release agent that \
+         publishes every stable bind. `stado host reconcile-object-verifier {target}` computes the \
+         item set from THIS machine's configuration, so declare the namespace here as well and \
+         then run it: stado config set {key} '<the same JSON>' && stado host \
+         reconcile-object-verifier {target}"
+    );
 }
 
 async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {

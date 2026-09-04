@@ -283,6 +283,28 @@ pub fn label(kind: &str, name: &str) -> String {
     }
 }
 
+/// The systemd unit name for a label, or an already-suffixed name unchanged.
+///
+/// The mirror of [`label`] one suffix over, and it is here for the same reason.
+/// [`label`] stopped the fleet minting its own prefix onto a name that already
+/// carried it; nothing stopped `.service` being appended to a name that already
+/// ended in it, and on 2026-09-03 that produced
+/// `com.wisent.compute.service.stado-resolver.service.service` in the registry
+/// and on the unit path. A doubled suffix is a DIFFERENT unit name, so systemd
+/// was asked for a unit nobody had written, the declaration reported `missing`
+/// with `observed: never`, and the resolver was declared on a host where it had
+/// never once existed.
+pub fn systemd_unit(label: &str) -> String {
+    if label.ends_with(SYSTEMD_SUFFIX) {
+        label.to_string()
+    } else {
+        format!("{label}{SYSTEMD_SUFFIX}")
+    }
+}
+
+/// The one suffix a `systemd --user` unit name carries.
+pub const SYSTEMD_SUFFIX: &str = ".service";
+
 fn local_control_plane_configured() -> bool {
     crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
         == Some(crate::capabilities::StorageAdapter::Local)
@@ -670,7 +692,7 @@ impl InstallPlan {
                 .join(".config")
                 .join("systemd")
                 .join("user")
-                .join(format!("{}.service", self.label)),
+                .join(systemd_unit(&self.label)),
         }
     }
 
@@ -768,7 +790,7 @@ pub fn linux_commands(label: &str) -> [CommandSpec; 2] {
             "--user".to_string(),
             "enable".to_string(),
             "--now".to_string(),
-            format!("{label}.service"),
+            systemd_unit(label),
         ]),
     ]
 }

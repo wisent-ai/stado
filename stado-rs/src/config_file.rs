@@ -1102,11 +1102,15 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let object_api = root.get("object_api").and_then(Value::as_object);
     if object_api.is_some() {
-        if let Err(object_problems) = crate::config::parse_object_api_namespaces(field_in(
+        match crate::config::parse_object_api_namespaces(field_in(
             root,
             &crate::capabilities::OBJECT_API_NAMESPACES_CONFIG,
         )) {
-            problems.extend(object_problems);
+            Err(object_problems) => problems.extend(object_problems),
+            // The policy parses; now it has to cover what the queue reads and
+            // writes, or `config set` would write a document under which the
+            // agent's next claim answers 401.
+            Ok(namespaces) => problems.extend(crate::config::queue_prefix_problem(&namespaces)),
         }
         let object_skarbiec = object_api
             .and_then(|section| section.get("skarbiec"))
@@ -1154,6 +1158,29 @@ pub fn validate(data: &Value) -> Vec<String> {
             &crate::capabilities::DATABASE_API_DATABASES_CONFIG,
         )) {
             problems.extend(database_problems);
+        }
+    }
+    // Both halves of the web plane are optional and independent: a fleet can
+    // declare products before its edge exists, and an edge is worth declaring
+    // before the first product moves onto it.
+    if let Some(web_api) = root.get("web_api").and_then(Value::as_object) {
+        for key in web_api.keys() {
+            if !matches!(key.as_str(), "products" | "edge") {
+                problems.push(format!("web_api contains unsupported key {key:?}"));
+            }
+        }
+        if web_api.contains_key("products") {
+            if let Err(web_problems) = crate::config::parse_web_api_products(field_in(
+                root,
+                &crate::capabilities::WEB_API_PRODUCTS_CONFIG,
+            )) {
+                problems.extend(web_problems);
+            }
+        }
+        if web_api.contains_key("edge") {
+            if let Err(edge_problems) = crate::config::parse_web_api_edge(web_api.get("edge")) {
+                problems.extend(edge_problems);
+            }
         }
     }
     let release_api = root.get("release_api").and_then(Value::as_object);

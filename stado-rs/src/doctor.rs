@@ -81,12 +81,24 @@ fn storage_adapter(name: &str) -> Option<crate::capabilities::StorageAdapter> {
 /// concurrently, so this bounds the whole command and not one row of it.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(u8::BITS as u64);
 
-/// Verdict of one check.
+/// Verdict of one check — or, for [`Status::Unmeasured`], the absence of a
+/// verdict.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Status {
     /// Nothing to do.
     #[default]
     Pass,
+    /// The probe never answered, so this check says nothing about the world.
+    ///
+    /// Not a verdict. A probe that ran out of its budget used to be a FAIL,
+    /// and on 2026-09-03 that made `doctor` report six failures of which four
+    /// were 8- and 24-second timeouts under load the doctor itself was
+    /// generating — the same three checks passed five minutes later. An
+    /// operator who is shown four wolves learns to ignore the shepherd, and
+    /// "the probe did not answer" is a statement about the probe, never about
+    /// the deployment. This is the `absent` versus `unreachable` distinction
+    /// this fleet already treats as load-bearing everywhere else.
+    Unmeasured,
     /// Works, but a documented hazard is live.
     Warn,
     /// Blocking: the deployment cannot do its job in this state.
@@ -98,6 +110,7 @@ impl Status {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Pass => "PASS",
+            Self::Unmeasured => "UNMEASURED",
             Self::Warn => "WARN",
             Self::Fail => "FAIL",
         }
@@ -107,6 +120,7 @@ impl Status {
     pub const fn key(self) -> &'static str {
         match self {
             Self::Pass => "pass",
+            Self::Unmeasured => "unmeasured",
             Self::Warn => "warn",
             Self::Fail => "fail",
         }
@@ -114,12 +128,21 @@ impl Status {
 
     /// The more severe of two verdicts. Lets a check that inspects several
     /// providers reach one verdict without ranking numbers.
+    ///
+    /// `Unmeasured` outranks `Pass` and nothing else: an incomplete sweep must
+    /// not read as clean, and must not read as broken either.
     pub const fn worst(self, other: Self) -> Self {
         match (self, other) {
             (Self::Fail, _) | (_, Self::Fail) => Self::Fail,
             (Self::Warn, _) | (_, Self::Warn) => Self::Warn,
+            (Self::Unmeasured, _) | (_, Self::Unmeasured) => Self::Unmeasured,
             _ => Self::Pass,
         }
+    }
+
+    /// Whether this row is a statement about the deployment at all.
+    pub const fn is_verdict(self) -> bool {
+        !matches!(self, Self::Unmeasured)
     }
 }
 
@@ -139,6 +162,14 @@ pub struct Check {
     pub detail: String,
     /// The env var or command that changes the outcome.
     pub remedy: String,
+    /// What this check interrogated, as fields rather than as prose.
+    ///
+    /// Empty means the check counts no subjects — one endpoint, one config
+    /// file, one yes-or-no question — not that it looked at nothing. A check
+    /// that does count subjects puts the number here as well as in `detail`,
+    /// so "did this check actually measure anything" is answerable from
+    /// `doctor --json` without parsing English.
+    pub measured: Vec<crate::fleet_shape::Measurement>,
 }
 
 impl Check {
@@ -155,6 +186,7 @@ impl Check {
             status,
             detail,
             remedy: remedy.to_string(),
+            measured: Vec::new(),
         }
     }
 
@@ -166,6 +198,20 @@ impl Check {
         Self::new(id, title, Status::Fail, detail, remedy)
     }
 
+    /// A check whose probe never answered. Carries no verdict about the
+    /// deployment, and says which budget it ran out of.
+    fn unmeasured(id: &'static str, title: &'static str, detail: String, remedy: &str) -> Self {
+        Self::new(id, title, Status::Unmeasured, detail, remedy)
+    }
+
+    /// Record what one rule interrogated. Chainable so a probe can state its
+    /// subject count on the same expression that builds the row.
+    fn measuring(mut self, check: &'static str, host: Option<String>, subjects: u64) -> Self {
+        self.measured
+            .push(crate::fleet_shape::Measurement::new(check, host, subjects));
+        self
+    }
+
     fn to_json(&self) -> Value {
         json!({
             "id": self.id,
@@ -173,6 +219,7 @@ impl Check {
             "status": self.status.key(),
             "detail": self.detail,
             "remedy": self.remedy,
+            "measured": self.measured.iter().map(crate::fleet_shape::Measurement::to_json).collect::<Vec<Value>>(),
         })
     }
 }
@@ -185,6 +232,7 @@ struct Findings {
     status: Status,
     notes: Vec<String>,
     remedies: Vec<String>,
+    measurements: Vec<crate::fleet_shape::Measurement>,
 }
 
 impl Findings {
@@ -202,6 +250,12 @@ impl Findings {
         }
     }
 
+    /// Record what one rule interrogated, beside the prose note that says the
+    /// same thing in a sentence.
+    fn measure(&mut self, measurement: crate::fleet_shape::Measurement) {
+        self.measurements.push(measurement);
+    }
+
     /// `base` is the knob that governs this check when nothing went wrong.
     fn into_check(self, id: &'static str, title: &'static str, base: &str) -> Check {
         let remedy = if self.remedies.is_empty() {
@@ -215,6 +269,7 @@ impl Findings {
             status: self.status,
             detail: self.notes.join("; "),
             remedy,
+            measured: self.measurements,
         }
     }
 }
@@ -250,6 +305,16 @@ impl Report {
             .count()
     }
 
+    /// Checks whose probe never answered. Counted separately from `failed`
+    /// on purpose: adding them together is what made `doctor` report six
+    /// failures when two were real.
+    pub fn unmeasured(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|check| check.status == Status::Unmeasured)
+            .count()
+    }
+
     pub fn warned(&self) -> usize {
         self.checks
             .iter()
@@ -263,6 +328,7 @@ impl Report {
             "status": self.status().key(),
             "failed": self.failed(),
             "warned": self.warned(),
+            "unmeasured": self.unmeasured(),
             "checks": self.checks.iter().map(Check::to_json).collect::<Vec<Value>>(),
         })
     }
@@ -306,13 +372,16 @@ async fn check_placement() -> Check {
     let document = match crate::cli::registry::fetch_document().await {
         Ok(document) => document,
         Err(error) => {
-            return Check::new(
+            // The registry is this check's only source of truth, so a
+            // registry nobody could read leaves the question unanswered
+            // rather than answered badly. Same distinction as an elapsed
+            // probe: no reading, therefore no verdict.
+            return Check::unmeasured(
                 PLACEMENT_ID,
                 PLACEMENT_TITLE,
-                Status::Warn,
-                format!("the registry could not be read: {error}"),
+                format!("not measured: the registry could not be read: {error}"),
                 PLACEMENT_REMEDY,
-            )
+            );
         }
     };
     let here = crate::providers::vast::system_hostname();
@@ -326,10 +395,16 @@ async fn check_placement() -> Check {
             PLACEMENT_TITLE,
             "the directory declares no services".to_string(),
             PLACEMENT_REMEDY,
-        );
+        )
+        .measuring(PLACEMENT_ID, Some(here), 0);
     };
     let mut squatting: Vec<String> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
+    // Declared services whose port this host actually probed. A directory
+    // entry with no active host or no resolvable port is not a subject: it
+    // was skipped, and counting it would inflate the only number that says
+    // whether this row means anything.
+    let mut probed = 0_u64;
     for (name, entry) in services {
         let Some(active) = entry.get("active_host").and_then(serde_json::Value::as_str) else {
             continue;
@@ -337,6 +412,7 @@ async fn check_placement() -> Check {
         let Some(port) = crate::cli::directory::service_port(entry, active) else {
             continue;
         };
+        probed += 1;
         if active.starts_with(&here) || here.starts_with(active) {
             // The placed host itself: the question is the opposite one. A
             // directory entry naming this host while nothing answers its port
@@ -363,13 +439,14 @@ async fn check_placement() -> Check {
         }
     }
     let problems: Vec<String> = squatting.into_iter().chain(absent).collect();
-    if problems.is_empty() {
+    let verdict = if problems.is_empty() {
         Check::pass(
             PLACEMENT_ID,
             PLACEMENT_TITLE,
-            "this host holds no port belonging to a service placed elsewhere, and every \
-             service placed here answers"
-                .to_string(),
+            format!(
+                "{probed} declared service port(s) probed from here; this host holds no port \
+                 belonging to a service placed elsewhere, and every service placed here answers"
+            ),
             PLACEMENT_REMEDY,
         )
     } else {
@@ -379,7 +456,8 @@ async fn check_placement() -> Check {
             problems.join("; "),
             PLACEMENT_REMEDY,
         )
-    }
+    };
+    verdict.measuring(PLACEMENT_ID, Some(here), probed)
 }
 
 /// Run a probe under an explicit deadline. A row whose work grows with the
@@ -396,10 +474,18 @@ async fn bounded_within(
 ) -> Check {
     match tokio::time::timeout(deadline, probe).await {
         Ok(check) => check,
-        Err(_) => Check::fail(
+        // NOT a FAIL. The budget elapsed, which says the probe did not
+        // answer in time and says nothing whatever about the deployment.
+        // Reported as a failure it made three checks read broken under the
+        // doctor's own load and pass again minutes later, which teaches an
+        // operator to discount every row in the table.
+        Err(_) => Check::unmeasured(
             id,
             title,
-            format!("probe did not answer within {deadline:?}"),
+            format!(
+                "not measured: the probe did not answer within {deadline:?}, so this check \
+                 says nothing about the deployment either way"
+            ),
             remedy,
         ),
     }
@@ -437,6 +523,22 @@ async fn selected_within(
 /// one allowance for scheduling behind the other preflight storage readers.
 fn storage_round_trip_deadline() -> Duration {
     PROBE_TIMEOUT * 4
+}
+
+/// The registry read crosses the resolver's forward, and a forward that has
+/// gone cold is declared to need [`crate::cli::resolver::TUNNEL_OPEN_BUDGET`]
+/// before it accepts its first connection. Bounding this probe at the flat
+/// allowance measured the channel's cold start instead of the registry: on
+/// 2026-09-03 `stado registry pull` answered in 5.4s on a warm channel and
+/// 35.9s after seventy seconds of idling, so `registry FAIL probe did not
+/// answer within 8s` was the verdict on a registry that was answering, and it
+/// failed the 0.13.52 deployment preflight and with it the release.
+///
+/// So the budget is the transport's declared establishment allowance plus one
+/// ordinary probe allowance for the read itself, and the numbers come from the
+/// two declarations rather than from a third one written here.
+fn registry_probe_deadline() -> Duration {
+    crate::cli::resolver::TUNNEL_OPEN_BUDGET.saturating_add(PROBE_TIMEOUT)
 }
 
 /// Per-item allowance for the gateway-auth sweep, multiplied by the number of
@@ -573,8 +675,9 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
             check_vm_identity()
         },),
-        selected(
+        selected_within(
             scope,
+            registry_probe_deadline(),
             REGISTRY_ID,
             REGISTRY_TITLE,
             REGISTRY_REMEDY,
@@ -699,6 +802,17 @@ async fn check_fleet_shape() -> Check {
         findings.note(Status::Fail, finding.line());
         findings.remedy(finding.command.clone());
     }
+    // The per-rule counts the sweep already computed, as fields beside the
+    // prose. Every host swept contributes one row per rule, so a rule that
+    // proved nothing on one host is visible without reading a sentence.
+    for measurement in &sweep.measurements {
+        findings.measure(measurement.clone());
+    }
+    findings.measure(crate::fleet_shape::Measurement::new(
+        SHAPE_ID,
+        None,
+        u64::from(sweep.measured),
+    ));
     if sweep.measured == 0 {
         findings.note(Status::Fail, sweep.summary());
     } else {
@@ -1331,13 +1445,131 @@ const INTEGRITY_VERSIONS: usize = 6;
 /// been answering `probe did not answer within 8s` instead of auditing
 /// anything.
 ///
-/// The nine probes per coordinate now run concurrently, which is what makes
-/// this bound sufficient rather than merely generous: twelve coordinates at
-/// one round trip each, not 120 in series.
+/// The nine probes per coordinate run concurrently, and so do the two manifest
+/// reads that check the coordinate was built from one revision, which is what
+/// makes this bound sufficient rather than merely generous: twelve coordinates
+/// at two round trips each, not 144 in series.
 const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
 
+/// How long a claim may stand with no artifact behind it before the
+/// coordinate is called burnt rather than in flight.
+///
+/// Both publishers write the claim immediately before their uploads, in the
+/// same job: `deploy.yml` calls `release claim-coordinate` and then copies the
+/// objects, in `publish-linux` for `linux-amd64` and in
+/// `deploy-control-plane` for `darwin-arm64`. So the honest budget is one
+/// publishing job's wall clock, not the whole train's — a train can wait
+/// hours for release capacity, but it has not claimed anything while it
+/// waits.
+///
+/// Measured, not guessed: in run 33693066772, the tag train for 0.13.49,
+/// `publish-linux` took 21m29s (05:19:07 to 05:40:36) and
+/// `deploy-control-plane` 20m08s (04:58:56 to 05:19:04), each of those
+/// including the build that precedes the claim. Sixty minutes is roughly
+/// three times the longest of them, so a slow but working publication is
+/// never called burnt, while a claim older than that has outlived every
+/// publication this channel has recorded.
+///
+/// It errs late on purpose. The cost of firing early is a false alarm on
+/// every release, which is how a check gets turned off; the cost of firing
+/// late is a report an hour after the number was already spent, and the
+/// number stays spent either way. The train's own
+/// `cancel-in-progress: true` concurrency group means a superseded
+/// publication dies at once rather than finishing slowly, so most burnt
+/// claims are already permanent long before this bound.
+const CLAIM_WITHOUT_ARTIFACT: chrono::Duration = chrono::Duration::minutes(60);
+
+/// What a coordinate holding only its claim is: a publication in flight, or a
+/// version number permanently spent.
+///
+/// The claim is create-only and so is every artifact, so a claim with nothing
+/// behind it cannot be completed by a later train: the second publisher is
+/// refused at the claim if it names another revision, and a rebuild of the
+/// same revision can never reproduce byte-identical artifacts. The number is
+/// gone, and the only remedy is a new version.
+///
+/// This is deliberately NOT part of
+/// [`crate::deploy::host_release::coordinate_revision_conflict`], which
+/// answers a different question about a different subject: that one compares
+/// two publishers' manifests at a coordinate that HAS artifacts and reports a
+/// coordinate built twice. This reports a coordinate built never. Folding
+/// them together would make one sentence answer for both, and the remedies
+/// are the same only by coincidence.
+///
+/// The claim's own body names the revision, which is the fact an operator
+/// needs: it says which commit spent the number, and therefore whether the
+/// version in `Cargo.toml` still has a train that can publish it.
+async fn claim_only_verdict(
+    product: &crate::deploy::products::Product,
+    coordinate: &crate::cli::storage::PublishedCoordinate,
+) -> (Status, String) {
+    let (version, platform) = (&coordinate.version, &coordinate.platform);
+    let uri = format!(
+        "stado://releases/{}/{version}/{platform}/{}",
+        product.source.product,
+        crate::release_control::RELEASE_REVISION_NAME
+    );
+    let revision = match crate::cli::storage::fetch_object(&uri).await {
+        Ok(bytes) => serde_json::from_slice::<crate::release_control::CoordinateRevision>(&bytes)
+            .map(|claim| claim.source_revision)
+            .unwrap_or_else(|error| format!("an unreadable claim record ({error})")),
+        Err(error) => format!("a claim this audit could not read ({error})"),
+    };
+    let Some(written) = coordinate.claim_written_at else {
+        // No timestamp means the age cannot be judged, and guessing either
+        // way is what this row exists to stop: calling a live publication
+        // burnt is a false alarm on a release, calling a spent number healthy
+        // is the silence itself.
+        return (
+            Status::Unmeasured,
+            format!(
+                "{version}/{platform} holds only its claim, bound to {revision}, and the store \
+                 reported no write time for it, so whether the publication is in flight or \
+                 permanently spent could not be decided"
+            ),
+        );
+    };
+    let age = Utc::now() - written;
+    let stamp = written.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    if age < CLAIM_WITHOUT_ARTIFACT {
+        return (
+            Status::Unmeasured,
+            format!(
+                "{version}/{platform} is publishing now: its claim was written {stamp}, binding \
+                 it to {revision}, and no artifact has followed within the {} minute budget yet",
+                CLAIM_WITHOUT_ARTIFACT.num_minutes()
+            ),
+        );
+    }
+    (
+        Status::Fail,
+        format!(
+            "{version}/{platform} is BURNT and permanently so: its claim was written {stamp}, \
+             binding it to {revision}, and no artifact followed within {} minutes. Claim and \
+             artifacts are create-only, so no later train can publish this version — the number \
+             is spent and a publication of it must use a new one",
+            CLAIM_WITHOUT_ARTIFACT.num_minutes()
+        ),
+    )
+}
+
+/// Whether this coordinate's publication is still inside the budget its claim
+/// started.
+///
+/// One clock for both shapes of an unfinished publication — no artifacts at
+/// all, and some artifacts — because they are the same event observed at
+/// different moments, and two thresholds would eventually disagree about the
+/// same release. A coordinate with no claim timestamp is not in flight: this
+/// answers "provably still running", and absent evidence is not proof.
+fn in_flight(coordinate: &crate::cli::storage::PublishedCoordinate) -> bool {
+    coordinate
+        .claim_written_at
+        .is_some_and(|written| Utc::now() - written < CLAIM_WITHOUT_ARTIFACT)
+}
+
 /// Walk what the channel actually holds and say, per version and platform,
-/// whether the coordinate is whole, empty, or partial.
+/// whether the coordinate is deliverable: every object present, and every
+/// publisher of it naming one build.
 ///
 /// This exists because the only thing that ever audited the channel was the
 /// act of publishing to it or delivering from it. `stado/0.10.0/darwin-arm64`
@@ -1345,19 +1577,27 @@ const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
 /// something else; `stado/0.11.0/darwin-arm64` sat at 4 objects of 9 and
 /// `stado/0.12.1/linux-amd64` at 2 of 9 for the same reason.
 ///
-/// PARTIAL is the only status this reports, and that is deliberate. A version
-/// that published nothing has no keys in the store, so it never appears in
-/// this walk — correctly, because an empty coordinate holds nothing to be
-/// inconsistent with and the same tag can still publish cleanly. A coordinate
-/// that does appear and is short is permanent: release objects are create-only
-/// and the missing bytes can never be added. That distinction between empty
-/// and partial is the whole lesson of the incident this check comes from.
+/// Two failures are reported and both are permanent, because release objects
+/// are create-only. PARTIAL is a coordinate short of objects that can never be
+/// added. The second is a coordinate whose two publishers built different
+/// revisions, which no later publication can reconcile either — 0.13.27 on
+/// 2026-09-01 and 0.13.49 on 2026-09-03, both discovered by a delivery attempt
+/// long after the train had finished writing them.
+///
+/// A version that published nothing has no keys in the store, so it never
+/// appears in this walk — correctly, because an empty coordinate holds nothing
+/// to be inconsistent with and the same tag can still publish cleanly. That
+/// distinction between empty and damaged is the whole lesson of the incidents
+/// this check comes from.
 ///
 /// Presence comes from [`crate::deploy::host_release::missing_release_objects`],
 /// which reads the coordinate's own `SHA256SUMS` and probes every name it
-/// declares through `storage stat`. No second checksum parser, no second
-/// binary list, and an unreachable store propagates as an error instead of
-/// being counted as an absent object.
+/// declares through `storage stat`. Revision agreement comes from
+/// [`crate::deploy::host_release::coordinate_revision_conflict`], the same
+/// comparison `host release` refuses on. No second checksum parser, no second
+/// binary list, no second definition of what one build means, and an
+/// unreachable store propagates as an error instead of being counted as an
+/// absent object.
 async fn check_release_integrity() -> Check {
     let mut findings = Findings::default();
     findings.remedy(INTEGRITY_REMEDY);
@@ -1388,56 +1628,126 @@ async fn check_release_integrity() -> Check {
     }
 
     let mut versions: Vec<String> = Vec::new();
-    for (version, _) in &coordinates {
-        if !versions.contains(version) {
-            versions.push(version.clone());
+    for coordinate in &coordinates {
+        if !versions.contains(&coordinate.version) {
+            versions.push(coordinate.version.clone());
         }
     }
     versions.truncate(INTEGRITY_VERSIONS);
 
     let mut whole = 0usize;
     let mut audited = 0usize;
-    for (version, platform) in &coordinates {
+    for coordinate in &coordinates {
+        let (version, platform) = (&coordinate.version, &coordinate.platform);
         if !versions.contains(version) {
             continue;
         }
         audited += 1;
-        match crate::deploy::host_release::missing_release_objects(product, version, platform).await
+        // A coordinate holding its claim and nothing else is not a partial
+        // one, and the object audit below cannot tell the difference: the
+        // claim carries no list of what a complete coordinate holds, so
+        // `missing_release_objects` can only answer `absent: SHA256SUMS` —
+        // the same sentence it gives a coordinate that published eight
+        // objects of nine. `stado/0.14.4/darwin-arm64` read exactly that on
+        // 2026-09-03 while holding one 144-byte object, and the number was
+        // already spent.
+        if coordinate.claim_only() {
+            let (status, sentence) = claim_only_verdict(product, coordinate).await;
+            findings.note(status, sentence);
+            continue;
+        }
+        let complete =
+            match crate::deploy::host_release::missing_release_objects(product, version, platform)
+                .await
+            {
+                Ok(missing) if missing.is_empty() => true,
+                Ok(missing) => {
+                    // The coordinates come from the store's own listing, so a
+                    // version that published nothing has no keys and never
+                    // appears here at all — which is the right outcome,
+                    // because an empty coordinate holds nothing to be
+                    // inconsistent with and the same tag can still publish
+                    // cleanly. A coordinate that appears and is short has
+                    // bytes that can never be completed: release objects are
+                    // create-only.
+                    //
+                    // `stado/0.11.0/darwin-arm64` is the shape being caught
+                    // here — archive, manifest and SHA256SUMS present, five
+                    // binaries absent, permanently.
+                    //
+                    // Unless it is happening right now. A publisher writes
+                    // its objects one at a time, so every release passes
+                    // through "short of objects" on the way to whole, and the
+                    // claim it wrote first says when that began. Reading
+                    // 0.14.5 as PARTIAL at 18:23 while its train was still
+                    // uploading is the same false alarm the claim-only branch
+                    // above exists to avoid, and the same clock answers both.
+                    if in_flight(coordinate) {
+                        findings.note(
+                            Status::Unmeasured,
+                            format!(
+                                "{version}/{platform} is publishing now: {} object(s) not written \
+                                 yet ({}), within the {} minute budget its claim started",
+                                missing.len(),
+                                missing.join(", "),
+                                CLAIM_WITHOUT_ARTIFACT.num_minutes()
+                            ),
+                        );
+                        false
+                    } else {
+                        findings.note(
+                            Status::Fail,
+                            format!(
+                                "{version}/{platform} is PARTIAL and permanently so; absent: {}",
+                                missing.join(", ")
+                            ),
+                        );
+                        false
+                    }
+                }
+                Err(error) => {
+                    findings.note(
+                        Status::Warn,
+                        format!("{version}/{platform} could not be audited: {error}"),
+                    );
+                    false
+                }
+            };
+        if !complete {
+            continue;
+        }
+        // Complete is not the same as coherent. Every object a coordinate
+        // needs can be present while two of them were built from different
+        // revisions, because two publishers write one coordinate and
+        // create-only puts mean neither can overwrite the other. That
+        // coordinate counts nine of nine here and is still undeliverable, so
+        // counting only presence is what let 0.13.49 pass this row at 06:14
+        // while `host release --dry-run` refused it at 06:09.
+        match crate::deploy::host_release::coordinate_revision_conflict(product, version, platform)
+            .await
         {
-            Ok(missing) if missing.is_empty() => whole += 1,
-            Ok(missing) => {
-                // Everything this walk can see is partial, and that is not a
-                // simplification. The coordinates come from the store's own
-                // listing, so a version that published nothing has no keys and
-                // never appears here at all — which is the right outcome,
-                // because an empty coordinate holds nothing to be inconsistent
-                // with and the same tag can still publish cleanly. A
-                // coordinate that appears and is short has bytes that can
-                // never be completed: release objects are create-only.
-                //
-                // `stado/0.11.0/darwin-arm64` is the shape being caught here —
-                // archive, manifest and SHA256SUMS present, five binaries
-                // absent, permanently.
-                findings.note(
-                    Status::Fail,
-                    format!(
-                        "{version}/{platform} is PARTIAL and permanently so; absent: {}",
-                        missing.join(", ")
-                    ),
-                );
-            }
+            Ok(None) => whole += 1,
+            Ok(Some(conflict)) => findings.note(Status::Fail, conflict),
             Err(error) => findings.note(
                 Status::Warn,
-                format!("{version}/{platform} could not be audited: {error}"),
+                format!("{version}/{platform} could not be audited for one build: {error}"),
             ),
         }
     }
     if whole == audited {
         findings.note(
             Status::Pass,
-            format!("{whole} of {audited} recent published coordinates are whole"),
+            format!(
+                "{whole} of {audited} recent published coordinates are whole and built from one \
+                 revision"
+            ),
         );
     }
+    findings.measure(crate::fleet_shape::Measurement::new(
+        INTEGRITY_ID,
+        None,
+        audited as u64,
+    ));
     findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY)
 }
 

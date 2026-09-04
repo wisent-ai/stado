@@ -273,6 +273,20 @@ impl StadoObjectBackend {
     /// upstream, and that is not a window anything should wait out.
     const BOUNDARY_UNAVAILABLE_BODY: &'static str = "object authorization unavailable";
 
+    /// The body the resolver's forward answers with while it has no channel to
+    /// the host that serves this store — [`crate::cli::resolver`]'s
+    /// `UPSTREAM_REFUSAL`, sent as `502` before the prompt close.
+    ///
+    /// Also a window, not a verdict, and for the same reason as the boundary
+    /// above: the forward is opening, or has just been re-opened after going
+    /// cold, and the next attempt reaches the store. Left unretried it decided
+    /// releases. On 2026-09-03 the 0.14.0 train published both platforms and
+    /// then died in delivery on `registry store unreachable (stado:registry.json):
+    /// Stado object API error HTTP 502: upstream unavailable`, and `stado host
+    /// reclaim` reported the queue store unreadable off the same answer while
+    /// the very next read of the same prefix succeeded.
+    const FORWARD_UNAVAILABLE_BODY: &'static str = "upstream unavailable";
+
     /// Attempts, including the first, before a closed boundary is reported.
     const BOUNDARY_ATTEMPTS: usize = 6;
 
@@ -289,11 +303,13 @@ impl StadoObjectBackend {
     /// 2026-08-29T23:02:53Z on exactly this body, three seconds after the same
     /// client had read a storage state successfully through the same gateway.
     ///
-    /// Only that one status-and-body pair is retried, and only
-    /// [`Self::BOUNDARY_ATTEMPTS`] times with a linear backoff. Any other body
-    /// under `503`, and every other status, reaches the caller unchanged — a
-    /// gateway that is genuinely unauthorized must still say so on the first
-    /// answer.
+    /// Exactly two status-and-body pairs are retried, and only
+    /// [`Self::BOUNDARY_ATTEMPTS`] times with a linear backoff: the closed
+    /// authorization boundary above, and the forward's own
+    /// [`Self::FORWARD_UNAVAILABLE_BODY`] under `502`. Any other body under
+    /// either status, and every other status, reaches the caller unchanged — a
+    /// gateway that is genuinely unauthorized, and a proxy that is genuinely
+    /// pointed at nothing, must still say so on the first answer.
     async fn send_through_boundary(
         builder: reqwest::RequestBuilder,
     ) -> Result<Response, StorageError> {
@@ -304,14 +320,18 @@ impl StadoObjectBackend {
         };
         for attempt in 1..=Self::BOUNDARY_ATTEMPTS {
             let response = candidate.send().await?;
-            if response.status() != StatusCode::SERVICE_UNAVAILABLE
-                || attempt == Self::BOUNDARY_ATTEMPTS
-            {
+            let transient = matches!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE | StatusCode::BAD_GATEWAY
+            );
+            if !transient || attempt == Self::BOUNDARY_ATTEMPTS {
                 return Ok(response);
             }
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            if !body.contains(Self::BOUNDARY_UNAVAILABLE_BODY) {
+            let window = body.contains(Self::BOUNDARY_UNAVAILABLE_BODY)
+                || body.contains(Self::FORWARD_UNAVAILABLE_BODY);
+            if !window {
                 return Err(StorageError::Stado { status, body });
             }
             let Some(next) = builder.try_clone() else {

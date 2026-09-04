@@ -82,6 +82,25 @@ const LOCK_HOLDER_NAME: &str = "disk-cleanup.lock.holder";
 /// budget, and both are states nobody should have to wait out.
 const LOCK_TAKEOVER_GRACE_S: f64 = 300.0;
 
+/// How long one pass may wait on the queue store for its workdir keep-list.
+///
+/// NO Python original. Every other bound in this module — [`DEADLINE_SECONDS`],
+/// `max_scan_items`, `max_items_per_pass` — governs work done AFTER the lock,
+/// and the keep-list read is the only thing a pass waits on before it. It had
+/// no bound at all, and the store's own HTTP client sets no timeout either
+/// (`queue::gcs` builds a bare `reqwest::Client`), so a stalled listing
+/// stalled the pass for as long as the transport took. On 2026-09-03
+/// charless-mac-mini published `duration_ms: 818021` for a pass that reached
+/// no cleaner.
+///
+/// Half of [`DEADLINE_SECONDS`], because the whole point of the janitor's own
+/// default pass budget is that a pass is a short thing, and a keep-list read
+/// that outlasts the scan it feeds is not a slow read but a broken one. The
+/// expiry is not a failure: `None` is the keep-list's modelled unreadable
+/// answer and [`queue_workdirs`] already refuses to delete on it and records
+/// `queue_store_unreadable`.
+const KEEP_LIST_BUDGET: Duration = Duration::from_secs(DEADLINE_SECONDS as u64 / 2);
+
 /// The janitor's state file relative to `$HOME` — `_STATE_DIR` joined with
 /// `_STATE_NAME` in the Python original.
 ///
@@ -302,6 +321,21 @@ pub struct CleanupReport {
     pub check_interval_seconds: Option<i64>,
     pub started_at: String,
     pub duration_ms: i64,
+    /// Of `duration_ms`, how much was spent waiting on the queue store before
+    /// the pass had decided anything — the canonical-registry read and the
+    /// workdir keep-list read, both of which happen before the run lock.
+    ///
+    /// `duration_ms` said 818021 and `outcome` said `healthy_noop`, and
+    /// between those two numbers there was no way to tell a janitor that had
+    /// walked a very large filesystem from one that had waited a quarter of an
+    /// hour on a network read for a keep-list no cleaner on that pass would
+    /// ever consult. Those call for opposite responses — one is the host, the
+    /// other is ours — and every consumer of this report was being handed the
+    /// verdict without the cost's shape. `scanned`/`cleaners: null` already
+    /// says a pass reached no cleaner; this says where such a pass spent its
+    /// time, so `healthy_noop` can never again hide a wait inside a word that
+    /// means "nothing needed doing".
+    pub store_wait_ms: i64,
     pub outcome: String,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,
@@ -339,6 +373,28 @@ pub struct CleanupReport {
     /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
     /// non-run this was.
     pub scanned: bool,
+    /// Declared cleaners this pass never scanned, because the scan share or
+    /// the pass deadline was spent before their turn came.
+    ///
+    /// [`scanned`](Self::scanned) says whether a pass reached its cleaners at
+    /// all; this says which of them it never reached, and it exists for the
+    /// same reason: the table publishes `scanned 0, eligible 0, deleted 0`
+    /// for a cleaner that was never given a turn, which is byte-for-byte what
+    /// a cleaner that looked and found nothing emits. On `charless-mac-mini`
+    /// the cleaners run in a fixed order with `backup_twins` last, the policy
+    /// declared no `max_pass_seconds` so every pass took the janitor's own 30
+    /// seconds against a `$HOME` holding 103.9 GiB under `~/.stado` alone,
+    /// and `build_caches` — which walks all of `$HOME` by design — ended the
+    /// pass inside itself. `backup_twins` reported zeros with
+    /// `skipped {scan_cap: 1, scan_deadline: 1}` for as long as anyone had
+    /// looked, under real pressure, while the host refused every ordinary job
+    /// for eleven days. The outcome was `cap_reached`, which is true, names
+    /// the budget and not the cleaner, and reads like a finished look at the
+    /// disk.
+    ///
+    /// Empty when every declared cleaner had its turn, so a reader can tell
+    /// "nothing was eligible" from "nobody looked".
+    pub unscanned_cleaners: Vec<String>,
     /// Where the build-cache walk stopped, relative to its scan root, or
     /// `None` when it crossed the whole tree. Carried across passes through
     /// the state file: see [`build_caches::scan_build_caches`].
@@ -353,12 +409,13 @@ impl CleanupReport {
             target_name: None,
             policy_digest: None,
             writer: "unknown",
-            writer_version: env!("CARGO_PKG_VERSION"),
+            writer_version: crate::build_identity::BUILD_IDENTITY,
             policy_defaulted: false,
             mode: None,
             check_interval_seconds: None,
             started_at: utc_now(),
             duration_ms: 0,
+            store_wait_ms: 0,
             outcome: "invalid_or_unavailable_policy".to_string(),
             free_bytes_before: None,
             free_bytes_after: None,
@@ -376,6 +433,7 @@ impl CleanupReport {
             active_slot_count: active_slot_count.max(0),
             last_success_at: None,
             scanned: false,
+            unscanned_cleaners: Vec::new(),
             builds_resume_from: None,
             errors: Vec::new(),
         }
@@ -469,6 +527,7 @@ impl CleanupReport {
             "check_interval_seconds": self.check_interval_seconds,
             "started_at": self.started_at,
             "duration_ms": self.duration_ms,
+            "store_wait_ms": self.store_wait_ms,
             "outcome": self.outcome,
             "free_bytes_before": self.free_bytes_before,
             "free_bytes_after": self.free_bytes_after,
@@ -476,6 +535,7 @@ impl CleanupReport {
             "target_bytes": self.target_bytes,
             "pressure_active": self.pressure_active,
             "cleaners": cleaners,
+            "unscanned_cleaners": self.unscanned_cleaners,
             "caps": {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
@@ -923,14 +983,68 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
         .get("last_attempt_at")
         .and_then(Value::as_f64)
         .map_or(attempted_at, |recorded| recorded.max(attempted_at));
+    // When the last pass was prevented rather than run, and never moving
+    // backwards either.
+    //
+    // A janitor that cannot take the run lock because a workload holds it in
+    // shared mode has been PREVENTED. That is a modelled, healthy answer —
+    // `acquire_workload_lock` takes the lock for the job's whole duration on
+    // purpose — but until this stamp existed nothing recorded it, so
+    // `cleanup_success_age_seconds` downstream could not tell a prevented
+    // janitor from a silent one and inferred a stall from the absence. On
+    // 2026-09-03 charless-mac-mini ran one job for 42 minutes, roughly 40
+    // in-process passes hit `lock_busy` at the ten-second agent tick, none of
+    // them left a trace, and `host gates` turned `claiming` off on a host with
+    // 17.3 GiB free, a 15 GiB watermark and `disk_pressure_unresolved: false`.
+    //
+    // Only the time is recorded here, not the holder: a `flock` owner cannot be
+    // named from the process that failed to take it, and the one thing in this
+    // product that can name it -- `host disk`'s `cleanup_lock.holders` --
+    // already does. What the arithmetic needs is prevented-since-a-known-time,
+    // and that is what this is.
+    let prevented_now = report.get("outcome").and_then(Value::as_str) == Some("lock_busy");
+    let last_prevented_at = previous
+        .get("last_prevented_at")
+        .and_then(Value::as_f64)
+        .map_or_else(
+            || prevented_now.then_some(attempted_at),
+            |recorded| {
+                Some(if prevented_now {
+                    recorded.max(attempted_at)
+                } else {
+                    recorded
+                })
+            },
+        );
+    // A prevented pass returns before the lock is held, so it never reached the
+    // carry-forward in `run_with_lock` and its report says `last_success_at:
+    // null`. Writing that verbatim would erase the one timestamp the stall
+    // arithmetic is measured from — recording the prevented pass would then be
+    // worse than dropping it. The last success belongs to the host, not to a
+    // pass, so it is carried here for every writer and every outcome.
+    let mut report = report.clone();
+    if report.get("last_success_at").is_none_or(Value::is_null) {
+        if let Some(recorded) = previous
+            .get("report")
+            .and_then(|previous| previous.get("last_success_at"))
+            .filter(|stamp| !stamp.is_null())
+        {
+            if let Some(object) = report.as_object_mut() {
+                object.insert("last_success_at".to_string(), recorded.clone());
+            }
+        }
+    }
     let mut state = Map::new();
     state.insert("version".to_string(), serde_json::json!(STATE_VERSION));
     state.insert(
         "last_attempt_at".to_string(),
         serde_json::json!(last_attempt_at),
     );
+    if let Some(stamp) = last_prevented_at {
+        state.insert("last_prevented_at".to_string(), serde_json::json!(stamp));
+    }
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
-    state.insert("report".to_string(), report.clone());
+    state.insert("report".to_string(), report);
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()
@@ -1120,12 +1234,36 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             ),
         }),
     };
+    // The declared cleaners the pass never reached, kept in the public form
+    // because the reader that needs it is `stado host disk` on another
+    // machine. Filtered to the six known cleaner names: this crosses a host
+    // boundary into an operator's terminal, and every other field here is
+    // bounded for the same reason.
+    let public_unscanned: Vec<Value> = get("unscanned_cleaners")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|name| {
+                    matches!(
+                        *name,
+                        "huggingface_cache" | "weles_recordings" | "build_caches"
+                    ) || *name == chromium_clones::CLEANER
+                        || *name == queue_workdirs::CLEANER
+                        || *name == backup_twins::CLEANER
+                })
+                .map(Value::from)
+                .collect()
+        })
+        .unwrap_or_default();
     serde_json::json!({
         "version": STATE_VERSION,
         "mode": mode,
         "check_interval_seconds": public_nonnegative(get("check_interval_seconds")),
         "started_at": public_timestamp(get("started_at")),
         "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
+        "store_wait_ms": public_nonnegative(get("store_wait_ms")).unwrap_or(0),
         "outcome": outcome,
         "free_bytes_before": public_nonnegative(get("free_bytes_before")),
         "free_bytes_after": public_nonnegative(get("free_bytes_after")),
@@ -1133,6 +1271,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         "target_bytes": public_nonnegative(get("target_bytes")),
         "pressure_active": get("pressure_active").and_then(Value::as_bool),
         "cleaners": public_cleaners,
+        "unscanned_cleaners": public_unscanned,
         "caps": {
             "bytes": cap("bytes"),
             "items": cap("items"),
@@ -1512,8 +1651,8 @@ fn finish(
     value
 }
 
-/// Every job id currently in `queue` or `running`, or `None` when the queue
-/// store could not be read.
+/// Every job id currently in `queue` or `running` from an already-open store,
+/// or `None` when the keep-list could not be built inside `budget`.
 ///
 /// The keep-list for [`queue_workdirs`]. Read best-effort, exactly as
 /// [`crate::deploy::host_reclaim`] reads it for the same directories, and for
@@ -1521,20 +1660,34 @@ fn finish(
 /// outage. A partial read is discarded rather than narrowed, because a
 /// keep-list missing the running job's id authorizes deleting the tree that
 /// job is writing into.
+///
+/// [`crate::queue::JobStorage::list_job_ids`] and NOT `list_jobs`: this wants
+/// ids, the ids are in the object names, and downloading every job document to
+/// read a field out of it is what cost charless-mac-mini 818 seconds — see
+/// that function for the measurement. The `budget` is the same defect's other
+/// half: the read had no bound at all, so however long the transport took was
+/// how long the pass took.
+///
+/// Public as the test seam for both properties; `fetch_live_job_ids` is this
+/// at the real store with [`KEEP_LIST_BUDGET`].
+pub async fn live_job_ids_within(
+    store: &crate::queue::JobStorage,
+    budget: Duration,
+) -> Option<Vec<String>> {
+    let read = async {
+        let mut ids = Vec::new();
+        for state in ["queue", "running"] {
+            ids.extend(store.list_job_ids(state).await.ok()?);
+        }
+        Some(ids)
+    };
+    tokio::time::timeout(budget, read).await.ok().flatten()
+}
+
+/// [`live_job_ids_within`] against the configured queue store.
 async fn fetch_live_job_ids() -> Option<Vec<String>> {
     let store = crate::queue::JobStorage::new().await.ok()?;
-    let mut ids = Vec::new();
-    for state in ["queue", "running"] {
-        ids.extend(
-            store
-                .list_jobs(state, 0)
-                .await
-                .ok()?
-                .into_iter()
-                .map(|job| job.job_id),
-        );
-    }
-    Some(ids)
+    live_job_ids_within(&store, KEEP_LIST_BUDGET).await
 }
 
 /// The post-lock half of `run_cleanup_once` (policy resolution through
@@ -1902,6 +2055,34 @@ fn run_with_lock(
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
+    // Which declared cleaners never got a turn. Every counter needed for this
+    // was already in hand here and nothing said it: a cleaner whose share ran
+    // out publishes the same three zeros as one that looked and found nothing,
+    // and `cap_reached` names the budget rather than the cleaner it stopped.
+    //
+    // Keyed on the two skips a budget produces — `scan_cap` and
+    // `scan_deadline` — and never on a zero count alone: a cleaner whose root
+    // does not exist on this host also scans nothing, reports `root_absent`,
+    // and is not waiting for a turn. Calling that one unscanned would be this
+    // field committing the error it exists to report. The order is the run
+    // order, so the answer reads as "the pass ended before these".
+    let budget_stopped = |cleaner: &CleanerReport| {
+        cleaner.scanned_items == 0
+            && (cleaner.skipped.contains_key("scan_cap")
+                || cleaner.skipped.contains_key("scan_deadline"))
+    };
+    report.unscanned_cleaners = [
+        ("huggingface_cache", &report.hf),
+        ("weles_recordings", &report.weles),
+        ("build_caches", &report.builds),
+        (chromium_clones::CLEANER, &report.clones),
+        (queue_workdirs::CLEANER, &report.workdirs),
+        (backup_twins::CLEANER, &report.backup_twins),
+    ]
+    .into_iter()
+    .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
+    .map(|(name, _)| name.to_string())
+    .collect();
 
     let after = match free_bytes(home) {
         Ok(free) => free,
@@ -2045,7 +2226,7 @@ async fn cleanup_once(
     let hostname = crate::providers::vast::system_hostname();
     let mut report = CleanupReport::base(active_slot_count, &hostname);
     report.writer = writer.as_str();
-    report.writer_version = env!("CARGO_PKG_VERSION");
+    report.writer_version = crate::build_identity::BUILD_IDENTITY;
 
     // Python's outer `except BaseException` half: any failure before the
     // policy resolves lands in `runtime` and leaves the default outcome.
@@ -2090,6 +2271,13 @@ async fn cleanup_once(
     // unresolved registry yields `invalid_or_unavailable_policy` and no
     // cleaner runs, and `live_jobs: None` makes `queue_workdirs` remove
     // nothing rather than risk a live job's tree.
+    //
+    // Timed as well as bounded, and the total recorded on the report: these
+    // two reads are the only thing a pass waits on before it has decided
+    // whether to do anything, so they are the only way a `healthy_noop` can
+    // cost 818 seconds. The budget stops that from happening; the measurement
+    // is what proves it stopped. See [`CleanupReport::store_wait_ms`].
+    let store_wait = Instant::now();
     let input_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
     let registry = match tokio::time::timeout(input_budget, fetch_canonical_registry()).await {
         Ok(result) => result,
@@ -2101,6 +2289,7 @@ async fn cleanup_once(
     let live_jobs = tokio::time::timeout(input_budget, fetch_live_job_ids())
         .await
         .unwrap_or_default();
+    report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
     // The lock is taken with a stated deadline, and a hold past its own
     // deadline is answered rather than waited out. `lock_busy` used to be the
     // only answer this function had for "somebody else has it", and that is
@@ -2116,7 +2305,8 @@ async fn cleanup_once(
             .map_or(DEADLINE_SECONDS, |seconds| seconds as f64),
     );
     let mut taken_over = false;
-    let lock = match acquire_lock_state(&state_dir, pass_seconds, writer.as_str()) {
+    let writer_label = writer.as_str().to_string();
+    let lock = match acquire_lock_state(&state_dir, pass_seconds, &writer_label) {
         Ok(LockState::Held(lock)) => lock,
         Ok(LockState::TakenOver {
             lock,
@@ -2177,11 +2367,11 @@ async fn cleanup_once(
             // Carry the last SUCCESS forward. It is read after the lock
             // elsewhere, so a tick that merely could not get the lock used to
             // report `last_success_at: null` — "this host has never completed
-            // a pass" — and `deploy::host_gates` reads exactly that as
-            // `disk_cleanup_stalled`. So one busy lock made a host that
-            // cleaned successfully minutes earlier look like one that never
-            // has, and refused claiming on the strength of it. Found by
-            // object-api-deploy while the fleet sat behind that gate.
+            // a pass" — and `deploy::host_gates` reads exactly that as a stall.
+            // So one busy lock made a host that cleaned successfully minutes
+            // earlier look like one that never has, and refused claiming on
+            // the strength of it. Found by object-api-deploy while the fleet
+            // sat behind that gate.
             if let Ok(previous) = read_state(&state_dir) {
                 report.last_success_at = previous
                     .get("report")
@@ -2189,7 +2379,12 @@ async fn cleanup_once(
                     .and_then(|value| value.get("last_success_at"))
                     .and_then(|value| value.as_str().map(str::to_string));
             }
-            return finish(report, started, Some(&home), None, attempted_at, log_fn);
+            // `persist`, not `None`: a pass prevented by a live holder is the
+            // fact the stall arithmetic needs most, and without it forty
+            // prevented passes and forty passes that never ran leave an
+            // identical, empty record. Kept from origin/main's change to this
+            // same branch of the function.
+            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
         Err(exc) => {
             report.add_error("runtime", &exc);
@@ -2197,6 +2392,7 @@ async fn cleanup_once(
             return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
     };
+
     run_with_lock(
         &home,
         &state_dir,

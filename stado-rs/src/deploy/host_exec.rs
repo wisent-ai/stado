@@ -114,6 +114,78 @@ struct HostExecReceipt {
 /// `status` for a command that ran and exited clean.
 pub const OK_STATUS: &str = "ok";
 
+/// A host-exec failure that states its own [`crate::failure::FailureCode`]
+/// where it is created, instead of leaving one to be guessed from its prose.
+///
+/// On 2026-09-03 `host exec charless-mac-mini -- ls -la …` was refused by the
+/// allowlist and reported `error_code=timeout`, `retryable=true`. Nothing had
+/// timed out. The refusal was built as a bare [`DeployError`], flattened to a
+/// string by the CLI, and the code was then reconstructed by
+/// [`crate::failure::classify_message`], whose `timeout` needle is the bare
+/// substring `"timeout"` — and this refusal prints the whole allowlist, three
+/// entries of which carry `--login-timeout-ms`. **The refusal matched its own
+/// help text**, so every unapproved command on every host told its caller to
+/// retry something that can never succeed.
+///
+/// Narrowing the needle would have left that design in place and handed the
+/// next help-text collision to the next reader. So the code travels with the
+/// failure: `code: Some(_)` is knowledge from the construction site and is
+/// used verbatim, while `None` marks a failure that genuinely arrived as text
+/// and keeps `classify_message` as its last resort.
+///
+/// `help` is the second half of the repair. The allowlist stays in front of
+/// the operator, but out of `message`, so the classified and logged sentence
+/// is the refusal itself — short enough to survive the log line's detail
+/// bound whole, and with no vocabulary in it but its own.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct ExecRefusal {
+    /// What this failure knows itself to be, when it knows.
+    pub code: Option<crate::failure::FailureCode>,
+    /// The operator sentence: what was refused, and why.
+    pub message: String,
+    /// Operator help that is not part of the failure — the approved
+    /// spellings — printed beside it and never classified.
+    pub help: Option<String>,
+}
+
+impl ExecRefusal {
+    /// A refusal this module states outright: the words are understood, and
+    /// the allowlist does not admit them.
+    ///
+    /// [`crate::failure::FailureCode::Refused`] — "an explicit policy refused
+    /// this command" — is the whole of what happened. Nothing is missing, no
+    /// credential was presented, nothing is down, and waiting changes
+    /// nothing: only the words or the table can change. It is not retryable,
+    /// and its exit code is the one the caller already chose.
+    ///
+    /// The code was added to `wisent-errors` for this call site rather than
+    /// picked from the seven that were there. `not_found` reads as a missing
+    /// path and would have sent an operator to check paths and permissions
+    /// until they disbelieved the error, which is the cost the `timeout`
+    /// misclassification was already imposing, only quieter.
+    fn unapproved(message: String) -> Self {
+        Self {
+            code: Some(crate::failure::FailureCode::Refused),
+            message,
+            help: Some(format!("approved commands: {}", allowlist())),
+        }
+    }
+}
+
+impl From<DeployError> for ExecRefusal {
+    /// Everything else this module reaches — the registry, the channel, the
+    /// host — still arrives as prose, and prose is what `classify_message`
+    /// exists for.
+    fn from(error: DeployError) -> Self {
+        Self {
+            code: None,
+            message: error.0,
+            help: None,
+        }
+    }
+}
+
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
 /// no word splitting, no redirection, no globbing.
@@ -191,7 +263,149 @@ const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     // The order Weles's kimi login trajectory probes, so this read and that
     // install cannot disagree about whether the host has uv.
     (UV_INSTALLER, &[UV_INSTALLER, "/usr/local/bin/uv"]),
+    // The four programs a Spis crawl placement needs, each at the paths this
+    // fleet actually installs it at, home-relative first. A single-path entry
+    // would report "no such file" for a host that has the program one prefix
+    // over, and the first probe run of these entries on 2026-09-03 proved that
+    // the system prefixes alone answer "missing" for a program that is present:
+    // rustup writes cargo into `~/.cargo/bin`, and
+    // `~/.stado/bin/install-cua-driver` links its CLI into `~/.local/bin` off
+    // the bundle it dittos into `/Applications/CuaDriver.app`.
+    (
+        APPIUM_CLI,
+        &[
+            "~/.npm-global/bin/appium",
+            "~/.local/bin/appium",
+            APPIUM_CLI,
+            "/usr/local/bin/appium",
+        ],
+    ),
+    (
+        ANDROID_DEBUG_BRIDGE,
+        &[
+            "~/Library/Android/sdk/platform-tools/adb",
+            ANDROID_DEBUG_BRIDGE,
+            "/usr/local/bin/adb",
+        ],
+    ),
+    (
+        CUA_DRIVER,
+        &[
+            "~/.local/bin/cua-driver",
+            "/Applications/CuaDriver.app/Contents/MacOS/cua-driver",
+            CUA_DRIVER,
+            "/usr/local/bin/cua-driver",
+        ],
+    ),
+    (
+        CARGO_CLI,
+        &[
+            "~/.cargo/bin/cargo",
+            "/Users/Shared/.cargo/bin/cargo",
+            CARGO_CLI,
+            "/usr/local/bin/cargo",
+        ],
+    ),
+    (
+        TMUX_CLI,
+        &[TMUX_CLI, "/usr/local/bin/tmux", "/usr/bin/tmux"],
+    ),
+    // Git, at real installations only. Homebrew first, then the Command Line
+    // Tools' own git INSIDE the developer directory, then a Linux path.
+    //
+    // `/usr/bin/git` is absent on purpose and must stay absent: on macOS that
+    // path is the `xcode-select` shim, and on a host with no Command Line
+    // Tools it opens the installer WINDOW rather than printing a version, so
+    // probing it could raise a consent dialog on an unattended host. The CLT
+    // path below is the real binary the shim would have forwarded to, and it
+    // simply does not exist when the tools are absent — which is the honest
+    // answer this probe wants.
+    (
+        GIT_CLI,
+        &[
+            GIT_CLI,
+            "/usr/local/bin/git",
+            "/Library/Developer/CommandLineTools/usr/bin/git",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+        ],
+    ),
+    // The order every Node reader in this repository already probes — the
+    // launcher script in `deploy::weles_browser_runtime`, and the host reads in
+    // `cli/host.rs` and `cli/seed_freshness.rs` — so a `host exec` answer about
+    // a host's Node cannot name a different binary from the one a managed unit
+    // executes on that same host.
+    (
+        NODE_RUNTIME,
+        &[NODE_RUNTIME, "/usr/local/bin/node", "/usr/bin/node"],
+    ),
+    (NPM_CLI, &[NPM_CLI, "/usr/local/bin/npm", "/usr/bin/npm"]),
+    (
+        CADDY_PROXY,
+        &[CADDY_PROXY, "/usr/local/bin/caddy", "/usr/bin/caddy"],
+    ),
 ];
+
+/// Every absolute path this fleet installs one program at, in probe order, or
+/// `None` for a program whose only path is its own `argv[0]`.
+///
+/// Exposed because a second reader appeared and copying the list into it would
+/// have created exactly the disagreement [`PROGRAM_CANDIDATES`] exists to
+/// prevent: `deploy::mobile_runtime` verifies and installs the mobile runtime
+/// and has to resolve `appium` and `adb` the same way this allowlist's probe
+/// does, or `stado host exec TARGET -- appium --version` and
+/// `stado host mobile-runtime TARGET` could name different binaries on one
+/// machine and disagree about whether the host is ready. One table, two
+/// readers.
+///
+/// It is also the answer to "which path should a placement use": the fleet's
+/// hosts do not carry these directories on a non-interactive `PATH`, so a
+/// consumer resolves a declared absolute path from here and never searches the
+/// environment.
+pub fn program_candidates(program: &str) -> Option<&'static [&'static str]> {
+    PROGRAM_CANDIDATES
+        .iter()
+        .find(|(name, _)| *name == program)
+        .map(|(_, candidates)| *candidates)
+}
+
+/// The Appium server CLI's canonical name in [`PROGRAM_CANDIDATES`].
+pub const APPIUM_PROGRAM: &str = APPIUM_CLI;
+
+/// The Android platform-tools bridge's canonical name in
+/// [`PROGRAM_CANDIDATES`].
+pub const ADB_PROGRAM: &str = ANDROID_DEBUG_BRIDGE;
+
+/// The Node runtime's canonical name in [`PROGRAM_CANDIDATES`].
+///
+/// Needed by any reader that runs a Node shim rather than a compiled binary:
+/// `appium` starts `#!/usr/bin/env node`, and a non-interactive ssh session on
+/// a Homebrew host carries none of Node's directories on `PATH`, so the shim
+/// answers `env: node: No such file or directory` and reads as broken while
+/// being perfectly installed. [`candidate_script`] makes the same argument one
+/// level up, and puts every candidate's directory on `PATH` for that reason.
+pub const NODE_PROGRAM: &str = NODE_RUNTIME;
+
+/// Git's canonical name in [`PROGRAM_CANDIDATES`].
+///
+/// Exposed for the same reason [`APPIUM_PROGRAM`] is: a second reader must
+/// resolve it from this table, not from a list of its own — and in git's case
+/// a hand-written list is how `/usr/bin/git` gets added back.
+pub const GIT_PROGRAM: &str = GIT_CLI;
+
+/// The tmux multiplexer, at the paths this fleet's hosts install it at.
+///
+/// Spis's terminal families drive the product under test inside a tmux
+/// session, so this is their precondition in the same way cargo is every
+/// worker's. It went unapproved, which meant `stado host exec TARGET --
+/// tmux -V` answered "not an approved host-exec command" and every CLI and
+/// TUI preflight refused every host — a refusal that reads as "this machine
+/// has no tmux" and is really a question the channel was never allowed to
+/// ask. Found on 2026-09-03 by running the terminal preflight against
+/// lukasz-macbook, which does carry tmux.
+const TMUX_CLI: &str = "/opt/homebrew/bin/tmux";
+
+/// tmux's canonical name in [`PROGRAM_CANDIDATES`].
+pub const TMUX_PROGRAM: &str = TMUX_CLI;
 
 /// Brama's own service launcher, as the fleet installs it in the managed
 /// account's home.
@@ -222,6 +436,85 @@ const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 /// fleet probes for it — including Weles's kimi login trajectory, whose pinned
 /// CLI install depends on one of them existing.
 const UV_INSTALLER: &str = "/opt/homebrew/bin/uv";
+
+/// The Appium server CLI, as Homebrew and a global npm prefix lay it down.
+///
+/// Spis's crawl coordinator asks this host, through this very channel, whether
+/// the mobile placement can run at all before it submits a job. Until
+/// 2026-09-03 the answer it got was "not an approved host-exec command", which
+/// reads as a policy gap and hid the only fact that mattered: whether the
+/// program is on the machine.
+const APPIUM_CLI: &str = "/opt/homebrew/bin/appium";
+
+/// The Android platform-tools bridge, at the two absolute paths the fleet's
+/// macOS hosts install it at.
+///
+/// `which adb` below answers a different question — whether the login shell's
+/// PATH carries it — and answers `not found` on a host that has the binary
+/// outside a non-interactive ssh PATH, which is exactly the case on Homebrew
+/// installs.
+const ANDROID_DEBUG_BRIDGE: &str = "/opt/homebrew/bin/adb";
+
+/// The Cua Driver CLI, which drives native macOS and desktop applications.
+///
+/// `cua-driver doctor --json` is its own read-only self-check and the exact
+/// prerequisite Spis's desktop placement probes; `~/.stado/bin/install-cua-driver`
+/// is what puts it on a host, and this entry is how an operator learns whether
+/// that ever ran here.
+const CUA_DRIVER: &str = "/opt/homebrew/bin/cua-driver";
+
+/// Cargo, at the paths this fleet installs Rust at: the shared toolchain the
+/// always-on hosts keep outside any one login's home first, then Homebrew,
+/// then a local rustup prefix.
+///
+/// Every Spis crawl worker runs as `cargo run --release` at a pinned revision
+/// on the placement host, so "does this host have cargo, and where" is the
+/// precondition of every native, terminal and command-line family.
+const CARGO_CLI: &str = "/opt/homebrew/bin/cargo";
+
+/// Git, at the paths a real installation puts it, and DELIBERATELY NOT at
+/// `/usr/bin/git`.
+///
+/// `/usr/bin/git` on macOS is not git. It is Apple's `xcode-select` shim, and
+/// on a host without the Command Line Tools installed, running it OPENS THE
+/// CLT INSTALLER WINDOW instead of answering. So the obvious probe — ask
+/// `/usr/bin/git --version`, the path every script reaches for — is the one
+/// spelling that can pop a consent dialog on an unattended fleet host, which
+/// is the opposite of what a read-only allowlist is for. The shim is excluded
+/// from the candidates below for exactly that reason, and this paragraph is
+/// the reason written down beside the entry, because it is the kind of thing
+/// that gets "simplified" back in by the next person who notices `/usr/bin`
+/// is missing from a list of git paths.
+///
+/// Spis's terminal (TUI) worker runs `git` to build its fixture repository,
+/// so "does this host have a real git, and where" is that family's
+/// precondition; it is asked here so a host can be refused before it claims
+/// a slot, and the answer is the absolute path the worker's command is then
+/// built from.
+const GIT_CLI: &str = "/opt/homebrew/bin/git";
+/// The Node runtime, at the absolute paths this fleet installs it at.
+///
+/// A non-interactive ssh login reads no shell profile, and the fleet's Node
+/// comes from Homebrew on the macOS hosts and from the distribution's own
+/// package on the Linux one, so `node` is on nobody's PATH over this channel
+/// and the question has to be asked of the paths directly. It is `argv[0]` of
+/// the node entry, so [`ApprovedCommand::display`] spells it `node --version`
+/// — the name of the program, in the case every operator types it.
+const NODE_RUNTIME: &str = "/opt/homebrew/bin/node";
+
+/// The npm CLI, at the absolute paths it is installed beside that Node at.
+///
+/// A separate program from the runtime and therefore a separate question: an
+/// install can leave one behind without the other, and `npm ci` is what a web
+/// product's release actually runs.
+const NPM_CLI: &str = "/opt/homebrew/bin/npm";
+
+/// The Caddy reverse proxy, at the absolute paths a host may carry it at.
+///
+/// The public web edge terminates TLS for a product hostname with a
+/// registry-managed Caddy unit, and the unit's program is this binary, so this
+/// is the path the unit will name and the path the read must probe.
+const CADDY_PROXY: &str = "/opt/homebrew/bin/caddy";
 
 /// The prefix that marks a program, or one of its environment values, as
 /// living under the login user's home rather than at a system path.
@@ -474,6 +767,24 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
     },
     ApprovedCommand {
         argv: &[
+            "/bin/ps", "ax", "-o", "pid", "-o", "rss", "-o", "pcpu", "-o", "comm",
+        ],
+        why: "reports resident memory per process, by executable name only. The two `ps` \
+              entries around it show identity, parentage and elapsed time but never a byte \
+              count, so the one question a thrashing host forces - which process ate the \
+              memory - had no answer in this table at all. Added 2026-09-03: \
+              charless-mac-mini was holding ~2.9 GB in the compressor with ~88 MB free and \
+              3,277,146 swapouts, which stalled every fresh ssh session on it for 12-25 s \
+              and tripped an unrelated preflight's hard timeout; `vm_stat` proved the \
+              pressure was real but could not name a single owner of it. `-o rss` is a \
+              kernel counter and `-o comm` is the executable's name; `-o command` - the \
+              full argv, where tokens and passwords are passed - is deliberately NOT in \
+              this table and cannot be reached through it. The selector is fixed to `ax` \
+              and takes no pid, user, or file argument, so it cannot be pointed at \
+              anything narrower or anywhere else",
+    },
+    ApprovedCommand {
+        argv: &[
             "/bin/ps",
             "axww",
             "-o",
@@ -584,6 +895,87 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
         why: "reports whether Android platform-tools are on the managed login's PATH; it takes \
               a fixed executable name, reads no application state, and writes nothing",
     },
+    // The four crawl prerequisites, added 2026-09-03. Spis's crawl coordinator
+    // preflights a placement host through this channel before it submits any
+    // job, and for these four the channel answered "not an approved host-exec
+    // command". That refusal is indistinguishable from "the program is
+    // missing", so the 2026-09-01 crawl run recorded fifteen catalogs as
+    // preflight_failed without anybody being able to say which of the two it
+    // was. Each entry prints a version or a self-check, takes no
+    // operator-supplied word, installs nothing and mutates nothing.
+    ApprovedCommand {
+        argv: &[APPIUM_CLI, "--version"],
+        why: "prints the installed Appium server's version, probing the absolute paths this \
+              fleet installs it at rather than the non-interactive ssh PATH -- a different \
+              question that answers `not found` on a host that has the binary. It is the \
+              precondition of every iOS and Android capture placement: without Appium there \
+              is no driver to open an installed application with. `--version` starts no \
+              server, opens no device and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[APPIUM_CLI, "driver", "list", "--installed"],
+        why: "lists which Appium drivers are actually installed, which is the half of mobile \
+              readiness a version cannot answer: XCUITest for iOS and UiAutomator2 for \
+              Android are separate installs, and a placement fails at the first command \
+              without them. `list --installed` reads the local driver manifest; the forms \
+              that change anything (`driver install`, `uninstall`, `update`) are absent from \
+              this table and unreachable through it, because the allowlist matches an entry \
+              exactly and never appends operator words",
+    },
+    ApprovedCommand {
+        argv: &[ANDROID_DEBUG_BRIDGE, "version"],
+        why: "prints the installed Android Debug Bridge's version from the absolute paths the \
+              fleet installs platform-tools at. `which adb` above answers the PATH question \
+              and returns nothing on a Homebrew install reached over ssh, which is why both \
+              exist. `version` contacts no device and starts no server beyond adb's own \
+              local one",
+    },
+    ApprovedCommand {
+        argv: &[ANDROID_DEBUG_BRIDGE, "devices", "-l"],
+        why: "lists the Android devices and emulators this host can currently see, with their \
+              transport and model. It is the placement question for the Android family: a \
+              host with adb and no device cannot capture anything. The listing names devices, \
+              not their contents, and changes nothing on them",
+    },
+    ApprovedCommand {
+        argv: &[CUA_DRIVER, "doctor", "--json"],
+        why: "runs the Cua Driver's own read-only self-check and prints it as JSON: whether \
+              the driver is installed and whether this host's accessibility and \
+              screen-recording grants are in place. That is the exact precondition of the \
+              macOS and desktop capture families, and `~/.stado/bin/install-cua-driver` is \
+              what would repair it. `doctor` opens no application and grants nothing itself",
+    },
+    ApprovedCommand {
+        argv: &[CARGO_CLI, "--version"],
+        why: "prints the installed Rust toolchain's cargo version from the paths this fleet \
+              installs Rust at, shared-toolchain prefix first. Every Spis crawl worker runs \
+              as `cargo run --release` at a pinned revision on the placement host, so this \
+              one fact decides whether the terminal, command-line, documentation and native \
+              families can execute there at all. `--version` compiles nothing, fetches \
+              nothing and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[GIT_CLI, "--version"],
+        why: "prints git's version from the paths a real installation puts it at, and \
+              deliberately NOT from `/usr/bin/git`, which on macOS is the `xcode-select` \
+              shim: on a host without the Command Line Tools that path opens the installer \
+              WINDOW instead of answering, so the obvious probe is the one spelling that \
+              could raise a consent dialog on an unattended fleet host. Spis's terminal \
+              family builds its fixture repository with git, so this decides whether that \
+              family can run at all, and the resolved path is what the worker's command is \
+              then built from rather than a bare name a non-login shell cannot find. \
+              `--version` reads no repository, touches no working tree and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[TMUX_CLI, "-V"],
+        why: "prints the tmux version from the absolute paths this fleet installs it at. Spis's \
+              command-line and terminal families drive the product under test inside a tmux \
+              session, so this is their precondition exactly as cargo is every worker's -- and \
+              until this entry existed the question could not be asked at all: `tmux -V` came \
+              back `not an approved host-exec command`, so both families refused every host and \
+              the refusal read as a missing program. `-V` starts no server, attaches to no \
+              session and writes nothing",
+    },
     ApprovedCommand {
         argv: &[UV_INSTALLER, "--version"],
         why: "prints the uv package installer's version, probing the two absolute paths Weles's \
@@ -679,6 +1071,28 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               that dropped is the one that is no longer listed by default. There is no \
               interface operand and no address, and every configuring form of ifconfig requires \
               one, so this entry cannot change an address, a route, or an interface's state",
+    },
+    // The Linux half of the interface read, added 2026-09-02.
+    // `stado host exec ubuntu-server-rtx-pro-6000 -- ifconfig -a` fails with
+    // `/sbin/ifconfig: No such file or directory`, because Ubuntu ships
+    // iproute2 and not net-tools, so the entry above answers for the macOS
+    // hosts and for no other kind of machine in the fleet.
+    ApprovedCommand {
+        argv: &["/usr/bin/ip", "addr"],
+        why: "lists every network interface on a Linux host with the addresses it carries — the \
+              same fact the `ifconfig -a` entry above reads, on the hosts where that entry \
+              cannot run. Ubuntu ships iproute2 and not net-tools, so \
+              `host exec ubuntu-server-rtx-pro-6000 -- ifconfig -a` answers \
+              `/sbin/ifconfig: No such file or directory` and the fleet's one approved way to \
+              read a host's interfaces was a macOS-only read; the address of the fleet's only \
+              Linux host had to be inferred from `tailscale netcheck` instead, which reports \
+              the reflexive address a relay observed and not one word about what the \
+              interfaces on the machine actually hold. `addr` with no object and no operand is \
+              iproute2's read-only listing form: every form that changes an address takes \
+              `add`, `del`, `change`, `replace` or `flush` after it, none of which is in this \
+              table and none of which can be appended, because the allowlist matches an entry \
+              exactly and never appends operator words. What it prints are the addresses the \
+              registry already holds",
     },
     // The three sign-in repairs, added 2026-09-02. These are the only entries
     // in this table that change anything, and they are here because the thing
@@ -886,6 +1300,100 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               stop. It takes no flag and no operator path, lists names only, and writes \
               nothing",
     },
+    // The three reads a web product's release and its unit need before either
+    // one runs, added 2026-09-02. `stado web` builds a Node product on a fleet
+    // builder with `npm ci` and runs it on a fleet host with `npm run start`,
+    // and the public hostname in front of it is terminated by a
+    // registry-managed Caddy unit. Each of those three facts is a property of
+    // the machine that is true before the release is submitted, and none of
+    // them could be asked of a host through this channel.
+    //
+    // All three probe absolute paths rather than the login shell's PATH, the
+    // way the `uv --version` entry above does and for the same reason: a
+    // non-interactive ssh login reads no profile, so a PATH lookup answers
+    // `not found` on a host that carries the binary, which is the wrong answer
+    // to a precondition check and the most expensive kind of wrong answer to
+    // get.
+    ApprovedCommand {
+        argv: &[NODE_RUNTIME, "--version"],
+        why: "prints the Node runtime's version, probing the absolute paths this fleet installs \
+              it at rather than the login shell's PATH — which is a different question and \
+              answers `not found` on a host that has the binary, because a non-interactive ssh \
+              login reads no shell profile and the fleet's Node comes from Homebrew. A web \
+              product's release builds with `npm ci` on whichever host the recipe's \
+              `runner_platform` selects, and its unit runs `npm run start` on whichever host \
+              the product is declared against, so a machine carrying no Node toolchain fails \
+              the first inside a quality gate and the second at unit bootstrap. Until this \
+              entry there was no sanctioned way to ask either host whether it has a Node \
+              toolchain at all: the question got answered by reading a release log after a \
+              build had already failed, which spends a whole submit to learn one fact that was \
+              true of the machine before the release started. `--version` takes no argument, \
+              installs nothing, resolves no registry, and runs no package script",
+    },
+    ApprovedCommand {
+        argv: &[NPM_CLI, "--version"],
+        why: "prints the npm CLI's version, probed the same way, for the other half of the same \
+              precondition. The runtime and the package manager are separate binaries, a \
+              partial or hand-rolled install leaves a host with one and not the other, and it \
+              is npm — not node — that a web release invokes: `npm ci` in the quality gate and \
+              `npm run start` in the unit. Its version is also the fact that decides whether \
+              `npm ci` can read the product's checked-in `package-lock.json` at all, since a \
+              lockfile written by a newer npm than the host carries is refused rather than \
+              honoured. That is the difference between 'this builder cannot build a Node \
+              product' and 'this product's build is broken', and before this entry the fleet \
+              learned which one it was facing from a failed release's log. `--version` prints \
+              and exits: it contacts no registry, writes no cache, and runs no lifecycle \
+              script",
+    },
+    ApprovedCommand {
+        argv: &[CADDY_PROXY, "version"],
+        why: "prints the version of the Caddy binary a host carries, probed at the same \
+              absolute paths rather than through the login shell's PATH. The public web edge \
+              terminates TLS for a product hostname with a registry-managed Caddy unit, so \
+              whether a host already carries that binary is the precondition of installing it: \
+              a host that has it needs a unit and a configuration written for it, and a host \
+              that does not needs the binary itself first, which is a different repair by a \
+              different mechanism. Asking after the fact means learning the answer from a unit \
+              that will not start, with the hostname already published and no certificate \
+              behind it. `version` is Caddy's own read-only subcommand: it loads no \
+              configuration, binds no port and starts no server, unlike `run`, `start` and \
+              `reload`, none of which is in this table",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "list-units",
+            "--type",
+            "service",
+            "--all",
+            "--no-pager",
+            "--no-legend",
+        ],
+        why: "lists this host's systemd services, the Linux counterpart of the `launchctl \
+              list` entry above. Added 2026-09-03: the fleet's one linux-amd64 builder had \
+              been running a two-day-old stado image that refuses today's registry document \
+              (`policy:ValueError`), so its own janitor never learned a low watermark and it \
+              claimed nothing -- every release build for that platform queued behind it. \
+              Naming the unit that holds that process is the first step of the repair, and \
+              this table could not name a systemd unit at all: `launchctl list` answers only \
+              on macOS. `list-units` is systemd's read-only verb with every selector fixed \
+              here; the mutating verbs (start, stop, restart, enable, daemon-reload) are \
+              absent from this table and cannot be reached through it",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "list-unit-files",
+            "--type",
+            "service",
+            "--no-pager",
+            "--no-legend",
+        ],
+        why: "lists the systemd service unit FILES installed on this host, which is a \
+              different question from `list-units` above: a unit whose file exists but was \
+              never loaded appears only here, and that is exactly the shape an undeclared \
+              queue agent takes. Read-only, every selector fixed, and it takes no unit name",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
@@ -907,23 +1415,23 @@ pub fn is_shell_safe(word: &str) -> bool {
 
 /// Resolve the operator's words to an approved entry, or refuse.
 ///
-/// The refusal always carries the full allowlist: an operator who guessed
-/// wrong should not have to go read the source to find out what is
-/// available.
-pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, DeployError> {
+/// Every refusal here is stated, not guessed: it is the one place that knows
+/// the words matched nothing, so it says so with its own code (see
+/// [`ExecRefusal`]). The approved spellings still reach the operator — an
+/// operator who guessed wrong should not have to go read the source — but
+/// they ride [`ExecRefusal::help`] rather than the sentence, because a
+/// refusal that quotes its own help text is a refusal that can be
+/// misclassified by it.
+pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, ExecRefusal> {
     if words.is_empty() {
-        return Err(DeployError(format!(
-            "no command given; approved commands: {}",
-            allowlist()
-        )));
+        return Err(ExecRefusal::unapproved("no command given".to_string()));
     }
     for word in words {
         if !is_shell_safe(word) {
-            return Err(DeployError(format!(
+            return Err(ExecRefusal::unapproved(format!(
                 "argument {} contains a character a shell would interpret; \
-                 host exec is an allowlist, not a shell. Approved commands: {}",
+                 host exec is an allowlist, not a shell",
                 py_str_repr(word),
-                allowlist()
             )));
         }
     }
@@ -932,10 +1440,9 @@ pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, DeployError
         .iter()
         .find(|candidate| candidate.display() == requested)
         .ok_or_else(|| {
-            DeployError(format!(
-                "{} is not an approved host-exec command; approved commands: {}",
+            ExecRefusal::unapproved(format!(
+                "{} is not an approved host-exec command",
                 py_str_repr(&requested),
-                allowlist()
             ))
         })
 }
@@ -954,6 +1461,18 @@ pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, DeployError
 /// than a shell's `No such file or directory` against whichever path happened
 /// to be listed first, because the second reads as "the fleet installed this
 /// wrongly" when the truth is "this program is not on this machine".
+///
+/// Every candidate's directory goes on `PATH` before the exec, and that is not
+/// convenience. `/opt/homebrew/bin/npm` is a JavaScript shim whose first line
+/// is `#!/usr/bin/env node`, so executing it on a channel whose `PATH` does
+/// not carry Homebrew answers `env: node: No such file or directory` — which
+/// is what `stado host exec charless-mac-mini -- npm --version` answered on
+/// 2026-09-03 while `node --version` on the same host answered `v25.9.0` from
+/// the directory beside it. The interpreter a shim needs is always a sibling
+/// of the shim, so the directories this table already names are exactly the
+/// ones that make it runnable. They are prepended, not appended: a host with
+/// two Node installations must resolve the shim against the one whose path
+/// this entry selected, not against whatever the login shell prefers.
 fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
     let fixed = arguments
         .iter()
@@ -961,8 +1480,29 @@ fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
         .collect::<Vec<String>>()
         .join(" ");
     let mut script = String::from("set -eu\n");
+    // Reversed, because each line prepends: emitting the candidates back to
+    // front leaves the first candidate's directory first on PATH, which is the
+    // same precedence the exec loop below applies.
+    for candidate in candidates.iter().rev() {
+        if let Some(directory) = std::path::Path::new(candidate).parent() {
+            let directory = directory.to_string_lossy();
+            if !directory.is_empty() {
+                script.push_str(&format!(
+                    "PATH={}:\"$PATH\"\n",
+                    shlex_quote(directory.as_ref())
+                ));
+            }
+        }
+    }
+    script.push_str("export PATH\n");
     for candidate in candidates {
-        let path = shlex_quote(candidate);
+        // A candidate may be home-relative: the installers that lay these
+        // programs down (`~/.stado/bin/install-cua-driver`, rustup, a global
+        // npm prefix) write into the login user's home, and only the host
+        // knows what that path is. `home_anchored` expands nothing here — it
+        // emits the host's own `"$HOME"` followed by the quoted remainder,
+        // exactly as the account-owned entries already do.
+        let path = home_anchored(candidate);
         let marker = shlex_quote(&format!("{RESOLVED_EXECUTABLE_MARKER}{candidate}"));
         script.push_str(&format!(
             "if [ -x {path} ]; then printf '%s\\n' {marker} >&2; exec {path} {fixed}; fi\n"
@@ -1008,11 +1548,17 @@ fn extract_resolved_executable(
 }
 
 /// Run one approved command on a canonical registry host.
+///
+/// The error type is [`ExecRefusal`] rather than [`DeployError`] so the
+/// allowlist's own refusal keeps the code it stated all the way to the
+/// operator. Every other failure on this path converts in through
+/// `From<DeployError>` with no code, which is the honest answer for a
+/// sentence produced by ssh, the registry or the remote shell.
 pub async fn exec_host(
     target_name: &str,
     words: &[String],
     runner: &Runner,
-) -> Result<Value, DeployError> {
+) -> Result<Value, ExecRefusal> {
     // Refuse before resolving the target: an operator who typed something
     // outside the allowlist gets the allowlist back immediately, without a
     // registry round-trip and without the host ever being contacted.
@@ -1065,9 +1611,9 @@ pub async fn exec_host(
             // A failed run may never have reached any candidate.
             None if !output.ok() => None,
             None => {
-                return Err(DeployError(
-                    "host returned no resolved executable marker".into(),
-                ))
+                return Err(
+                    DeployError("host returned no resolved executable marker".into()).into(),
+                )
             }
         }
     } else {
@@ -1103,12 +1649,31 @@ pub async fn exec_host(
         },
         error,
     };
-    serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()))
+    serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()).into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/usr/bin/git` is the `xcode-select` shim: on a host with no Command
+    /// Line Tools, running it opens the installer WINDOW instead of printing
+    /// a version. A read-only allowlist must not be able to raise a consent
+    /// dialog on an unattended host, so the shim stays out of the candidates
+    /// and this test is what stops it being helpfully added back.
+    #[test]
+    fn the_git_probe_never_reaches_the_xcode_select_shim() {
+        let candidates = program_candidates(GIT_PROGRAM).expect("git is in the table");
+        assert!(
+            !candidates.contains(&"/usr/bin/git"),
+            "the /usr/bin/git shim must never be probed: {candidates:?}"
+        );
+        assert!(
+            candidates.contains(&"/Library/Developer/CommandLineTools/usr/bin/git"),
+            "the real Command Line Tools git must be probed instead"
+        );
+        assert!(candidates.iter().all(|path| path.starts_with('/')));
+    }
 
     /// Every entry must be reachable by the spelling it advertises.
     ///

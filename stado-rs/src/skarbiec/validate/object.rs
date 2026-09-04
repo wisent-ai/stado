@@ -17,6 +17,12 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
+    // A policy that parses but leaves a queue prefix ungranted is the object
+    // API answering 401 to every agent claim; it is a deployment defect of
+    // this host, not a credential problem of the caller.
+    if let Some(problem) = crate::config::queue_prefix_problem(namespaces) {
+        return Err(SkarbiecError::Deployment(problem));
+    }
     let client = Client::object_verifier()?;
     let expected = namespaces
         .values()

@@ -32,6 +32,7 @@ pub mod dashboard;
 pub mod database;
 pub mod directory;
 pub mod disk_cleanup;
+pub mod dns;
 pub mod doctor;
 pub mod egress;
 pub mod fleet;
@@ -72,6 +73,7 @@ pub mod stream;
 pub mod submit;
 pub mod table;
 pub mod vast;
+pub mod web;
 
 /// Command failure with a click-matching exit code. A `Some` message is
 /// printed as `Error: {msg}` on stderr (click `ClickException`, code 1)
@@ -79,10 +81,33 @@ pub mod vast;
 /// [`crate::failure::FailureCode::exit_code`] applied to `code`; a `None`
 /// message exits silently (click `SystemExit`, e.g. config validation
 /// failure after the ERROR lines were already printed).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CmdError {
     pub message: Option<String>,
     pub code: i32,
+    /// The failure code this error stated about itself where it was built.
+    ///
+    /// `None` means it arrived as prose and [`main_entry`] falls back to
+    /// [`crate::failure::classify_message`], which reads the wording. That
+    /// fallback is the last resort and never an equal alternative: a
+    /// keyword read of a sentence is a guess, and on 2026-09-03 the guess
+    /// reported a hard allowlist refusal as a retryable timeout because the
+    /// refusal printed an allowlist containing `--login-timeout-ms`. A
+    /// caller that knows what its failure is says so here.
+    pub failure: Option<crate::failure::FailureCode>,
+    /// Operator help that belongs beside the failure but not inside it —
+    /// the approved spellings of a refused command, for instance. Printed
+    /// after the error line, carried as its own field in `--json`, and
+    /// never classified or logged as the failure's detail.
+    pub help: Option<String>,
+    /// The caller was invoked with `--json` and its failure must be
+    /// machine-readable too.
+    ///
+    /// A command that answers `--json` with prose on the error path cannot
+    /// be handled by the script that asked for JSON; it can only be parsed
+    /// by eye. [`main_entry`] prints one envelope for every command that
+    /// sets this, so the shape is uniform rather than per-command.
+    pub json: bool,
 }
 
 /// click `ClickException`'s exit code: "it ran and failed". Every runtime
@@ -96,6 +121,7 @@ impl CmdError {
         Self {
             message: Some(msg.into()),
             code: CLICK_ERROR_CODE,
+            ..Self::default()
         }
     }
 
@@ -108,6 +134,7 @@ impl CmdError {
             // click's UsageError.exit_code, as a ratio of two width
             // constants rather than a bare literal.
             code: (u16::BITS / u8::BITS) as i32,
+            ..Self::default()
         }
     }
 
@@ -116,7 +143,27 @@ impl CmdError {
         Self {
             message: None,
             code,
+            ..Self::default()
         }
+    }
+
+    /// Carry the code the failure already knows, so nothing downstream has
+    /// to infer it from the wording.
+    pub fn stating(mut self, code: crate::failure::FailureCode) -> Self {
+        self.failure = Some(code);
+        self
+    }
+
+    /// Attach operator help that is not part of the failure sentence.
+    pub fn helping(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    /// Answer in JSON, because that is what the caller asked for.
+    pub fn machine_readable(mut self, json: bool) -> Self {
+        self.json = json;
+        self
     }
 }
 
@@ -179,9 +226,40 @@ impl From<std::io::Error> for CmdError {
     }
 }
 
+/// The whole cause chain of one HTTP failure, joined, with the URL it was
+/// asking for.
+///
+/// `reqwest::Error`'s own `Display` is frequently one unattributable word, and
+/// `builder error` is the worst of them: it names no URL, no header and no
+/// field. On 2026-09-03 it was the only thing `stado storage stat
+/// stado://system/release-catalog/preferences-landing.json` said, while the
+/// same command for two other products answered an honest HTTP 401 — so the
+/// operator's only signal that the fault was in a credential rather than in
+/// the network was that one product differed from the others. The answer was
+/// one layer down, in a source chain nothing printed: a header value that
+/// could not be built. Every reqwest failure that reaches an operator now
+/// carries that chain, because the layer that knows the cause is never the one
+/// whose message gets shown.
+pub fn http_failure(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(current) = cause {
+        let text = current.to_string();
+        if !text.is_empty() && !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        cause = current.source();
+    }
+    if let Some(url) = error.url() {
+        message.push_str(&format!(" (requesting {url})"));
+    }
+    message
+}
+
 impl From<reqwest::Error> for CmdError {
     fn from(exc: reqwest::Error) -> Self {
-        Self::click(exc.to_string())
+        Self::click(http_failure(&exc))
     }
 }
 
@@ -233,7 +311,11 @@ fn print_onboarding() {
 
 #[derive(Parser)]
 #[command(
-    version,
+    // Not bare `version`: that prints CARGO_PKG_VERSION alone, and one
+    // version has named several different trees of this crate. `--version`
+    // is where an operator asks which build a host is running, so it answers
+    // with the revision too.
+    version = crate::build_identity::BUILD_IDENTITY,
     about = "Stado — policy-controlled queue and compute control plane."
 )]
 pub struct Cli {
@@ -446,11 +528,11 @@ enum Commands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect or change stado configuration: show | validate | init | set.
+    /// Inspect or change stado configuration: show | validate | init | set | unset.
     Config {
         #[arg(default_value = "show")]
         sub: String,
-        /// `set`: dotted key, e.g. `alerts.channels`.
+        /// `set` and `unset`: dotted key, e.g. `alerts.channels`.
         key: Option<String>,
         /// `set`: JSON value; a bare word is stored as a string.
         value: Option<String>,
@@ -553,6 +635,12 @@ enum Commands {
     /// Resolve fleet databases: placement endpoint and credential coordinate.
     #[command(subcommand)]
     Database(database::DatabaseCommands),
+    /// Host a web product on the fleet: build it, run it, publish its hostname.
+    #[command(subcommand)]
+    Web(web::WebCommands),
+    /// Own the records of a DNS zone Stado manages at its registrar.
+    #[command(subcommand)]
+    Dns(dns::DnsCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     ///
     /// Being replaced by the service declaration contract: a model server is
@@ -1287,6 +1375,20 @@ enum HostCommands {
         #[arg(long)]
         print: bool,
     },
+    /// The unit ids the registry declares for THIS host, one per line.
+    ///
+    /// What the health beacon must ask about. The collector's list was an
+    /// operator-typed `WC_HEALTH_UNITS`, so a service the registry declared
+    /// and the beacon never watched read as a unit that does not exist:
+    /// `registry doctor` reported `missing-plist` for
+    /// `com.wisent.compute.service.stado-resolver.service.service` on
+    /// ubuntu-server-rtx-pro-6000 while that unit was active with a live pid.
+    ///
+    /// Prints nothing and succeeds when this machine is not in the registry or
+    /// the registry cannot be read: a beacon that fails to collect reports
+    /// nothing at all, which is worse than reporting the operator's own list.
+    #[command(name = "beacon-units")]
+    BeaconUnits,
     /// Recover a registry-managed macOS host through its approved channel.
     Recover {
         target: String,
@@ -1585,9 +1687,18 @@ enum HostCommands {
     },
     /// Pull TARGET's Skarbiec mirror into its live vault without discarding
     /// local-only items.
+    ///
+    /// This replaces the live vault file with the mirror rather than merging
+    /// the two; run `--check` first, which names every item that would be
+    /// replaced and every one that would be lost, and exits non-zero when
+    /// either set is not empty.
     #[command(name = "sync-vault")]
     SyncVault {
         target: String,
+        /// Report what a pull would change and exit non-zero on any conflict
+        /// or loss, applying nothing.
+        #[arg(long)]
+        check: bool,
         /// Emit the Skarbiec pull report as JSON.
         #[arg(long)]
         json: bool,
@@ -2268,6 +2379,30 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Verify, and with --repair install, the mobile automation runtime
+    /// TARGET's registry entry declares it needs: the Appium server at its
+    /// declared version, each declared driver, and Android platform-tools.
+    #[command(name = "mobile-runtime")]
+    MobileRuntime {
+        target: String,
+        /// Install what the declaration asks for, then verify again.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Which hosts a mobile capture family may be placed on, out of the
+    /// registry's declarations alone. Read-only, contacts no host: a host that
+    /// declares no runtime for the family is absent from the answer and is
+    /// never probed for it.
+    #[command(name = "mobile-placement")]
+    MobilePlacement {
+        /// `ios` or `android`; omit for every family.
+        #[arg(long)]
+        family: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's effective Stado configuration through its fleet channel.
     ConfigShow { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
@@ -2472,9 +2607,37 @@ pub async fn main_entry() -> i32 {
             let Some(message) = err.message.as_deref() else {
                 return err.code;
             };
-            let code = crate::failure::classify_message(message);
-            eprintln!("Error: {message}");
-            eprintln!("{}", crate::failure::operator_line(code));
+            // What the failure said about itself beats what its wording
+            // looks like. `classify_message` reads prose, and prose is
+            // evidence only when there is nothing better: it once read a
+            // refusal's own allowlist and reported `timeout, retryable`.
+            let code = err
+                .failure
+                .unwrap_or_else(|| crate::failure::classify_message(message));
+            if err.json {
+                // The same sorted-keys rendering every `--json` command on
+                // this CLI already prints, so a caller parses one shape.
+                println!(
+                    "{}",
+                    crate::deploy::host_recovery::to_sorted_pretty(&serde_json::json!({
+                        "status": "error",
+                        "failure_point": point,
+                        "service": service,
+                        "error_code": code.as_str(),
+                        "retryable": code.retryable(),
+                        "severity": code.severity().as_str(),
+                        "summary": code.operator_summary(),
+                        "message": message,
+                        "help": err.help,
+                    }))
+                );
+            } else {
+                eprintln!("Error: {message}");
+                if let Some(help) = err.help.as_deref() {
+                    eprintln!("{help}");
+                }
+                eprintln!("{}", crate::failure::operator_line(code));
+            }
             crate::failure::log_failure(&point, service, code, message);
             // Usage errors keep their own code: no amount of retrying fixes
             // an argument, whatever the message happens to read like.
@@ -2705,6 +2868,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::PublishBeacon { source, print } => {
                 host::publish_beacon(&source, print).await
             }
+            HostCommands::BeaconUnits => host::beacon_units().await,
             HostCommands::Recover {
                 target,
                 bundled_registry,
@@ -2943,7 +3107,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
-            HostCommands::SyncVault { target, json } => host::sync_vault(&target, json).await,
+            HostCommands::SyncVault {
+                target,
+                check,
+                json,
+            } => host::sync_vault(&target, check, json).await,
             HostCommands::VaultItemPut {
                 target,
                 item,
@@ -3165,6 +3333,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 repair,
                 json,
             } => host::weles_browser_runtime(&target, &components, repair, json).await,
+            HostCommands::MobileRuntime {
+                target,
+                repair,
+                json,
+            } => host::mobile_runtime(&target, repair, json).await,
+            HostCommands::MobilePlacement { family, json } => {
+                host::mobile_placement(family.as_deref(), json).await
+            }
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,
@@ -3198,6 +3374,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Database(sub) => database::dispatch(sub).await,
+        Commands::Web(sub) => web::dispatch(sub).await,
+        Commands::Dns(sub) => dns::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,

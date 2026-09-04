@@ -51,6 +51,7 @@ pub struct JobStorage {
 
 const TRANSITION_PREFIX: &str = "job-transitions";
 const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
+const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -625,19 +626,24 @@ impl JobStorage {
 
     async fn set_transition_state(
         &self,
-        transition_id: &str,
-        job_id: &str,
+        expected: &JobTransition,
         state: &str,
     ) -> Result<(), StorageError> {
         for _ in 0..16 {
-            let Some((mut transition, version)) = self.read_job_transition(job_id).await? else {
+            let Some((mut transition, version)) =
+                self.read_job_transition(&expected.job_id).await?
+            else {
                 return Err(StorageError::Other(format!(
-                    "durable transition {transition_id} disappeared"
+                    "durable transition {} disappeared",
+                    expected.transition_id
                 )));
             };
-            if transition.transition_id != transition_id {
+            if transition.transition_id != expected.transition_id
+                || transition.owner != expected.owner
+            {
                 return Err(StorageError::StorageConflict(format!(
-                    "durable transition ownership changed for {job_id}"
+                    "durable transition generation changed for {}",
+                    expected.job_id
                 )));
             }
             if transition.state == state {
@@ -646,7 +652,7 @@ impl JobStorage {
             transition.state = state.to_string();
             match self
                 .compare_and_swap_text(
-                    &transition_path(job_id),
+                    &transition_path(&expected.job_id),
                     &version,
                     &serde_json::to_string_pretty(&transition)?,
                 )
@@ -658,7 +664,55 @@ impl JobStorage {
             }
         }
         Err(StorageError::StorageConflict(format!(
-            "durable transition {transition_id} remained contended"
+            "durable transition {} remained contended",
+            expected.transition_id
+        )))
+    }
+    /// Retire only the transition generation this caller finished.
+    ///
+    /// A plain delete is unsafe: another lifecycle move may replace the
+    /// completed record between our final read and delete, and deleting by path
+    /// would then erase that newer move. A named retired state keeps the reason
+    /// in the durable record, stops later recovery from re-verifying settled
+    /// history, and remains replaceable by the next transition.
+    async fn retire_transition_record(
+        &self,
+        completed: &JobTransition,
+    ) -> Result<(), StorageError> {
+        for _ in 0..16 {
+            let Some((mut current, version)) = self.read_job_transition(&completed.job_id).await?
+            else {
+                return Ok(());
+            };
+            if current.transition_id != completed.transition_id
+                || current.owner != completed.owner
+                || current.state == TRANSITION_RETIRED_STATE
+            {
+                return Ok(());
+            }
+            if current.state != "completed" {
+                return Err(StorageError::StorageConflict(format!(
+                    "durable transition {} changed to {} before retirement",
+                    completed.transition_id, current.state
+                )));
+            }
+            current.state = TRANSITION_RETIRED_STATE.to_string();
+            match self
+                .compare_and_swap_text(
+                    &transition_path(&completed.job_id),
+                    &version,
+                    &serde_json::to_string_pretty(&current)?,
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "durable transition {} remained contended while retiring",
+            completed.transition_id
         )))
     }
 
@@ -734,7 +788,54 @@ impl JobStorage {
         }
         self.retire_transition_source(transition).await?;
         tombstone::on_transition(self, &destination, &transition.to_prefix).await;
+        // Retire this exact generation rather than deleting by path: the next
+        // lifecycle move is allowed to replace a settled record concurrently.
+        self.retire_transition_record(transition).await?;
         Ok(true)
+    }
+
+    /// Settle a durable record whose state this build does not know.
+    ///
+    /// This build writes `prepared`, `completed`, `aborted` and the named
+    /// retired state. A different value was written outside this state machine.
+    /// Raising it into the caller stops far more than the job it describes:
+    /// [`Self::claim_queued_job`] recovers before every claim, so one
+    /// uninterpretable record ends the agent's whole tick, and on
+    /// charless-mac-mini it did — the loop died and restarted every few seconds
+    /// for hours while seven pinned jobs waited and every gate read healthy.
+    ///
+    /// So the world decides instead of the label. A destination that already
+    /// carries the promised job in the promised state proves the move
+    /// happened, and it is finished exactly as a `completed` record would be.
+    /// An intact, unfenced source proves it did not, and the record is
+    /// aborted. Only a fenced source with no destination is genuinely
+    /// unresolvable, and that one is reported.
+    async fn settle_unrecognized_transition(
+        &self,
+        transition: &JobTransition,
+    ) -> Result<bool, StorageError> {
+        let job_id = transition.job_id.as_str();
+        if let Some(destination) = self.read_job(&transition.to_prefix, job_id).await? {
+            if crate::queue::submit::immutable_job_projection(&destination)
+                == crate::queue::submit::immutable_job_projection(&transition.destination_job)
+                && destination.state == prefix_state(&transition.to_prefix)
+            {
+                self.set_transition_state(transition, "completed").await?;
+                return self.finish_completed_transition(transition).await;
+            }
+        }
+        let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
+        if let Some(versioned) = self.read_text_versioned(&source_path).await? {
+            let source = Job::from_json(&versioned.content)?;
+            if source.state != transition_fence_state(&transition.transition_id) {
+                self.set_transition_state(transition, "aborted").await?;
+                return Ok(false);
+            }
+        }
+        Err(StorageError::StorageConflict(format!(
+            "durable transition {} carries unknown state {} and neither side of the move settles it",
+            transition.transition_id, transition.state
+        )))
     }
 
     /// Recover or finish the single durable lifecycle transition for a job.
@@ -744,8 +845,35 @@ impl JobStorage {
         let Some((transition, _)) = self.read_job_transition(job_id).await? else {
             return Ok(false);
         };
-        if transition.state == "aborted" {
+        if transition.state == TRANSITION_RETIRED_STATE {
             return Ok(false);
+        }
+        if transition.state == "aborted" {
+            // `aborted` is a decision made from an earlier view of the two
+            // sides, not a terminal fact. A later placement rewrite can make
+            // that view stale while the destination remains the completed
+            // move. Upgrade only when the destination matches and the source
+            // is absent, fenced, or already cleaned for this generation.
+            let Some(destination) = self.read_job(&transition.to_prefix, job_id).await? else {
+                return Ok(false);
+            };
+            if crate::queue::submit::immutable_job_projection(&destination)
+                != crate::queue::submit::immutable_job_projection(&transition.destination_job)
+                || destination.state != prefix_state(&transition.to_prefix)
+            {
+                return Ok(false);
+            }
+            let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
+            if let Some(versioned) = self.read_text_versioned(&source_path).await? {
+                let source = Job::from_json(&versioned.content)?;
+                let fence_state = transition_fence_state(&transition.transition_id);
+                let cleaned_state = transition_cleaned_state(&transition.transition_id);
+                if source.state != fence_state && source.state != cleaned_state {
+                    return Ok(false);
+                }
+            }
+            self.set_transition_state(&transition, "completed").await?;
+            return self.finish_completed_transition(&transition).await;
         }
         let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
         let destination_path = format!("{}/{}.json", transition.to_prefix, job_id);
@@ -755,10 +883,7 @@ impl JobStorage {
             return self.finish_completed_transition(&transition).await;
         }
         if transition.state != "prepared" {
-            return Err(StorageError::Other(format!(
-                "durable transition {} has invalid state {}",
-                transition.transition_id, transition.state
-            )));
+            return self.settle_unrecognized_transition(&transition).await;
         }
 
         match self.read_text_versioned(&source_path).await? {
@@ -782,8 +907,7 @@ impl JobStorage {
             Some(versioned) => {
                 let source = Job::from_json(&versioned.content)?;
                 if source.state != fence_state {
-                    self.set_transition_state(&transition.transition_id, job_id, "aborted")
-                        .await?;
+                    self.set_transition_state(&transition, "aborted").await?;
                     return Ok(false);
                 }
             }
@@ -803,8 +927,7 @@ impl JobStorage {
                         transition.transition_id
                     )));
                 }
-                self.set_transition_state(&transition.transition_id, job_id, "completed")
-                    .await?;
+                self.set_transition_state(&transition, "completed").await?;
                 return self.finish_completed_transition(&transition).await;
             }
         }
@@ -889,8 +1012,7 @@ impl JobStorage {
             // would be invisible to a listing that walks only the index.
             self.write_priority_marker(&destination).await?;
         }
-        self.set_transition_state(&transition.transition_id, job_id, "completed")
-            .await?;
+        self.set_transition_state(&transition, "completed").await?;
         self.finish_completed_transition(&transition).await
     }
 
@@ -1010,8 +1132,8 @@ impl JobStorage {
     }
 
     /// Claim through a durable transition record. The running job is derived
-    /// from the fresh versioned queue body; stale caller priority/assignment
-    /// cannot overwrite a concurrent queued rewrite.
+    /// from the fresh versioned queue body; stale caller priority, assignment,
+    /// or provider placement cannot overwrite a concurrent queued rewrite.
     ///
     /// The claimed running document carries a worker lease from the first
     /// instant it exists, so a claim that dies before its first heartbeat is
@@ -1026,6 +1148,8 @@ impl JobStorage {
         let current = Job::from_json(&versioned.content)?;
         if current.state != crate::models::job_state::QUEUED
             || current.assigned_to != job.assigned_to
+            || current.provider != job.provider
+            || current.pin_to_provider != job.pin_to_provider
             || crate::queue::submit::immutable_job_projection(&current)
                 != crate::queue::submit::immutable_job_projection(job)
         {
@@ -1325,6 +1449,13 @@ impl JobStorage {
         oldest_first: usize,
     ) -> Result<Vec<Job>, StorageError> {
         listing::list_jobs(self, prefix, oldest_first).await
+    }
+
+    /// Every job id under `{prefix}/`, without downloading one document.
+    /// See [`listing::list_job_ids`] for why a keep-list must use this and
+    /// not [`Self::list_jobs`].
+    pub async fn list_job_ids(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        listing::list_job_ids(self, prefix).await
     }
 
     /// Priority markers first, then oldest-first, counting only jobs the

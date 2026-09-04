@@ -1,7 +1,7 @@
 # Checks that measure nothing
 
-One defect shape has now been found thirty times in this repository, in thirty
-different subsystems, inside about two days. The twentieth was
+One defect shape has now been found thirty-seven times in this repository, in
+thirty-seven different subsystems, inside about two days. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
 every reading of it was true; the twenty-second is the one where the fleet
 could rule out every mechanism it owns and still not name what had happened;
@@ -14,15 +14,31 @@ record itself produced — a keep-set and a liveness signal — rather than in t
 system they were built to judge; the twenty-eighth answers instance 20 by
 measuring the thing that mattered about the same name, not who answered but
 where the bytes went; the twenty-ninth is the only one so far whose
-prevention landed in the same change as its diagnosis; and the thirtieth is
+prevention landed in the same change as its diagnosis; the thirtieth is
 the one that had been true for as long as nobody created the sibling that
-made it visible. Every instance is
+made it visible; the thirty-second is one row for two instances an hour
+apart, because they are one design property: the answer existed at the site,
+was dropped there, and was reconstructed downstream by inference — a janitor
+that could not say it had been prevented, and a refusal that reported itself
+as a retryable timeout; the thirty-third is instance 29's own remedy read
+one scope too narrow, found because that remedy refused a real second build;
+the thirty-fourth is the one where the budget that decides how much of a
+host a janitor sees was never declared against the size of that host, so its
+last cleaner had scanned nothing for as long as anyone had looked; the
+thirty-fifth is #7 arriving at its worst reading, where one version named
+four different builds and answering "which build is this" meant reading
+symbols out of a binary; the thirty-sixth is instance 14's shape moved
+from a boundary to an installer — a gate that is correct in every detail and
+is not on the path anything travels; and the thirty-seventh is a durable
+lifecycle record checking a queued document without accounting for the
+placement writer that is explicitly allowed to change that document.
+Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The thirty
+## The thirty-seven
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -56,6 +72,20 @@ what is actually there.
 | 28 | the `release` check in `src/doctor.rs`, and `STADO_PUBLIC_RELEASE_API_URL` in both release workflows (#298) | the release channel is reachable | **the route a release actually travels.** The check GETs a 201-byte manifest and passes on any 200, so it passed while `charless-mac-mini.tail6443b3.ts.net` resolved through `1.1.1.1`/`8.8.8.8` — the resolver this machine has for the MagicDNS suffix, which cannot answer a MagicDNS name — to the public `ts.net` front end on one attempt and to nothing on the next, with `100.100.100.100` answering `100.120.25.24` throughout and that address serving the same route in **82 ms**. The 0.13.40 train read one immutable object at 20 MB per 55 s, spent 42 minutes inside `Validate public native release delivery`, and was cancelled at 55 minutes with the object API healthy the whole time. Two narrowings, one name: the check measured the answer instead of the path, and the validation step re-downloaded every object — 300 MB per platform — to prove what the writer read-back had already proven. Instance 20 saw these public addresses and asked whether the name had been hijacked; the answer is that public DNS answers for `ts.net` names by design, and the property nothing held was that a tailnet origin must be reached at its tailnet address |
 | 29 | the immutable release coordinate `releases/<product>/<version>/<platform>/`, written by `deploy.yml` and by `cli::release_submit::publish` (#324) | these objects are immutable, so a version means one build | **that anything owned the version.** Create-only puts protect one OBJECT. The two producers write **disjoint** names — the train writes six executables, `SHA256SUMS`, `stado-v<v>-<p>.tar.gz` and `release-manifest-<p>.json`; the signed pipeline writes `release.json`, `release.sig`, `release.tar.gz` and `qualification.json` — so `--if-absent` never refused either of them, and the version number lives in `Cargo.toml`, which many commits share. `stado/0.13.46/darwin-arm64` is the bill: `release.json` attests `446ad490`, `release-manifest-darwin-arm64.json` attests `641a52b2`, both publications succeeded, and `pipeline_catalog_identity` (#266) then refused delivery of a version that means two builds — correctly, and too late, because immutable objects mean it can never be made to mean one. **Now prevented, not merely detected:** `RELEASE_REVISION_NAME` (`source-revision.json`) is claimed create-only, before any artifact, by every publisher through one function — `claim_release_coordinate`, reached from the pipeline directly and from both workflows as `stado release claim-coordinate` — so a second build is refused while the prefix still holds nothing, naming both commits and the one remedy immutability leaves: publish a new version |
 | 30 | `/api/object/list`, `ObjectRef::namespace_prefix`, both `authorized_list_prefix` implementations and `StadoObjectBackend::blob_prefix` (#334) | this listing answers for the prefix that was asked for | **the separator that says what a prefix is.** Every one of those layers called `trim_matches('/')`, so `prefix=queue/` became `queue`, and a store scan for `queue` answers with `queue/` **and every sibling whose name begins with those five letters**. Nothing had one until 2026-09-02 at 23:32, when a migration created `queue_priority/`: the next release train read 9026 priority markers as queued jobs, `list_jobs` could not build the terminal-workdir keep-list, and `release-capacity` refused the 0.13.50 train before a single object was published — a disk pass that never looked at a build cache, blocking a release, because of a trailing slash. **Now three things instead of one:** the separator survives from the query string to the store scan; a client filters an over-broad answer instead of refusing a store that holds exactly the right objects, so a fleet still running the old gateway cannot make a new reader wrong; and an unreadable queue costs the one stage that needs it — reported as `SKIPPED`, keeping every workdir — instead of the whole reclamation. The refusal for a genuinely inconsistent item, where `uri`, `namespace` and `key` disagree, is untouched: breadth and integrity were one error message, and they need opposite responses |
+| 31 | `fetch_release_object` in `src/deploy/host_release.rs` (#345) | the target can discover how many bytes it must fetch | **who answers the question.** The size came from a `Range: 0-0` request's `Content-Range`, which the tailnet proxy in front of the object API produces and the dashboard's own release route does not. Every delivery worked as long as the target was a DIFFERENT host from the one serving the store; the host that serves it fetched over its own loopback, got no `Content-Range`, and refused with `fetch no_declared_size` — so `charless-mac-mini` could not be given the release it publishes, and `deploy-fleet` failed 0.13.52 four times on a host whose bytes were already public. The operator side knew the number the whole time: `release_object_size` reads it from the channel and `archive_bytes` is bound into the program, so the target is told rather than left to derive, and the range probe survives only as the fallback for a size nobody could read. The same change stopped asking that host for its own public name: the service directory states the address each host uses to reach a loopback service, and `release_origin_allowed` had always permitted it |
+| 32 | `cleanup_once`'s `lock_busy` branch at `src/providers/local/disk_cleanup/mod.rs:1938` **and** the `DeployError` -> string -> `classify_message` path through `src/deploy/host_exec.rs:400`, `src/cli/host.rs:2728` and `src/failure.rs:109` | this host's janitor has stalled, and this `host exec` timed out | **the answer that was in hand at the site and thrown away, then guessed back downstream.** Two instances, one property, an hour apart. The janitor: a workload holds the run lock in shared mode for its whole job, so a pass that starts meanwhile answers `lock_busy` — the modelled, healthy answer — and `finish` writes state only when `persist` is `Some`, which that one branch passed as `None`. Line 1353 even special-cased `outcome != "lock_busy"` on a path `lock_busy` could never reach: someone intended to record it and the wiring never carried it there. The janitor is in-process in the agent at a ten-second tick, so roughly **40 prevented passes** left no trace during one 42-minute job on `charless-mac-mini`, `interval_noop` never advanced the stamp, `cleanup_success_age_seconds` reached 2311s against a 1200s limit, and `host gates` turned `claiming` off on a host with **17.3 GiB free, a 15 GiB watermark and `disk_pressure_unresolved: false`** — refusing new work because it was doing work. The classifier: `DeployError` carries no code, `CmdError::click(exc.to_string())` discards it into a string, `classify_message` bare-substring-matches `"timeout"`, and the allowlist refusal **prints the allowlist**, three of whose entries contain `--login-timeout-ms` — so every unapproved command on every host reports `error_code=timeout retryable=true` and every caller retries a decision that will never change. Neither site lacked the information; both dropped it and let an inference downstream reconstruct it wrongly. **Fixed:** the prevented outcome is persisted with its timestamp as `last_prevented_at`, a pass prevented within the stall window is not a stall, and the stall blocks admission only under real pressure. The classifier repair is #343's family and is owned elsewhere |
+| 33 | `claim_release_coordinate` in `src/cli/release_cmd.rs` and the claim step inside each publisher of `deploy.yml` (#351, #366) | one coordinate, one build — the remedy written for instance 29 | **the version above the coordinate, and the moment the claim is made.** The record is per `<version>/<platform>`, so each platform was internally consistent while the version was not: `0.14.3/linux-amd64` attests `8cf54ece` with all ten objects published, and `0.14.3/darwin-arm64` attests `ccc43c5e`, claimed minutes earlier by `Submit product release` on an unrelated commit. Each publisher claimed only its own coordinate, and only when it was already holding a built archive — so the Linux leg published everything before the darwin leg learned the version was spent, leaving a half version no attempt can complete. 0.14.2 and 0.14.4 hold exactly one object each, the darwin claim, for the same reason. Two changes close it: the claim now also reads its sibling platforms and refuses a version whose platforms disagree, and the release train claims **every** declared platform in `release-capacity`, before either publisher starts, so a spent version costs one minute instead of one platform's release |
+| 34 | `max_pass_seconds` (absent) and `max_scan_items` in `charless-mac-mini`'s registry `disk_cleanup` policy, spent by the cleaner order in `src/providers/local/disk_cleanup/mod.rs:1665` | this host's janitor completed a pass, and its replica holds no reclaimable twin | **whether the last cleaner in the order ever ran.** The policy declared `max_scan_items: 10000` and no `max_pass_seconds`, so every pass took the janitor's own 30-second deadline against a `$HOME` carrying 103.9 GiB under `~/.stado` alone. `build_caches` walks all of `$HOME` by design, and the pass ended inside it: measured 2026-09-03T21:24Z, `backup_twins` reported `scanned 0, eligible 0, deleted 0, skipped {scan_cap: 1, scan_deadline: 1}` while the host sat at 12.8 GiB free against a 15 GiB watermark, refusing every ordinary job for eleven days. `cap_reached` is true and reads like work being done — the same sentence this file records at instance 21, one layer further out: there the budget was spent by the first cleaner, here it is spent by the clock. Declaring `max_pass_seconds: 240` and `max_scan_items: 100000` (generation `2f513ddd`) changed the same pass to `duration_ms 144856`, `deadline: false`, and `backup_twins scanned 66662` — and the answer it then gave is the second half of the finding: `absent_from_primary: 66642`, so those 9.2 GiB at `local-backup/ecosystem/probierz/ecosystem/probierz` are not twins at all but the only copy of instance 3's misaddressed objects, and no cleaner may remove them. Two declarations were narrower than the world here: the pass budget, and the assumption that a replica's contents exist at their primary address |
+| 35 | `Cargo.toml`'s `version`, read by `env!("CARGO_PKG_VERSION")` at `src/targets.rs:3148`, `src/providers/local/agent.rs`, `src/providers/local/disk_cleanup/mod.rs` and thirteen other sites | this binary is `0.14.6` | **which tree `0.14.6` means.** #7 said a version number can stand for two materially different trees. On 2026-09-03 it stood for **four**: the binary the fleet was actually running, which carried neither `0abdb82b` (the janitor workload-hold leak fix) nor `df121b88` (builder selection on claimability); `df121b88` itself, whose `Cargo.toml` declares `version = "0.14.6"`; `0abdb82b`, which declares the same; the checkout HEAD `489ba2b7`, carrying all four of the night's fixes; and a local `target/release` build with a fourth combination. No release object existed to disambiguate them — `stado://releases/stado/0.14.6/darwin-arm64/release.tar.gz` measured **absent** while `source-revision.json` measured **present**, a coordinate claimed and never published into, and 0.14.7 and 0.14.8 had neither. So the only way to establish what the control plane carried was **`strings` and `nm` against the installed binary**: `0abdb82b` absent because `disk_cleanup_lock_held` and `cleanup_prevented_age_seconds` were missing from it, `df121b88` absent because its literal `no declared target of that platform is publishing capacity` was missing **and the pre-fix sentence `is broadcasting verified release_platform` was still there**, `1e6448bd` present because the symbol `stado::cli::resolver::Tunnel::usable` existed with zero `alive` symbols left, `02cd36e3` present by its literal. Symbol absence alone proves nothing — inlining can remove a `pub fn` — so every negative needed a string literal beside it, and one candidate literal had to be discarded after it turned out to live in a doc comment at `host_gates.rs:243`. The irony is the point: the commit that opened the window is `8e82eb97`, **"Bind a version to one build across its platforms, before either publisher starts"**. **Now a read:** `58f971de` embeds the source revision at build time and surfaces it in `--version`, in the agent's published `agent_version` and `agent_source_revision`, and in a cleanup report's `writer_version` — `stado 0.14.8 (rev 58f971de6aaf)`, with `-dirty` when the tree had uncommitted changes, and the stated sentinel `unknown` where no git metadata exists, because a tarball build is a legitimate build and a gate that refused it would remove the only route that currently ships fixes |
+| 36 | `host recover --release` in `src/deploy/host_recovery_release.rs` against `~/.stado/bin/install-built-stado-binary` | installing the control plane is a gated operation | **that the gated path is the path anything travels.** The product ships an installer that is correct in every detail: it reads three registry-trusted signed objects from a compile-time origin and refuses `STADO_API_URL`, a local resolver and the target's own binary (`:1-7`); it checks the host's identity against the registry and exits 64 on a mismatch (`:285-289`); it compares an `openssl dgst -sha256` against the manifest digest and exits 68 (`:329-331`); it runs `codesign` then `codesign --verify` (`:333-334`); it hardlinks a backup before activating (`:337-341`); it activates atomically (`:346`); it then **smoke-gates the result** — `"$active" resolver --help`, exit 70 on failure (`:349-354`) — and commits only afterwards (`:355`), with an EXIT/HUP/INT/TERM trap that relinks the backup and emits `rollback restored` on any earlier failure (`:303-323`). It is unused, because it needs a published coordinate and the versions in production have none. What actually installs the fleet's control plane is a hand-rolled script with **no signature check, no registry trust, no host identity check, no readiness gate and no automatic rollback**: it prints sha256 rather than comparing it (`:135-136`, `:180`), runs `--version` on the staged file as its only liveness read (`:67-68`), refuses a downgrade (`:137-139`) — its one real guard — copies a dated backup with `shutil.copy2` (`:174-177`, which is why the installed binary's mtime survives a swap and cannot be used to date an install), `os.replace`s the file (`:179`), and leaves recovery as a **printed `cp` line** (`:183`). Ten dated `stado.<version>-backup-<date>` files in `~/.stado/bin` show how routine that route is. Same shape as instance 14, one layer out: there a boundary named "release publication" was enumerated, labelled, described, branched and validated and required by no route; here an installer is signed, digest-checked, smoke-gated and rollback-capable and reached by no caller. The sentence that makes it land: **the coordinate system publishes signed, verified, rollback-capable artifacts for four products, and the binary implementing it is installed by `cp`.** Deliberately still permissive — see "The repair, in order" below |
+| 37 | `immutable_job_projection`, durable records under `job-transitions/`, and `autonomy::optimizer::update_job_placement` | a completed transition's saved destination still identifies the queued job it moved | **that placement has its own writer between those two reads.** The autonomy optimizer owns `provider`, `pin_to_provider` and `assigned_to` on a queued document and writes them with a versioned CAS; lifecycle owns the prefix and state. `assigned_to` was already absent from the supposedly complete immutable projection, while `provider` and `pin_to_provider` remained in it. On 2026-09-03 transition `c50f5388…` had correctly requeued `job-cd5dfcf78b6727f30fec0c87` with empty provider placement, then the optimizer selected `local` and pinned it. Every later claim compared the live queue document with the old destination, reported `does not match completed transition`, killed the whole agent tick, and left seven unrelated pinned jobs waiting for eleven days while capacity and health continued to publish. The fix gives each field one owner: the durable request digest still protects caller-supplied placement options, the shared immutable stored-job projection excludes all three optimizer-owned placement fields, and lifecycle continues to verify every other identity field plus the destination state. A completed generation retires itself as `retired:destination-verified-source-retired` through a versioned CAS rather than an unsafe path delete, an unknown label such as the observed `done` is settled from the actual source and destination, and one job's remaining claim error is published with that job id while the scan continues to the next job. |
+
+The observed `c50f5388…` record had already been labelled `aborted`, even
+though its source was `transition-cleaned:c50f5388…` and its queued
+destination matched once optimizer-owned placement was excluded. Recovery now
+checks both sides of an aborted record too: only a matching destination with
+an absent, fenced, or generation-matched cleaned source is completed and
+retired, so the stored label cannot preserve an earlier wrong reading.
 
 ## The property they share
 
@@ -71,7 +101,8 @@ name assumed to be hijacked because its address was public. A budget assumed
 to reach the cleaner it was declared for. A binary assumed to have been
 delivered because it reports a version. A keep-set assumed to hold every
 declared label's pid. A host assumed silent because the thing that reports on
-it stopped reporting.
+it stopped reporting. A version assumed to name the code that carries it. An
+installer assumed to be on the path because it exists and is correct.
 
 Several of these passed a validator, a schema or a health check first, and one
 of them passed a fix aimed at that very defect. So: **a defect that survives a
@@ -154,6 +185,61 @@ seven days by a process no report could name.
    deleting a CI check to get past it, one layer down, and it is why the two
    fixes for instance 22 are a refusal that `--force` **cannot** cross and a
    separate flag that names the intent out loud.
+9. **A gate nothing reaches is not a gate.** Instance 14 was a boundary that
+   was enumerated, labelled, described, branched and validated and required
+   by no route. Instance 36 is an installer that is signature-verified,
+   digest-checked, identity-checked, smoke-gated and rollback-capable and is
+   reached by no caller, while a script with none of those properties installs
+   the fleet's control plane. Reviewing a gate's contents cannot find this,
+   because its contents are correct; the only question that finds it is **who
+   calls this, and what do they use instead.** Ask it of every gate whose
+   precondition is something the fleet does not currently produce.
+10. **A version identifies a release, never a build.** A version string is
+   whatever `Cargo.toml` said when the compiler ran, so several trees can and
+   do carry the same one — four of them, in instance 35. Anything that has to
+   answer "which code is running" must carry the revision, and anything that
+   has to answer "which is newer" must not: `minimum_stado_version`, the
+   agent's release-handoff comparison and `self_update` order versions, and a
+   revision has no order. Carry both, separately, and let the ordered one stay
+   a bare semantic version.
+
+## The repair, in order
+
+Instance 36 is the one finding in this document whose fix must **not** be
+applied first. The order matters more than any single step, and each step is
+the precondition of the next.
+
+1. **Publish real coordinates for the `stado` binary.** Nothing downstream is
+   possible without this. `host recover --release` verifies three signed
+   objects, and for every version the fleet actually runs there are none:
+   `0.14.6` has a `source-revision.json` claim and no archive, `0.14.7` and
+   `0.14.8` have neither, and the newest published stado coordinate is
+   `0.14.4` — the one version nobody is running. Until a coordinate exists,
+   the gated installer has nothing to install.
+2. **Move installation onto the gated path.** Install with
+   `host recover --release <VERSION>`, and let `host declare-version` and
+   `host reconcile` state and converge the desired version, so what runs on a
+   host is always bytes that were signed, digest-checked and smoke-gated with
+   a rollback behind them. This cannot come first: it presupposes step 1.
+3. **Only then close the bypass.** Retire `build-stado-binary` and
+   `install-built-stado-binary`, or make them refuse bytes that do not match a
+   published coordinate.
+
+**Why closing the bypass first would be the worst available choice**, and this
+is the whole reason the order is written down: the ungated script is currently
+the *only* route by which a fix reaches a host. Making it refuse while no
+published coordinate exists would leave this fleet unable to ship at all —
+including unable to ship the change that closes the gap. That is rule 8 read
+forwards: a refusal is a measurement, and a gate whose precondition is the
+outcome it is meant to enable is instance 15's shape, already in this table.
+
+What instance 35's fix buys for every step above is the ability to check them.
+Each one needs to know what a host is actually running, and until `58f971de`
+that meant `strings` and `nm`. It is now `stado --version`, `agent_version`
+and `agent_source_revision` in the capacity diag, and `writer_version` on any
+cleanup report. Step 3 in particular becomes auditable rather than assumed: a
+binary installed by the bypass out of an uncommitted tree now says `-dirty`
+about itself.
 
 ## What was proven, on live runs
 
@@ -378,3 +464,24 @@ should resolve. `install-stado.sh`, `self_update.rs` and `local_install.rs`
 read the sidecar while `stado release status` reads the signed manifest. With
 #324 in place the two can no longer name different revisions, so this is now a
 question of which document is canonical rather than which answer is true.
+
+**#7's worst reading arrived on 2026-09-03, and the half that hurt is now
+closed (instance 35).** Everything above concerns two paths disagreeing about
+one *published* coordinate. The sharper case needs no publisher at all: a
+version with **no** release object, carried by a binary installed outside the
+coordinate system entirely. `0.14.6` named four different trees — one of them
+the binary the fleet was running, missing two of the night's fixes — and with
+no artifact to read, provenance had to be recovered with `strings` and `nm`.
+`58f971de` closes that by embedding the source revision at build time and
+surfacing it wherever the version is surfaced, so the question is answerable
+on any host from the binary itself, with no coordinate, no store and no
+network. `VERSION` deliberately stays a bare semantic version, because
+ordering depends on it.
+
+What that leaves of #7 is its original form and no more: autoversion can still
+let one version number stand for two trees, and the release rule that would
+fix it is still a deliberate decision rather than an incident change. The
+difference is that a wrong answer is now detectable from the binary instead of
+being unfalsifiable — which is the rule this document keeps arriving at, that
+an instrument's output *is* the world as far as everything above it is
+concerned.

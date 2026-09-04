@@ -51,6 +51,9 @@ pub enum ReleaseCommands {
     Proxy(ReleaseProxyArgs),
     /// Show desired and observed rollout state.
     Status(ReleaseStatusArgs),
+    /// Resolve the exact policy-derived executable of the active signed release.
+    #[command(name = "active-binary")]
+    ActiveBinary(ReleaseActiveBinaryArgs),
     /// Read a release candidate's own stdout/stderr off the target host.
     Logs(crate::cli::release_evidence::ReleaseLogsArgs),
     /// One verdict over desired state, the candidate, quarantine and the
@@ -235,6 +238,16 @@ pub struct ReleaseStatusArgs {
 }
 
 #[derive(Args)]
+pub struct ReleaseActiveBinaryArgs {
+    pub product: String,
+    /// Resolve for this registry target. Defaults to the current machine.
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 pub struct ReleaseRollbackArgs {
     pub product: String,
     #[arg(long)]
@@ -363,6 +376,19 @@ pub(crate) async fn claim_release_coordinate(
     if let Ok(existing) = crate::cli::storage::fetch_object_from_writer(&uri).await {
         return judge_existing_claim(&claim, &existing, &uri);
     }
+    // One version, one build, across platforms too.
+    //
+    // The record is per platform because that is where the artifacts live, and
+    // on 2026-09-03 that turned out to be one scope too narrow: 0.14.3's linux
+    // leg was claimed by the tag `8cf54ece` while another publisher had already
+    // claimed the darwin leg from `ccc43c5e`, so the version was split across
+    // producers with each platform internally consistent. A sibling that
+    // attests a different commit is the same defect one level up, so it is
+    // refused here — before this platform's first artifact — and named with
+    // both commits.
+    if let Some(conflict) = sibling_revision_conflict(&claim).await {
+        return Err(conflict);
+    }
 
     let temporary = tempfile::NamedTempFile::new()?;
     std::fs::write(temporary.path(), &bytes)?;
@@ -386,6 +412,48 @@ pub(crate) async fn claim_release_coordinate(
             }
         }
     }
+}
+
+/// The first sibling platform of this version that attests a different commit.
+///
+/// `None` when every readable sibling agrees, and also when nothing can be
+/// read: an unreachable store is not evidence of a second build, and the
+/// per-platform record is still the claim that decides. This only ever adds a
+/// refusal that names two commits, never a permission.
+async fn sibling_revision_conflict(
+    claim: &release_control::CoordinateRevision,
+) -> Option<CmdError> {
+    let coordinates = crate::cli::storage::published_release_coordinates(&claim.product)
+        .await
+        .ok()?;
+    for coordinate in coordinates {
+        let (version, platform) = (coordinate.version, coordinate.platform);
+        if version != claim.version || platform == claim.platform {
+            continue;
+        }
+        let base = release_control::release_base(&claim.product, &version, &platform).ok()?;
+        let uri = format!("{base}/{}", release_control::RELEASE_REVISION_NAME);
+        let Ok(bytes) = crate::cli::storage::fetch_object_from_writer(&uri).await else {
+            continue;
+        };
+        let Ok(held) = serde_json::from_slice::<release_control::CoordinateRevision>(&bytes) else {
+            continue;
+        };
+        if held.source_revision != claim.source_revision {
+            return Some(CmdError::click(format!(
+                "{}/{} already attests source revision {} for platform {}, and this publisher \
+                 carries {} for {}. A version's platforms are one build: publish a new version \
+                 rather than splitting this one across two commits",
+                claim.product,
+                claim.version,
+                held.source_revision,
+                platform,
+                claim.source_revision,
+                claim.platform
+            )));
+        }
+    }
+    None
 }
 
 fn judge_existing_claim(
@@ -1130,6 +1198,66 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     Err(CmdError::silent(super::CLICK_ERROR_CODE))
 }
 
+async fn active_binary(args: &ReleaseActiveBinaryArgs) -> Result<(), CmdError> {
+    let (registry, notice) = crate::targets::fetch_registry_or_last_good()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if let Some(notice) = notice {
+        eprintln!("{notice}");
+    }
+    let hostname = crate::providers::vast::system_hostname();
+    let local = registry
+        .lookup_self(&hostname)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| CmdError::click(format!("host {hostname} is not in the target registry")))?;
+    let target_name = args.target.as_deref().unwrap_or(&local.name);
+    let target_entry = registry
+        .targets
+        .iter()
+        .find(|target| target.name == target_name)
+        .ok_or_else(|| CmdError::click(format!("unknown registry target {target_name:?}")))?;
+    if !crate::deploy::host_channel::target_is_this_host(target_entry) {
+        return Err(CmdError::click(format!(
+            "target {target_name:?} is not this host; active-binary resolves local release state only"
+        )));
+    }
+
+    let document = super::resolver::canonical_document_or_last_good(target_name).await?;
+    release_control::validate_registry_contract(&document).map_err(CmdError::click)?;
+    let control = release_control::control(&document)?
+        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let policy = control
+        .products
+        .get(&args.product)
+        .ok_or_else(|| CmdError::click(format!("unknown release product {:?}", args.product)))?;
+    let target = policy.targets.get(target_name).ok_or_else(|| {
+        CmdError::click(format!(
+            "release product {:?} has no target {target_name:?}",
+            args.product
+        ))
+    })?;
+    let active = crate::release_agent::active_binary(&args.product, target_name, policy, target)
+        .map_err(CmdError::click)?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "state": "active",
+                "product": args.product,
+                "target": target_name,
+                "version": active.version,
+                "platform": active.platform,
+                "artifact_sha256": active.artifact_sha256,
+                "manifest_sha256": active.manifest_sha256,
+                "path": active.path,
+            }))?
+        );
+    } else {
+        println!("{}", active.path.display());
+    }
+    Ok(())
+}
+
 async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
     let (document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let mut control = release_control::control(&document)?
@@ -1428,6 +1556,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             .await
             .map_err(CmdError::click),
         ReleaseCommands::Status(args) => status(&args).await,
+        ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
         ReleaseCommands::Logs(args) => crate::cli::release_evidence::dispatch_logs(&args).await,
         ReleaseCommands::Doctor(args) => crate::cli::release_evidence::dispatch_doctor(&args).await,
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,

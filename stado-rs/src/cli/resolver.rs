@@ -173,21 +173,44 @@ fn ssh_command(control_master: &'static str) -> Command {
     }
     command
 }
-/// SSH transport for high-volume adapter traffic.
+/// SSH transport for the forwards that carry adapter traffic.
 ///
-/// Adapter requests share one authenticated connection; authority snapshots do
-/// not. Sharing the request path prevents a queue poll burst from creating one
-/// SSH process and one remote session per object read, while isolating snapshot
-/// reads prevents a stuck control master from freezing registry refresh.
+/// This used to say that adapter requests "share one authenticated connection",
+/// and that sharing "prevents one SSH process and one remote session per object
+/// read". Only the second half was ever true: multiplexing shares the session,
+/// while `ssh -W` still forked a client process for every request. The forwards
+/// this command now starts are one per destination, so the first half is true
+/// as well. Authority snapshots still run outside this path, so a stuck control
+/// master cannot freeze registry refresh.
+/// A unix socket path is capped by the kernel: 104 bytes on macOS, 108 on
+/// Linux. `ssh` checks the path it was handed against that cap and refuses the
+/// whole invocation with `ControlPath too long (... >= 104 bytes)`, exiting 255
+/// before it attempts any connection. Nothing here ever checked, so a host
+/// whose `HOME` is long enough -- a service started under
+/// `$HOME/.stado/services/<label>/current/<platform>` is exactly that -- could
+/// not open a transport at all, and the reason appeared only on ssh's stderr.
+const CONTROL_PATH_LIMIT: usize = 104;
+/// What `%C` expands to: ssh's connection hash, 40 hex characters.
+const CONTROL_PATH_HASH: usize = 40;
+
 fn ssh_proxy_command() -> Command {
-    let mut command = ssh_command("ControlMaster=auto");
-    command.args(["-o", "ControlPersist=60"]);
-    if let Ok(home) = std::env::var("HOME") {
-        command
-            .arg("-o")
-            .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
+    let prefix = std::env::var("HOME")
+        .ok()
+        .map(|home| format!("{home}/.stado/resolver-ssh-"));
+    // Multiplexing was load-bearing while every request opened its own
+    // session. A forward is one per destination, so a control master is now an
+    // optimisation: when its socket path cannot fit, serve without one rather
+    // than refuse to serve.
+    match prefix.filter(|prefix| prefix.len() + CONTROL_PATH_HASH <= CONTROL_PATH_LIMIT) {
+        Some(prefix) => {
+            let mut command = ssh_command("ControlMaster=auto");
+            command
+                .args(["-o", "ControlPersist=60", "-o"])
+                .arg(format!("ControlPath={prefix}%C"));
+            command
+        }
+        None => ssh_command("ControlMaster=no"),
     }
-    command
 }
 
 fn target_ssh_paths(target: &targets::ComputeTarget) -> Vec<targets::SshConnectionPath> {
@@ -487,6 +510,50 @@ pub(crate) fn snapshot_source(
 /// service-directory authority.
 pub async fn canonical_document(local_target: &str) -> Result<Value, CmdError> {
     let (document, _) = super::registry::fetch_versioned_document().await?;
+    verify_document_target(document, local_target)
+}
+
+/// [`canonical_document`], falling back to this host's last-known-good copy
+/// when the authority cannot be read.
+///
+/// The release agent publishes every product's stable bind, and it learns
+/// which ports those are from `release_control` in the canonical registry,
+/// which it reads through the object API. On 2026-09-03 the object API's
+/// object boundary closed — a namespace was declared on the host without the
+/// object verifier's grant covering its item — and every registry read
+/// answered `503 object authorization unavailable`. The agent had no fallback,
+/// so it exited on that 503 every fifteen seconds, published nothing, and the
+/// stable binds of Skarbiec and Brama stayed unbound: `brama.wisent.com/health`
+/// answered 502 for hours, and the object API needs Skarbiec's stable bind to
+/// open the very boundary that was closed. A restart of the agent was all it
+/// took to enter that loop and nothing in the product could leave it.
+///
+/// The resolver already had exactly this fallback and exactly this outage
+/// could not touch it — see [`load_startup`], which bootstraps routing from
+/// [`last_good_document`] and keeps retrying the authority. This gives the
+/// agent the same footing: a start that cannot read the authority uses the
+/// last-known-good copy, says so, and publishes the ports the fleet needs
+/// while the authority is repaired. It never becomes the steady state, because
+/// each tick asks the authority first.
+pub async fn canonical_document_or_last_good(local_target: &str) -> Result<Value, CmdError> {
+    match super::registry::fetch_versioned_document().await {
+        Ok((document, _)) => verify_document_target(document, local_target),
+        Err(authority_error) => {
+            let document = last_good_document().map_err(|cache_error| {
+                CmdError::click(format!(
+                    "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
+                ))
+            })?;
+            eprintln!(
+                "release agent recovery: registry authority failed ({authority_error}); reconciling from the last-known-good registry"
+            );
+            verify_document_target(document, local_target)
+        }
+    }
+}
+
+/// One document, refused unless it describes the host asking for it.
+fn verify_document_target(document: Value, local_target: &str) -> Result<Value, CmdError> {
     let detected = current_target(&document).map_err(CmdError::click)?;
     if detected != local_target {
         return Err(CmdError::click(format!(
@@ -550,6 +617,132 @@ struct Snapshot {
     loaded_at_iso: String,
 }
 
+/// How long a freshly opened forward may take to accept its first connection.
+///
+/// Read by [`crate::doctor`] too: a probe that reaches the fleet through this
+/// transport cannot be bounded tighter than the transport is declared to need,
+/// or it reports a healthy registry as unreachable every time the channel has
+/// gone cold.
+pub const TUNNEL_OPEN_BUDGET: Duration = Duration::from_secs(30);
+/// How often the opening forward is probed inside that budget.
+const TUNNEL_OPEN_POLL: Duration = Duration::from_millis(100);
+
+/// One long-lived SSH forward to one `host:port` behind one destination, shared
+/// by every connection that needs it.
+///
+/// The transport used to be `ssh -W` per request: one operating-system process,
+/// with a pipe pair, for every object read. Multiplexing made those share a
+/// remote session, which is what the old comment claimed, but not a process --
+/// a resolver up for thirty minutes held 178 descriptors, 122 of them pipes,
+/// for about sixty requests in flight. Under a release the fan-out is unbounded,
+/// so the process walked into its own descriptor budget: `accept failed: Too
+/// many open files`, launchd counted 166 restarts, and every death dropped the
+/// connections in flight -- four publications died mid-run and every fleet agent
+/// hung on its next object read, which froze the capacity heartbeats the
+/// release pipeline picks builders from.
+///
+/// A forward costs one process for as long as the destination is in use, and a
+/// request costs the two sockets it would cost anyway. Fan-out stops being a
+/// function of traffic, so there is nothing to bound and nothing to refuse.
+///
+/// The forwarding process is not the forward. When a control master is already
+/// up -- and [`select_resolver_ssh_path`] leaves one up, because its probe runs
+/// under the same `ControlMaster=auto` -- `ssh -N -L` is a multiplex slave: it
+/// hands the listener to the master and exits 0 immediately, before the master
+/// has bound it. Judging the forward by that corpse read every hand-off as a
+/// dead transport: `refused connection: the SSH forward to <destination>
+/// exited before it accepted: exit status: 0`, 56 times in one resolver
+/// lifetime on this workstation and 41 of them on `stado-object-api`, each one
+/// answered to the client as `HTTP 502 upstream unavailable`. So the port is
+/// what proves a forward here, and `child` only says whether the process that
+/// asked for it failed.
+struct Tunnel {
+    local: u16,
+    child: tokio::process::Child,
+}
+
+impl Tunnel {
+    /// Open a forward and wait, bounded, until it accepts.
+    async fn open(destination: &str, host: &str, port: u16) -> Result<Self, String> {
+        // Ask the OS for a free loopback port and release it: `ssh -L` needs a
+        // number before it starts, and this is the only way to learn one that
+        // is free. A racing binder is handled by the caller, which drops the
+        // forward and opens another.
+        let probe = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .map_err(|error| format!("no free loopback port for an SSH forward: {error}"))?;
+        let local = probe
+            .local_addr()
+            .map_err(|error| format!("loopback probe has no address: {error}"))?
+            .port();
+        drop(probe);
+        let mut child = ssh_proxy_command()
+            .args([
+                "-N",
+                "-L",
+                &format!("127.0.0.1:{local}:{host}:{port}"),
+                destination,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("could not start the SSH forward: {error}"))?;
+        let deadline = tokio::time::Instant::now() + TUNNEL_OPEN_BUDGET;
+        loop {
+            // The port first, and the process only when the port is still
+            // shut. A slave that handed its listener to a live control master
+            // is already gone by the time the master binds, so asking the
+            // process first turns every hand-off into a refusal.
+            if let Ok(open) = TcpStream::connect(("127.0.0.1", local)).await {
+                drop(open);
+                return Ok(Self { local, child });
+            }
+            match child.try_wait() {
+                // A clean exit with the port still shut is the hand-off in
+                // progress: the master owns the listener now and has the rest
+                // of the budget to bind it. A forward that never arrives is
+                // reported by the deadline below, naming the wait rather than
+                // an exit status that was never the failure.
+                Ok(Some(status)) if status.success() => {}
+                Ok(Some(status)) => {
+                    return Err(format!(
+                        "the SSH forward to {destination} exited before it accepted: {status}"
+                    ))
+                }
+                Ok(None) => {}
+                Err(error) => return Err(format!("SSH forward wait failed: {error}")),
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "the SSH forward to {destination} did not accept within {}s",
+                    TUNNEL_OPEN_BUDGET.as_secs()
+                ));
+            }
+            tokio::time::sleep(TUNNEL_OPEN_POLL).await;
+        }
+    }
+
+    /// Whether this forward may still carry traffic.
+    ///
+    /// A multiplex slave exits 0 as soon as the control master takes its
+    /// listener, so a dead child with a clean status leaves a live forward
+    /// behind; only a non-zero exit says the transport failed. Treating the
+    /// clean exit as death discarded a warm forward on every single request,
+    /// which put every request back into the opening race above instead of
+    /// once per destination. What actually proves a forward is the dial in
+    /// [`ResolverState::tunnel_connect`], and that already retries once
+    /// against a freshly opened one.
+    fn usable(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => status.success(),
+            Err(_) => false,
+        }
+    }
+}
+
 struct ResolverState {
     local_store: Option<Arc<RegistryStore>>,
     source: RwLock<SnapshotSource>,
@@ -558,16 +751,100 @@ struct ResolverState {
     local_target: String,
     adapters: Vec<ResolverAdapter>,
     config: ResolverConfig,
+    /// One forward per `destination|host:port`, opened on first use.
+    tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Tunnel>>,
+    /// Why this host last refused to refresh its last-known-good registry
+    /// copy, as [`targets::LastGoodRefusal::kind`].
+    ///
+    /// Published, not just logged. This process reads the authority every
+    /// few seconds and is the one thing on the host that would notice the
+    /// fallback going stale; a refusal that only reached stderr left the
+    /// operator's `resolver status` vouching for a host whose recovery copy
+    /// had stopped advancing.
+    last_good_refusal: RwLock<Option<&'static str>>,
 }
 
 impl ResolverState {
+    /// A connection to `host:port` behind the first of `paths` that answers,
+    /// over the forward this resolver keeps for that pair, opening it if this
+    /// is its first use.
+    ///
+    /// Opening holds the pool lock, so two requests for a cold destination
+    /// cannot race into two forwards. Openings are rare; a warm destination
+    /// only reads the port.
+    ///
+    /// Path selection is part of opening, not part of connecting. It used to
+    /// run in `proxy_connection` ahead of this call, so every accepted
+    /// connection to a host that declares an `ssh_fallbacks` entry -- as
+    /// `charless-mac-mini` declares `lan` -- paid one `ssh <destination> true`
+    /// process, bounded at twenty seconds, before any traffic moved. That is
+    /// the process per request this transport exists to remove, and it also
+    /// left a control master up for the forward to be handed to. Selecting
+    /// under the pool lock costs one probe per forward instead of one per
+    /// request, and a warm destination costs none.
+    async fn tunnel_connect(
+        &self,
+        active_host: &str,
+        paths: &[targets::SshConnectionPath],
+        host: &str,
+        port: u16,
+    ) -> Result<TcpStream, String> {
+        // Keyed by the host, not by a destination: which of its paths answers
+        // is chosen while the forward is opened, and one forward per host is
+        // the point.
+        let key = format!("{active_host}|{host}:{port}");
+        // Two attempts: a forward that died between the liveness check and the
+        // dial, or a local port some other process took, is retried once
+        // against a freshly opened one. A second failure is the answer.
+        for attempt in 0..2 {
+            let (local, destination) = {
+                let mut tunnels = self.tunnels.lock().await;
+                let live = tunnels
+                    .get_mut(&key)
+                    .and_then(|tunnel| tunnel.usable().then_some(tunnel.local));
+                match live {
+                    Some(local) => (local, None),
+                    None => {
+                        // Dropping the entry kills the dead child.
+                        tunnels.remove(&key);
+                        let path = select_resolver_ssh_path(paths).await?;
+                        let tunnel = Tunnel::open(&path.destination, host, port).await?;
+                        let local = tunnel.local;
+                        tunnels.insert(key.clone(), tunnel);
+                        (local, Some(path.destination.clone()))
+                    }
+                }
+            };
+            match TcpStream::connect(("127.0.0.1", local)).await {
+                Ok(stream) => return Ok(stream),
+                Err(error) => {
+                    self.tunnels.lock().await.remove(&key);
+                    if attempt == 1 {
+                        let named = destination.as_deref().unwrap_or(active_host);
+                        return Err(format!(
+                            "the SSH forward to {named} for {host}:{port} refused a \
+                             connection on 127.0.0.1:{local}: {error}"
+                        ));
+                    }
+                }
+            }
+        }
+        unreachable!("the loop returns on its last attempt")
+    }
+
     async fn refresh(&self) -> Result<bool, String> {
         let source = self.source.read().await.clone();
         let (document, store_version, generation) =
             source.fetch(host_silence::READER_RESOLVER).await?;
         let serialized = serde_json::to_string(&document)
             .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
-        targets::store_last_good(&serialized, &store_version);
+        // A refused cache does not fail the refresh: the document this
+        // process just read is good and serving it is the job. It does get
+        // recorded, so `publish_serving` carries it to `resolver status`.
+        match targets::store_last_good(&serialized, &store_version) {
+            Ok(()) => *self.last_good_refusal.write().await = None,
+            Err(refusal) => *self.last_good_refusal.write().await = Some(refusal.kind()),
+        }
         let next_source = snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
         if next_config != self.config {
@@ -641,6 +918,7 @@ impl ResolverState {
             current.directory_generation,
             &current.store_version,
             &current.loaded_at_iso,
+            *self.last_good_refusal.read().await,
         ));
     }
 }
@@ -783,6 +1061,13 @@ struct PublishedState {
     attempt: u32,
     /// When the next upstream read is due.
     next_attempt_at: Option<String>,
+    /// Why this host last refused to refresh its last-known-good registry
+    /// copy ([`targets::LastGoodRefusal::kind`]), absent while the copy is
+    /// being kept current.
+    ///
+    /// The slug only: the underlying sentence names a path and the
+    /// authority's own words, and this file is read by another process.
+    last_good_refusal: Option<String>,
 }
 
 impl PublishedState {
@@ -796,7 +1081,13 @@ impl PublishedState {
         }
     }
 
-    fn serving(target: &str, generation: u64, store_version: &str, loaded_at: &str) -> Self {
+    fn serving(
+        target: &str,
+        generation: u64,
+        store_version: &str,
+        loaded_at: &str,
+        last_good_refusal: Option<&str>,
+    ) -> Self {
         Self {
             updated_at: now_iso(),
             target: target.to_string(),
@@ -805,6 +1096,7 @@ impl PublishedState {
             generation: Some(generation),
             store_version: Some(store_version.to_string()),
             loaded_at: Some(loaded_at.to_string()),
+            last_good_refusal: last_good_refusal.map(str::to_string),
             ..Self::default()
         }
     }
@@ -1056,6 +1348,10 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         local_target: target.to_string(),
         adapters: config.adapters.clone(),
         config: config.clone(),
+        tunnels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        // Startup has not written a copy yet; the first `refresh` sets this
+        // either way.
+        last_good_refusal: RwLock::new(None),
     });
 
     // A resolver that must serve the very address it reads the registry through
@@ -1405,171 +1701,59 @@ async fn proxy_connection(
             adapter.service, adapter.bind
         ));
     }
-    if resolved.active_host == state.local_target {
-        let (mut client_read, mut client_write) = client.into_split();
-        let upstream = match TcpStream::connect((host, port)).await {
-            Ok(upstream) => upstream,
-            Err(error) => {
-                refuse_connection(
-                    &mut client_read,
-                    &mut client_write,
-                    adapter,
-                    &format!("{host}:{port}"),
-                    &format!("local upstream connect failed: {error}"),
-                    None,
-                )
-                .await;
-                return Ok(());
-            }
-        };
-        let (mut upstream_read, mut upstream_write) = upstream.into_split();
-        let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
-        let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
-        tokio::try_join!(upload, download)
-            .map_err(|error| format!("local proxy failed: {error}"))?;
-        return Ok(());
-    }
-
-    let paths = resolved_ssh_paths(&resolved);
-    let ssh = select_resolver_ssh_path(&paths)
-        .await
-        .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))?;
-    let destination = format!("{host}:{port}");
-    let mut child = ssh_proxy_command()
-        .args(["-W", destination.as_str(), ssh.destination.as_str()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("could not start registry SSH transport: {error}"))?;
-    let mut ssh_stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "SSH transport has no stdin".to_string())?;
-    let mut ssh_stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "SSH transport has no stdout".to_string())?;
+    // Both halves of the fleet reach the upstream over a plain socket: the host
+    // that holds the store dials it directly, every other host dials the
+    // forward this resolver keeps to it. One code path, and neither branch
+    // below starts a process.
+    //
+    // That last sentence was false for as long as it stood here, and it is
+    // worth saying why rather than trusting it again. It read "no process per
+    // request on either" while the `else` branch called
+    // `select_resolver_ssh_path` right here, ahead of the pool: every host
+    // that declares an `ssh_fallbacks` entry -- every host in this fleet --
+    // paid one `ssh <destination> true`, bounded at twenty seconds, in front
+    // of every accepted connection. The claim was about the forward and was
+    // written as though it covered the whole function.
+    //
+    // So it is now checkable against what is visible below: this branch dials
+    // and nothing else. Every process the transport needs -- the path probe
+    // and the forward itself -- is started by
+    // [`ResolverState::tunnel_connect`], under the pool lock, once per
+    // forward. A request that finds a warm forward costs the two sockets it
+    // would cost anyway.
     let (mut client_read, mut client_write) = client.into_split();
-    // Ten seconds is enough for a direct TCP dial, not for a cold SSH control
-    // connection on a busy GUI host. Keep the configured value when it is
-    // larger, but never turn transient host pressure into an immediate 502.
-    let connect = Duration::from_secs(adapter.connect_seconds.max(30));
-    // Establishment is the one window `idle_seconds` cannot bound: nothing has
-    // flowed yet, so a dead backend would otherwise hold the client for the
-    // whole idle window. Forward whatever the client sends so the upstream has
-    // a request to answer, then wait -- bounded by the connect budget -- for
-    // the first upstream byte, or for the SSH child's early exit: `ssh -W`
-    // opens its channel at startup, so a dead backend fails the channel open
-    // and the child is gone within moments.
-    let mut upstream_head = [0_u8; 16 * 1024];
-    let mut client_head: Option<Vec<u8>> = None;
-    let establishment = async {
-        // A large request can legitimately produce no response bytes until
-        // its complete body reaches the service. Bound silence, not total
-        // upload time: every client byte proves the channel is still making
-        // progress and renews the establishment budget.
-        let silence = tokio::time::sleep(connect);
-        tokio::pin!(silence);
-        let mut buffer = [0_u8; 16 * 1024];
-        loop {
-            tokio::select! {
-                _ = &mut silence => {
-                    return Err(format!(
-                        "no channel progress within the {}s connect budget",
-                        connect.as_secs()
-                    ));
-                }
-                status = child.wait() => {
-                    let status = status
-                        .map_err(|error| format!("SSH transport wait failed: {error}"))?;
-                    if !status.success() {
-                        return Err(format!(
-                            "SSH transport exited before the upstream answered: {status}"
-                        ));
-                    }
-                    // A short HTTP response can be fully written while the SSH
-                    // child exits. In that case both wait() and stdout are ready,
-                    // and select! may observe the clean exit first. Drain the
-                    // buffered response before calling that successful transport
-                    // a refusal.
-                    return match ssh_stdout.read(&mut upstream_head).await {
-                        Ok(0) => Err(
-                            "SSH transport closed before the upstream answered".to_string()
-                        ),
-                        Ok(read) => Ok(read),
-                        Err(error) => Err(format!("SSH transport read failed: {error}")),
-                    };
-                }
-                read = ssh_stdout.read(&mut upstream_head) => {
-                    return match read {
-                        Ok(0) => Err(
-                            "SSH transport closed before the upstream answered".to_string()
-                        ),
-                        Ok(read) => Ok(read),
-                        Err(error) => Err(format!("SSH transport read failed: {error}")),
-                    };
-                }
-                read = client_read.read(&mut buffer) => {
-                    match read {
-                        Ok(0) => {
-                            return Err(
-                                "client closed before the upstream answered".to_string()
-                            )
-                        }
-                        Ok(read) => {
-                            if client_head.is_none() {
-                                client_head = Some(buffer[..read].to_vec());
-                            }
-                            ssh_stdin.write_all(&buffer[..read]).await.map_err(|error| {
-                                format!("SSH transport write failed: {error}")
-                            })?;
-                            silence.as_mut().reset(tokio::time::Instant::now() + connect);
-                        }
-                        Err(error) => return Err(format!("client read failed: {error}")),
-                    }
-                }
-            }
-        }
+    let upstream = if resolved.active_host == state.local_target {
+        TcpStream::connect((host, port))
+            .await
+            .map_err(|error| format!("local upstream connect failed: {error}"))
+    } else {
+        let paths = resolved_ssh_paths(&resolved);
+        state
+            .tunnel_connect(&resolved.active_host, &paths, host, port)
+            .await
+            .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))
     };
-    let established = match establishment.await {
-        Ok(read) => read,
+    // A refusal is written to the client before anything is read from it, so
+    // the sentence names the reason instead of a socket that closed silently.
+    let upstream = match upstream {
+        Ok(upstream) => upstream,
         Err(cause) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
             refuse_connection(
                 &mut client_read,
                 &mut client_write,
                 adapter,
-                &destination,
+                &format!("{host}:{port}"),
                 &cause,
-                client_head.as_deref(),
+                None,
             )
             .await;
             return Ok(());
         }
     };
-    client_write
-        .write_all(&upstream_head[..established])
-        .await
-        .map_err(|error| format!("client write failed: {error}"))?;
-    let upload = copy_until_idle(&mut client_read, &mut ssh_stdin, idle);
-    let download = copy_until_idle(&mut ssh_stdout, &mut client_write, idle);
-    let (upload_idle, download_idle) =
-        tokio::try_join!(upload, download).map_err(|error| format!("SSH proxy failed: {error}"))?;
-    if upload_idle || download_idle {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        return Ok(());
-    }
-    let status = child
-        .wait()
-        .await
-        .map_err(|error| format!("SSH transport wait failed: {error}"))?;
-    if !status.success() {
-        return Err(format!("SSH transport exited with {status}"));
-    }
+    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
+    let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
+    tokio::try_join!(upload, download).map_err(|error| format!("proxy failed: {error}"))?;
     Ok(())
 }
 
@@ -1868,10 +2052,30 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         .map_err(CmdError::click)?
         .ok_or_else(|| CmdError::click("registry.service_directory is required"))?;
 
-    let api_listening = bind_listening(&config.api_bind).await;
-    let mut probed: Vec<(&ResolverAdapter, bool)> = Vec::with_capacity(config.adapters.len());
+    // A declared bind is a loopback address *on the target*. Connecting to it
+    // from here answers a different question: what this machine holds on that
+    // number. The two answers were reported as one, and on a control-plane
+    // host that runs its own resolver the numbers collide -- asking about
+    // charless-mac-mini returned `listening: false` for three adapters that
+    // one pid was holding there, and would have returned `listening: true`
+    // for the four whose numbers this laptop happens to serve itself. So the
+    // probe runs only where the binds live, and elsewhere reports that it did
+    // not run rather than a measurement of the wrong socket.
+    let local_target = current_target(&document).ok();
+    let binds_are_local = local_target.as_deref() == Some(target.as_str());
+    let api_listening = if binds_are_local {
+        Some(bind_listening(&config.api_bind).await)
+    } else {
+        None
+    };
+    let mut probed: Vec<(&ResolverAdapter, Option<bool>)> =
+        Vec::with_capacity(config.adapters.len());
     for adapter in &config.adapters {
-        let listening = bind_listening(&adapter.bind).await;
+        let listening = if binds_are_local {
+            Some(bind_listening(&adapter.bind).await)
+        } else {
+            None
+        };
         probed.push((adapter, listening));
     }
     let authority = probe_authority(&registry, &directory, &target, notice.as_deref()).await;
@@ -1922,14 +2126,14 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         }
         Some(_) => {}
     }
-    if !api_listening {
+    if api_listening == Some(false) {
         blockers.push(format!(
             "nothing is listening on the resolution API at {}",
             config.api_bind
         ));
     }
     for (adapter, listening) in &probed {
-        if !listening {
+        if *listening == Some(false) {
             blockers.push(format!(
                 "nothing is listening on the {} adapter for consumer {} at {}",
                 adapter.service, adapter.consumer, adapter.bind
@@ -1966,13 +2170,27 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
             "this answer read a registry copy {seconds}s old rather than the authority"
         ));
     }
+    // The recovery copy is not advancing. Nothing is down yet, which is
+    // exactly why it belongs here: the host looks healthy right up to the
+    // outage the copy exists for, and then answers from whatever generation
+    // it last accepted.
+    if let Some(refusal) = published
+        .as_ref()
+        .and_then(|state| state.last_good_refusal.as_deref())
+        .filter(|refusal| !refusal.is_empty())
+    {
+        blockers.push(format!(
+            "the resolver is not refreshing this host's last-known-good registry copy \
+             ({refusal}), so the fallback stays at the generation it last accepted"
+        ));
+    }
 
     // `down` is reserved for a resolver that is answering nothing at all.
     // Everything else that is wrong is `degraded`, because an adapter short of
     // its upstream still serves the services whose upstream is up.
     let verdict = if blockers.is_empty() {
         "ready"
-    } else if !api_listening && resolver_state != RESOLVER_SERVING {
+    } else if api_listening == Some(false) && resolver_state != RESOLVER_SERVING {
         "down"
     } else {
         "degraded"
@@ -1984,6 +2202,18 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         "pid": published.as_ref().map(|state| state.pid).filter(|pid| *pid != 0),
         "updated_at": published.as_ref().map(|state| state.updated_at.clone()),
         "api": {"bind": config.api_bind, "listening": api_listening},
+        // A null `listening` is a measurement that did not happen, not a
+        // socket that is down. Say which, so nobody reads the absence as
+        // health or as an outage.
+        "bind_probe": if binds_are_local {
+            format!("probed: these binds are loopback addresses on {target}, which is this host")
+        } else {
+            format!(
+                "not probed: these binds are loopback addresses on {target}, and this command \
+                 ran on {}; ask that host with `stado host inventory {target}`",
+                local_target.as_deref().unwrap_or("a host with no registry identity")
+            )
+        },
         "adapters": probed
             .iter()
             .map(|(adapter, listening)| json!({
@@ -2023,10 +2253,10 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
         println!(
             "api {} {}",
             config.api_bind,
-            if api_listening {
-                "listening"
-            } else {
-                "not-listening"
+            match api_listening {
+                Some(true) => "listening",
+                Some(false) => "not-listening",
+                None => "not-probed",
             }
         );
         for (adapter, listening) in &probed {
@@ -2035,10 +2265,10 @@ async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError>
                 adapter.service,
                 adapter.consumer,
                 adapter.bind,
-                if *listening {
-                    "listening"
-                } else {
-                    "not-listening"
+                match listening {
+                    Some(true) => "listening",
+                    Some(false) => "not-listening",
+                    None => "not-probed",
                 }
             );
         }

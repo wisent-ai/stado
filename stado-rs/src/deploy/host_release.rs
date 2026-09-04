@@ -244,6 +244,9 @@ pub struct ReleaseRequest {
     pub sha256: String,
     pub archive_name: String,
     pub member: String,
+    /// The exact published byte count of `archive_name`, read on this side so
+    /// the target never has to discover it.
+    pub archive_bytes: u64,
     /// The public Stado origin serving immutable releases.
     pub release_api: String,
     pub dry_run: bool,
@@ -262,6 +265,7 @@ pub struct ReleasePlan {
     pub source_commit: String,
     pub archive_name: String,
     pub member: String,
+    pub archive_bytes: u64,
     pub release_api: String,
     pub declared_version: String,
     pub dry_run: bool,
@@ -410,6 +414,7 @@ pub fn plan(
         source_commit: request.source_commit.clone(),
         archive_name: request.archive_name.clone(),
         member: request.member.clone(),
+        archive_bytes: request.archive_bytes,
         release_api: request.release_api.trim_end_matches('/').to_string(),
         declared_version: declared.to_string(),
         dry_run: request.dry_run,
@@ -645,19 +650,28 @@ fetch_release_object() {
   fetch_path=$2
   fetch_head="$fetch_path.head"
   fetch_part="$fetch_path.part"
-  fetch_total=$(release_object_total "$fetch_uri" "$fetch_head") || {
+  # The operator side read the published size before this program existed, so
+  # the total is bound, not discovered. Deriving it from a `Range: 0-0`
+  # answer's `Content-Range` only worked through the tailnet proxy: the
+  # dashboard's own release route serves no ranges, so the host that serves
+  # the store fetching over its own loopback got no `Content-Range` and
+  # refused with `no_declared_size`. The probe remains for a bound of zero,
+  # which is a caller that could not read the size.
+  fetch_total=$archive_bytes
+  if [ "$fetch_total" -eq 0 ]; then
+    fetch_total=$(release_object_total "$fetch_uri" "$fetch_head") || {
+      /bin/rm -f "$fetch_head"
+      say fetch failed
+      return 1
+    }
     /bin/rm -f "$fetch_head"
-    say fetch failed
-    return 1
-  }
-  /bin/rm -f "$fetch_head"
+  fi
   case "$fetch_total" in
     ''|*[!0-9]*)
       say fetch no_declared_size
       return 1
       ;;
   esac
-  say fetch_bytes "$fetch_total"
   fetch_have=0
   while [ "$fetch_have" -lt "$fetch_total" ]; do
     fetch_end=$((fetch_have + fetch_chunk_bytes - 1))
@@ -1268,6 +1282,9 @@ fn bindings(plan: &ReleasePlan) -> String {
         shlex_quote(&crate::watchdog::hostname()),
         plan.product.root(),
     );
+    // A number, so it is bound unquoted and validated as a number on this
+    // side by its type.
+    bound.push_str(&format!("archive_bytes={}\n", plan.archive_bytes));
     // Where the origin's name lives, for the target's own `curl`.
     //
     // The caller reads the manifest through a client that pins tailnet names
@@ -1491,6 +1508,12 @@ pub async fn release_target(
     report.insert("declared_version".to_string(), json!(plan.declared_version));
     report.insert("release_uri".to_string(), json!(plan.release_uri()));
     report.insert("sha256".to_string(), json!(plan.sha256));
+    // The address the TARGET was told to fetch from. Its absence cost an hour
+    // on 2026-09-03: `fetch no_declared_size` says the answer carried no
+    // `Content-Range`, and nothing in the receipt said which origin had
+    // answered, so the one fact that separates "the store cannot serve ranges"
+    // from "the target reached the wrong server" was not in the report.
+    report.insert("release_api".to_string(), json!(plan.release_api));
     report.insert("staged_path".to_string(), json!(plan.staged_path()));
     report.insert("active_path".to_string(), json!(plan.active_path()));
     report.insert("install_root".to_string(), json!(plan.product.root()));
@@ -1699,10 +1722,100 @@ pub async fn release_target(
         }
     }
 
+    // Every stable bind this host declares, proven listening before this
+    // reports `ok`.
+    //
+    // A roll restarts the release agent, and the agent is the only thing that
+    // publishes a stable bind. On 2026-09-03 two rolls reported `ok` with
+    // every step `ok`, and Skarbiec's 127.0.0.1:8895 and Brama's
+    // 127.0.0.1:8080 were both unbound behind them: the agent could not read
+    // `release_control` through a closed object boundary, so it published
+    // nothing, and `brama.wisent.com/health` answered 502 for hours while two
+    // release reports said the roll had succeeded. A roll that restarts the
+    // publisher of a serving port and does not look at the port is a roll
+    // that cannot tell success from an outage.
+    let (verdicts, missing) = verify_stable_binds(target, runner).await;
+    if !verdicts.is_empty() {
+        report.insert("stable_binds".to_string(), json!(verdicts));
+    }
     report.insert("steps".to_string(), json!(steps));
+    if !missing.is_empty() {
+        report.insert("activated".to_string(), json!(true));
+        return Ok(fail(
+            &mut report,
+            1,
+            format!(
+                "the release is active and the units restarted, but {} declared stable bind(s) are                  not listening after {STABLE_BIND_BUDGET_SECONDS}s: {}. The release agent                  publishes these ports; read its log with `stado host unit-log {}                  com.wisent.stado.release-agent` before rolling anything else",
+                missing.len(),
+                missing.join(", "),
+                target.name
+            ),
+        ));
+    }
     report.insert("exit_code".to_string(), json!(0));
     report.insert("status".to_string(), json!(RELEASED_STATUS));
     Ok(Value::Object(report))
+}
+
+/// How long a restarted agent is given to publish its stable binds.
+const STABLE_BIND_BUDGET_SECONDS: u64 = 120;
+
+/// Poll every stable bind this host declares until it listens, and report
+/// each one.
+///
+/// The registry comes through the reader that falls back to this host's
+/// last-known-good copy, because the outage this guard exists to catch is one
+/// in which the authority cannot be read: a verification that needed the
+/// authority would go blind at exactly the moment it matters. A host whose
+/// registry cannot be read at all reports no verdicts rather than a false
+/// failure — the roll's own steps already carry that.
+async fn verify_stable_binds(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> (serde_json::Map<String, Value>, Vec<String>) {
+    let mut verdicts = serde_json::Map::new();
+    let mut missing = Vec::new();
+    let Ok((registry, _)) = crate::targets::fetch_registry_or_last_good().await else {
+        return (verdicts, missing);
+    };
+    let plans = crate::deploy::host_recovery::plan_stable_binds(&registry.to_document(), target);
+    if plans.is_empty() {
+        return (verdicts, missing);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(STABLE_BIND_BUDGET_SECONDS);
+    for plan in plans {
+        let port = plan.bind.rsplit(':').next().unwrap_or_default().to_string();
+        let listening = loop {
+            if stable_bind_listening(target, &port, runner).await {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        };
+        verdicts.insert(
+            plan.bind.clone(),
+            json!({
+                "product": plan.product,
+                "verdict": if listening { "listening" } else { "absent" },
+            }),
+        );
+        if !listening {
+            missing.push(format!("{} ({})", plan.bind, plan.product));
+        }
+    }
+    (verdicts, missing)
+}
+
+/// Whether one loopback port has a listener on the target, read with the same
+/// `lsof` spelling every other reader of "what is listening" uses.
+async fn stable_bind_listening(target: &ComputeTarget, port: &str, runner: &Runner) -> bool {
+    let selector = format!("-iTCP:{port}");
+    let words = ["/usr/sbin/lsof", "-nP", selector.as_str(), "-sTCP:LISTEN"];
+    host_channel::run_program(target, &words, runner)
+        .await
+        .is_ok_and(|output| output.ok() && !output.stdout.trim().is_empty())
 }
 
 /// What a `--dry-run` says it would do, in the order it would do it.
@@ -2006,19 +2119,15 @@ async fn pipeline_catalog_identity(
                 "{sidecar_uri} sits beside a signed release manifest and is invalid: {error}"
             ))
         })?;
-        let sidecar_commit = sidecar
-            .get("source_commit")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !sidecar_commit.is_empty() && sidecar_commit != manifest.source_revision {
-            return Err(DeployError(format!(
-                "{} {version} on {platform} was published twice from two different revisions: \
-                 the signed release manifest was built from {}, and {sidecar_uri} from \
-                 {sidecar_commit}. Delivery would install the signed one, which is not the \
-                 build the second publisher put there. Release objects are immutable, so this \
-                 version can never be made to mean one build; publish a new version instead",
-                product.source.product, manifest.source_revision
-            )));
+        if let Some(conflict) = revision_conflict(
+            &product.source.product,
+            version,
+            platform,
+            &manifest.source_revision,
+            &sidecar_uri,
+            &sidecar,
+        ) {
+            return Err(DeployError(conflict));
         }
     }
     let (document, _) = crate::cli::registry::fetch_versioned_document()
@@ -2080,6 +2189,85 @@ async fn pipeline_catalog_identity(
             manifest.binary
         },
     })
+}
+
+/// One immutable coordinate, one build: the sentence to refuse with when the
+/// coordinate's two publishers disagree about which revision they built.
+///
+/// This is its own function because two callers ask the same question at
+/// different moments. `pipeline_catalog_identity` asks it while delivering,
+/// with the signed manifest already in hand. `doctor`'s release-channel audit
+/// asks it about every recent coordinate, so a version poisoned at publication
+/// time is named by the standing audit rather than waiting for the next
+/// delivery to discover it — which is how 0.13.27 was found on 2026-09-01, and
+/// how 0.13.49 was found on 2026-09-03 only after its train had been re-run to
+/// completion into a coordinate that can never be delivered.
+fn revision_conflict(
+    product: &str,
+    version: &str,
+    platform: &str,
+    signed_revision: &str,
+    sidecar_uri: &str,
+    sidecar: &Value,
+) -> Option<String> {
+    let sidecar_commit = sidecar.get("source_commit").and_then(Value::as_str)?;
+    if sidecar_commit.is_empty() || sidecar_commit == signed_revision {
+        return None;
+    }
+    Some(format!(
+        "{product} {version} on {platform} was published twice from two different revisions: \
+         the signed release manifest was built from {signed_revision}, and {sidecar_uri} from \
+         {sidecar_commit}. Delivery would install the signed one, which is not the build the \
+         second publisher put there. Release objects are immutable, so this version can never \
+         be made to mean one build; publish a new version instead"
+    ))
+}
+
+/// Read both publishers of one published coordinate and report the conflict
+/// between them, delivering nothing.
+///
+/// A coordinate with one publisher is not a conflict, and neither is an absent
+/// sidecar or an absent signed manifest: the only question answered here is
+/// whether the two documents that do exist name the same build. An unreadable
+/// store is an error rather than agreement, because a listing that cannot be
+/// read is not a coordinate that agrees with itself.
+///
+/// The two reads run together rather than in sequence, because the standing
+/// audit in `doctor` calls this once per coordinate under a fixed deadline
+/// whose arithmetic is one round trip per coordinate, not two.
+pub(crate) async fn coordinate_revision_conflict(
+    product: &Product,
+    version: &str,
+    platform: &str,
+) -> Result<Option<String>, DeployError> {
+    let base = format!(
+        "stado://releases/{}/{version}/{platform}",
+        product.source.product
+    );
+    let sidecar_uri = format!("{base}/release-manifest-{platform}.json");
+    let signed_uri = format!("{base}/{}", crate::release_control::RELEASE_MANIFEST_NAME);
+    let (sidecar, signed) = tokio::join!(
+        crate::cli::storage::fetch_object(&sidecar_uri),
+        crate::cli::storage::fetch_object(&signed_uri),
+    );
+    let (Ok(sidecar), Ok(signed)) = (sidecar, signed) else {
+        return Ok(None);
+    };
+    let signed: crate::release_control::ReleaseManifest = serde_json::from_slice(&signed)
+        .map_err(|error| DeployError(format!("{signed_uri} is invalid: {error}")))?;
+    let sidecar: Value = serde_json::from_slice(&sidecar).map_err(|error| {
+        DeployError(format!(
+            "{sidecar_uri} sits beside a signed release manifest and is invalid: {error}"
+        ))
+    })?;
+    Ok(revision_conflict(
+        &product.source.product,
+        version,
+        platform,
+        &signed.source_revision,
+        &sidecar_uri,
+        &sidecar,
+    ))
 }
 pub(crate) async fn catalog_identity(
     product: &Product,
@@ -2273,6 +2461,33 @@ pub async fn release_host(
         || registry
             .service(OBJECT_API_SERVICE)
             .is_some_and(|object_api| object_api.active_host == target.name);
+    // Two roles, one string, and they are not the same address.
+    //
+    // This process reads the catalog from `release_api_origin()`, which has to
+    // be reachable from HERE. The TARGET then fetches the archive itself, and
+    // the host that serves the release object API is the one case where the
+    // public name is the worse address: `charless-mac-mini` asking its own
+    // tailnet name hairpins back into its own `tailscale serve`. The service
+    // directory states the address each host uses to reach a loopback
+    // service, so the target's own entry is that address, and
+    // `release_origin_allowed` has always permitted loopback HTTP for exactly
+    // this case.
+    let target_release_api = registry
+        .service(OBJECT_API_SERVICE)
+        .filter(|object_api| object_api.active_host == target.name)
+        .and_then(|object_api| object_api.address_for(&target.name))
+        .map(|endpoint| endpoint.url.trim_end_matches('/').to_string())
+        .filter(|url| loopback_http_origin(url))
+        .unwrap_or(release_api);
+    // The published byte count, read here so the target never derives it from
+    // a `Range: 0-0` answer. See `cli::storage::release_object_size`.
+    let archive_uri = format!(
+        "stado://releases/{}/{version}/{platform}/{}",
+        product.source.product, identity.archive_name
+    );
+    let archive_bytes = crate::cli::storage::release_object_size(&archive_uri)
+        .await
+        .map_err(|error| DeployError(error.to_string()))?;
     let request = ReleaseRequest {
         binary: product.name.clone(),
         version: version.to_string(),
@@ -2281,7 +2496,8 @@ pub async fn release_host(
         sha256: identity.sha256,
         archive_name: identity.archive_name,
         member: identity.member,
-        release_api,
+        archive_bytes,
+        release_api: target_release_api,
         dry_run,
         reinstall,
     };

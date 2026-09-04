@@ -418,6 +418,15 @@ define_capabilities! {
             ProviderId::Local => (External, "deployment environment", "Reverse proxy and local routing are managed outside Stado"),
         ]
     },
+    MobileAppCapture => {
+        id: "mobile-app-capture",
+        summary: "Drive and capture installed iOS and Android applications on a declared host.",
+        providers: [
+            ProviderId::Macos => (Implemented, "deploy::mobile_runtime", "Appium with the XCUITest driver for iOS and UiAutomator2 for Android, declared per host under targets[].mobile_runtime and verified at its declared absolute paths"),
+            ProviderId::Local => (Partial, "deploy::mobile_runtime", "A registry host carries the runtime only where it declares one; iOS additionally requires Xcode, which no fleet host installs on demand"),
+            ProviderId::Linux => (Planned, "", "Android would work through platform-tools; iOS cannot be driven from Linux at all"),
+        ]
+    },
     IdentityAccess => {
         id: "identity-access",
         summary: "Authenticate workloads and authorize provider operations.",
@@ -1172,6 +1181,11 @@ pub const DATABASE_API_DATABASES_CONFIG: ConfigField = ConfigField::document(
     "WC_DATABASE_API_DATABASES",
     "database_api.databases",
 );
+pub const WEB_API_PRODUCTS_CONFIG: ConfigField = ConfigField::document(
+    "web-api-products",
+    "WC_WEB_API_PRODUCTS",
+    "web_api.products",
+);
 pub const RELEASE_API_PUBLISHERS_CONFIG: ConfigField = ConfigField::document(
     "release-api-publishers",
     "WC_RELEASE_API_PUBLISHERS",
@@ -1298,15 +1312,6 @@ pub enum Consumer {
     /// A fleet process reads the declaration and acts on it. The string names
     /// the exact code path, so the claim is checkable rather than asserted.
     Fleet(&'static str),
-    /// No process reads the declaration; an operator-invoked command copies its
-    /// value to somewhere a consumer does read. Until somebody runs that
-    /// command by hand the declared value changes nothing anywhere, and the two
-    /// copies drift in the meantime — which is exactly how the registry came to
-    /// list a Weles action the worker had never heard of.
-    OperatorCopy {
-        command: &'static str,
-        destination: &'static str,
-    },
     /// Nothing in this build reads it at all.
     Unread,
 }
@@ -1360,21 +1365,6 @@ impl DeclaredField {
     pub const fn unread(path: &'static str, surface: DeclarationSurface) -> Self {
         Self {
             consumer: Consumer::Unread,
-            ..Self::read(path, surface, "")
-        }
-    }
-
-    pub const fn operator_copy(
-        path: &'static str,
-        surface: DeclarationSurface,
-        command: &'static str,
-        destination: &'static str,
-    ) -> Self {
-        Self {
-            consumer: Consumer::OperatorCopy {
-                command,
-                destination,
-            },
             ..Self::read(path, surface, "")
         }
     }
@@ -1445,15 +1435,19 @@ pub const DECLARED_FIELDS: &[DeclaredField] = &[
         DeclarationSurface::RegistryTarget,
         "transcript-label-trainer placement::declared_lake_root",
     ),
-    // Known offenders. `weles.actions` is modelled (`WelesPolicy::actions`) and
-    // still reaches no host by itself: the worker reads its own
-    // `placement-policy.json`, and `stado placement weles-policy` is what
-    // copies the registry value there when an operator runs it.
-    DeclaredField::operator_copy(
+    // `weles.actions` is modelled (`WelesPolicy::actions`) and the worker reads
+    // its own `placement-policy.json`, never the registry. For a long time the
+    // only thing joining the two was an operator running `stado host
+    // publish-placement-policy`, so they drifted: the registry listed
+    // `apple_create_developer_id` and the host file did not, and the worker
+    // declined the row in silence for hours while the declaration said it was
+    // allowed. The host's own agent now writes that file from this declaration
+    // on every pass, which is what makes the value reach behaviour without
+    // anybody retyping a command.
+    DeclaredField::read(
         "weles.actions",
         DeclarationSurface::RegistryTarget,
-        "stado placement weles-policy publish",
-        "~/.config/weles/placement-policy.json on the target host",
+        "providers::local::agent::reconcile_placement_policy",
     ),
     DeclaredField::read(
         "storage.stado.ca_file",

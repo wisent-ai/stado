@@ -173,8 +173,33 @@ pub async fn run(
         match local_agent::run_agent(&gpu_type, idle_shutdown, &kind).await {
             Ok(()) => return Ok(()),
             Err(error) => {
+                // A release handoff must reach launchd/systemd. Retrying
+                // `run_agent` here keeps executing the replaced inode forever,
+                // publishes no capacity, and prevents the next release from
+                // being built on this host.
+                if error.is::<local_agent::ReleaseHandoff>() {
+                    return Err(CmdError::click(error.to_string()));
+                }
+                // A 401 from the object API is not this agent's credential:
+                // the bearer selected the namespace, and the namespace policy
+                // on the object API host did not grant the key. Between
+                // 2026-09-01 and 2026-09-03 that was `job-transitions/`, and
+                // the agent printed only the status code while it restarted
+                // for two days.
+                let message = error.to_string();
+                let hint = if message.contains("HTTP 401") {
+                    format!(
+                        "; the object API refused a key this binary uses — its \
+                         object_api.namespaces.{} policy must grant every prefix in \
+                         queue::copy::CANONICAL_PREFIXES; `stado doctor` on that host names the \
+                         missing ones",
+                        crate::config::QUEUE_OBJECT_NAMESPACE
+                    )
+                } else {
+                    String::new()
+                };
                 local_agent::agent_log(&format!(
-                    "agent loop failed: {error}; restarting after bounded delay"
+                    "agent loop failed: {message}{hint}; restarting after bounded delay"
                 ));
                 tokio::time::sleep(std::time::Duration::from_secs(
                     crate::constants::POLL_INTERVAL_S,

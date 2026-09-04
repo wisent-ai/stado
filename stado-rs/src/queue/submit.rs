@@ -294,9 +294,10 @@ pub fn submission_job_key(request_digest: &str, index: usize, command: &str) -> 
 
 /// The complete immutable submission projection. These are the only fields
 /// excluded because Stado deliberately mutates them after admission:
-/// lifecycle state/timestamps and provider attachment; retry, preemption and
-/// yield counters; scheduler assignment/dispatch estimates; operator priority;
-/// measured sizing/output observations.
+/// lifecycle state/timestamps; optimizer-owned provider placement; retry,
+/// preemption and yield counters; scheduler assignment/dispatch estimates;
+/// operator priority; measured sizing/output observations. The durable request
+/// digest still guards every caller-supplied option, including provider pins.
 pub(crate) fn immutable_job_projection(job: &Job) -> Value {
     let mut value = serde_json::to_value(job).expect("Job serialization is infallible");
     let object = value.as_object_mut().expect("Job serializes as an object");
@@ -315,6 +316,8 @@ pub(crate) fn immutable_job_projection(job: &Job) -> Value {
         "dispatch_attempts",
         "last_dispatch_attempt",
         "assigned_to",
+        "provider",
+        "pin_to_provider",
         "runtime_seconds_estimate",
         "gpu_mem_gb",
         "peak_vram_gb",

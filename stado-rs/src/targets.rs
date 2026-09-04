@@ -1333,6 +1333,50 @@ pub struct SshConnectionPath {
 /// named fallback paths.
 pub const PRIMARY_SSH_CONNECTION: &str = "primary";
 
+/// The mobile automation runtime one host must carry.
+///
+/// This is the per-host statement of required software the fleet did not
+/// have. `managed_versions` covers stado-managed release binaries under
+/// `~/.stado/bin`; `placement_profiles` moves services between hosts and says
+/// nothing about software; `capabilities` names capability families and their
+/// providers, not host programs. So the requirement behind the iOS and
+/// Android capture families lived nowhere, and the only trace of it in the
+/// repository was the probe side: `deploy::host_exec` approved
+/// `appium --version`, `appium driver list --installed`, `which adb` and
+/// `adb devices -l` on 2026-09-03 so a placement could be asked whether it
+/// can run, with nothing anywhere stating what the answer ought to be.
+///
+/// Declared here rather than hardcoded in the verifier for the reason
+/// [`crate::deploy::weles_browser_runtime`] reads Playwright's revisions out
+/// of the installed release instead of pinning them in Rust: a constant in
+/// the checkout drifts from the fleet and then verifies the wrong thing.
+// `Map<String, Value>` blocks `Eq`, for the reason spelled out at
+// [`VerifyDescriptor`]: `serde_json` will not promise reflexivity for floats.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobileRuntime {
+    /// Exact Appium server version, bare (`3.2.1`), never a range and never
+    /// `latest`: a coordinate, for the reason
+    /// [`crate::deploy::host_release`] refuses to resolve one.
+    pub appium: String,
+    /// Appium drivers this host must have installed, by their Appium driver
+    /// name (`xcuitest`, `uiautomator2`). A version cannot answer for these:
+    /// each is a separate install, and a placement fails at its first
+    /// command without the one its platform needs.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub drivers: Vec<String>,
+    /// Whether this host must carry Android platform-tools, the package
+    /// `adb` lives in. Declared as a requirement and not as a version: the
+    /// vendor publishes one rolling `latest` archive per platform and stamps
+    /// the build into `adb version`, so a pinned number here would be a
+    /// promise the source cannot keep.
+    #[serde(default)]
+    pub platform_tools: bool,
+    /// Keys this build does not model, kept verbatim, for the reason
+    /// [`VerifyDescriptor::extra`] keeps them.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 /// One routable box. Unknown registry keys land in
 /// [`ComputeTarget::extra`] (Python's `extra` dict), via `#[serde(flatten)]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1421,6 +1465,24 @@ pub struct ComputeTarget {
     /// shared workstations from picking up stray queue backlog.
     #[serde(default)]
     pub pinned_only: bool,
+    /// The mobile automation runtime this host must carry, when it is a host
+    /// the mobile capture families are placed on. Absent means the host is
+    /// not a mobile placement, which is what every host is until somebody
+    /// declares otherwise — the same default as [`Self::display_stream`].
+    ///
+    /// Separate from [`Self::managed_versions`] on purpose, and the
+    /// separation is the whole reason this field exists. `managed_versions`
+    /// declares stado-managed binaries under `~/.stado/bin`, delivered by
+    /// `host release` out of a release Stado published and verified by
+    /// digest; every version diagnostic in the fleet
+    /// (`deploy::service_converge`, `host reconcile`) enumerates it and looks
+    /// for `$HOME/.stado/bin/<name>`. Appium is an npm package and `adb` is
+    /// Google's, neither is a Stado release artefact, and neither lives
+    /// there, so declaring them under `managed_versions` would have produced
+    /// drift rows nothing could ever deliver against — a declaration with no
+    /// reader, the exact shape `host_software` was written to remove.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_runtime: Option<MobileRuntime>,
     /// Required version of each stado-managed binary under `~/.stado/bin`,
     /// keyed by binary name (`stado`, `skarbiec`) and holding the bare
     /// version number (`0.5.1`), never a prefixed banner like
@@ -2896,6 +2958,263 @@ pub(crate) fn may_replace_last_good(
     Ok(())
 }
 
+/// Why the last-known-good copy was not refreshed.
+///
+/// The cache refused documents silently until 2026-09-03: every refusal
+/// printed one stderr line and [`store_last_good`] returned `()`, so neither
+/// caller could know the host had stopped taking new copies. A host can sit a
+/// registry generation behind indefinitely that way, with the only evidence
+/// on a stream nobody keeps.
+///
+/// The variants are separate because the operator's next step is: fix the
+/// document the authority is serving, upgrade this build, look at what the
+/// authority just published, or look at the disk. "Not recorded" answers none
+/// of those.
+///
+/// None of this changes WHEN the copy is written. Every document refused
+/// before is refused now, for the same reason, and the older copy on disk is
+/// still left exactly as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LastGoodRefusal {
+    /// This process has no `HOME`, so there is no cache location to write to
+    /// and no path to name in a diagnostic either. The only refusal that
+    /// prints nothing, because the sentence every other one prints is built
+    /// around the document's path.
+    NoCacheLocation,
+    /// The authority served something that is not JSON. The document is
+    /// broken and no build would take it.
+    Unparseable { detail: String },
+    /// Well-formed, and refused anyway: this build does not accept what the
+    /// document declares. The registry is not the fault — the age of this
+    /// binary is. Same class as the janitor's `policy:NotImplementedError`.
+    RejectedByThisBuild { detail: String },
+    /// Valid, and still not an improvement: it names no hosts while the
+    /// recorded copy names some. A deliberate safeguard
+    /// ([`may_replace_last_good`]) rather than a fault — an empty fleet is
+    /// what an outage looks like from here — and it must be visible for that
+    /// exact reason: the authority is publishing something the fallback will
+    /// not take.
+    WouldLoseRecordedHosts { held: usize, detail: String },
+    /// Nothing judged the document; the filesystem refused the write.
+    NotWritten { detail: String },
+}
+
+impl LastGoodRefusal {
+    /// A stable slug for a log line, a published state file, or a check.
+    /// Bounded and free of paths, values and credentials, so it may be
+    /// recorded anywhere the detail sentence may not.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoCacheLocation => "no-cache-location",
+            Self::Unparseable { .. } => "unparseable-document",
+            Self::RejectedByThisBuild { .. } => "rejected-by-this-build",
+            Self::WouldLoseRecordedHosts { .. } => "would-lose-recorded-hosts",
+            Self::NotWritten { .. } => "not-written",
+        }
+    }
+
+    /// The underlying sentence, which names paths and declared values and so
+    /// belongs on stderr and in an operator's terminal, not in the slug.
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::NoCacheLocation => "no HOME, so this process has no registry cache location",
+            Self::Unparseable { detail }
+            | Self::RejectedByThisBuild { detail }
+            | Self::NotWritten { detail } => detail,
+            Self::WouldLoseRecordedHosts { detail, .. } => detail,
+        }
+    }
+}
+
+impl std::fmt::Display for LastGoodRefusal {
+    /// The historical text. The stderr line this crate has always printed is
+    /// built from it verbatim, so an operator's existing grep still matches.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.detail())
+    }
+}
+
+/// The last refusal this process saw, for a surface that reads the cache
+/// later and has to say why what it is reading is old.
+///
+/// A refusal may NOT be written down: the whole point is that the cache is
+/// left untouched. So the record is process-local, and its reader is
+/// [`fetch_registry_or_last_good_detail`], which names it in the notice it
+/// already puts in front of an operator when a copy is being served instead
+/// of the authority.
+static LAST_GOOD_REFUSAL: Mutex<Option<LastGoodRefusal>> = Mutex::new(None);
+
+/// Record a refusal for this process.
+pub(crate) fn note_last_good_refusal(refusal: &LastGoodRefusal) {
+    *LAST_GOOD_REFUSAL
+        .lock()
+        .expect("last-known-good refusal lock") = Some(refusal.clone());
+}
+
+/// The last refusal this process saw, if any.
+pub fn last_good_refusal() -> Option<LastGoodRefusal> {
+    LAST_GOOD_REFUSAL
+        .lock()
+        .expect("last-known-good refusal lock")
+        .clone()
+}
+
+// ---------------------------------------------------------------------------
+// build versus registry — a build that refuses the document being published
+// ---------------------------------------------------------------------------
+
+/// Whether one host's installed build accepts the registry the control plane
+/// publishes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildVerdict {
+    /// The build was asked and refused. The refusal is a [`LastGoodRefusal`]
+    /// rather than a sentence of its own: the same validator produced it, and
+    /// an operator comparing this row with `resolver status` must not have to
+    /// map two vocabularies onto one fault.
+    Refused(LastGoodRefusal),
+    /// The build could not be asked. A finding and never a silence, on the
+    /// same rule [`crate::deploy::service::ImageState::Unread`] states: the
+    /// defect this check exists to remove is an unread state rendered as a
+    /// passing one, and a host silently omitted would be that defect wearing
+    /// this check's name.
+    Unmeasured {
+        /// Why, named the way an operator would name it.
+        reason: String,
+    },
+}
+
+/// One host whose installed build was held against the published registry.
+///
+/// Only refusals and unmeasured hosts are built: a build that accepts the
+/// document has nothing to report.
+///
+/// This is the condition that opened both silent windows and that nothing
+/// reported. On `lukasz-macbook` the disk janitor journalled 8,348
+/// `policy:ValueError` passes across two windows — 2026-08-20T20:18:05Z to
+/// 2026-08-27T18:03:59Z and 2026-08-31T06:30:49Z to 2026-09-02T17:50:40Z —
+/// while the registry was valid the whole way through and the running build
+/// was too old to accept it. Neither window opened on a restart or a binary
+/// replacement, so [`crate::deploy::service::StaleUnitImage`] fires nothing:
+/// the installed file and the running image agreed and the REGISTRY was what
+/// moved. Measured on 2026-09-03, 0.7.14 through 0.7.22 refuse today's
+/// document over `disk_cleanup.cleaners`, 0.13.24 refuses it over the
+/// `disk_cleanup` key set, and 0.13.46 onward accept it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildRegistrySkew {
+    pub host: String,
+    /// The build that answered, or that would have had to. `None` on a host
+    /// this process cannot ask, because the version there is not knowable
+    /// from here either.
+    pub build: Option<String>,
+    pub verdict: BuildVerdict,
+}
+
+impl BuildRegistrySkew {
+    /// Stable machine-readable category, in `registry doctor`'s vocabulary.
+    pub fn kind(&self) -> &'static str {
+        match self.verdict {
+            BuildVerdict::Refused(_) => "build-refuses-registry",
+            BuildVerdict::Unmeasured { .. } => "unread-build-verdict",
+        }
+    }
+
+    /// The row an operator reads. It names the host, the build and the
+    /// validator's own words, because "incompatible" sends somebody back to
+    /// run the validator by hand to re-derive the one fact the check already
+    /// holds.
+    pub fn sentence(&self) -> String {
+        match &self.verdict {
+            BuildVerdict::Refused(refusal) => format!(
+                "the build installed on {} ({}) refuses the registry this control plane publishes \
+                 ({}): {refusal}. The document is not the fault — the age of that binary is, and \
+                 every policy this build resolves out of the registry fails while it runs. \
+                 Upgrading the build on {} is what clears it; republishing the registry does not",
+                self.host,
+                self.build.as_deref().unwrap_or("an unread version"),
+                refusal.kind(),
+                self.host,
+            ),
+            BuildVerdict::Unmeasured { reason } => format!(
+                "whether the build installed on {} accepts the registry this control plane \
+                 publishes could not be measured, and is NOT reported as acceptance: {reason}",
+                self.host
+            ),
+        }
+    }
+}
+
+/// The version of the build running this process, which is the only build any
+/// process can answer for.
+pub fn running_build() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Whether THIS build accepts `document`, the registry the authority is
+/// publishing right now.
+///
+/// The same gate [`store_last_good`] holds the recovery copy to, reported
+/// through the same [`LastGoodRefusal`] vocabulary. It is a direct call and
+/// not a read of [`last_good_refusal`] on purpose: that record exists only if
+/// this process happened to take the uncached authority path, and a check
+/// that fires only when the cache was refreshed cannot fire in the case it
+/// was written for.
+///
+/// `None` means this build accepts the document. Nothing is recorded here —
+/// judging a document is not the same as caching one, and this must be safe
+/// to call from a reporting surface.
+pub fn build_refusal(document: &Value) -> Option<LastGoodRefusal> {
+    validate_registry(document)
+        .err()
+        .map(|error| LastGoodRefusal::RejectedByThisBuild {
+            detail: error.to_string(),
+        })
+}
+
+/// Every declared machine held against the published document, worst first
+/// in the only order that is knowable: this host measured, every other host
+/// unmeasured.
+///
+/// LOCAL ONLY, and the signature says so — for the reason
+/// [`crate::deploy::service::observe_unit_images`] states about pids, applied
+/// to builds. Which document a build accepts is a question only that build
+/// can answer: the beacon publishes one `state` word per unit and carries no
+/// version, and nothing in the store records a host's installed build against
+/// a registry generation. So `local_host` is the name of the host this
+/// process runs on, and every other machine gets one row saying its build was
+/// not asked.
+///
+/// A host that accepts yields nothing. Dispatcher pools are the caller's to
+/// skip: `kind="gcp"` and `kind="vast"` name no machine with a build on it.
+pub fn builds_refusing_registry(
+    host: &str,
+    document: &Value,
+    local_host: Option<&str>,
+) -> Vec<BuildRegistrySkew> {
+    if local_host != Some(host) {
+        return vec![BuildRegistrySkew {
+            host: host.to_string(),
+            build: None,
+            verdict: BuildVerdict::Unmeasured {
+                reason: format!(
+                    "which registry document a build accepts is readable only by running that \
+                     build, and this command is running {} on {}; {host} is unmeasured until \
+                     `stado registry doctor` runs there",
+                    running_build(),
+                    local_host.unwrap_or("a host no registry target names"),
+                ),
+            },
+        }];
+    }
+    build_refusal(document)
+        .map(|refusal| BuildRegistrySkew {
+            host: host.to_string(),
+            build: Some(running_build().to_string()),
+            verdict: BuildVerdict::Refused(refusal),
+        })
+        .into_iter()
+        .collect()
+}
+
 /// Record a document the authority served AND this build validated.
 ///
 /// The gate is the registry-v2 contract ([`validate_registry`]), not the
@@ -2908,16 +3227,21 @@ pub(crate) fn may_replace_last_good(
 ///
 /// A document that fails the contract is reported and not recorded: the copy
 /// already on disk is worth more than the newest thing the store happened to
-/// hold, and a cache nobody can trust is a cache nobody may use.
+/// hold, and a cache nobody can trust is a cache nobody may use. The refusal
+/// is RETURNED as well as printed ([`LastGoodRefusal`]): a caller that cannot
+/// see it cannot tell an operator the host stopped taking copies, which is
+/// how a host sits a generation behind with one stderr line as the evidence.
 ///
 /// Document first, sidecar second. A crash between the two leaves a new
 /// document dated by the older sidecar, which OVERSTATES the age; the other
 /// order understates it, and a registry that reads fresher than it is, is
 /// the exact lie this cache exists to prevent.
-pub(crate) fn store_last_good(text: &str, generation: &str) {
+pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefusal> {
     let (Some(document), Some(meta)) = (registry_last_good_path(), registry_last_good_meta_path())
     else {
-        return;
+        // Nothing to name in a sentence, so nothing is printed — the caller
+        // gets the outcome instead.
+        return Err(LastGoodRefusal::NoCacheLocation);
     };
     let report = |error: &dyn std::fmt::Display| {
         eprintln!(
@@ -2925,11 +3249,18 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
             document.display()
         );
     };
+    // Every arm below builds the refusal, prints the same sentence it always
+    // printed (`Display` is the underlying detail verbatim), and returns it.
+    let refuse = |refusal: LastGoodRefusal| -> Result<(), LastGoodRefusal> {
+        report(&refusal);
+        Err(refusal)
+    };
     match serde_json::from_str::<Value>(text) {
         Ok(data) => {
             if let Err(error) = validate_registry(&data) {
-                report(&error);
-                return;
+                return refuse(LastGoodRefusal::RejectedByThisBuild {
+                    detail: error.to_string(),
+                });
             }
             // Valid is not the same as better. A document naming no hosts
             // never replaces one that names some.
@@ -2949,19 +3280,23 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
                 .ok()
                 .and_then(|held| serde_json::from_str::<Value>(&held).ok());
             if let Err(error) = may_replace_last_good(&data, recorded.as_ref()) {
-                report(&error);
-                return;
+                return refuse(LastGoodRefusal::WouldLoseRecordedHosts {
+                    held: recorded.as_ref().map_or(0, declared_target_count),
+                    detail: error,
+                });
             }
         }
         Err(error) => {
-            report(&error);
-            return;
+            return refuse(LastGoodRefusal::Unparseable {
+                detail: error.to_string(),
+            });
         }
     }
     if let Some(directory) = document.parent() {
         if let Err(error) = std::fs::create_dir_all(directory) {
-            report(&error);
-            return;
+            return refuse(LastGoodRefusal::NotWritten {
+                detail: error.to_string(),
+            });
         }
     }
     let sidecar = serde_json::to_string(&RegistryCacheMeta {
@@ -2970,12 +3305,19 @@ pub(crate) fn store_last_good(text: &str, generation: &str) {
     })
     .expect("registry cache metadata serialization is infallible");
     if let Err(error) = write_atomic(&document, text) {
-        report(&error);
-        return;
+        return refuse(LastGoodRefusal::NotWritten {
+            detail: error.to_string(),
+        });
     }
+    // The document landed and the sidecar did not: a copy nobody can date,
+    // which `load_last_good` skips. Still a refusal to the caller, and the
+    // policy is untouched — this was already the last statement.
     if let Err(error) = write_atomic(&meta, &sidecar) {
-        report(&error);
+        return refuse(LastGoodRefusal::NotWritten {
+            detail: error.to_string(),
+        });
     }
+    Ok(())
 }
 
 /// The cached document with the age of what it is, or `None` when there is
@@ -3063,12 +3405,22 @@ pub async fn fetch_registry_or_last_good_detail(
     };
     match load_last_good() {
         Some((registry, meta, age)) => {
-            let notice = format!(
+            let mut notice = format!(
                 "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {authority}",
                 registry_last_good_path().unwrap_or_default().display(),
                 meta.read_at,
                 meta.generation,
             );
+            // Why the copy is as old as it is, when this process already
+            // knows. Without it the age looks like the authority's fault,
+            // and an operator chasing an unreachable store never learns
+            // that the last refresh reached this host and was refused.
+            if let Some(refusal) = last_good_refusal() {
+                notice.push_str(&format!(
+                    "; this process refused to refresh that copy ({}): {refusal}",
+                    refusal.kind()
+                ));
+            }
             Ok((
                 registry,
                 Some(RegistryCopyNotice {
@@ -3113,7 +3465,15 @@ async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError
     match download_registry().await {
         Ok(Some(document)) => match load_registry_from_str(&document.content) {
             Ok(registry) => {
-                store_last_good(&document.content, &document.version);
+                // The authority answered, so this read is not degraded and
+                // the refusal must not fail it. What it must not do is
+                // vanish: the copy on disk is now older than the document
+                // just served, and the sentence this process prints when it
+                // later falls back to that copy is the one place an operator
+                // sees the consequence.
+                if let Err(refusal) = store_last_good(&document.content, &document.version) {
+                    note_last_good_refusal(&refusal);
+                }
                 Ok(registry)
             }
             // The `[_load_from_gcs]` prefix is Python's function name, kept

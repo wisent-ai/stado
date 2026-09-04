@@ -24,6 +24,8 @@
       ],
       "unit": "com.wisent.always-on.skarbiec",
       "env": {
+        "GNUPGHOME": "$HOME/.gnupg",
+        "SKARBIEC_AUDIT_FILE": "$HOME/.stado/skarbiec.audit.jsonl",
         "SKARBIEC_VAULT_FILE": "$HOME/.stado/skarbiec.vault.json"
       }
     },

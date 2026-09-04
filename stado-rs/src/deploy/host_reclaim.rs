@@ -894,23 +894,39 @@ pub async fn reclaim_host(
     // looked at. Skipping the stage keeps every workdir, which is the
     // fail-closed behaviour this comment always claimed, and says so in the
     // report instead of deleting blind or refusing everything.
+    //
+    // A stage that skips silently is the other half of that same outage, so
+    // the store's own sentence travels into the skip. It used to be
+    // discarded (`Err(_)`) at the only place that saw it, and that is why the
+    // release train spent an hour and three attempts: nothing anywhere said
+    // which read failed or why. The queue held 13 parseable records and
+    // `running/` was empty, both verified object by object through the same
+    // CLI, so the sentence was the only thing that could have named the real
+    // failure. Carried through, `HTTP 502: upstream unavailable` classes as
+    // `infra_down`, `retryable=true` — which is the truth about a status
+    // `deploy.yml` retries three times — where a discarded error left
+    // `error_code="unknown"`, `retryable=false`. A refusal, or a skip, an
+    // operator cannot act on is the defect this fleet keeps paying for.
+    let mut unreadable: Vec<String> = Vec::new();
     let live_jobs = match crate::queue::JobStorage::new().await {
         Ok(store) => {
             let mut ids = Vec::new();
-            let mut readable = true;
             for state in ["queue", "running"] {
                 match store.list_jobs(state, 0).await {
                     Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
-                    Err(_) => readable = false,
+                    Err(error) => unreadable.push(format!("{state}/: {error}")),
                 }
             }
-            if readable {
+            if unreadable.is_empty() {
                 Some(ids)
             } else {
                 None
             }
         }
-        Err(_) => None,
+        Err(error) => {
+            unreadable.push(format!("opening the queue store: {error}"));
+            None
+        }
     };
     let target_free_gb = target
         .disk_cleanup
@@ -937,9 +953,11 @@ pub async fn reclaim_host(
     if live_jobs.is_none() {
         reclamation.skipped.push((
             "queue_workdirs".to_string(),
-            "the queue store did not answer, so no workdir could be shown to be terminal; \
-             every workdir was kept"
-                .to_string(),
+            format!(
+                "the queue store did not answer, so no workdir could be shown to be terminal; \
+                 every workdir was kept — {}",
+                unreadable.join("; ")
+            ),
         ));
     }
     Ok((target, reclamation))

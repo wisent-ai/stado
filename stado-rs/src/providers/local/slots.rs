@@ -58,9 +58,15 @@ pub struct ActiveSlot {
     /// Detached heartbeat task (daemon-thread parity); exits when the pid dies.
     _hb_task: tokio::task::JoinHandle<()>,
     /// Shared hold on the janitor's cleanup lock for this live workload
-    /// (Python `slot["disk_cleanup_lock"]`). Released when the slot is
-    /// dropped (flock closes with the fd) or explicitly via
-    /// [`super::disk_cleanup::release_workload_lock`].
+    /// (Python `slot["disk_cleanup_lock"]`).
+    ///
+    /// Released by [`ActiveSlot::reap`] the instant the workload's process is
+    /// observed to have exited — NOT when the slot is dropped. The slot
+    /// outlives the process on purpose: finalization (artifact upload, status
+    /// write, the `running` -> terminal move) is retried on later ticks and
+    /// keeps the slot alive for as long as the store refuses. Tying the hold
+    /// to the slot therefore tied a cross-process lock to an unbounded retry.
+    /// See [`release_hold_for_exited_workload`].
     pub disk_cleanup_lock: Option<super::disk_cleanup::WorkloadLock>,
     /// Driver UUID of the board this job was placed on, when the host has one
     /// to choose. The agent reads it back to keep the next claim off a card it
@@ -95,6 +101,71 @@ impl ActiveSlot {
     /// file from disk (see the 2026-05-06 zero-byte-log incident below).
     fn close_log(&mut self) {
         self.log_file.take();
+    }
+
+    /// The workload's exit status, or `None` while its process is still
+    /// executing — and, on the first observation of an exit, the release of
+    /// the janitor's shared cleanup hold.
+    ///
+    /// One expression and not two statements, deliberately. The hold means
+    /// "a workload process is live on this host"; this is the exact moment
+    /// that stops being true, and every path in [`advance_slot`] below this
+    /// point is finalization. A separate release statement is one refactor
+    /// away from being skipped by a new early return, which is precisely how
+    /// the leak below was introduced.
+    pub fn reap(
+        &mut self,
+        log_fn: &mut dyn FnMut(&str),
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        let status = self.child.try_wait()?;
+        if status.is_some() {
+            release_hold_for_exited_workload(&mut self.disk_cleanup_lock, log_fn);
+        }
+        Ok(status)
+    }
+}
+
+/// Release the janitor's shared cleanup hold because the workload it stands
+/// for is no longer executing. Idempotent: a hold already released is a no-op.
+///
+/// # The defect this exists to make impossible
+///
+/// [`super::disk_cleanup::acquire_workload_lock_in`] takes a SHARED `fs2` hold
+/// on `~/.cache/wisent-compute/disk-cleanup.lock` per live workload, and
+/// `disk_cleanup`'s own pass needs that same file EXCLUSIVELY. One shared hold
+/// that is never released therefore makes every exclusive acquire fail
+/// forever — not for a while, forever — and a cleanup pass answers `lock_busy`
+/// on every tick without ever scanning a directory.
+///
+/// The hold used to live and die with the [`ActiveSlot`], and a slot is
+/// deliberately retained past its workload: when the terminal artifact upload
+/// fails, [`advance_slot`] returns [`SlotOutcome::Running`] so finalization can
+/// be retried on a later tick. That retry is unbounded by construction. So a
+/// store that keeps refusing one upload converted a cross-process lock into a
+/// permanent one, on a process that was otherwise perfectly healthy and kept
+/// publishing capacity throughout.
+///
+/// Measured on `charless-mac-mini` on 2026-09-03: the agent (pid 79473, alive
+/// 11.5 hours) held the lock, `host disk` named it as the holder, every pass
+/// reported `outcome: lock_busy, duration_ms: 372`, and the janitor's last
+/// success stayed at 16:40:29Z. `host gates` then read that success age
+/// against `STALL_INTERVALS * 300s` and reported `disk_cleanup_stalled`, which
+/// closed the host to all work — on 18.4 GiB free against a 15 GiB watermark,
+/// with eight jobs pinned to it. `lukasz-macbook` was closed the same way on
+/// the same day at 118.7 GiB free against 100. Those two are the whole of
+/// `darwin-arm64` in the registry, so the platform had no builder at all.
+///
+/// And it could not clear itself. The agent replaces itself only once
+/// `slots.is_empty()` (`agent::run_agent`'s release-handoff branch), which the
+/// retained slot prevents; the wedge clears when a superseding release is
+/// installed; and installing one needs a `darwin-arm64` builder, which is the
+/// host this wedge closed.
+pub fn release_hold_for_exited_workload(
+    hold: &mut Option<super::disk_cleanup::WorkloadLock>,
+    log_fn: &mut dyn FnMut(&str),
+) {
+    if let Some(hold) = hold.take() {
+        super::disk_cleanup::release_workload_lock(hold, log_fn);
     }
 }
 
@@ -783,6 +854,26 @@ async fn materialize_stado_inputs(
 // start_slot
 // ---------------------------------------------------------------------------
 
+/// Errors before or after the queue claim are agent failures. A claim error is
+/// scoped to one queued job and may be reported while the scan continues.
+#[derive(Debug)]
+pub enum StartSlotError {
+    Claim(StorageError),
+    Other(StorageError),
+}
+
+impl From<StorageError> for StartSlotError {
+    fn from(error: StorageError) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<std::io::Error> for StartSlotError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Other(error.into())
+    }
+}
+
 /// Spawn a subprocess for `job`, register it in 'running' state, return the
 /// slot. Python `start_slot`.
 ///
@@ -802,7 +893,7 @@ pub async fn start_slot(
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
     gpu_uuid: Option<&str>,
-) -> Result<Option<ActiveSlot>, StorageError> {
+) -> Result<Option<ActiveSlot>, StartSlotError> {
     let job_id = job.job_id;
     let Some(mut job) = store.read_job("queue", &job_id).await? else {
         log_fn(&format!("claim lost for {job_id}: queued record is absent"));
@@ -875,7 +966,11 @@ pub async fn start_slot(
     job.state = job_state::RUNNING.to_string();
     job.started_at = Some(isoformat_utc(Utc::now()));
     job.instance_ref = Some(format!("local@{hostname}"));
-    if !store.claim_queued_job(&job).await? {
+    let claimed = store
+        .claim_queued_job(&job)
+        .await
+        .map_err(StartSlotError::Claim)?;
+    if !claimed {
         log_fn(&format!(
             "claim lost for {}: another worker or cancellation won",
             job.job_id
@@ -1171,7 +1266,9 @@ pub async fn advance_slot(
             .map_err(|e| StorageError::Other(format!("SIGCONT pid {pid}: {e}")))?;
         slot.paused = false;
     }
-    let Some(exit_status) = slot.child.try_wait()? else {
+    // `reap` and not `child.try_wait`: observing the exit is what releases the
+    // janitor's shared cleanup hold, so nothing below this line can retain it.
+    let Some(exit_status) = slot.reap(log_fn)? else {
         // Still running: refresh the peak-VRAM attribution and, on the
         // heartbeat interval, the status blob + streamed log.
         let used = gpu_probe::smi_job_used_gb(pid).await;
@@ -1353,6 +1450,11 @@ pub async fn advance_slot(
             log_fn(&format!(
                 "terminal artifact upload failed for {job_id}; retaining running state for retry: {error}"
             ));
+            // `Running` here means "finalize me again next tick", NOT "a
+            // workload is executing" — the process exited above. The retry is
+            // unbounded on purpose, so nothing scoped to a live workload may
+            // ride along with it; `reap` has already released the janitor
+            // hold. See [`release_hold_for_exited_workload`].
             return Ok(SlotOutcome::Running(slot));
         }
     }

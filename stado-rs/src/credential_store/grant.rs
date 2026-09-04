@@ -56,6 +56,41 @@ impl GrantOutcome {
     }
 }
 
+/// Make one item's fields readable by the consumer Stado's own reads
+/// authenticate as, and report what that changed.
+///
+/// This exists because the same failure arrived twice in one afternoon, from
+/// two unrelated commands, in the same words. `stado dns list wisent.com`
+/// answered `HTTP 403: consumer not authorized to read item field` for
+/// `namecheap_auto`, a credential that had been in the vault for weeks. Then
+/// `stado release catalog sync` answered the identical 403 for a release
+/// publisher item written sixty seconds earlier by `skarbiec set-json`. The
+/// shape is not a missing credential: it is that a Skarbiec grant is per item
+/// and per field, so **writing an item grants nothing**, and until now the
+/// only thing that could close the gap was an operator running
+/// `skarbiec token-mint` by hand — which replaces a capability list instead of
+/// adding to it, and for a consumer holding hundreds of capabilities is how a
+/// fleet loses its credentials.
+///
+/// So any command that declares an item and then reads it calls this first.
+/// The consumer is [`crate::config::skarbiec_consumer`] with its own token
+/// file, deliberately: that is the exact triple
+/// [`crate::credential_store::read_string`] authenticates with, and widening
+/// any other identity leaves the 403 in place while reporting that a grant was
+/// written. `None` means there was no grant to widen because the selected
+/// store is a file the owner reads directly.
+pub fn settle_field_reads(
+    item: &str,
+    fields: &[&str],
+) -> Result<Option<GrantOutcome>, SkarbiecError> {
+    if super::skarbiec_url().is_none() {
+        return Ok(None);
+    }
+    let consumer = crate::config::skarbiec_consumer();
+    let token_file = crate::config::skarbiec_token_file();
+    grant_field_reads(consumer, Path::new(token_file), item, fields).map(Some)
+}
+
 fn deployment(message: String) -> SkarbiecError {
     SkarbiecError::Deployment(message)
 }

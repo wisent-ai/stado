@@ -19,6 +19,15 @@ const TWO: f64 = (u16::BITS / u8::BITS) as f64;
 const CLOUD_STARTUP_SECONDS: f64 =
     (crate::monitor::billing::SECONDS_PER_MINUTE * (u16::BITS / u8::BITS) as u64) as f64;
 const DEFAULT_FAILURE_PROBABILITY: f64 = f64::EPSILON;
+/// How many of the newest feedback records one planning pass reads.
+///
+/// The pass used to read every record ever written -- 3,642 of them on
+/// 2026-09-03, one object request each, on every pass. This is the cost bound
+/// that stops the archive's size from reaching the planner at all: the
+/// per-target median startup time and failure ratio these records feed are
+/// statistics, and a few hundred recent samples per target describe a target
+/// at least as well as a month of them.
+const FEEDBACK_SAMPLE_CAP: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacementCandidate {
@@ -107,7 +116,7 @@ pub async fn plan_queued(
     summary.provider_errors = provider_errors;
     let history_rows = crate::scheduler::cost::collect_completed(store).await?;
     let wall_times = crate::scheduler::cost::wall_time_table(&history_rows);
-    let feedback = super::storage::list_feedback(store).await?;
+    let feedback = super::storage::list_recent_feedback(store, FEEDBACK_SAMPLE_CAP).await?;
     let planning_now = Utc::now();
     // The planner considers the whole queue: it is placing capacity, not
     // claiming a slot, so nothing here narrows the window and nothing bounds

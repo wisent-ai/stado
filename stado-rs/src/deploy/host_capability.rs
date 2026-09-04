@@ -121,9 +121,20 @@ pub async fn resolve(
 
 impl RemoteBroker {
     /// One remote invocation, every word quoted.
+    ///
+    /// `PATH` is set for the same reason `GNUPGHOME` is: Skarbiec opens an
+    /// item by spawning `gpg`, and a non-interactive channel session carries
+    /// none of the login shell's PATH, so Homebrew's prefix is absent and
+    /// every single route answers `does not open: spawn gpg`. On 2026-09-03
+    /// that read as a fleet-wide credential outage -- thirty-three routes
+    /// "broken" while the service on that host was opening all of them -- and
+    /// [`verify_routes`] documented the confusion instead of removing it. An
+    /// answer that is wrong the same way for every input is not evidence; it
+    /// is a missing variable.
     fn command(&self, arguments: &[&str]) -> String {
         let mut line = format!(
-            "GNUPGHOME={} SKARBIEC_VAULT_FILE={}",
+            "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} \
+             SKARBIEC_VAULT_FILE={}",
             shlex_quote(&self.gnupg_home),
             shlex_quote(&self.vault),
         );
