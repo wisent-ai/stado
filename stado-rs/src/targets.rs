@@ -301,12 +301,13 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 6] = [
+    const ALLOWED: [&str; 7] = [
         "backup_twins",
         "build_caches",
         "chromium_clones",
         "huggingface_cache",
         "queue_workdirs",
+        "release_store",
         "weles_recordings",
     ];
     let mut unknown: Vec<&str> = cleaners
@@ -344,7 +345,12 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         let cleaner = cleaner
             .as_object()
             .ok_or_else(|| verr(&cleaner_location, "must be an object"))?;
-        const CLEANER_KEYS: [&str; 3] = ["allow_missing_upload_proof", "min_age_seconds", "root"];
+        const CLEANER_KEYS: [&str; 4] = [
+            "allow_missing_upload_proof",
+            "keep_newest",
+            "min_age_seconds",
+            "root",
+        ];
         let mut unknown_keys: Vec<&str> = cleaner
             .keys()
             .map(String::as_str)
@@ -414,6 +420,19 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
                     "must be a non-empty string",
                 ));
             }
+        }
+        // `keep_newest` is the rollback ladder `release_store` leaves per
+        // product; it belongs to that cleaner alone and must keep at least
+        // one, because a store with zero versions of a product cannot serve
+        // the rollback the release loop promises.
+        if let Some(keep) = cleaner.get("keep_newest") {
+            if name != "release_store" {
+                return Err(verr(
+                    &format!("{cleaner_location}.keep_newest"),
+                    "only the release_store cleaner takes keep_newest",
+                ));
+            }
+            require_int(keep, &format!("{cleaner_location}.keep_newest"), 1, None)?;
         }
     }
     Ok(())
@@ -1241,6 +1260,10 @@ pub struct DiskCleanerPolicy {
     /// cleaner's well-known location, e.g. ~/weles/recordings for weles).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
+    /// `release_store` only: how many newest versions of each product stay
+    /// with no other reason to keep them — the rollback ladder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_newest: Option<i64>,
 }
 
 /// Disk-cleanup policy for a local target.
@@ -1304,6 +1327,7 @@ impl DiskCleanupPolicy {
                 min_age_seconds: 86_400,
                 allow_missing_upload_proof: false,
                 root: None,
+                keep_newest: None,
             },
         );
         Self {

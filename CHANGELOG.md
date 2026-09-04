@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.26
+
+- **Release-store retention:** the host janitor now reclaims immutable product versions only after preserving every host-owned, active-pipeline, recently completed, quarantined, and newest rollback coordinate. It walks the canonical product/run layout without following links, enforces the declared byte and item limits, and reports every reason a version stayed.
+- **Object API recovery:** the checked recovery path now accepts a healthy Skarbiec proxy that release-control still owns instead of mistaking recorded ownership for an orphan and refusing before it checks readiness.
+- **GPU admission:** inference deployment now distinguishes GPU processes owned by registry-declared units from unknown processes. Declared streaming and service workloads may coexist with inference; an unaccounted process still refuses the deployment with its PID.
+- **Migration:** enable `release_store` in the object-store host's disk-cleanup policy; the default rollback ladder keeps three newest versions per product. No persisted state rewrite is required.
+- **Rollback boundary:** rolling back disables release-store reclamation, restores the false Skarbiec recovery refusal, and treats every non-inference GPU process as unmanaged.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation and the live janitor report cover the new retention path, while the release pipeline supplies signed platform manifests and delivery receipts.
+
 ## 0.15.24
 
 - **Release-controlled placement:** a placement service may now declare the exact external lifecycle `{"name":"<service>","controller":"release-control","product":"<product>"}` on every host template. Managed units retain their exact `name`/`unit`/`path`/`kind` record, routing units remain Stado-managed, and mixed or partial lifecycle records are rejected.
