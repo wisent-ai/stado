@@ -7082,10 +7082,7 @@ fn ensure_object_verifier_declarations_match(
         .filter(|(_, item)| !local.contains(item.as_str()))
         .map(|(namespace, item)| format!("{namespace}={item}"))
         .collect::<Vec<_>>();
-    let unexpected = local
-        .difference(&host_items)
-        .cloned()
-        .collect::<Vec<_>>();
+    let unexpected = local.difference(&host_items).cloned().collect::<Vec<_>>();
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }
