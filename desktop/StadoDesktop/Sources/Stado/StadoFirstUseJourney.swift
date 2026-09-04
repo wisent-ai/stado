@@ -20,11 +20,14 @@ final class StadoFirstUseJourney: ObservableObject {
     func start() async {
         guard client == nil else { return }
         do {
-            guard let url = Bundle.module.url(forResource: "stado-first-use", withExtension: "json") else {
-                throw JourneyClientError.storage
-            }
             let fallback = try JourneyRouter.makeBundle(
-                canonicalDefinition: String(contentsOf: url, encoding: .utf8),
+                canonicalDefinition: String(
+                    decoding: JourneyResource.definitionData(
+                        resource: "stado-first-use",
+                        bundleName: "StadoDesktop_Stado.bundle"
+                    ),
+                    as: UTF8.self
+                ),
                 journeyVersionId: UUID(uuidString: "10000000-0000-4000-8000-000000000004")!
             )
             let client = try JourneyClient(
@@ -59,6 +62,36 @@ final class StadoFirstUseJourney: ObservableObject {
 
     func dismissError() {
         errorMessage = nil
+    }
+    func replay() async -> WisentMutationOutcome {
+        guard let client else {
+            return .failed("The walkthrough did not load in this session, so there is nothing to show.")
+        }
+        do {
+            try await client.reset(evidenceRevision: evidenceRevision)
+            errorMessage = nil
+            await refresh()
+            try? await client.flush()
+            return .succeeded("Started. The walkthrough is on screen.")
+        } catch {
+            return .failed(Self.replayFailure(error))
+        }
+    }
+
+    private static func replayFailure(_ error: Error) -> String {
+        guard let journeyError = error as? JourneyClientError else {
+            return (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        }
+        switch journeyError {
+        case .notStarted:
+            return "The walkthrough did not load in this session, so there is nothing to show."
+        case .storage:
+            return "The walkthrough could not be written on this Mac."
+        case .transport:
+            return "The onboarding service could not be reached."
+        case let .invalid(reason):
+            return reason
+        }
     }
 
     func advance() async {
@@ -112,8 +145,8 @@ struct StadoFirstUseRoot: View {
     @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var enrollmentStore: MachineEnrollmentStore
     @ObservedObject var auth: WisentAuthStore
+    @ObservedObject var journey: StadoFirstUseJourney
     @ObservedObject var router: ConsoleRouter
-    @StateObject private var journey = StadoFirstUseJourney()
 
     var body: some View {
         Group {
