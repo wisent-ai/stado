@@ -1722,19 +1722,21 @@ fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
 // canonical policy resolution
 // ---------------------------------------------------------------------------
 
-/// Python `_fetch_canonical_registry`: fetch the canonical object
-/// directly; destructive checks never use fallback/cache. Generation-
-/// pinned via the store's versioned read (reload + pinned download, with
-/// the same 412-retry the Python SDK path relies on).
+/// Fetch the canonical object directly; destructive checks never use
+/// fallback/cache. Generation-pinned via the store's versioned read (reload +
+/// pinned download, with the same 412-retry the Python SDK path relies on).
+///
+/// The registry remains fail-closed: malformed, incomplete, or unreadable
+/// policy never authorizes deletion. When this host is configured as a client
+/// of its own Stado object API, however, cleanup uses the server's explicitly
+/// declared direct backing store. Otherwise disk exhaustion could make the
+/// listener unavailable and thereby disable the janitor needed to recover it.
 ///
 /// DEVIATION from Python, matching `targets::download_registry_blob`: the
-/// object is resolved by [`targets::RegistryStore`] instead of a
-/// hardcoded GCS bucket. Pinned to GCS, the cleaner failed closed on an
-/// Azure-only deployment — it could not read the policy that authorizes
-/// deletion even though the dashboard was writing that policy to the
-/// configured store. The "gcs" path is byte-identical.
+/// object is resolved by [`targets::RegistryStore`] instead of a hardcoded GCS
+/// bucket. The direct-server constructor preserves that adapter choice.
 async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
-    let store = targets::RegistryStore::open().await?;
+    let store = targets::RegistryStore::open_for_server().await?;
     let text = store
         .read_versioned()
         .await?
@@ -1934,9 +1936,19 @@ pub async fn live_job_ids_within(
     tokio::time::timeout(budget, read).await.ok().flatten()
 }
 
-/// [`live_job_ids_within`] against the configured queue store.
+/// [`live_job_ids_within`] against the queue's authoritative backing store.
+///
+/// An agent normally reaches a `stado` primary through the local object API.
+/// Cleanup cannot depend on that listener while disk exhaustion is the reason
+/// it is unavailable: use the same explicitly configured direct backup that
+/// backs the server itself. Other primary adapters remain unchanged.
 async fn fetch_live_job_ids() -> Option<Vec<String>> {
-    let store = crate::queue::JobStorage::new().await.ok()?;
+    let store = if crate::config::wc_storage_backend() == "stado" {
+        crate::queue::JobStorage::for_server().await
+    } else {
+        crate::queue::JobStorage::new().await
+    }
+    .ok()?;
     live_job_ids_within(&store, KEEP_LIST_BUDGET).await
 }
 
