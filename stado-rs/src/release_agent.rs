@@ -951,6 +951,11 @@ async fn ensure_active_proxy(
     if !ready(active, &serving.readiness_path).await {
         return Err("active release lost readiness".to_string());
     }
+    // A legacy unit can be loaded again after cutover while the stable proxy
+    // remains healthy. Reassert release ownership on every reconcile, not only
+    // when the proxy first starts; otherwise the legacy launcher can rewrite
+    // shared runtime trust before failing to bind the already-owned port.
+    stop_legacy(target)?;
     write_proxy_target(target, product, generation, active.port)?;
 
     let recorded_proxy = match state.proxy_pid {
@@ -1325,6 +1330,12 @@ async fn reconcile_stable_proxy(
             .iter()
             .any(|process| process.port == Some(upstream_port))
     });
+    // A surviving healthy proxy means the release path owns the stable bind.
+    // Reconcile the declared legacy unit before adopting that proxy so a later
+    // launchd reload cannot run both deployment paths at once.
+    if upstream_is_owned {
+        stop_legacy(target)?;
+    }
     if upstream_is_owned && stable_bind_ready(&serving).await {
         state.proxy_pid = Some(proxy_pid);
         save_state(target, state)?;
