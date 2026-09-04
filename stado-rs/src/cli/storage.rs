@@ -1200,6 +1200,12 @@ fn backend_prefix(backend: &Arc<dyn BlobBackend>, prefix: &str) -> Result<String
     match prefix.strip_prefix("stado://") {
         Some(rest) => {
             let (namespace, key) = rest.split_once('/').unwrap_or((rest, ""));
+            if RemoteObjectApi::release_authorized(namespace, key) {
+                return Err(CmdError::click(
+                    "release-governed stado:// prefixes must be listed with `stado storage objects \
+                     <namespace> <prefix>` so the exact publisher credential is used",
+                ));
+            }
             Ok(backend.blob_prefix(namespace, key)?)
         }
         None => Ok(prefix.to_string()),
@@ -1489,15 +1495,17 @@ fn inferred_namespace_hint(path: &str) -> String {
 /// `read_bytes` propagates [`crate::queue::StorageError`], so an
 /// unreachable store is an error here too and never an empty body.
 async fn cat(args: &StorageCatArgs) -> Result<(), CmdError> {
-    let store = JobStorage::new().await?;
-    let Some(bytes) = store
-        .read_bytes(&backend_key(store.backend(), &args.path)?)
-        .await?
-    else {
-        return Err(CmdError::click(format!(
-            "{:?}: absent — the store answered and the object is not there",
-            args.path
-        )));
+    let bytes = if args.path.starts_with("stado://") {
+        fetch_object(&args.path).await?
+    } else {
+        let store = JobStorage::new().await?;
+        let Some(bytes) = store.read_bytes(&args.path).await? else {
+            return Err(CmdError::click(format!(
+                "{:?}: absent — the store answered and the object is not there",
+                args.path
+            )));
+        };
+        bytes
     };
     let mut out = std::io::stdout().lock();
     out.write_all(&bytes)?;
@@ -2835,12 +2843,14 @@ impl RemoteObjectApi {
 
     async fn delete(&self, uri: &str) -> Result<(), CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
+        let bearer = self.release_bearer(uri).await?;
         let response = self
-            .request(reqwest::Method::DELETE, endpoint)
+            .request_as(reqwest::Method::DELETE, endpoint, bearer.as_deref())
             .send()
             .await?;
-        let payload: RemoteDeleteResponse =
-            self.response_json(response, "object DELETE", None).await?;
+        let payload: RemoteDeleteResponse = self
+            .response_json(response, "object DELETE", bearer.as_deref())
+            .await?;
         if payload.state != "absent" || payload.uri != uri {
             return Err(CmdError::click(
                 "Stado object API returned an inconsistent object DELETE response",
@@ -3948,7 +3958,7 @@ async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
         ));
     }
     let uri = object.to_string();
-    if let Some(remote) = RemoteObjectApi::configured()? {
+    if let Some(remote) = RemoteObjectApi::configured_for_object(&object)? {
         remote.delete(&uri).await?;
     } else {
         let store = JobStorage::new().await?;

@@ -2709,14 +2709,20 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return response,
         };
-        let authorized = if release_object_namespace(object.namespace()) {
-            let Some(target_key) = release_upload_target_key(object.key()) else {
-                return send_json(
-                    http_status("403"),
-                    &json!({"error": "release objects are immutable and cannot be deleted"}),
-                );
-            };
-            authorize_release(self, request, target_key, false).await
+        let authorized = if let Some(policy_key) =
+            crate::object_store::release_policy_key(object.namespace(), object.key())
+        {
+            if release_object_namespace(object.namespace()) {
+                let Some(target_key) = release_upload_target_key(object.key()) else {
+                    return send_json(
+                        http_status("403"),
+                        &json!({"error": "release objects are immutable and cannot be deleted"}),
+                    );
+                };
+                authorize_release(self, request, target_key, false).await
+            } else {
+                authorize_release(self, request, &policy_key, false).await
+            }
         } else {
             if !self.boundaries_available(&[Boundary::Object]).await {
                 return send_json(
