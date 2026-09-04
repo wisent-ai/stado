@@ -349,3 +349,46 @@ pub async fn issue(
             ))
         })
 }
+
+/// Store one captured Apple code in the Weles broker that will redeem it.
+///
+/// The six digits travel on stdin only. They are never an argument, a registry
+/// value, a diagnostic, or part of this function's receipt.
+pub async fn apple_challenge_put(
+    target: &ComputeTarget,
+    broker: &RemoteBroker,
+    resource: &str,
+    code: &str,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(DeployError(
+            "refusing to store an invalid Apple challenge".to_string(),
+        ));
+    }
+    let command = broker.command(&["apple-challenge-put", resource]);
+    let output =
+        host_channel::run_program_with_stdin(target, &["/bin/sh", "-c", &command], code, runner)
+            .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: `skarbiec apple-challenge-put` failed against {}: {}",
+            target.name,
+            broker.vault,
+            host_channel::last_error_line(&output, "the host gave no reason")
+        )));
+    }
+    let receipt: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+        DeployError(format!(
+            "{}: `skarbiec apple-challenge-put` did not answer with JSON: {error}",
+            target.name
+        ))
+    })?;
+    if receipt.get("status").and_then(Value::as_str) != Some("stored") {
+        return Err(DeployError(format!(
+            "{}: Skarbiec did not confirm that the Apple challenge was stored",
+            target.name
+        )));
+    }
+    Ok(receipt)
+}
