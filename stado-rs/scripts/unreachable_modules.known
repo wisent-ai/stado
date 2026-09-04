@@ -2,22 +2,11 @@
 #
 # Each one is compiled into nothing. This file is a ratchet, not an amnesty:
 # it exists so `scripts/unreachable_modules.py` can fail on anything NEW while
-# these four wait for an owner's decision. Removing a line is the fix;
+# these three wait for an owner's decision. Removing a line is the fix;
 # adding one needs a reason that survives being read in a year.
 #
 # A stale entry - a path listed here that no longer exists - also fails the
 # check, so this list cannot quietly outlive the files it describes.
-
-# 279 lines added by ce4e11cb (2026-08-31 15:48:50Z) to fix `stado fleet key
-# ls` so it enumerates registry targets and resolves each key by exact
-# credential item id. The only `mod key;` in the tree is in
-# src/cli/fleet/mod.rs, which resolves to src/cli/fleet/key/mod.rs - so this
-# file has never been compiled, and the command it was written to correct
-# still lists by item-name prefix at src/cli/fleet/key/mod.rs:270. The commit's
-# own principle is that behaviour must never be derived from item names.
-# Needs its author: declare it in src/bin/stado_fleet/main.rs, or apply the fix
-# to the path the `stado` binary actually runs.
-src/bin/stado_fleet/key/mod.rs
 
 # 139 lines of PRODUCT code - operator secret storage on the configured queue
 # backend - last touched 2026-07-27. Nothing references it; `secrets::` in

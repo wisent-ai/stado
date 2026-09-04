@@ -2033,6 +2033,58 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Archive one unmanaged executable from TARGET without deleting its bytes.
+    ///
+    /// The source must be a direct child of `$HOME/.stado/bin`,
+    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`, and a regular non-symlink
+    /// file owned by the approved account. Stado moves it atomically into the
+    /// product backup tree and verifies its size, mode, and SHA-256 there.
+    #[command(name = "retire-file")]
+    RetireFile {
+        target: String,
+        /// Absolute path to one file in an approved user bin directory.
+        path: String,
+        /// Canonical product name owning the backup tree.
+        #[arg(long)]
+        product: String,
+        /// Inspect and report the exact source without moving it.
+        #[arg(long)]
+        dry_run: bool,
+        /// Dry-run transaction token binding an apply to its reviewed destination.
+        #[arg(long)]
+        transaction: Option<String>,
+        /// SHA-256 from the reviewed dry-run receipt.
+        #[arg(long)]
+        expected_sha256: Option<String>,
+        /// Byte count from the reviewed dry-run receipt.
+        #[arg(long)]
+        expected_size: Option<u64>,
+        /// Octal mode from the reviewed dry-run receipt.
+        #[arg(long)]
+        expected_mode: Option<String>,
+        /// Emit the retirement report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Device-local endpoint for the target-resolving retire-file command.
+    #[command(name = "retire-file-local", hide = true)]
+    RetireFileLocal {
+        path: String,
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        transaction: Option<String>,
+        #[arg(long)]
+        expected_sha256: Option<String>,
+        #[arg(long)]
+        expected_size: Option<u64>,
+        #[arg(long)]
+        expected_mode: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's crontab, and optionally prune one entry from it.
     ///
     /// The periodic table is the one place a fleet host can declare a
@@ -3136,6 +3188,53 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveFile { target, path, json } => {
                 host::remove_file(&target, &path, json).await
             }
+            HostCommands::RetireFile {
+                target,
+                path,
+                product,
+                dry_run,
+                transaction,
+                expected_sha256,
+                expected_size,
+                expected_mode,
+                json,
+            } => {
+                host::retire_file(
+                    &target,
+                    host::RetireFileRequest {
+                        path: &path,
+                        product: &product,
+                        dry_run,
+                        transaction: transaction.as_deref(),
+                        expected_sha256: expected_sha256.as_deref(),
+                        expected_size,
+                        expected_mode: expected_mode.as_deref(),
+                    },
+                    json,
+                )
+                .await
+            }
+            HostCommands::RetireFileLocal {
+                path,
+                product,
+                dry_run,
+                transaction,
+                expected_sha256,
+                expected_size,
+                expected_mode,
+                json,
+            } => host::retire_file_local(
+                host::RetireFileRequest {
+                    path: &path,
+                    product: &product,
+                    dry_run,
+                    transaction: transaction.as_deref(),
+                    expected_sha256: expected_sha256.as_deref(),
+                    expected_size,
+                    expected_mode: expected_mode.as_deref(),
+                },
+                json,
+            ),
             HostCommands::Cron {
                 target,
                 prune,
