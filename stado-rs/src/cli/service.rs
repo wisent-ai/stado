@@ -2053,53 +2053,80 @@ async fn label_print(
             state.host
         )));
     }
-    table::print(
-        &["FIELD", "VALUE"],
-        &[
-            vec![
-                "domain".to_string(),
-                dash(state.domain.as_deref().unwrap_or("")),
-            ],
-            vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
-            vec![
-                "state".to_string(),
-                dash(state.state.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "last exit code".to_string(),
-                dash(state.last_exit_code.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "runs".to_string(),
-                dash(state.runs.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "path".to_string(),
-                dash(state.path.as_deref().unwrap_or("")),
-            ],
-            vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
-            vec![
-                "unit file state".to_string(),
-                dash(state.unit_file_state.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "restart".to_string(),
-                dash(state.restart.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "triggers".to_string(),
-                dash(state.triggers.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "triggered by".to_string(),
-                dash(state.triggered_by.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "part of".to_string(),
-                dash(state.part_of.as_deref().unwrap_or("")),
-            ],
+    let mut rows = vec![
+        vec![
+            "domain".to_string(),
+            dash(state.domain.as_deref().unwrap_or("")),
         ],
-    );
+        vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
+        vec![
+            "state".to_string(),
+            dash(state.state.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "last exit code".to_string(),
+            dash(state.last_exit_code.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "runs".to_string(),
+            dash(state.runs.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "path".to_string(),
+            dash(state.path.as_deref().unwrap_or("")),
+        ],
+        vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
+    ];
+    if state.event_read_status.is_some() {
+        rows.extend([
+            vec![
+                "stdout path".to_string(),
+                dash(state.stdout_path.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "stderr path".to_string(),
+                dash(state.stderr_path.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "recent launchd events".to_string(),
+                dash(
+                    &state
+                        .recent_events
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" | "),
+                ),
+            ],
+            vec![
+                "launchd event read".to_string(),
+                dash(state.event_read_status.as_deref().unwrap_or("")),
+            ],
+        ]);
+    }
+    rows.extend([
+        vec![
+            "unit file state".to_string(),
+            dash(state.unit_file_state.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "restart".to_string(),
+            dash(state.restart.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "triggers".to_string(),
+            dash(state.triggers.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "triggered by".to_string(),
+            dash(state.triggered_by.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "part of".to_string(),
+            dash(state.part_of.as_deref().unwrap_or("")),
+        ],
+    ]);
+    table::print(&["FIELD", "VALUE"], &rows);
     // A loaded unit whose file is gone is the shape no directory scan can
     // report, so it is called out rather than left to be inferred from a path.
     if state.path.is_none() {
