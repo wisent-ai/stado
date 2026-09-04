@@ -747,10 +747,14 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
     })
 }
 
-/// The live consumer id of one exact registry target, for a delivery pinned
-/// to the host it installs on. Same capacity-publication resolution as
-/// [`builder`], narrowed from "any live host of this platform" to "this
-/// host, live, or a named refusal".
+/// Resolve the consumer id last published by one exact registry target.
+///
+/// Delivery jobs are the recovery lane that installs a Stado version able to
+/// clear a target's current gate. Requiring the target's general capacity row
+/// to be fresh here deadlocks that lane: a long-running job or disk-pressure
+/// gate can age the row past the scheduler horizon while the agent still has
+/// enough identity to claim the exact pinned delivery. Builders still use
+/// [`builder`] and therefore still require fresh, claimable capacity.
 async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -758,23 +762,32 @@ async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let capacity = crate::queue::capacity::read_consumer_capacity(&store)
+    let publications = crate::queue::capacity::read_publications(&store)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    for consumer in capacity.keys() {
-        let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
-        if registry
+    let mut newest = None;
+    for (consumer, publication) in publications {
+        let identity = consumer.strip_prefix("local-").unwrap_or(&consumer);
+        let matches_target = registry
             .lookup_self(identity)
             .map_err(|error| CmdError::click(error.to_string()))?
-            .is_some_and(|target| target.name == target_name)
-        {
-            return Ok(consumer.clone());
+            .is_some_and(|target| target.name == target_name);
+        if !matches_target {
+            continue;
+        }
+        let replace = newest
+            .as_ref()
+            .is_none_or(|(_, stamp)| publication.stamp > *stamp);
+        if replace {
+            newest = Some((consumer, publication.stamp));
         }
     }
-    Err(CmdError::click(format!(
-        "delivery target {target_name} is not broadcasting capacity, so the delivery pinned to \
-         it cannot run; see stado host gates {target_name}"
-    )))
+    newest.map(|(consumer, _)| consumer).ok_or_else(|| {
+        CmdError::click(format!(
+            "delivery target {target_name} has no retained capacity publication, so its consumer \
+             identity is unknown; see stado host gates {target_name}"
+        ))
+    })
 }
 fn secret_refs(v: &BTreeMap<String, String>) -> BTreeMap<String, JobSecretRef> {
     v.iter()
