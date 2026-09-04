@@ -101,6 +101,18 @@ pub struct ServiceEndpoint {
     /// The exact source revision that release was built from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_revision: Option<String>,
+    /// The canonical API base UNDER that origin, e.g. `/api/v1`.
+    ///
+    /// Separate from `url` because the directory's endpoint is deliberately an
+    /// origin: [`validate_endpoint`] requires host-relative loopback with a
+    /// known port and no path, and the resolver's whole contract is built on
+    /// that shape. A consumer that needs the versioned base -- Spis, asking
+    /// the public task API for browser evidence -- needs it stated rather than
+    /// guessed, and rewriting `url` to carry it would break every reader that
+    /// composes its own paths onto the origin. So the base is published beside
+    /// the origin, and the two compose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,6 +321,22 @@ fn validate_endpoint(endpoint: &ServiceEndpoint, location: &str) -> Result<(), S
         return Err(format!(
             "{location}.url: must use host-relative loopback with a known port"
         ));
+    }
+    if let Some(base_path) = &endpoint.base_path {
+        // An absolute, single-segment-or-deeper path with no trailing slash,
+        // so composing it onto the origin is textual and unambiguous. A
+        // consumer must never have to decide whether to strip a slash.
+        if !base_path.starts_with('/')
+            || base_path.ends_with('/')
+            || base_path.contains("//")
+            || base_path.contains('?')
+            || base_path.contains('#')
+            || base_path.len() < 2
+        {
+            return Err(format!(
+                "{location}.base_path: must be an absolute path with no trailing slash"
+            ));
+        }
     }
     Ok(())
 }
