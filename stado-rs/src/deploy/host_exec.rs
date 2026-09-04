@@ -564,11 +564,7 @@ const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
 ];
 
 /// Total allocated KiB below the manual Figma export's fixed work tree.
-const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &[
-    "/usr/bin/du",
-    "-sk",
-    ".stado/work/figma-export",
-];
+const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &["/usr/bin/du", "-sk", ".stado/work/figma-export"];
 
 
 /// Every entry whose fixed path arguments name something inside the managed
