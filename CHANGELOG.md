@@ -5,6 +5,7 @@
 - **Run retention:** validation of an already-retained terminal outcome now uses the same legacy-linkage rule as the reaper that records it. A terminal job may omit all three submission-linkage fields only when its job id and remaining immutable projection exactly match the durable manifest entry; live and partially linked jobs still require exact submission identity.
 - **Migration:** no persisted-state rewrite is required. The coordinator can validate and complete the normal reaper repair for affected v3 run manifests.
 - **Rollback boundary:** rolling back lets the reaper write the migrated outcome but makes the next manifest validation reject that same outcome as different submission content.
+- **GUI host recovery:** interrupted CuaDriver downloads keep their version-scoped partial archive and resume from the last byte instead of restarting at byte zero until the host-channel deadline fails again.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the run-retention journey drives the built coordinator through the migrated terminal state.
 
 ## 0.15.22

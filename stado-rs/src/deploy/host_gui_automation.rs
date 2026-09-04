@@ -424,7 +424,10 @@ async fn reconcile_app(
         false
     };
     if !archive_valid {
-        remove_if_present(target, &partial, false, runner).await?;
+        // The host channel has a bounded command window. Keep a verified
+        // version-scoped partial and resume it on the next reconciliation;
+        // deleting it first makes every slow GitHub download restart at byte
+        // zero and therefore guarantees the same timeout forever.
         run(
             target,
             &[
@@ -432,6 +435,8 @@ async fn reconcile_app(
                 "-fL",
                 "--retry",
                 "3",
+                "--continue-at",
+                "-",
                 "--output",
                 &partial,
                 CUA_DRIVER_ARCHIVE_URL,
