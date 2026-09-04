@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.22
+
+- **Desktop verification host:** managed GUI hosts now use the pinned and checksummed CuaDriver 0.23.2 bundle. `stado host gui-automation enable TARGET` replaces the previous managed driver and recreates its Aqua LaunchAgent when the installed version differs.
+- **Test bundle:** `desktop/StadoDesktop/scripts/build-app.sh --unsigned-bundle` builds a complete bundle for transfer to a dedicated Probierz host without reading signing identities, installing the app, registering it with LaunchServices, launching it, or changing the local running app.
+- **Migration:** no persisted-state rewrite is required. Reconcile each declared GUI host with `stado host gui-automation enable TARGET`; the existing Accessibility grant is re-established for the new signed bundle.
+- **Rollback boundary:** rolling back pins CuaDriver 0.22.0 again and removes the side-effect-free test-bundle staging mode.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the Desktop capacity journey runs on the Stado-selected macOS GUI host through Probierz.
+
 ## 0.15.21
 
 - **Run retention:** the coordinator can retain an exact terminal job named by a validated durable run even when that historical job predates submission-linkage fields. Missing linkage is accepted only when all three linkage fields are absent and the remaining immutable job projection matches the manifest; partial or conflicting linkage still fails closed.
