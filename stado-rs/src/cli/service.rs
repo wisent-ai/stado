@@ -2584,6 +2584,19 @@ async fn update(
         println!("{host}: {name} -> {version} (takes effect on the next restart)");
         return Ok(());
     }
+    // The relink is the dangerous half: `current` moves and launchd's next
+    // spawn reads a path that may not exist in the tree that just arrived.
+    // Checking the archive's member list against the unit's own program path
+    // costs one local read and is the difference between a refusal and an
+    // outage. On 2026-09-04 the object API unit, whose program is
+    // `current/darwin-arm/stado`, was pointed at a published stado archive
+    // that holds exactly `bin/stado`; `current` relinked, launchd could not
+    // spawn, the job left the system domain, and every `/api/object` read on
+    // the fleet failed for eleven minutes.
+    if let Some(path) = archive {
+        let members = archive_members(path)?;
+        refuse_archive_without_program(program, &members).map_err(CmdError::click)?;
+    }
     let installed = match (reference, archive) {
         (Some(reference), None) => install_from_artifact(&target, &directory, reference).await?,
         (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
@@ -7176,6 +7189,77 @@ async fn install_from_artifact(
 /// the approved channel, checksummed on the far side, unpacked into a version
 /// directory named for its own digest, and `current` is relinked only after the
 /// digest matches.
+/// The paths a gzip-compressed release archive carries, in archive order.
+///
+/// Read locally, before anything is copied to a host: the cheapest moment to
+/// learn that a bundle cannot satisfy the unit it is meant for.
+fn archive_members(path: &str) -> Result<Vec<String>, CmdError> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| CmdError::click(format!("cannot read archive {path}: {error}")))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let entries = archive
+        .entries()
+        .map_err(|error| CmdError::click(format!("{path} is not a tar archive: {error}")))?;
+    let mut members = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| CmdError::click(format!("{path} could not be listed: {error}")))?;
+        let path = entry.path().map_err(|error| {
+            CmdError::click(format!("{path} holds an unreadable name: {error}"))
+        })?;
+        members.push(normalize_member(&path.to_string_lossy()));
+    }
+    Ok(members)
+}
+
+/// One archive path, comparable: no `./` prefix, no trailing slash.
+fn normalize_member(raw: &str) -> String {
+    raw.trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Refuse an archive that does not carry the file the unit executes.
+///
+/// The unit's program is an absolute path through `current`, so what the
+/// archive must hold is the part after it: a unit running
+/// `.../current/darwin-arm/stado` needs a member `darwin-arm/stado`. Both
+/// sides are named in the refusal, because the useful sentence is the
+/// mismatch, not the fact of one.
+fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(), String> {
+    let Some(relative) = program.split("/current/").nth(usize::from(true)) else {
+        // A unit pinned to a version directory rather than `current` is a
+        // different fault, reported by `follow_current`; there is no program
+        // path to look for here and inventing one would refuse every archive.
+        return Ok(());
+    };
+    let relative = normalize_member(relative);
+    if relative.is_empty() || members.iter().any(|member| member == &relative) {
+        return Ok(());
+    }
+    let mut held: Vec<&str> = members
+        .iter()
+        .filter(|member| !member.ends_with('/'))
+        .map(String::as_str)
+        .take(6)
+        .collect();
+    if members.len() > held.len() {
+        held.push("…");
+    }
+    Err(format!(
+        "refusing to relink `current`: the unit runs current/{relative}; the archive holds {}. \
+         Pointing `current` at a tree without that file does not fail here - it fails at \
+         launchd's next spawn, which cannot report why, and a KeepAlive job that cannot spawn \
+         leaves its domain. Install an archive whose layout matches the unit's program, or \
+         change the unit's program to a path this archive carries.",
+        if held.is_empty() {
+            "nothing".to_string()
+        } else {
+            held.join(", ")
+        }
+    ))
+}
+
 async fn install_from_archive(
     target: &crate::targets::ComputeTarget,
     directory: &str,
@@ -7528,6 +7612,78 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::process::Command;
     use std::time::Duration;
+
+    /// Write a real gzip-compressed tar holding the named paths, so the member
+    /// reader is exercised against an archive rather than a list someone typed.
+    fn archive_fixture(directory: &std::path::Path, members: &[&str]) -> String {
+        let path = directory.join("bundle.tar.gz");
+        let file = std::fs::File::create(&path).expect("create fixture");
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            file,
+            flate2::Compression::fast(),
+        ));
+        for member in members {
+            let body = b"binary";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, member, &body[..])
+                .expect("append member");
+        }
+        builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip");
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn archive_members_reads_the_paths_a_bundle_carries() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = archive_fixture(directory.path(), &["bin/stado", "./darwin-arm/stado"]);
+        let members = archive_members(&path).expect("list members");
+        assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
+    }
+
+    /// The exact 2026-09-04 outage: the object API unit runs
+    /// `current/darwin-arm/stado` and every published stado archive holds
+    /// `bin/stado`. The refusal must name both halves.
+    #[test]
+    fn an_archive_without_the_unit_program_is_refused_naming_both() {
+        let members = vec!["bin/stado".to_string()];
+        let refusal = refuse_archive_without_program(
+            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+            &members,
+        )
+        .expect_err("an archive without the program must be refused");
+        assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
+        assert!(refusal.contains("bin/stado"), "{refusal}");
+    }
+
+    #[test]
+    fn an_archive_carrying_the_unit_program_is_accepted() {
+        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
+        refuse_archive_without_program(
+            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+            &members,
+        )
+        .expect("the program is in the archive");
+    }
+
+    /// A unit pinned to a version directory has no `current` segment. That is a
+    /// different fault and refusing every archive over it would be wrong.
+    #[test]
+    fn a_unit_not_running_through_current_is_not_judged_here() {
+        let members = vec!["bin/stado".to_string()];
+        refuse_archive_without_program(
+            "/Users/charles/.stado/services/x/sha256-abc/darwin-arm/stado",
+            &members,
+        )
+        .expect("no current segment, nothing to check");
+    }
 
     /// Serve one fixed JSON body on 200 to every request that arrives, on a
     /// loopback port the kernel picks, until the handle is dropped. The probe
