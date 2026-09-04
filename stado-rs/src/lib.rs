@@ -46,6 +46,10 @@ pub mod release_agent;
 pub mod release_cause;
 pub mod release_control;
 pub mod release_pipeline;
+// Crate-private: the revisit pass has exactly two callers, the release agent's
+// tick and `registry doctor`'s annotation, both inside this crate. Nothing
+// outside it should be able to reach a function that restarts a launchd unit.
+pub(crate) mod release_unit_image;
 pub mod scheduler;
 pub mod schedules;
 pub mod self_update;
