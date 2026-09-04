@@ -272,6 +272,7 @@ fn declared_names(registry: &Registry, result: &mut Sweep) {
         doubled_suffix(target, &mut findings, &mut suffixes);
         declared_doubled_prefix(target, &mut findings, &mut labels);
     }
+    profile_unit_names(registry, &mut findings, &mut labels, &mut suffixes);
     result.measured += 1;
     for finding in findings.drain(..) {
         result.record(finding);
@@ -495,6 +496,77 @@ fn declared_doubled_prefix(target: &ComputeTarget, out: &mut Vec<Finding>, measu
                 label = service.label
             ),
         });
+    }
+}
+
+/// The same two rules, on the unit names a placement profile declares.
+///
+/// The third population that declares a unit name, and the one both checks
+/// above still missed: `placement_profiles[].hosts[<host>].units` names a
+/// label and a path per service, and it is what `service remove` refuses
+/// against — a profile whose unit has no managed record is a document the
+/// validator will not accept. So a doubled name here is load-bearing twice
+/// over, and `com.wisent.compute.service.com.wisent.brama` sat in the
+/// `brama-skarbiec` profile for lukasz-macbook, carrying the fleet's own
+/// prefix onto a name that already had one, with no launchd job of that name
+/// on the host at all.
+///
+/// No command edits a profile, so the remediation names the exact key rather
+/// than a command that does not exist.
+fn profile_unit_names(
+    registry: &Registry,
+    out: &mut Vec<Finding>,
+    labels: &mut usize,
+    suffixes: &mut usize,
+) {
+    for profile in &registry.placement_profiles {
+        for (host, placement) in &profile.hosts {
+            for (service, unit) in &placement.units {
+                let key = format!(
+                    "placement_profiles[{}].hosts.{host}.units.{service}",
+                    profile.name
+                );
+                if unit.kind == service::KIND_SYSTEMD {
+                    *suffixes += 1;
+                    if let Some(stem) = unit.unit.strip_suffix(local_install::SYSTEMD_SUFFIX) {
+                        if stem.ends_with(local_install::SYSTEMD_SUFFIX) {
+                            out.push(Finding {
+                                check: SUFFIX_CHECK,
+                                subject: format!("{host}:{}", unit.unit),
+                                declared: format!(
+                                    "one {} suffix per unit name",
+                                    local_install::SYSTEMD_SUFFIX
+                                ),
+                                observed: format!(
+                                    "the profile's name already ended in the suffix, so it was appended twice: the real unit is {stem}"
+                                ),
+                                command: format!("correct {key}.unit to {stem}"),
+                            });
+                        }
+                    }
+                    continue;
+                }
+                *labels += 1;
+                let Some(rest) = unit.unit.strip_prefix(MINTED_PREFIX) else {
+                    continue;
+                };
+                if !rest.starts_with("com.wisent.") {
+                    continue;
+                }
+                out.push(Finding {
+                    check: PREFIX_CHECK,
+                    subject: format!("{host}:{}", unit.unit),
+                    declared: format!("one {MINTED_PREFIX} prefix per label"),
+                    observed: format!(
+                        "the profile declares it with the prefix minted onto a name that already carried one: the real name is {rest}"
+                    ),
+                    command: format!(
+                        "correct {key}.unit, .name and .path to {rest}; stado service label-print {} --host {host} says whether anything holds the doubled one",
+                        unit.unit
+                    ),
+                });
+            }
+        }
     }
 }
 

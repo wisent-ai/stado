@@ -3203,8 +3203,13 @@ fi
 # beyond just the argv. On non-Darwin or when no unit exists, we'll proceed
 # with the normal create/update path. On Darwin with an existing unit, we'll
 # compare to see if content has drifted even when argv matches.
+# Render the unit whenever a unit file exists, not only when the job is
+# loaded. A declaration whose program matches but whose job is not loaded is
+# bootstrapped from the file as it stands, so without rendering here a stale
+# file -- one missing an environment the declaration now carries -- would be
+# bootstrapped unchanged forever.
 rendered=''
-if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
+if [ \"$os\" = \"Darwin\" ] && [ -f \"$unit_path\" ]; then
   staged=\"$HOME/.stado/$unit.plist.$$\"
   if [ \"$domain\" = system ]; then
     /bin/cat > \"$staged\" <<'@HEREDOC@'
@@ -3262,6 +3267,23 @@ if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
   say 'already_correct' \"$domain/$unit pid $pid\"
   exit 0
+fi
+
+if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = no ]; then
+  # argv matches and nothing is loaded: bootstrap below reads the file as it
+  # stands, so a drifted unit file must be installed first or the job comes
+  # up with the old content. This is the drift branch's repair for a unit
+  # launchd does not hold: same comparison, bootstrap instead of kickstart.
+  if [ -n \"$rendered\" ] && ! /bin/cmp -s \"$rendered\" \"$unit_path\"; then
+    if [ \"$domain\" = system ]; then
+      /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$rendered\" \"$unit_path\" || bail \"sudo -n install $unit_path was refused\"
+    else
+      /bin/cp \"$rendered\" \"$unit_path\" || bail \"cannot write $unit_path\"
+      /bin/chmod u=rw,go= \"$unit_path\" || bail \"cannot protect $unit_path\"
+    fi
+  fi
+  /bin/rm -f \"$staged\" \"$rendered\"
+  rendered=''
 fi
 if [ \"$declared_argv\" != \"$argv\" ]; then
   if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then

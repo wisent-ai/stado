@@ -440,11 +440,11 @@ async fn bind(name: &str, target: Option<String>, as_json: bool) -> Result<(), C
 ///
 /// Read from `registry.targets[<asking>].service_resolver.adapters`, the same
 /// declaration the resolver itself binds. A machine that consumes a service
-/// through the resolver has one bind per consumer, so naming the consumer is
-/// what separates two programs sharing a service: `brama` on an operator laptop
-/// is bound once for `operator`, once for `brama-desktop` and once for `lem`,
-/// each with its own connect and idle budget, and handing a caller the wrong one
-/// puts it on somebody else's channel.
+/// through the resolver has exactly one bind per consumer, so naming the
+/// consumer is what disambiguates two programs sharing a service: `brama` on an
+/// operator laptop is bound once for `operator` and once for `brama-desktop`,
+/// and handing the wrong one to a caller puts it on a channel whose idle and
+/// connect budgets belong to somebody else.
 fn adapter_route(
     document: &Value,
     asking: &str,
@@ -532,12 +532,15 @@ async fn connect(
     //
     // The lookup is `registry.targets[<asking>].service_resolver.adapters`,
     // which already declares one loopback bind per (service, consumer) pair on
-    // every machine that consumes a service, and which the resolver already
-    // binds. Nothing new is declared here; the declaration was simply never
-    // read, so every client that needed a working address grew a hand-written
-    // pointer file beside it. Lem carried `~/.lem/brama.json` with
-    // `127.0.0.1:17621` typed into it for months, against a package whose own
-    // default is "empty means ask Stado".
+    // every machine that consumes a service. Nothing new is declared here; the
+    // declaration was simply never read, so every client that needed a working
+    // address grew a hand-written pointer file beside it. Lem carried one for
+    // months with `127.0.0.1:17621` typed into it.
+    //
+    // `--consumer` selects among a machine's adapters for the same service. One
+    // adapter needs no choosing; several without a named consumer is ambiguous
+    // and says so, because picking one silently is how a caller ends up on
+    // another program's channel.
     let url = if asking == active {
         format!("{scheme}://127.0.0.1:{port}")
     } else {
