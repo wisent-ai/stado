@@ -1,8 +1,9 @@
 //! Declarative, registry-backed service placement groups.
 //!
-//! A profile names the logical services that move together, the concrete unit
-//! installed on each eligible host, the state files that travel, health probes,
-//! and routing units whose desired state depends on the selected destination.
+//! A profile names the logical services that move together, their lifecycle
+//! owner on each eligible host, the state files that travel, health probes,
+//! and Stado-managed routing units whose desired state depends on the selected
+//! destination.
 //! Runtime transactions are recorded in the same compare-and-swapped registry
 //! document so two operators cannot relocate services concurrently.
 
@@ -46,17 +47,107 @@ pub struct PlacementHost {
     pub units: BTreeMap<String, PlacementUnit>,
     pub probes: Vec<PlacementProbe>,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacementUnit {
+    /// Logical service identity recorded in `targets[].services[]` for a
+    /// Stado-managed unit.
+    pub name: String,
+    /// Exactly one lifecycle shape. Existing managed units keep their
+    /// byte-for-byte `unit` / `path` / `kind` shape; release-controlled
+    /// services carry only `controller` / `product`.
+    pub lifecycle: PlacementLifecycle,
+}
+
+impl<'de> Deserialize<'de> for PlacementUnit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = Map::<String, Value>::deserialize(deserializer)?;
+        let keys = raw.keys().map(String::as_str).collect::<BTreeSet<_>>();
+        let managed_keys = BTreeSet::from(["kind", "name", "path", "unit"]);
+        let release_keys = BTreeSet::from(["controller", "name", "product"]);
+        let string = |key: &str| {
+            raw.get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| format!("{key} must be a string"))
+        };
+        if keys == managed_keys {
+            return Ok(Self {
+                name: string("name").map_err(serde::de::Error::custom)?,
+                lifecycle: PlacementLifecycle::Managed(ManagedPlacementUnit {
+                    unit: string("unit").map_err(serde::de::Error::custom)?,
+                    path: string("path").map_err(serde::de::Error::custom)?,
+                    kind: string("kind").map_err(serde::de::Error::custom)?,
+                }),
+            });
+        }
+        if keys == release_keys {
+            let controller = string("controller").map_err(serde::de::Error::custom)?;
+            if controller != "release-control" {
+                return Err(serde::de::Error::custom(
+                    "controller must be exactly \"release-control\"",
+                ));
+            }
+            return Ok(Self {
+                name: string("name").map_err(serde::de::Error::custom)?,
+                lifecycle: PlacementLifecycle::ReleaseControl(ReleaseControlledPlacementUnit {
+                    controller: ReleaseController::ReleaseControl,
+                    product: string("product").map_err(serde::de::Error::custom)?,
+                }),
+            });
+        }
+        Err(serde::de::Error::custom(
+            "must contain exactly managed fields [name, unit, path, kind] or release-controlled fields [name, controller, product]",
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum PlacementLifecycle {
+    Managed(ManagedPlacementUnit),
+    ReleaseControl(ReleaseControlledPlacementUnit),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PlacementUnit {
-    /// Name recorded in `targets[].services[]` after cutover.
-    pub name: String,
+pub struct ManagedPlacementUnit {
     /// launchd label or systemd unit name.
     pub unit: String,
     /// Absolute unit-file path on the target host.
     pub path: String,
     pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseControlledPlacementUnit {
+    pub controller: ReleaseController,
+    pub product: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ReleaseController {
+    #[serde(rename = "release-control")]
+    ReleaseControl,
+}
+
+impl PlacementUnit {
+    pub fn managed(&self) -> Option<&ManagedPlacementUnit> {
+        match &self.lifecycle {
+            PlacementLifecycle::Managed(unit) => Some(unit),
+            PlacementLifecycle::ReleaseControl(_) => None,
+        }
+    }
+
+    pub fn release_controlled(&self) -> Option<&ReleaseControlledPlacementUnit> {
+        match &self.lifecycle {
+            PlacementLifecycle::Managed(_) => None,
+            PlacementLifecycle::ReleaseControl(owner) => Some(owner),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -109,17 +200,23 @@ fn validate_identifier(value: &str, location: &str) -> Result<(), String> {
 
 fn validate_unit(unit: &PlacementUnit, location: &str) -> Result<(), String> {
     validate_identifier(&unit.name, &format!("{location}.name"))?;
-    if unit.unit.is_empty() || unit.unit.chars().any(char::is_control) {
+    let Some(managed) = unit.managed() else {
+        let owner = unit
+            .release_controlled()
+            .expect("placement lifecycle is exhaustive");
+        return validate_identifier(&owner.product, &format!("{location}.product"));
+    };
+    if managed.unit.is_empty() || managed.unit.chars().any(char::is_control) {
         return Err(format!("{location}.unit: must be a non-empty unit name"));
     }
-    if unit.kind != "launchd" && unit.kind != "systemd" {
+    if managed.kind != "launchd" && managed.kind != "systemd" {
         return Err(format!(
             "{location}.kind: must be one of ['launchd', 'systemd']"
         ));
     }
-    let path = Path::new(&unit.path);
+    let path = Path::new(&managed.path);
     if !path.is_absolute()
-        || unit.path.chars().any(char::is_control)
+        || managed.path.chars().any(char::is_control)
         || path
             .components()
             .any(|component| matches!(component, Component::ParentDir))
@@ -128,12 +225,13 @@ fn validate_unit(unit: &PlacementUnit, location: &str) -> Result<(), String> {
             "{location}.path: must be an absolute path without '..'"
         ));
     }
-    if unit.kind == "launchd" && path.extension().and_then(|part| part.to_str()) != Some("plist") {
+    if managed.kind == "launchd" && path.extension().and_then(|part| part.to_str()) != Some("plist")
+    {
         return Err(format!("{location}.path: launchd units must end in .plist"));
     }
-    if unit.kind == "systemd" && !unit.unit.ends_with(".service") {
+    if managed.kind == "systemd" && !managed.unit.ends_with(".service") {
         return Err(format!(
-            "{location}.unit: systemd units must end in .service"
+            "{location}.unit: systemd unit names must end in .service"
         ));
     }
     Ok(())
@@ -306,6 +404,11 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             if !profile.hosts.contains_key(&route.active_when_destination) {
                 return Err(format!(
                     "{route_location}.active_when_destination: must be one of the profile hosts"
+                ));
+            }
+            if route.unit.managed().is_none() {
+                return Err(format!(
+                    "{route_location}.unit: placement routing units must be Stado-managed"
                 ));
             }
             validate_unit(&route.unit, &format!("{route_location}.unit"))?;

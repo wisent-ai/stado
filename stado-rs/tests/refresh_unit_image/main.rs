@@ -215,7 +215,6 @@ impl Harness {
                 "ssh": "lukasz@10.9.9.30",
                 "release_platform": "darwin-arm64",
                 "hostnames": hostnames,
-                "slots": 1,
                 "role": "always-on",
                 "host_heuristic": "always-on",
                 "managed_versions": {},

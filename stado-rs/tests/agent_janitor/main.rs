@@ -175,9 +175,9 @@ async fn reading_the_latest_report_never_waits_for_a_pass_in_flight() {
     assert_eq!(reports.completed_passes(), 0);
 }
 
-/// A completed pass is what the tick then publishes, and the slot count the
-/// tick set must reach it. This is the half that must keep working: decoupling
-/// the pass must not stop its report from ever arriving.
+/// A completed pass is what the tick then publishes, and the active workload
+/// count the tick set must reach it. Decoupling the pass must not stop its
+/// report from ever arriving.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_completed_pass_becomes_the_report_the_tick_publishes() {
     let reports = JanitorReports::new();

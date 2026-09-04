@@ -564,12 +564,7 @@ const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
 ];
 
 /// Total allocated KiB below the manual Figma export's fixed work tree.
-const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &[
-    "/usr/bin/du",
-    "-sk",
-    ".stado/work/figma-export",
-];
-
+const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &["/usr/bin/du", "-sk", ".stado/work/figma-export"];
 
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
@@ -764,6 +759,25 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               writes nothing. Added 2026-08-19: the linux builder sat at 100% used and every \
               declared cleaner and reclaim stage measured zero, so the operator had no \
               sanctioned way to even name what was eating the disk",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "1", "/private/tmp"],
+        why: "attributes the OS scratch directory one level deep; -x stays on one filesystem, \
+              -k is a fixed unit, the depth and the path are fixed words, and du writes \
+              nothing. Added 2026-09-04: charless-mac-mini reached 1.1 GB free of 239 GB, \
+              which took the object API, the registry authority and every Skarbiec \
+              decryption on that host down at once, and the root-level attribution named \
+              /private/tmp as the second largest consumer at 14.2 GB while every declared \
+              cleaner and reclaim stage measured zero. Nothing in this table could say what \
+              those bytes were, so they could neither be defended nor reclaimed",
+    },
+    ApprovedCommand {
+        argv: &["/bin/ls", "-lt", "/private/tmp"],
+        why: "lists the OS scratch directory's own entries with their modification times; the \
+              path is a fixed word, no operator selector is appended, and ls writes nothing. \
+              Sizes alone cannot separate a wedged product's live scratch from an abandoned \
+              tree, and deleting an unclassified 14 GB is not a repair. Added 2026-09-04 \
+              beside the du entry above, for the same outage",
     },
     ApprovedCommand {
         argv: &["/usr/bin/who"],

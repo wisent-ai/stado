@@ -5,6 +5,7 @@
 //! which have no Python original and live in `crate::deploy::host_*`.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsStr};
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -12,7 +13,6 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -4699,7 +4699,10 @@ fn retire_file_binding(
         request.expected_size,
         request.expected_mode,
     ) {
-        (None, None, None, None) => Ok(None),
+        (None, None, None, None) if request.dry_run => Ok(None),
+        (None, None, None, None) => Err(CmdError::usage(
+            "mutating retire-file requires transaction, expected-sha256, expected-size, and expected-mode from a reviewed receipt",
+        )),
         (Some(transaction), Some(expected_sha256), Some(expected_size), Some(expected_mode)) => {
             if request.dry_run {
                 return Err(CmdError::usage(
@@ -4708,7 +4711,7 @@ fn retire_file_binding(
             }
             if !safe_retirement_transaction(transaction) {
                 return Err(CmdError::usage(
-                    "transaction must be the exact token from a retire-file dry-run receipt",
+                    "transaction must be the exact token from a handoff or retire-file dry-run receipt",
                 ));
             }
             if expected_sha256.len() != 64
@@ -4725,7 +4728,7 @@ fn retire_file_binding(
                     .all(|byte| matches!(byte, b'0'..=b'7'))
             {
                 return Err(CmdError::usage(
-                    "expected-mode must be the four-digit octal mode from the dry-run receipt",
+                    "expected-mode must be the four-digit octal mode from the handoff or dry-run receipt",
                 ));
             }
             Ok(Some(RetireFileBinding {
@@ -5337,9 +5340,211 @@ pub fn retire_file_local(
     Ok(())
 }
 
-/// Resolve TARGET and invoke the same installed Rust primitive locally or over
-/// its declared host channel. Remote cleanup therefore requires the 0.15.1
-/// Stado delivery to be installed before any residue is touched.
+const RETIRE_SYSTEM_LAUNCHD_FILE: &str = r#"set -eu
+src=$1
+dst=$2
+dry=$3
+expected_sha=$4
+expected_size=$5
+expected_mode=$6
+if [ ! -e "$src" ]; then
+  printf 'STADO_RETIRE_SYSTEM\tabsent\t-\t-\t-\t-\n'
+  exit 0
+fi
+[ -f "$src" ] && [ ! -L "$src" ] || {
+  printf 'source is not a regular non-symlink file\n' >&2
+  exit 65
+}
+owner=$(/usr/bin/stat -f '%u' "$src")
+[ "$owner" = 0 ] || {
+  printf 'source is not owned by root\n' >&2
+  exit 65
+}
+size=$(/usr/bin/stat -f '%z' "$src")
+mode=$(/usr/bin/stat -f '%Lp' "$src")
+case ${#mode} in 3) mode=0$mode ;; esac
+sha=$(/usr/bin/shasum -a 256 "$src" | /usr/bin/awk '{print $1}')
+if [ "$expected_sha" != - ]; then
+  [ "$sha" = "$expected_sha" ] &&
+  [ "$size" = "$expected_size" ] &&
+  [ "$mode" = "$expected_mode" ] || {
+    printf 'source differs from the reviewed dry-run receipt\n' >&2
+    exit 65
+  }
+fi
+if [ "$dry" = yes ]; then
+  printf 'STADO_RETIRE_SYSTEM\tready\t%s\t%s\t%s\t%s\n' "$size" "$sha" "$mode" "$dst"
+  exit 0
+fi
+[ ! -e "$dst" ] || {
+  printf 'destination collision\n' >&2
+  exit 65
+}
+/bin/mv -n "$src" "$dst"
+if [ -e "$src" ] || [ ! -f "$dst" ] || [ -L "$dst" ]; then
+  [ ! -e "$src" ] && [ -e "$dst" ] && /bin/mv -n "$dst" "$src" || true
+  printf 'retirement path postcondition failed\n' >&2
+  exit 65
+fi
+after_size=$(/usr/bin/stat -f '%z' "$dst")
+after_mode=$(/usr/bin/stat -f '%Lp' "$dst")
+case ${#after_mode} in 3) after_mode=0$after_mode ;; esac
+after_sha=$(/usr/bin/shasum -a 256 "$dst" | /usr/bin/awk '{print $1}')
+if [ "$after_size" != "$size" ] || [ "$after_mode" != "$mode" ] || [ "$after_sha" != "$sha" ]; then
+  /bin/mv -n "$dst" "$src" || true
+  printf 'retired file digest, size, or mode changed; source restored\n' >&2
+  exit 65
+fi
+printf 'STADO_RETIRE_SYSTEM\tretired\t%s\t%s\t%s\t%s\n' "$size" "$sha" "$mode" "$dst"
+"#;
+
+async fn retire_system_launchd_file(
+    target: &crate::targets::ComputeTarget,
+    request: &RetireFileRequest<'_>,
+    binding: Option<&RetireFileBinding>,
+) -> Result<RetireFileOutcome, CmdError> {
+    if !target.release_platform.starts_with("darwin-") {
+        return Err(retire_refused(
+            "system launchd retirement requires a Darwin target",
+        ));
+    }
+    let source = Path::new(request.path);
+    if source.parent() != Some(Path::new("/Library/LaunchDaemons"))
+        || source.extension().and_then(OsStr::to_str) != Some("plist")
+    {
+        return Err(retire_refused(
+            "privileged retirement is limited to one /Library/LaunchDaemons/*.plist file",
+        ));
+    }
+    let name = source
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| retire_refused("system launchd source has no UTF-8 basename"))?;
+    let stem = name
+        .strip_suffix(".plist")
+        .ok_or_else(|| retire_refused("system launchd source must end in .plist"))?;
+    if stem.is_empty()
+        || !stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(retire_refused(
+            "system launchd basename contains unsupported characters",
+        ));
+    }
+    if !safe_backup_product(request.product) {
+        return Err(CmdError::usage(
+            "product must be 1-128 ASCII letters, digits, dots, underscores, or dashes and start with a letter or digit",
+        ));
+    }
+    let transaction = binding
+        .map(|binding| binding.transaction.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+                uuid::Uuid::new_v4().simple()
+            )
+        });
+    let destination = format!("/Library/LaunchDaemons/{name}.stado-retired-{transaction}");
+    let expected_size = binding
+        .map(|binding| binding.expected_size.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let expected_sha = binding
+        .map(|binding| binding.expected_sha256.as_str())
+        .unwrap_or("-");
+    let expected_mode = binding
+        .map(|binding| binding.expected_mode.as_str())
+        .unwrap_or("-");
+    let password = super::service::host_sudo_password(target)
+        .await?
+        .unwrap_or_default();
+    let output = crate::deploy::host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/sudo",
+            "-S",
+            "-p",
+            "",
+            "/bin/sh",
+            "-c",
+            RETIRE_SYSTEM_LAUNCHD_FILE,
+            "stado-retire-system-launchd",
+            request.path,
+            &destination,
+            if request.dry_run { "yes" } else { "no" },
+            expected_sha,
+            &expected_size,
+            expected_mode,
+        ],
+        &format!("{password}\n"),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(retire_refused(format!(
+            "{}: privileged launchd retirement failed: {}",
+            target.name,
+            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+        )));
+    }
+    let marker = output
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("STADO_RETIRE_SYSTEM\t"))
+        .ok_or_else(|| retire_refused("privileged launchd retirement returned no marker"))?;
+    let fields: Vec<&str> = marker.split('\t').collect();
+    if fields.len() != 6 {
+        return Err(retire_refused(
+            "privileged launchd retirement returned a malformed marker",
+        ));
+    }
+    if fields[1] == "absent" {
+        return Ok(RetireFileOutcome {
+            target: target.name.clone(),
+            source: request.path.to_string(),
+            destination: None,
+            transaction: None,
+            status: "absent".to_string(),
+            size: None,
+            sha256: None,
+            mode: None,
+            detail: Some("source does not exist".to_string()),
+        });
+    }
+    let expected_status = if request.dry_run { "ready" } else { "retired" };
+    if fields[1] != expected_status {
+        return Err(retire_refused(format!(
+            "privileged launchd retirement returned status {:?}, expected {expected_status:?}",
+            fields[1]
+        )));
+    }
+    let size = fields[2]
+        .parse::<u64>()
+        .map_err(|_| retire_refused("privileged launchd retirement returned an invalid size"))?;
+    if fields[3].len() != 64 || !fields[3].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(retire_refused(
+            "privileged launchd retirement returned an invalid SHA-256",
+        ));
+    }
+    Ok(RetireFileOutcome {
+        target: target.name.clone(),
+        source: request.path.to_string(),
+        destination: Some(fields[5].to_string()),
+        transaction: Some(transaction),
+        status: fields[1].to_string(),
+        size: Some(size),
+        sha256: Some(fields[3].to_string()),
+        mode: Some(fields[4].to_string()),
+        detail: None,
+    })
+}
+
+/// Resolve TARGET and perform one checked archive locally or over its declared
+/// host channel. User binaries invoke the same installed Rust primitive on a
+/// remote target; system launchd declarations use this build's fixed
+/// digest-bound privileged primitive with the target's approved sudo grant.
 async fn retire_file_document(
     target: &str,
     request: &RetireFileRequest<'_>,
@@ -5354,7 +5559,9 @@ async fn retire_file_document(
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut outcome = if crate::deploy::host_channel::target_is_this_host(&resolved) {
+    let mut outcome = if Path::new(path).parent() == Some(Path::new("/Library/LaunchDaemons")) {
+        retire_system_launchd_file(&resolved, request, binding).await?
+    } else if crate::deploy::host_channel::target_is_this_host(&resolved) {
         retire_file_local_document(request, binding)?
     } else {
         let runner = crate::deploy::production_runner();
@@ -5513,19 +5720,15 @@ pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFile
         r#"set -u
 path={quoted}
 report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
-# `/Library/LaunchDaemons/com.wisent.*.plist` is a managed area too. The fleet
-# INSTALLS there — `deploy::service::ENSURE_BODY` writes a system daemon with
-# `sudo -n /usr/bin/install -m 644 -o root -g wheel` — and until now it could
-# not delete what it wrote, so `service remove` refused with "outside the
-# managed home areas" and every always-on host only ever accumulated unit
-# files. charless-mac-mini reached 81 that the registry does not declare,
-# including a `com.wisent.compute.service.com.wisent.compute.service.stado-agent-mini`
-# whose KeepAlive job restarted a duplicate queue agent every time it was
-# stopped. Create and delete now share one grant and one guard set.
+# A service file is removable exactly where Stado installs service files.
+# Keeping this list beside the delete is deliberate: a missing Linux path left
+# retired user units on disk, ready for an older coordinator or a manual
+# `systemctl enable` to resurrect. Root-owned machine units keep the same
+# `com.wisent.*` namespace restriction as LaunchDaemons.
 privileged=no
 case "$path" in
-  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*) ;;
-  /Library/LaunchDaemons/com.wisent.*.plist) privileged=yes ;;
+  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*|"$HOME/.config/systemd/user/"*) ;;
+  /Library/LaunchDaemons/com.wisent.*.plist|/etc/systemd/system/com.wisent.*.service) privileged=yes ;;
   *) report refused "outside the managed areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
 esac
 if [ -L "$path" ]; then
@@ -7082,10 +7285,7 @@ fn ensure_object_verifier_declarations_match(
         .filter(|(_, item)| !local.contains(item.as_str()))
         .map(|(namespace, item)| format!("{namespace}={item}"))
         .collect::<Vec<_>>();
-    let unexpected = local
-        .difference(&host_items)
-        .cloned()
-        .collect::<Vec<_>>();
+    let unexpected = local.difference(&host_items).cloned().collect::<Vec<_>>();
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }

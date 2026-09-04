@@ -33,8 +33,7 @@ const SEEDED_REGISTRY: &str = r#"{
             "kind": "local",
             "ssh": "u@10.0.0.1",
             "release_platform": "linux-amd64",
-            "hostnames": ["w1.local"],
-            "slots": 1
+            "hostnames": ["w1.local"]
         }
     ],
     "coordinators": [],
@@ -301,8 +300,7 @@ const SYSTEMD_REGISTRY: &str = r#"{
     "kind": "local",
     "ssh": "approved@10.9.9.20",
     "release_platform": "linux-amd64",
-    "hostnames": ["linux-builder.invalid"],
-    "slots": 2
+    "hostnames": ["linux-builder.invalid"]
   }],
   "coordinators": []
 }"#;
@@ -343,7 +341,10 @@ esac
 
 const SYSTEMD_FAKE_STAT: &str = r#"#!/bin/sh
 if [ "${1:-}" = -c ] && [ "${2:-}" = %U ]; then
-  echo root
+  case "${3:-}" in
+    /etc/systemd/system/*) echo root ;;
+    *) echo approved ;;
+  esac
   exit 0
 fi
 exit 1
@@ -351,14 +352,37 @@ exit 1
 
 /// A real call log plus the minimum systemd state the restart contract reads.
 const SYSTEMD_FAKE_SYSTEMCTL: &str = r#"#!/bin/sh
+[ "${1:-}" = --user ] && shift
 printf '%s\n' "$*" >> "$STADO_FAKE_STATE/systemctl.log"
 case "${1:-}" in
-  cat|daemon-reload) exit 0 ;;
-  restart)
+  cat|daemon-reload|unmask) exit 0 ;;
+  restart|enable)
     printf 'active\n' > "$STADO_FAKE_STATE/active"
     exit 0
     ;;
+  disable)
+    /bin/rm -f "$STADO_FAKE_STATE/active"
+    exit 0
+    ;;
+  mask)
+    /bin/rm -f "$STADO_FAKE_STATE/active"
+    if [ -f "$STADO_FAKE_STATE/reactivate-once" ]; then
+      /bin/mv "$STADO_FAKE_STATE/reactivate-once" \
+        "$STADO_FAKE_STATE/reactivate-after-internal-probe"
+    fi
+    exit 0
+    ;;
   is-active)
+    if [ -f "$STADO_FAKE_STATE/reactivate-after-probe" ]; then
+      /bin/rm -f "$STADO_FAKE_STATE/reactivate-after-probe"
+      printf 'active\n' > "$STADO_FAKE_STATE/active"
+      exit 0
+    fi
+    if [ -f "$STADO_FAKE_STATE/reactivate-after-internal-probe" ]; then
+      /bin/mv "$STADO_FAKE_STATE/reactivate-after-internal-probe" \
+        "$STADO_FAKE_STATE/reactivate-after-probe"
+      exit 1
+    fi
     [ -f "$STADO_FAKE_STATE/active" ]
     ;;
   show)
@@ -473,6 +497,35 @@ impl SystemdHost {
             "kind": "systemd",
             "source": "registry",
             "managed_since": "2026-09-04T00:00:00Z"
+        }]);
+        std::fs::write(
+            self.root.path().join("storage/registry.json"),
+            serde_json::to_vec_pretty(&document).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn doubled_resolver_path(&self) -> PathBuf {
+        self.root.path().join(
+            "home/.config/systemd/user/com.wisent.compute.service.stado-resolver.service.service",
+        )
+    }
+
+    fn declare_doubled_resolver(&self) {
+        let path = self.doubled_resolver_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[Service]\nExecStart=/bin/true\n").unwrap();
+        let mut document = self.document();
+        document["targets"][0]["services"] = serde_json::json!([{
+            "name": "stado-resolver",
+            "unit": "com.wisent.compute.service.stado-resolver.service.service",
+            "label": "",
+            "path": path,
+            "kind": "systemd",
+            "source": "registry",
+            "managed_since": "2026-09-04T00:00:00Z",
+            "program": "/bin/true",
+            "args": []
         }]);
         std::fs::write(
             self.root.path().join("storage/registry.json"),
@@ -599,5 +652,103 @@ fn systemd_system_unit_logs_come_from_the_system_journal() {
         sudo.lines()
             .any(|line| line == format!("-n journalctl -u {SYSTEMD_AGENT} -n 20 --no-pager")),
         "system journal access must stay non-interactive:\n{sudo}"
+    );
+}
+
+/// The managed-product declaration owns a delivered unit's stable identity.
+/// Reusing the stale registry label added another `.service` on every ensure
+/// pass and left three resolver processes beside one another on the builder.
+#[test]
+fn ensure_replaces_a_doubled_systemd_name_with_the_product_unit() {
+    let host = SystemdHost::new();
+    host.declare_doubled_resolver();
+
+    let ensured = host.stado(&[
+        "service",
+        "ensure",
+        "stado-resolver",
+        "--host",
+        "linux-builder",
+        "--reason",
+        "restore the managed-product unit identity",
+        "--json",
+    ]);
+    assert!(
+        ensured.status.success(),
+        "ensure failed: {}{}",
+        String::from_utf8_lossy(&ensured.stdout),
+        stderr(&ensured)
+    );
+
+    let document = host.document();
+    let service = &document["targets"][0]["services"][0];
+    assert_eq!(service["unit"], "com.wisent.stado-resolver.service");
+    assert!(service["path"]
+        .as_str()
+        .unwrap()
+        .ends_with("/.config/systemd/user/com.wisent.stado-resolver.service"));
+    let calls = host.state("systemctl.log");
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "enable --now com.wisent.stado-resolver.service"),
+        "canonical unit was not enabled:\n{calls}"
+    );
+}
+
+/// An older coordinator can act once on the declaration it read before
+/// withdrawal. Removal keeps the declaration withdrawn, reapplies the systemd
+/// mask after that stale start, and only then deletes the unit file.
+#[test]
+fn remove_survives_one_stale_reactivation_and_deletes_the_systemd_file() {
+    let host = SystemdHost::new();
+    host.declare_doubled_resolver();
+    std::fs::write(host.root.path().join("state/reactivate-once"), "").unwrap();
+
+    let removed = host.stado(&[
+        "service",
+        "remove",
+        "com.wisent.compute.service.stado-resolver.service.service",
+        "--host",
+        "linux-builder",
+        "--json",
+    ]);
+    assert!(
+        removed.status.success(),
+        "remove failed: {}{}",
+        String::from_utf8_lossy(&removed.stdout),
+        stderr(&removed)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
+    assert_eq!(report["action"], "removed");
+    assert_eq!(report["report"]["postcondition"]["state"], "met");
+    assert_eq!(report["file"]["status"], "removed");
+    assert!(!host.doubled_resolver_path().exists());
+    assert_eq!(
+        host.document()["targets"][0]["services"],
+        serde_json::json!([])
+    );
+
+    let calls = host.state("systemctl.log");
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| {
+                *line == "disable --now com.wisent.compute.service.stado-resolver.service.service"
+            })
+            .count(),
+        2,
+        "retirement was not retried after the stale start:\n{calls}"
+    );
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| {
+                *line
+                    == "mask --runtime --now com.wisent.compute.service.stado-resolver.service.service"
+            })
+            .count(),
+        2,
+        "the stale start was not fenced by a second runtime mask:\n{calls}"
     );
 }

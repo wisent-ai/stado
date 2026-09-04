@@ -53,8 +53,7 @@ const REGISTRY_WITH_FLEET: &str = r#"{
             "kind": "local",
             "ssh": "u@10.0.0.1",
             "release_platform": "linux-amd64",
-            "hostnames": ["w1.local"],
-            "slots": 1
+            "hostnames": ["w1.local"]
         }
     ],
     "coordinators": [],
@@ -70,7 +69,6 @@ const REGISTRY_WITH_MEMBER: &str = r#"{
             "ssh": "u@10.0.0.1",
             "release_platform": "linux-amd64",
             "hostnames": ["w1.local"],
-            "slots": 1,
             "fleet": "build"
         }
     ],

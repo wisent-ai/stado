@@ -1306,6 +1306,7 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     }
     found
 }
+
 async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     reqwest::Client::new()
@@ -1336,8 +1337,9 @@ async fn reconcile_stable_proxy(
         return Ok(());
     };
     let upstream = proxy_upstream_port(target, product);
+    let processes = release_processes(install_root);
     let upstream_is_owned = upstream.is_some_and(|upstream_port| {
-        release_processes(install_root)
+        processes
             .iter()
             .any(|process| process.port == Some(upstream_port))
     });

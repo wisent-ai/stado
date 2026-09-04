@@ -473,13 +473,18 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
 /// with nobody sitting at it. `control-host` carries it in both fields.
 pub const ROLE_ALWAYS_ON: &str = "always-on";
 
-/// Does the registry itself say this host runs unattended?
+/// Does the registry say this host is meant to keep a graphical account alive?
 ///
-/// An always-on host is a headless host: no account is logged in
-/// graphically, so launchd builds no `gui/<uid>` domain there and a
-/// LaunchAgent has nowhere to load. Read from the declaration rather than
-/// from a probe on purpose — this is the fact the document already carries,
-/// and the finding it produces has to be answerable with the store down.
+/// `always-on` describes uptime, not the absence of a login. The Mac mini is
+/// both always-on and the declared Weles host; autologin keeps its Aqua domain
+/// alive so browser-facing LaunchAgents can run there. Treating uptime as
+/// headlessness moved those jobs into the system domain, where they competed
+/// with the release-owned user jobs for the same ports.
+pub fn declared_graphical(target: &ComputeTarget) -> bool {
+    target.weles.as_ref().is_some_and(|policy| policy.enabled) || target.display_stream.is_some()
+}
+
+/// Does the registry itself say this host runs unattended?
 pub fn declared_always_on(target: &ComputeTarget) -> bool {
     [target.role.as_deref(), target.host_heuristic.as_deref()]
         .into_iter()
@@ -487,25 +492,15 @@ pub fn declared_always_on(target: &ComputeTarget) -> bool {
         .any(|word| word == ROLE_ALWAYS_ON)
 }
 
-/// Is the system domain the only launchd domain this host can load a unit
-/// into?
+/// Is the system domain the only declared launchd domain for this host?
 ///
-/// Both halves are the declaration's own words. `role` / `host_heuristic` say
-/// nobody is logged in graphically, so launchd builds no `gui/<uid>` and a
-/// LaunchAgent has nowhere to load — the fact [`MisdeclaredDomain`] reports.
-/// `release_platform` says launchd is the unit system at all: a Linux host
-/// keeps its `systemd --user` manager alive with `loginctl enable-linger` and
-/// has no `/Library/LaunchDaemons` for the daemon spelling to land in, so
-/// always-on there is not this question.
-///
-/// [`plan_deploy_labelled`] reads this, which makes the domain a unit is
-/// installed into a function of the host instead of a function of whoever
-/// remembered `--as-daemon`. Four units on the always-on mac were declared as
-/// per-login LaunchAgents and never loaded once — the active coordinator and
-/// the release agent among them — while `stado registry doctor` reported each
-/// one and every writer went on installing where the declaration said.
+/// An always-on Darwin target defaults to system services only when the same
+/// declaration does not assign it a persistent graphical workload. Linux uses
+/// systemd user lingering and does not have launchd domains.
 pub fn requires_daemon_domain(target: &ComputeTarget) -> bool {
-    declared_always_on(target) && !target.release_platform.starts_with("linux")
+    declared_always_on(target)
+        && !declared_graphical(target)
+        && !target.release_platform.starts_with("linux")
 }
 
 /// Where a launchd job that belongs to the machine lives.
@@ -563,7 +558,7 @@ impl MisdeclaredDomain {
     /// is carried by that fixed program and not by the document, so it is
     /// not a registry finding and correcting the document would not move it.
     pub fn detect(target: &ComputeTarget, service: &ManagedService) -> Option<Self> {
-        if service.source != SOURCE_REGISTRY || !declared_always_on(target) {
+        if service.source != SOURCE_REGISTRY || !requires_daemon_domain(target) {
             return None;
         }
         let declared = UnitDomain::from_path(&service.path);
@@ -2461,10 +2456,18 @@ const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
     else
       stado_post 'met' \"$domain/$unit is loaded but not running\"
     fi
-  elif stado_systemctl is-active --quiet \"$unit\"; then
-    stado_post 'unmet' \"$unit is still active\"
   else
-    stado_post 'met' \"$unit is not active\"
+    stopped_attempt=0
+    while [ \"$stopped_attempt\" -lt 30 ]; do
+      if ! stado_systemctl is-active --quiet \"$unit\"; then break; fi
+      stopped_attempt=$((stopped_attempt + 1))
+      /bin/sleep 1
+    done
+    if stado_systemctl is-active --quiet \"$unit\"; then
+      stado_post 'unmet' \"$unit is still active\"
+    else
+      stado_post 'met' \"$unit is not active\"
+    fi
   fi
 ";
 
@@ -2868,16 +2871,13 @@ printf 'STADO_ADOPT\\t%s\\t%s\\n' \"$file_state\" \"$unit_state\"
 say 'probed' \"$unit_path\"
 ";
 
-/// `service retire`: stop and forget. Files stay on disk — retiring is a
-/// management decision, not a deletion, and an operator who wants the unit
-/// gone can remove it knowing Stado will no longer fight them for it.
+/// `service retire`: withdraw and stop, while leaving the unit file on disk.
 ///
-/// Both per-login spellings are booted out and disabled, and this is the one
-/// place where that is right rather than a second resolver: retiring has to
-/// survive the next graphical login, when launchd builds a `gui/<uid>` domain
-/// and loads whatever is still enabled out of `~/Library/LaunchAgents`. A
-/// retire run while nobody is logged in graphically would otherwise leave the
-/// agent to come back with the next login.
+/// launchd has two per-login spellings, so both are booted out and disabled.
+/// systemd is runtime-masked before it is disabled. The mask is the rolling
+/// upgrade fence: a coordinator still running an older Stado may have read the
+/// declaration before its withdrawal and try one last `enable --now`; systemd
+/// must refuse that stale start without relying on the new shared lease.
 const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
   /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
@@ -2888,10 +2888,19 @@ const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl disable \"$user_domain/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
+  say 'retired' \"$unit_path\"
 else
   stado_systemctl disable --now \"$unit\" >/dev/null 2>&1 || true
+  detail=$(stado_systemctl mask --runtime --now \"$unit\" 2>&1)
+  rc=$?
+  if [ \"$rc\" -ne 0 ]; then
+    say 'retire_failed' \"$rc $detail\"
+  elif stado_systemctl is-active --quiet \"$unit\"; then
+    say 'retire_failed' \"$unit remained active after its runtime mask\"
+  else
+    say 'retired' \"$unit_path\"
+  fi
 fi
-say 'retired' \"$unit_path\"
 ";
 
 /// `service deploy`: write the rendered unit, then bootstrap it. Both
@@ -2953,6 +2962,7 @@ else
       || true
   fi
   stado_systemctl daemon-reload >/dev/null 2>&1 || true
+  stado_systemctl unmask \"$unit\" >/dev/null 2>&1 || true
   detail=$(stado_systemctl enable --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'deployed' \"$unit_path\"; else say 'enable_failed' \"$rc $detail\"; fi
@@ -3200,6 +3210,7 @@ else
       || true
   fi
   stado_systemctl daemon-reload >/dev/null 2>&1 || true
+  stado_systemctl unmask \"$unit\" >/dev/null 2>&1 || true
   if [ \"$had_unit\" = yes ]; then
     action=restarted
     detail=$(stado_systemctl restart \"$unit\" 2>&1)

@@ -24,6 +24,45 @@ that attempt its own output URI. A crash before or after the replacement
 platform record is saved therefore reuses the same attempt; only a newly
 persisted terminal failure can chain to another retry.
 
+Local queue jobs execute from the agent owner's
+`~/.stado/work/jobs/wc-<job-id>` tree, not a temporary directory. Admission
+resolves the physical home, then creates or opens `.stado`, `work`, and `jobs`
+one component at a time as owner-only directories with
+`O_DIRECTORY|O_NOFOLLOW`; component symlinks are refused. The serialized
+old-agent bridge repeats that refusal and changes permissions or
+creates the next child only from a held cwd whose physical path it just
+verified.
+A release submission remains able to repair an older agent: its deterministic
+bootstrap moves that agent's already-materialized job into the persistent root
+before the worker starts and preserves a compatibility symlink for the old
+agent's log and artifact upload. It also pins `TMPDIR`, `TMP`, and `TEMP`
+beneath that persistent tree so a pre-migration worker cannot put its release
+scratch back in OS temp.
+After a successful worker, the bridge uses the checked storage writer to upload
+and read back the command log and archive at both canonical status and exact
+attempt URIs, then publishes the attempt's `receipt.json` last as the completion
+marker. Each writer receipt must match the quiescent local source's SHA-256 and
+byte count. Its JSON and lifecycle-watch responses use random 0600 files under
+the validated work tmp directory, are removed after parsing, and leave only
+their proof lines in the already-open command log. A failed write or read-back
+turns the workload into a failure instead of allowing a successful terminal
+record.
+For a worker that already failed, the bridge still proves the command log at
+both destinations and, when an owned regular `receipt.json` exists, publishes
+that failed receipt to canonical then attempt storage. Evidence errors are
+appended to the safe log without replacing the worker's original nonzero exit
+code; the legacy link remains for the old agent's canonical finalization.
+The bootstrap prints both physical workdir and effective temporary root before
+invoking the worker, so an operator can prove the retry left `/tmp` from the
+canonical job log. Queue-workdir reclamation runs only through the janitor under
+its exclusive admission lock; every pass reserves a bounded scan share for
+terminal old-agent links independently of canonical workdir enumeration.
+If the canonical tree is ever absent or replaced while a job is live, the agent
+emits `workdir_missing` with its exact expected path at heartbeat and
+finalization, then retains that marker and the real workload exit code in the
+terminal job error. An existing empty command log remains the distinct
+`wrote no output` case.
+
 `stado release redeliver PRODUCT RUN_ID DELIVERY --retry-token TOKEN` is the
 operator recovery path for one delivery from the exact newest completed run. It
 does not publish a new candidate or move a channel. The retry token identifies

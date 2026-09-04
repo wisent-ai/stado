@@ -34,8 +34,7 @@ const SEEDED_REGISTRY: &str = r#"{
             "kind": "local",
             "ssh": "u@10.0.0.1",
             "release_platform": "linux-amd64",
-            "hostnames": ["w1.local"],
-            "slots": 1
+            "hostnames": ["w1.local"]
         }
     ],
     "coordinators": []
@@ -51,16 +50,14 @@ const SEEDED_REGISTRY_GROWN: &str = r#"{
             "kind": "local",
             "ssh": "u@10.0.0.1",
             "release_platform": "linux-amd64",
-            "hostnames": ["w1.local"],
-            "slots": 1
+            "hostnames": ["w1.local"]
         },
         {
             "name": "w2",
             "kind": "local",
             "ssh": "u@10.0.0.2",
             "release_platform": "linux-amd64",
-            "hostnames": ["w2.local"],
-            "slots": 1
+            "hostnames": ["w2.local"]
         }
     ],
     "coordinators": []

@@ -490,7 +490,7 @@ define_capabilities! {
             ProviderId::Gcp => (Partial, "scheduler::quota", "Preview live accelerator quota reads plus configured reservations"),
             ProviderId::Azure => (Partial, "scheduler::quota", "Configured reservations; live VM-family coverage is incomplete"),
             ProviderId::Aws => (Planned, "", "No live AWS quota adapter"),
-            ProviderId::Local => (Implemented, "queue::capacity + providers::local", "GPU probe, free VRAM, and agent slots"),
+            ProviderId::Local => (Implemented, "queue::capacity + providers::local", "Live CPU, RAM, disk, and accelerator measurements"),
             ProviderId::Box => (Implemented, "providers::box", "Account limits and available boxes"),
             ProviderId::Vast => (Partial, "providers::vast", "Published host capacity"),
         ]

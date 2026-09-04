@@ -91,10 +91,9 @@ pub fn target_is_this_host(target: &ComputeTarget) -> bool {
 ///
 /// One deliberate exception to the last refusal: a target that IS this
 /// machine needs no ssh destination, because reaching it does not involve
-/// the network. A local pool host with slots and no `ssh` field is a normal
-/// registry entry, not a broken one — refusing it made every read-only
-/// `stado host ...` command unusable on the box running the command, which
-/// is the box an operator most often asks about.
+/// the network. A local compute host with no `ssh` field is a normal registry
+/// entry, not a broken one — refusing it made every read-only `stado host ...`
+/// command unusable on the box running the command.
 pub fn resolve_target<'a>(
     registry: &'a Registry,
     target_name: &str,

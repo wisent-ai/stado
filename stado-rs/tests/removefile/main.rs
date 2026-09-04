@@ -44,8 +44,7 @@ fn storage_with_this_host(home: &Path) -> tempfile::TempDir {
             "kind": "local",
             "ssh": null,
             "release_platform": "darwin-arm64",
-            "hostnames": ["{hostname}"],
-            "slots": 1
+            "hostnames": ["{hostname}"]
         }}], "coordinators": []}}"#
     );
     std::fs::write(dir.path().join("registry.json"), document).unwrap();

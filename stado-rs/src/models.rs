@@ -231,7 +231,7 @@ pub struct Job {
     /// Additive output mirror URI (default location always written).
     #[serde(default)]
     pub output_uri: String,
-    /// Exclusive GPU use: agent claims only with zero other active slots.
+    /// Exclusive GPU use: the agent admits it only with no other active workload.
     #[serde(default)]
     pub exclusive: bool,
     /// Measured peak GPU memory (GiB); 0 = not measured.

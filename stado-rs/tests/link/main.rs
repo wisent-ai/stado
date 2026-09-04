@@ -62,8 +62,7 @@ const REGISTRY: &str = r#"{
             "kind": "local",
             "ssh": "u@127.0.0.1",
             "release_platform": "darwin-arm64",
-            "hostnames": ["h1.local"],
-            "slots": 1
+            "hostnames": ["h1.local"]
         }
     ],
     "coordinators": []

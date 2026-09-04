@@ -19,7 +19,27 @@ The host channel resolves the target from the canonical registry, checks its pin
 
 Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. Mutating workflows use their owning commands, such as `stado service file-sync`, `stado service secret-sync`, `stado release apply`, or `stado host reconcile-object-verifier`. Secret values are read and written on the target; they never appear in the remote argument list or command result.
 
-An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. A direct one-shot CLI apply may omit all four and generate its own transaction. The mutating form accepts only an owner-owned regular non-symlink that is a direct child of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; it opens `$HOME` and every source and destination ancestor without following symlinks, refuses group/world-writable ancestors and destination collisions, and uses the platform's atomic no-replace rename into `$HOME/.stado/products/<product>/backups/<transaction>/<basename>`. The destination must be on the same filesystem and resolve to the same inode, bytes, mode, and owner or Stado rolls the move back and fails. Both forms use the target's declared host channel and accept `--json`; a remote target must already run the Stado release that provides the hidden device-local primitive. Archived bytes are preservation evidence—this command has no restore operation.
+An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
+
+### Release-controlled placement handoff
+
+A service placement unit has one exact lifecycle. Stado-managed units retain the existing shape:
+
+```json
+{"name":"skarbiec","unit":"com.wisent.always-on.skarbiec","path":"/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist","kind":"launchd"}
+```
+
+A logical service whose process lifecycle belongs to the release controller instead carries only:
+
+```json
+{"name":"skarbiec","controller":"release-control","product":"skarbiec"}
+```
+
+The external shape must appear in every host template for that service and name one release product. The service directory still owns its route, active host, endpoint, consumers, and generation; the placement profile still owns state, routing units, and probes. Routing units remain ordinary Stado-managed units. Static validation requires the route's active host, endpoint, active-host probe, product, release target, and stable bind to agree; it rejects a target service row or any legacy launchd restore field on every target of the owning product. Resolution and verification therefore keep using the route without pretending the external process is a target-managed unit.
+
+Install 0.15.24 or newer on every registry reader and agent before publishing this shape. Then run `stado service handoff-release-control <service> --host <active-host> --product <product> --json` once. The command proves the committed desired release, active signed executable, stable proxy, readiness, inactive legacy unit, legacy file digests, and absence of an executable caller before one generation-bound compare-and-swap externalizes all templates, removes the active target row, removes the legacy restore identity, and advances the release and directory generations. It preserves the route, endpoints, consumers, profile state, routing units, and probes. Every placement mutation refuses a release-controlled member before a transaction or host action.
+
+After the successful handoff, retire the reported plist and convenience binary separately with `host retire-file`, plist first. Each handoff receipt supplies the unique transaction, SHA-256, byte count, and four-digit mode passed to the mutating command's four explicit binding flags; do not perform another dry-run or an unbound mutation. Each retirement reports `retired` or retry-safe `absent`, so a failure after the plist move preserves an exact partial-cleanup record and the binary operation remains independently resumable. Rollback after handoff is not a binary downgrade: it requires a new generation-bound registry change, restoration of both archived files, and proof that release-control is no longer serving. Older readers cannot parse the external shape and must not be reintroduced while it is published.
 
 ### Ordered connection paths
 
@@ -116,7 +136,7 @@ The two units were not a mistake anyone made. The Weles release deployer creates
 
 Stado is the fleet control plane, so the registry now describes what actually runs: `com.wisent.weles-worker` is adopted — with `--host-heuristic always-on` so the declarative placement carries, and its `weles` onboarding metadata re-attached field for field — and `com.wisent.always-on.weles` is retired. The next `auto-deploy.sh` run therefore re-creates a unit Stado already declares instead of a rival. `service serving com.wisent.weles-worker --host charless-mac-mini --port 58101` now answers `serving`, `served_by_unit`, owner declared `true`.
 
-Reversing it is two declarations and a restart, because the retired unit's plist is still on disk — `retire` removes a service from management and never deletes files:
+Reversing it is two declarations and a checked restart, because `retire` deliberately keeps the unit file while withdrawing its registry entry:
 
 ```console
 stado service adopt com.wisent.always-on.weles --host-heuristic always-on
@@ -124,7 +144,7 @@ stado service onboarding com.wisent.always-on.weles --host charless-mac-mini --p
 stado service restart com.wisent.always-on.weles --host charless-mac-mini
 ```
 
-One gap is left named rather than papered over, and it is in Stado, not in Weles. `retire` boots out and disables only the two per-login spellings (`RETIRE_BODY`), so it cannot `launchctl disable system/<label>`. Retiring a system LaunchDaemon therefore needs `service stop` first — which does have the privileged path, through the host account credential the registry's `account_ref` names — and even then the label is only booted out, not disabled. `/Library/LaunchDaemons/com.wisent.always-on.weles.plist` remains, so launchd will load it again after a reboot and the rival returns. The durable fix is a privileged branch in `retire` mirroring `stop_service_with_password`: `sudo launchctl bootout system/<label>` followed by `sudo launchctl disable system/<label>`, gated on the same `account_ref` credential and refusing with the exact privileged command when no password is readable.
+`retire` now handles the unit's real domain instead of assuming a per-login job. A system LaunchDaemon is stopped through the host account credential, then both `system/<label>` and its recovery job are disabled with privileged `launchctl`; a Linux user unit is stopped, disabled, and runtime-masked so an older coordinator cannot revive it from a stale read. `service remove` composes the same fenced retirement with deletion of the exact managed unit file, while `retire` keeps that file for an explicit rollback.
 
 ### A live process still executing a binary that was replaced underneath it
 

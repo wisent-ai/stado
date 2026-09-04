@@ -3,8 +3,8 @@
 //! Port of `stado/providers/local/disk/gate.py`.
 //!
 //! All cleanup is owned by the registry-authorized policy engine. This
-//! module only probes the filesystems and refuses new slots while pressure
-//! is unresolved.
+//! module only probes the filesystems and refuses new work while pressure is
+//! unresolved.
 
 use std::io::Write;
 use std::path::Path;
@@ -86,14 +86,14 @@ pub fn decide(obs: &GateObservation, log_fn: &mut dyn FnMut(&str)) -> bool {
     let mut refuse = !obs.home_write_probe_ok;
     if refuse {
         log_fn(&format!(
-            "$HOME write probe failed (~{:.1} GB free); refusing slots this tick",
+            "$HOME write probe failed (~{:.1} GB free); refusing new work this tick",
             obs.home_free_gb
         ));
     }
     // Staging-pressure backpressure is also admission-only.
     if !refuse && obs.staging_free_gb >= 0.0 && obs.staging_free_gb < obs.largest_pending_gb {
         log_fn(&format!(
-            "staging low (~{:.0}GB free < measured pending dir {:.0}GB); refusing slots",
+            "staging low (~{:.0}GB free < measured pending dir {:.0}GB); refusing new work",
             obs.staging_free_gb, obs.largest_pending_gb
         ));
         refuse = true;

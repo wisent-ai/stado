@@ -108,7 +108,6 @@ fn accepted() -> Value {
                 "ssh": "u@10.0.0.1",
                 "release_platform": "darwin-arm64",
                 "hostnames": ["macbook-fake.local"],
-                "slots": 1,
                 "disk_cleanup": {
                     "mode": "report",
                     "check_interval_seconds": 3600,

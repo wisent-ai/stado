@@ -53,7 +53,6 @@ impl Journey {
                 "ssh": "nobody@127.0.0.1",
                 "release_platform": build_platform(),
                 "hostnames": [hostname],
-                "slots": 1,
                 "disk_cleanup": {
                     "mode": "off",
                     "check_interval_seconds": 300,

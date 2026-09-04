@@ -504,18 +504,16 @@ fn declared_doubled_prefix(target: &ComputeTarget, out: &mut Vec<Finding>, measu
 
 /// The same two rules, on the unit names a placement profile declares.
 ///
-/// The third population that declares a unit name, and the one both checks
-/// above still missed: `placement_profiles[].hosts[<host>].units` names a
-/// label and a path per service, and it is what `service remove` refuses
-/// against — a profile whose unit has no managed record is a document the
-/// validator will not accept. So a doubled name here is load-bearing twice
-/// over, and `com.wisent.compute.service.com.wisent.brama` sat in the
-/// `brama-skarbiec` profile for lukasz-macbook, carrying the fleet's own
-/// prefix onto a name that already had one, with no launchd job of that name
-/// on the host at all.
+/// The third population that declares a managed unit name, and the one both
+/// checks above still missed: managed
+/// `placement_profiles[].hosts[<host>].units` entries name a label and path per
+/// service. Release-controlled entries deliberately have neither and are not
+/// part of either naming population. A doubled managed name remains
+/// load-bearing because placement lifecycle commands address it directly.
 ///
-/// No command edits a profile, so the remediation names the exact key rather
-/// than a command that does not exist.
+/// `stado service handoff-release-control` is the only command that replaces a
+/// managed template with a release-controlled one. Other profile corrections
+/// still name the exact registry key because no general profile editor exists.
 fn profile_unit_names(
     registry: &Registry,
     out: &mut Vec<Finding>,
@@ -525,6 +523,9 @@ fn profile_unit_names(
     for profile in &registry.placement_profiles {
         for (host, placement) in &profile.hosts {
             for (service, unit) in &placement.units {
+                if unit.release_controlled() {
+                    continue;
+                }
                 let key = format!(
                     "placement_profiles[{}].hosts.{host}.units.{service}",
                     profile.name
@@ -1181,12 +1182,17 @@ fn service_artefacts(
 ///
 /// Derived from the tags, not guessed: `git tag --contains` on the commit that
 /// added each name to `crate::targets`'s allowed list answers `stado-v0.12.0`
-/// for `queue_workdirs` (#154) and `stado-v0.13.0` for `backup_twins`. The two
-/// cleaners already in 0.9.5 — `build_caches`, `chromium_clones`,
-/// `huggingface_cache`, `weles_recordings` — need no entry, because no host in
-/// this fleet runs anything older.
-const CLEANERS_BY_VERSION: &[(&str, &str)] =
-    &[("queue_workdirs", "0.12.0"), ("backup_twins", "0.13.0")];
+/// for `queue_workdirs` (#154) and `stado-v0.13.0` for `backup_twins`.
+/// `release_store` first ships in 0.15.26; declaring it against an older host
+/// makes that host reject the entire policy instead of merely skipping the
+/// unknown cleaner. The four cleaners already in 0.9.5 — `build_caches`,
+/// `chromium_clones`, `huggingface_cache`, `weles_recordings` — need no entry,
+/// because no host in this fleet runs anything older.
+const CLEANERS_BY_VERSION: &[(&str, &str)] = &[
+    ("queue_workdirs", "0.12.0"),
+    ("backup_twins", "0.13.0"),
+    ("release_store", "0.15.26"),
+];
 
 /// Whether `installed` is at least `required`, comparing `X.Y.Z` numerically.
 ///
@@ -1233,8 +1239,8 @@ async fn disk_headroom(
             check: DISK_CHECK,
             subject: target.name.clone(),
             declared: "no disk_cleanup policy".to_string(),
-            observed: "a managed host with slots and no watermark, so nothing on it is ever \
-                       obliged to free space"
+            observed: "a managed compute host has no watermark, so nothing on it is ever obliged \
+                       to free space"
                 .to_string(),
             command: format!(
                 "add targets[{}].disk_cleanup to the registry, then stado registry validate and push",

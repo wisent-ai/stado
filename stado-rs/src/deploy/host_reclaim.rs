@@ -140,14 +140,15 @@ pub const BUILD_SCRATCH_STAGE: &str = "build_scratch";
 pub const DELIVERED_TREES_STAGE: &str = "delivered_trees";
 /// The stage name for the macOS per-launch Chromium bundle clones.
 pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
-/// The stage name for terminal queue-job workdirs and bootstrap scratch.
-pub const QUEUE_WORKDIRS_STAGE: &str = "queue_workdirs";
 /// Rebuildable package/browser caches owned by build tooling.
 pub const REBUILDABLE_CACHES_STAGE: &str = "rebuildable_caches";
 /// The stage name for macOS-style home trees found on a Linux host.
 pub const FOREIGN_HOME_TREES_STAGE: &str = "foreign_home_trees";
 /// The stage name for eligible local Time Machine APFS snapshots.
 pub const LOCAL_APFS_SNAPSHOTS_STAGE: &str = "local_apfs_snapshots";
+/// The stage name for queue job trees left in the OS scratch directory by an
+/// agent that predates the persistent `$HOME/.stado/work/jobs` root.
+pub const LEGACY_TMP_WORKDIRS_STAGE: &str = "legacy_tmp_workdirs";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -184,12 +185,9 @@ const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
 const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
 const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
-/// Whether the operator side could read the queue, and therefore whether the
-/// workdir sweep may run at all.
-const KEEP_LIST_MARK: &str = "@KEEP_LIST@";
 const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
-/// Where queue workdirs live in production: the fixed POSIX temp root plus
-/// whatever the login shell's TMPDIR names (the macOS per-user container).
+/// Queue workdirs historically lived in `/tmp`; current macOS agents may use
+/// the per-user temporary container. Both roots carry the same proof policy.
 pub const DEFAULT_WORK_ROOTS: &str = "/tmp \"${TMPDIR:-}\"";
 const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
 const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
@@ -355,6 +353,8 @@ done
 if [ -z "$wc_bin" ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tregistry_cleanup\t%s\n' 'no stado binary on this host'
 else
+  # Queue workdirs are policy-owned by this pass. Its exclusive janitor lock
+  # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
     plan=$("$wc_bin" disk-cleanup --once)
   else
@@ -662,12 +662,11 @@ fn superseded_words() -> String {
 
 /// The remote program for one mode, with every substitution in place.
 ///
-/// The stado candidates are quoted exactly the way
+/// The Stado candidates are quoted exactly the way
 /// [`crate::deploy::host_recovery::remote_script`] quotes them, so `$HOME`
-/// still expands on the remote side while the word stays one word.
-/// `work_roots` is substituted verbatim into the queue-workdirs sweep;
-/// production callers pass [`DEFAULT_WORK_ROOTS`], tests pass their scratch
-/// directory so an executed apply can never leave the fixture.
+/// still expands on the remote side while the word stays one word. When the
+/// queue authority is readable it supplies the keep-list; otherwise each
+/// workdir must earn deletion from the two-pass local proof.
 pub fn remote_script(
     apply: bool,
     live_jobs: Option<&[String]>,
@@ -679,10 +678,6 @@ pub fn remote_script(
         .map(|value| format!("\"{value}\""))
         .collect::<Vec<String>>()
         .join(" ");
-    // `None` is "nobody could read the queue", and the workdir sweep is then
-    // not run at all. An empty keep-list would mean the opposite — no job is
-    // live, so every workdir is terminal — and that is how a fail-closed
-    // stage becomes a delete-everything stage.
     let live_words = live_jobs
         .unwrap_or_default()
         .iter()
@@ -1050,33 +1045,7 @@ pub async fn reclaim_host(
     runner: &Runner,
 ) -> Result<(ComputeTarget, Reclamation), DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
-    // The keep-list for the queue_workdirs stage: jobs still queued or
-    // running are the only ones that may return to their workdirs.
-    //
-    // An unreadable queue store costs exactly that one stage. It used to
-    // refuse the whole reclamation, and on 2026-09-03 that turned a listing
-    // defect into a release outage: a migration created `queue_priority/`
-    // beside `queue/`, the gateway answered `prefix=queue/` with both, the
-    // keep-list could not be built, and `release-capacity` failed the
-    // 0.13.50 train before a single object was published — while the build
-    // caches and superseded trees the pass exists to free were never even
-    // looked at. Skipping the stage keeps every workdir, which is the
-    // fail-closed behaviour this comment always claimed, and says so in the
-    // report instead of deleting blind or refusing everything.
-    //
-    // A stage that skips silently is the other half of that same outage, so
-    // the store's own sentence travels into the skip. It used to be
-    // discarded (`Err(_)`) at the only place that saw it, and that is why the
-    // release train spent an hour and three attempts: nothing anywhere said
-    // which read failed or why. The queue held 13 parseable records and
-    // `running/` was empty, both verified object by object through the same
-    // CLI, so the sentence was the only thing that could have named the real
-    // failure. Carried through, `HTTP 502: upstream unavailable` classes as
-    // `infra_down`, `retryable=true` — which is the truth about a status
-    // `deploy.yml` retries three times — where a discarded error left
-    // `error_code="unknown"`, `retryable=false`. A refusal, or a skip, an
-    // operator cannot act on is the defect this fleet keeps paying for.
-    let mut unreadable: Vec<String> = Vec::new();
+    let mut unreadable = Vec::new();
     let live_jobs = match crate::queue::JobStorage::new().await {
         Ok(store) => {
             let mut ids = Vec::new();

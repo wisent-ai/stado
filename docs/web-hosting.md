@@ -565,12 +565,53 @@ HTTP 403: RequestDisallowedByPolicy ... policyAssignment
 
 That assignment is a deliberate cost guard, and the Azure grant this fleet
 holds has its spending limit removed - which is exactly the state the policy
-denies charge-bearing resources in. So the edge cannot be created until the
-operator either turns the spending limit On or exempts the edge's four
-resources from that assignment. It is a spending decision, so Stado does not
-take it, and no part of this document works around it: `stado web edge
-declare` remains the way to record an edge Stado did not create, for a host
-that already holds a public address.
+denies charge-bearing resources in.
+
+### The three entrances and what gates each
+
+Everything up to `route` is done and proven: build, release, the unit, the
+environment and the declarations. What is missing is one public entrance, and
+all three candidates end at a decision only the operator can take. Stado takes
+none of them by itself; `stado web edge declare` records whichever one exists.
+
+**1. The Azure edge.** `policyAssignment
+deny-charge-bearing-resources-until-spending-limit`, created 2026-08-15 by
+`jakub@wisent.ai` (`createdByType: User`) at subscription scope, is the
+built-in "Allowed resource types" with an allowlist of five free types;
+`Microsoft.Network/publicIPAddresses` is not among them. Its own description
+says "remove only after the billing property reports On" - and that can never
+happen. Microsoft answered on SR 2608140010002365 (2026-08-17): "At this time,
+there is no supported option available to restore or enable
+billingProfileSpendingLimit = On for this Sponsorship subscription", because a
+Sponsorship subscription converts to Pay-As-You-Go when its credits are spent;
+the case was archived 2026-08-24. So the gate is a person either exempting the
+edge's four resources from a colleague's assignment or accepting overage risk
+once the USD 100,000 grant is gone.
+
+**2. Cloudflare for SaaS in front of the tunnel already on the mini.** A
+custom hostname per product on a zone Cloudflare already serves, a proxied
+CNAME to `<tunnel-id>.cfargotunnel.com` as the fallback origin, and one
+Namecheap CNAME per hostname - no nameserver move, and the first 100 hostnames
+cost nothing
+([plans](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/),
+$0.10 each beyond). Three gates: enabling it on a non-Enterprise zone means
+"Non-enterprise: Enter payment information."
+([enable](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/enable/));
+every API call needs a scoped token that does not exist, since the only
+Cloudflare secret held is `platform-cloudflare-bobloo-tunnel`, whose `token`
+is a 180-character connector token the API rejects, and the dashboard login is
+Google SSO; and an A record at an apex is unsupported without Enterprise apex
+proxying, so `wisent.com`, `needher.ai`, `aiwritecheck.com` and
+`undetectabletext.com` cannot be served this way at all.
+
+**3. Moving the five Namecheap zones to Cloudflare nameservers.** Free, and it
+covers the apexes the previous option cannot. It needs the same missing API
+token, and it moves the zone that carries the company's mail - which is the
+operator's decision, not a deployment step.
+
+No part of this document works around any of them: `stado web edge declare`
+remains the way to record an edge Stado did not create, for a host that
+already holds a public address.
 
 `stado web edge remove` is the one command that undoes it. It deletes the VM,
 the NIC, the security group and the public address in reverse creation order,

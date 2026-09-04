@@ -77,10 +77,19 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         let token = client
             .read_string(item, "token")
             .await
+            // A vault that could not answer is not a deployment verdict. The
+            // context is still worth having, so it is added only to the
+            // errors that describe configuration; an unavailable Skarbiec is
+            // propagated with its own type intact so the caller can report
+            // that nothing was measured.
             .map_err(|error| {
-                SkarbiecError::Deployment(format!(
-                    "reading {item}/token for {scope} failed: {error}"
-                ))
+                if error.is_unavailable() {
+                    error
+                } else {
+                    SkarbiecError::Deployment(format!(
+                        "reading {item}/token for {scope} failed: {error}"
+                    ))
+                }
             })?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
