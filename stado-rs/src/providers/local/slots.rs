@@ -618,6 +618,24 @@ fn py_list_repr(items: &[String]) -> String {
     format!("[{inner}]")
 }
 
+/// Whether this agent kind may satisfy a job's requested system packages.
+pub fn allows_job_system_packages(kind: &str) -> bool {
+    crate::capabilities::variant(crate::capabilities::RuntimeFacet::Execution, kind).is_some_and(
+        |variant| {
+            matches!(
+                variant.adapter,
+                crate::capabilities::RuntimeAdapter::Execution(adapter)
+                    if adapter.allows_job_system_packages()
+            )
+        },
+    )
+}
+
+/// Whether this agent can satisfy the system-package part of this job.
+pub fn job_system_packages_eligible(job: &Job, kind: &str) -> bool {
+    job.apt_packages.is_empty() || allows_job_system_packages(kind)
+}
+
 /// Install job.apt_packages via sudo apt-get on cloud-kind agents.
 /// Python `_install_apt_packages`.
 ///
@@ -635,15 +653,7 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
     if job.apt_packages.is_empty() {
         return true;
     }
-    let system_packages_allowed =
-        crate::capabilities::variant(crate::capabilities::RuntimeFacet::Execution, kind)
-            .is_some_and(|variant| {
-                matches!(
-                    variant.adapter,
-                    crate::capabilities::RuntimeAdapter::Execution(adapter)
-                        if adapter.allows_job_system_packages()
-                )
-            });
+    let system_packages_allowed = allows_job_system_packages(kind);
     if !system_packages_allowed {
         log_fn(&format!(
             "refuse {}: apt_packages={} requested but agent kind={kind} has no managed-system-package capability",
