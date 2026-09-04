@@ -511,11 +511,6 @@ fn log_evidence(path: &Path, lines: usize, max_chars: usize) -> LogEvidence {
     }
 }
 
-/// The bounded tail alone, for a record with nothing to classify from.
-fn log_tail(path: &Path, lines: usize, max_chars: usize) -> String {
-    log_evidence(path, lines, max_chars).rendered
-}
-
 fn expand_home(value: &str, home: &str) -> String {
     value.replace("{home}", home)
 }
@@ -684,6 +679,34 @@ fn process_executable_matches(pid: i32, expected: &Path) -> bool {
     }
 }
 
+fn proxy_process_matches(
+    pid: i32,
+    target: &ReleaseTargetPolicy,
+    serving: &BlueGreenServing,
+    product: &str,
+) -> Result<bool, String> {
+    if !pid_alive(pid) {
+        return Ok(false);
+    }
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
+    if !process_executable_matches(pid, &executable) {
+        return Ok(false);
+    }
+    let expected_command = format!(
+        "{} release proxy --state {} --bind {}",
+        executable.display(),
+        proxy_state_path(target, product).display(),
+        serving.stable_bind
+    );
+    let output = Command::new("/bin/ps")
+        .args(["-ww", "-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map_err(|error| format!("cannot inspect stable proxy pid {pid}: {error}"))?;
+    Ok(output.status.success()
+        && String::from_utf8_lossy(&output.stdout).trim() == expected_command)
+}
+
 /// Find the live Stado proxy whose executable and complete argument vector own
 /// this exact state file and bind.
 ///
@@ -695,7 +718,7 @@ fn exact_proxy_pid(
     target: &ReleaseTargetPolicy,
     serving: &BlueGreenServing,
     product: &str,
-) -> Result<i32, String> {
+) -> Result<Option<i32>, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
     let expected_command = format!(
@@ -729,12 +752,8 @@ fn exact_proxy_pid(
     matches.sort_unstable();
     matches.dedup();
     match matches.as_slice() {
-        [pid] => Ok(*pid),
-        [] => Err(format!(
-            "no live Stado release proxy owns {} with state {}",
-            serving.stable_bind,
-            proxy_state_path(target, product).display()
-        )),
+        [pid] => Ok(Some(*pid)),
+        [] => Ok(None),
         many => Err(format!(
             "{} live Stado release proxies claim {} with state {}",
             many.len(),
@@ -861,10 +880,6 @@ fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     }
 }
 
-fn proxy_alive(state: &HostReleaseState) -> bool {
-    state.proxy_pid.is_some_and(pid_alive)
-}
-
 fn write_proxy_target(
     target: &ReleaseTargetPolicy,
     product: &str,
@@ -921,29 +936,38 @@ async fn ensure_active_proxy(
     if !ready(active, &serving.readiness_path).await {
         return Err("active release lost readiness".to_string());
     }
-    if proxy_alive(state) {
-        return write_proxy_target(target, product, generation, active.port);
-    }
+    write_proxy_target(target, product, generation, active.port)?;
 
-    stop_legacy(target)?;
-    state.proxy_pid = Some(start_proxy(
-        target,
-        serving,
-        product,
-        generation,
-        active.port,
-    )?);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    if proxy_alive(state) {
-        return Ok(());
-    }
+    let recorded_proxy = match state.proxy_pid {
+        Some(proxy_pid) if proxy_process_matches(proxy_pid, target, serving, product)? => {
+            Some(proxy_pid)
+        }
+        _ => None,
+    };
+    let proxy_pid = if let Some(proxy_pid) = recorded_proxy {
+        proxy_pid
+    } else if let Some(proxy_pid) = exact_proxy_pid(target, serving, product)? {
+        proxy_pid
+    } else {
+        stop_legacy(target)?;
+        let spawned_pid =
+            start_proxy(target, serving, product, generation, active.port)?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let proxy_pid = exact_proxy_pid(target, serving, product)
+            .map_err(|why| format!("stable release proxy failed to start: {why}"))?
+            .ok_or_else(|| "spawned stable release proxy is not live".to_string())?;
+        if proxy_pid != spawned_pid {
+            return Err(format!(
+                "spawned stable release proxy pid {spawned_pid}, but exact owner is pid {proxy_pid}"
+            ));
+        }
+        proxy_pid
+    };
 
-    let proxy_pid = exact_proxy_pid(target, serving, product)
-        .map_err(|why| format!("stable release proxy failed to start: {why}"))?;
     state.proxy_pid = Some(proxy_pid);
     stable_bind_answer(proxy_pid, target, serving, product, generation, active)
         .await
-        .map_err(|why| format!("stable release proxy failed to start: {why}"))
+        .map_err(|why| format!("stable release proxy is invalid: {why}"))
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
@@ -1377,27 +1401,18 @@ async fn rollback(
         );
     }
     if let Some(previous) = state.previous.take() {
-        if proxy_alive(state) {
-            write_proxy_target(
-                target,
-                &state.product,
-                state.rollout_generation,
-                previous.port,
-            )?;
-        } else {
-            let serving = target.blue_green_serving()?;
-            state.proxy_pid = Some(start_proxy(
-                target,
-                &serving,
-                &state.product,
-                state.rollout_generation,
-                previous.port,
-            )?);
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            if !proxy_alive(state) {
-                return Err("rollback proxy failed to start".to_string());
-            }
-        }
+        let serving = target.blue_green_serving()?;
+        let product = state.product.clone();
+        let generation = state.rollout_generation;
+        ensure_active_proxy(
+            target,
+            &serving,
+            &product,
+            generation,
+            &previous,
+            state,
+        )
+        .await?;
         if let Some(record) = &failed {
             terminate(record);
         }
@@ -2027,60 +2042,15 @@ async fn reconcile_product(
     state.cutover_at = Some(Utc::now());
     save_state(target, &mut state)?;
 
-    let proxy_result = if proxy_alive(&state) {
-        write_proxy_target(target, product, desired.rollout_generation, port)
-    } else {
-        stop_legacy(target)?;
-        state.proxy_pid = Some(start_proxy(
-            target,
-            &serving,
-            product,
-            desired.rollout_generation,
-            port,
-        )?);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if proxy_alive(&state) {
-            Ok(())
-        } else {
-            // Someone may already serve the stable bind: the target file this
-            // agent just wrote is what every Stado proxy reads, so a proxy left by
-            // an earlier run is already forwarding to this candidate. Spawning a
-            // second binder returns `Address already in use (os error 48)`, and the
-            // rollout used to fail for a bind that was serving correctly -- state
-            // said "no proxy", the port said otherwise, and nothing compared them.
-            match exact_proxy_pid(target, &serving, product) {
-                Ok(proxy_pid) => {
-                    state.proxy_pid = Some(proxy_pid);
-                    match stable_bind_answer(
-                        proxy_pid,
-                        target,
-                        &serving,
-                        product,
-                        desired.rollout_generation,
-                        &process,
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            state.detail = format!(
-                                "adopted proxy pid={proxy_pid} serving {}",
-                                serving.stable_bind
-                            );
-                            Ok(())
-                        }
-                        Err(why) => Err(format!(
-                            "stable release proxy failed to start: {why}; stderr {}",
-                            log_tail(&release_log_path(target, product, "proxy", "err"), 20, 1200)
-                        )),
-                    }
-                }
-                Err(why) => Err(format!(
-                    "stable release proxy failed to start: {why}; stderr {}",
-                    log_tail(&release_log_path(target, product, "proxy", "err"), 20, 1200)
-                )),
-            }
-        }
-    };
+    let proxy_result = ensure_active_proxy(
+        target,
+        &serving,
+        product,
+        desired.rollout_generation,
+        &process,
+        &mut state,
+    )
+    .await;
     if let Err(reason) = proxy_result {
         if policy.strategy.automatic_rollback {
             rollback(target, &mut state, reason).await?;
