@@ -19,6 +19,7 @@ pub mod build_caches;
 pub mod chromium_clones;
 pub mod hf;
 pub mod queue_workdirs;
+pub mod release_store;
 pub mod safefs;
 pub mod weles;
 
@@ -358,6 +359,7 @@ pub struct CleanupReport {
     pub clones: CleanerReport,
     pub workdirs: CleanerReport,
     pub backup_twins: CleanerReport,
+    pub release_store: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_job_count: i64,
@@ -405,6 +407,10 @@ pub struct CleanupReport {
     /// Empty when every declared cleaner had its turn, so a reader can tell
     /// "nothing was eligible" from "nobody looked".
     pub unscanned_cleaners: Vec<String>,
+    /// Cleaners the policy names that this binary does not implement: the
+    /// registry is read by every release at once, and a name a newer release
+    /// knows is not a reason to run none of the ones this release knows.
+    pub unknown_cleaners: Vec<String>,
     /// Where the build-cache walk stopped, relative to its scan root, or
     /// `None` when it crossed the whole tree. Carried across passes through
     /// the state file: see [`build_caches::scan_build_caches`].
@@ -438,12 +444,14 @@ impl CleanupReport {
             clones: CleanerReport::default(),
             workdirs: CleanerReport::default(),
             backup_twins: CleanerReport::default(),
+            release_store: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_job_count: active_job_count.max(0),
             last_success_at: None,
             scanned: false,
             unscanned_cleaners: Vec::new(),
+            unknown_cleaners: Vec::new(),
             builds_resume_from: None,
             errors: Vec::new(),
         }
@@ -488,6 +496,14 @@ impl CleanupReport {
             .or_insert(0) += count;
     }
 
+    pub fn skip_release_store(&mut self, reason: &str, count: i64) {
+        *self
+            .release_store
+            .skipped
+            .entry(reason.to_string())
+            .or_insert(0) += count;
+    }
+
     /// The report as JSON (key order normalized at serialization sites
     /// with [`canonical_json`], matching Python `json.dumps(sort_keys=True)`).
     pub fn to_value(&self) -> Value {
@@ -512,6 +528,7 @@ impl CleanupReport {
                 chromium_clones::CLEANER: cleaner(&self.clones),
                 queue_workdirs::CLEANER: cleaner(&self.workdirs),
                 backup_twins::CLEANER: cleaner(&self.backup_twins),
+                release_store::CLEANER: cleaner(&self.release_store),
             })
         } else {
             Value::Null
@@ -546,6 +563,7 @@ impl CleanupReport {
             "pressure_active": self.pressure_active,
             "cleaners": cleaners,
             "unscanned_cleaners": self.unscanned_cleaners,
+            "unknown_cleaners": self.unknown_cleaners,
             "caps": {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
@@ -1467,6 +1485,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             backup_twins::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
             ),
+            release_store::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(release_store::CLEANER)),
+            ),
         }),
     };
     // The declared cleaners the pass never reached, kept in the public form
@@ -1889,12 +1910,12 @@ fn finish(
 /// Every job id currently in `queue` or `running` from an already-open store,
 /// or `None` when the keep-list could not be built inside `budget`.
 ///
-/// The keep-list for [`queue_workdirs`]. Read best-effort, exactly as
-/// [`crate::deploy::host_reclaim`] reads it for the same directories, and for
-/// the same reason: an unreadable store must not turn a disk repair into an
-/// outage. A partial read is discarded rather than narrowed, because a
-/// keep-list missing the running job's id authorizes deleting the tree that
-/// job is writing into.
+/// The keep-list for [`queue_workdirs`]. Read best-effort so an unreadable
+/// store cannot turn a disk repair into an outage. A partial read is discarded
+/// rather than narrowed, because a keep-list missing the running job's id
+/// authorizes deleting the tree that job is writing into. `host reclaim`
+/// deliberately delegates these directories to this locked path and does not
+/// maintain another keep-list.
 ///
 /// [`crate::queue::JobStorage::list_job_ids`] and NOT `list_jobs`: this wants
 /// ids, the ids are in the object names, and downloading every job document to
@@ -2243,10 +2264,10 @@ fn run_with_lock(
     if remaining_after_clones == 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
         report.caps.scan = true;
     }
-    // The queue's own per-job scratch trees, scanned last on the budget the
-    // rest leave. They share the temporary root with the clones above and are
-    // judged by their job's state rather than by age, so nothing about the
-    // order above changes what this pass may take — only how much of it.
+    // The queue's own per-job trees, scanned last on the budget the rest leave.
+    // They live under the persistent agent-owned work root and are judged by
+    // their job's state rather than by age, so nothing about the order above
+    // changes what this pass may take — only how much of it.
     queue_workdirs::scan_queue_workdirs(
         home,
         &policy,
@@ -2282,12 +2303,30 @@ fn run_with_lock(
         deadline,
         &mut report,
     );
+    let remaining_after_twins = (policy.max_scan_items
+        - report.hf.scanned_items
+        - report.weles.scanned_items
+        - report.builds.scanned_items
+        - report.clones.scanned_items
+        - report.workdirs.scanned_items
+        - report.backup_twins.scanned_items)
+        .max(0);
+    if remaining_after_twins == 0 && policy.cleaners.contains_key(release_store::CLEANER) {
+        report.caps.scan = true;
+    }
+    // Immutable release versions nothing on this host still names, scanned
+    // last: it deletes whole version directories, so it takes the smallest
+    // share and only after every cleaner that reclaims scratch has had its
+    // turn — a release is the one class here that costs a rebuild to get
+    // back.
+    release_store::scan_release_store(home, &policy, remaining_after_twins, deadline, &mut report);
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
         + report.clones.scanned_items
         + report.workdirs.scanned_items
-        + report.backup_twins.scanned_items;
+        + report.backup_twins.scanned_items
+        + report.release_store.scanned_items;
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
@@ -2314,11 +2353,27 @@ fn run_with_lock(
         (chromium_clones::CLEANER, &report.clones),
         (queue_workdirs::CLEANER, &report.workdirs),
         (backup_twins::CLEANER, &report.backup_twins),
+        (release_store::CLEANER, &report.release_store),
     ]
     .into_iter()
     .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
     .map(|(name, _)| name.to_string())
     .collect();
+    const IMPLEMENTED: [&str; 7] = [
+        "huggingface_cache",
+        "weles_recordings",
+        "build_caches",
+        chromium_clones::CLEANER,
+        queue_workdirs::CLEANER,
+        backup_twins::CLEANER,
+        release_store::CLEANER,
+    ];
+    report.unknown_cleaners = policy
+        .cleaners
+        .keys()
+        .filter(|name| !IMPLEMENTED.contains(&name.as_str()))
+        .cloned()
+        .collect();
 
     let after = match free_bytes(home) {
         Ok(free) => free,

@@ -1498,6 +1498,10 @@ enum HostCommands {
         /// One cleaner's age gate, as `NAME=SECONDS`; repeatable.
         #[arg(long, value_name = "NAME=SECONDS")]
         cleaner_min_age_seconds: Vec<String>,
+        /// How many newest versions of each product `release_store` keeps with
+        /// no other reason to, as `release_store=N`; repeatable.
+        #[arg(long, value_name = "NAME=COUNT")]
+        cleaner_keep_newest: Vec<String>,
         /// Emit the policy and registry generation as JSON.
         #[arg(long)]
         json: bool,
@@ -2061,33 +2065,36 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Archive one unmanaged executable from TARGET without deleting its bytes.
+    /// Archive one obsolete executable or launchd declaration from TARGET
+    /// without deleting its bytes.
     ///
-    /// The source must be a direct child of `$HOME/.stado/bin`,
-    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`, and a regular non-symlink
-    /// file owned by the approved account. Stado moves it atomically into the
-    /// product backup tree and verifies its size, mode, and SHA-256 there.
+    /// User executables must be direct children of `$HOME/.stado/bin`,
+    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`. A system launchd declaration
+    /// must be one exact `/Library/LaunchDaemons/*.plist` file and is moved
+    /// under the host's approved sudo grant to a non-loadable sibling. Each
+    /// mutating path requires a handoff or dry-run receipt and verifies
+    /// its size, mode, and SHA-256 after the atomic move.
     #[command(name = "retire-file")]
     RetireFile {
         target: String,
-        /// Absolute path to one file in an approved user bin directory.
+        /// Absolute path to one approved user binary or system launchd plist.
         path: String,
-        /// Canonical product name owning the backup tree.
+        /// Canonical product name owning the retirement receipt.
         #[arg(long)]
         product: String,
         /// Inspect and report the exact source without moving it.
         #[arg(long)]
         dry_run: bool,
-        /// Dry-run transaction token binding an apply to its reviewed destination.
+        /// One-use transaction token from a handoff or dry-run receipt.
         #[arg(long)]
         transaction: Option<String>,
-        /// SHA-256 from the reviewed dry-run receipt.
+        /// SHA-256 from the same receipt.
         #[arg(long)]
         expected_sha256: Option<String>,
-        /// Byte count from the reviewed dry-run receipt.
+        /// Byte count from the same receipt.
         #[arg(long)]
         expected_size: Option<u64>,
-        /// Octal mode from the reviewed dry-run receipt.
+        /// Four-digit octal mode from the same receipt.
         #[arg(long)]
         expected_mode: Option<String>,
         /// Emit the retirement report as JSON.
@@ -2543,6 +2550,21 @@ enum HostCommands {
         #[arg(long)]
         reload_service: Option<String>,
     },
+    /// Remove one dotted Stado configuration key from TARGET.
+    ///
+    /// A declaration that should never have been made is retracted, not
+    /// overwritten with a null: a key present with a null value and a key that
+    /// is absent read the same through `jq` and differently through the code
+    /// that iterates the object.
+    #[command(name = "config-unset")]
+    ConfigUnset {
+        target: String,
+        key: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the retraction immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
+    },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
@@ -2589,11 +2611,14 @@ enum HostBuildCacheCommands {
 
 #[derive(Subcommand)]
 enum HostGuiAutomationCommands {
-    /// Report autologin, remote management, TCC and automation artifacts.
+    /// Report autologin, remote management, TCC, CuaDriver, and the signed
+    /// Apple challenge helper for the registry-bound GUI user.
     Status { target: String },
-    /// Configure persistent GUI login, install CuaDriver, and grant Accessibility.
+    /// Configure the persistent GUI login, CuaDriver, the Apple challenge
+    /// helper, runtime, and Accessibility grants.
     Enable { target: String },
-    /// Grant the installed CuaDriver app Accessibility for the host's GUI user.
+    /// Reconcile the signed Apple challenge helper and grant it and the
+    /// installed CuaDriver Accessibility for the registry-bound GUI user.
     #[command(name = "grant-accessibility")]
     GrantAccessibility { target: String },
     /// Revert the enablement: autologin, kcpassword, remote management,
@@ -2990,6 +3015,28 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 identity,
                 json,
             } => identity::verify(kind, identity, json).await,
+            IdentityCommands::RelayAppleChallenge {
+                identity,
+                authorization_id,
+                preflight,
+                json,
+            } => identity::relay_apple_challenge(identity, authorization_id, preflight, json).await,
+            IdentityCommands::IssueAppleCapabilities {
+                target,
+                agent,
+                authorization_id,
+                ttl_seconds,
+                json,
+            } => {
+                identity::issue_apple_capabilities(
+                    target,
+                    agent,
+                    authorization_id,
+                    ttl_seconds,
+                    json,
+                )
+                .await
+            }
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
@@ -3062,6 +3109,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 cleaner_root,
                 clear_cleaner_root,
                 cleaner_min_age_seconds,
+                cleaner_keep_newest,
                 json,
             } => {
                 host::disk_cleanup_policy(
@@ -3081,6 +3129,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                         cleaner_root,
                         clear_cleaner_root,
                         cleaner_min_age_seconds,
+                        cleaner_keep_newest,
                     },
                     json,
                 )
@@ -3543,6 +3592,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 value,
                 reload_service,
             } => host::config_set(&target, &key, &value, reload_service.as_deref()).await,
+            HostCommands::ConfigUnset {
+                target,
+                key,
+                reload_service,
+            } => host::config_unset(&target, &key, reload_service.as_deref()).await,
             HostCommands::Release {
                 target,
                 binary,
@@ -3591,6 +3645,33 @@ enum IdentityCommands {
         kind: String,
         #[arg(long)]
         identity: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Capture on the verified Apple-account holder and store on this worker.
+    #[command(hide = true)]
+    RelayAppleChallenge {
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        authorization_id: String,
+        /// Resolve both hosts and their broker/helper without opening a prompt.
+        #[arg(long)]
+        preflight: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Issue Apple login capabilities in the worker's own Weles broker.
+    #[command(hide = true)]
+    IssueAppleCapabilities {
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        authorization_id: String,
+        #[arg(long)]
+        ttl_seconds: u64,
         #[arg(long)]
         json: bool,
     },

@@ -301,26 +301,31 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 6] = [
+    const ALLOWED: [&str; 7] = [
         "backup_twins",
         "build_caches",
         "chromium_clones",
         "huggingface_cache",
         "queue_workdirs",
+        "release_store",
         "weles_recordings",
     ];
-    let mut unknown: Vec<&str> = cleaners
+    // A cleaner this binary does not know is a cleaner a newer binary does:
+    // the registry is one document read by every release in the fleet at
+    // once. Refusing the whole policy for one unfamiliar name switched off
+    // every cleaner on charless-mac-mini on 2026-09-04 the moment
+    // `release_store` was declared for the binary that was still queued to
+    // reach it — the janitor read `cleaners: null`, reported
+    // `invalid_or_unavailable_policy`, and the disk it had been holding above
+    // the watermark was left to fill. So an unknown name is skipped here and
+    // reported by the janitor as `unknown_cleaner`; the known ones keep
+    // running, and the new one starts the moment the binary that knows it
+    // lands. A name is still held to the cleaner key schema below.
+    let known: Vec<&str> = cleaners
         .keys()
         .map(String::as_str)
-        .filter(|k| !ALLOWED.contains(k))
+        .filter(|k| ALLOWED.contains(k))
         .collect();
-    unknown.sort_unstable();
-    if !unknown.is_empty() {
-        return Err(verr(
-            &cleaners_location,
-            &format!("unknown cleaners {}", py_list_repr(&unknown)),
-        ));
-    }
     // An armed policy with no cleaner is a declaration that cannot act. It
     // passes every other check here: the mode is legal, the thresholds are
     // legal, the cleaner map is a legal empty object — and the janitor then
@@ -332,7 +337,7 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     // `off` and `report` may legitimately name no cleaner: neither deletes,
     // and both still measure free space and pressure. `enforce` claims it
     // will act, so it has to name something it can act with.
-    if map["mode"].as_str() == Some("enforce") && cleaners.is_empty() {
+    if map["mode"].as_str() == Some("enforce") && known.is_empty() {
         return Err(verr(
             &cleaners_location,
             "must name at least one cleaner when mode is 'enforce'; an armed \
@@ -344,7 +349,12 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         let cleaner = cleaner
             .as_object()
             .ok_or_else(|| verr(&cleaner_location, "must be an object"))?;
-        const CLEANER_KEYS: [&str; 3] = ["allow_missing_upload_proof", "min_age_seconds", "root"];
+        const CLEANER_KEYS: [&str; 4] = [
+            "allow_missing_upload_proof",
+            "keep_newest",
+            "min_age_seconds",
+            "root",
+        ];
         let mut unknown_keys: Vec<&str> = cleaner
             .keys()
             .map(String::as_str)
@@ -372,10 +382,11 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         // `queue_workdirs` is the exception in the other direction, and it is
         // not a weaker rule but a different one. A job workdir is safe to
         // remove when its job is terminal, which the janitor establishes from
-        // the queue store's own `queue` and `running` listings, exactly as
-        // `host reclaim` does for the same directories. Age adds nothing to
-        // that and a floor would subtract: on the always-on mac the workdirs
-        // that took the host under its watermark were minutes old, 4.3 GiB of
+        // the queue store's own `queue` and `running` listings. `host reclaim`
+        // delegates these directories to that same locked janitor rather than
+        // maintaining a second sweep. Age adds nothing to the terminal gate
+        // and a floor would subtract: on the always-on mac the workdirs that
+        // took the host under its watermark were minutes old, 4.3 GiB of
         // `cargo` build output from jobs that had already finished, so a
         // day-long floor would have left the one cleaner written for that
         // failure unable to touch it.
@@ -389,7 +400,9 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
             // subtract — the replica that took charless-mac-mini from 51.8 to
             // 34.5 GiB free was written in the seven minutes before it was
             // measured.
-            "queue_workdirs" | "backup_twins" => 0,
+            // `release_store` keeps a version by who still names it, not by
+            // its age; the age gate only spares runs younger than it.
+            "queue_workdirs" | "backup_twins" | "release_store" => 0,
             _ => 86400,
         };
         require_int(
@@ -413,6 +426,19 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
                     "must be a non-empty string",
                 ));
             }
+        }
+        // `keep_newest` is the rollback ladder `release_store` leaves per
+        // product; it belongs to that cleaner alone and must keep at least
+        // one, because a store with zero versions of a product cannot serve
+        // the rollback the release loop promises.
+        if let Some(keep) = cleaner.get("keep_newest") {
+            if name != "release_store" {
+                return Err(verr(
+                    &format!("{cleaner_location}.keep_newest"),
+                    "only the release_store cleaner takes keep_newest",
+                ));
+            }
+            require_int(keep, &format!("{cleaner_location}.keep_newest"), 1, None)?;
         }
     }
     Ok(())
@@ -1240,6 +1266,10 @@ pub struct DiskCleanerPolicy {
     /// cleaner's well-known location, e.g. ~/weles/recordings for weles).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
+    /// `release_store` only: how many newest versions of each product stay
+    /// with no other reason to keep them — the rollback ladder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_newest: Option<i64>,
 }
 
 /// Disk-cleanup policy for a local target.
@@ -1303,6 +1333,7 @@ impl DiskCleanupPolicy {
                 min_age_seconds: 86_400,
                 allow_missing_upload_proof: false,
                 root: None,
+                keep_newest: None,
             },
         );
         Self {
@@ -2010,16 +2041,34 @@ pub struct PlacementState {
     pub extra: Map<String, Value>,
 }
 
-/// The launchd/systemd unit running one service on one host.
+/// One logical service's lifecycle on a placement host.
+///
+/// Managed units retain the original `unit` / `path` / `kind` representation.
+/// A release-controlled service instead carries `controller=release-control`
+/// and its exact release product; strict registry validation rejects every
+/// mixed or partial shape before this round-tripping model is constructed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacementUnit {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub unit: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
-    /// "launchd" | "systemd".
+    /// "launchd" | "systemd" for a managed unit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl PlacementUnit {
+    pub fn release_controlled(&self) -> bool {
+        self.controller.as_deref() == Some("release-control") && self.product.is_some()
+    }
 }
 
 /// A health check that proves a service came up on the host it moved to.
@@ -3626,6 +3675,9 @@ impl Registry {
         }
         let profile = self.placement_profile(service.placement_profile.as_deref()?)?;
         let unit = profile.hosts.get(host)?.units.get(name)?;
+        if unit.release_controlled() {
+            return None;
+        }
         [unit.unit.as_str(), unit.name.as_str()]
             .into_iter()
             .find(|label| !label.is_empty())

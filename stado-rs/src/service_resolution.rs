@@ -6,7 +6,7 @@
 //! placement cutover one atomic fleet-visible change.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
@@ -291,6 +291,149 @@ fn active_profile_host(
             active.join(", ")
         )),
     }
+}
+fn release_controlled_product(
+    profile: &crate::placement::PlacementProfile,
+    service: &str,
+) -> Result<Option<String>, String> {
+    let mut product = None;
+    let mut external_hosts = Vec::new();
+    for (host, host_profile) in &profile.hosts {
+        let unit = host_profile.units.get(service).ok_or_else(|| {
+            format!(
+                "placement profile {:?} has no unit for service {service:?} on {host:?}",
+                profile.name
+            )
+        })?;
+        if let Some(owner) = unit.release_controlled() {
+            if unit.name != service {
+                return Err(format!(
+                    "placement profile {:?} release-controlled service {service:?} must retain \
+                     that exact logical name, not {:?}",
+                    profile.name, unit.name
+                ));
+            }
+            external_hosts.push(host.as_str());
+            match product.as_deref() {
+                None => product = Some(owner.product.clone()),
+                Some(existing) if existing == owner.product => {}
+                Some(existing) => {
+                    return Err(format!(
+                        "placement profile {:?} service {service:?} mixes release products \
+                         {existing:?} and {:?}",
+                        profile.name, owner.product
+                    ))
+                }
+            }
+        }
+    }
+    if external_hosts.is_empty() {
+        return Ok(None);
+    }
+    if external_hosts.len() != profile.hosts.len() {
+        return Err(format!(
+            "placement profile {:?} service {service:?} must be release-controlled in every host \
+             template or managed in every host template",
+            profile.name
+        ));
+    }
+    Ok(product)
+}
+
+fn validate_release_controlled_route(
+    document: &Value,
+    target_entries: &BTreeMap<String, &Value>,
+    profile: &crate::placement::PlacementProfile,
+    service: &str,
+    route: &ServiceRoute,
+    product: &str,
+    location: &str,
+) -> Result<(), String> {
+    for (host, target) in target_entries {
+        if target_declares_service(target, service) {
+            return Err(format!(
+                "{location}: release-controlled service {service:?} must not retain a \
+                 targets[].services[] lifecycle record on {host:?}"
+            ));
+        }
+    }
+    let control = crate::release_control::control(document)?.ok_or_else(|| {
+        format!("{location}: release-controlled service requires release_control")
+    })?;
+    let policy = control.products.get(product).ok_or_else(|| {
+        format!("{location}: release-control product {product:?} is not declared")
+    })?;
+    if policy.service != service {
+        return Err(format!(
+            "{location}: release-control product {product:?} owns logical service {:?}, not \
+             {service:?}",
+            policy.service
+        ));
+    }
+    let raw_targets = document
+        .get("release_control")
+        .and_then(|control| control.get("products"))
+        .and_then(|products| products.get(product))
+        .and_then(|policy| policy.get("targets"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{location}: release-control product targets are not an object"))?;
+    for (target, release_target) in raw_targets {
+        if release_target.get("legacy_launchd_label").is_some()
+            || release_target.get("legacy_launchd_plist").is_some()
+        {
+            return Err(format!(
+                "{location}: release-controlled service {service:?} must not retain legacy \
+                 launchd restore fields on release target {target:?}"
+            ));
+        }
+    }
+    let target_policy = policy.targets.get(&route.active_host).ok_or_else(|| {
+        format!(
+            "{location}: release-control product {product:?} has no target {:?}",
+            route.active_host
+        )
+    })?;
+    let serving = target_policy.blue_green_serving().map_err(|error| {
+        format!("{location}: release-controlled placement requires a blue-green target: {error}")
+    })?;
+    let stable_bind = serving
+        .stable_bind
+        .parse::<SocketAddr>()
+        .map_err(|error| format!("{location}: invalid release stable_bind: {error}"))?;
+    let endpoint = route
+        .endpoints
+        .get(&route.active_host)
+        .and_then(|endpoint| socket_of(&endpoint.url))
+        .ok_or_else(|| {
+            format!(
+                "{location}: active release-controlled host {:?} has no usable endpoint",
+                route.active_host
+            )
+        })?;
+    if endpoint != stable_bind {
+        return Err(format!(
+            "{location}: active endpoint {endpoint} must equal release-control stable_bind \
+             {stable_bind}"
+        ));
+    }
+    let probe = profile
+        .hosts
+        .get(&route.active_host)
+        .and_then(|host| host.probes.iter().find(|probe| probe.service == service))
+        .and_then(|probe| socket_of(&probe.url))
+        .ok_or_else(|| {
+            format!(
+                "{location}: active release-controlled host {:?} has no usable placement probe",
+                route.active_host
+            )
+        })?;
+    if probe != stable_bind {
+        return Err(format!(
+            "{location}: placement probe socket {probe} must equal release-control stable_bind \
+             {stable_bind}"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_endpoint(endpoint: &ServiceEndpoint, location: &str) -> Result<(), String> {
@@ -677,11 +820,23 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                      placement host exactly once"
                 ));
             }
-            let declared_host = active_profile_host(profile, name, &target_entries)?;
-            if route.active_host != declared_host {
-                return Err(format!(
-                    "{location}.active_host: must match the managed unit on {declared_host:?}"
-                ));
+            if let Some(product) = release_controlled_product(profile, name)? {
+                validate_release_controlled_route(
+                    document,
+                    &target_entries,
+                    profile,
+                    name,
+                    route,
+                    &product,
+                    &location,
+                )?;
+            } else {
+                let declared_host = active_profile_host(profile, name, &target_entries)?;
+                if route.active_host != declared_host {
+                    return Err(format!(
+                        "{location}.active_host: must match the managed unit on {declared_host:?}"
+                    ));
+                }
             }
         } else {
             let managed_service = route.managed_service.as_deref().ok_or_else(|| {

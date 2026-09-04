@@ -932,6 +932,7 @@ pub struct DiskCleanupPolicyEdit {
     pub cleaner_root: Vec<String>,
     pub clear_cleaner_root: Vec<String>,
     pub cleaner_min_age_seconds: Vec<String>,
+    pub cleaner_keep_newest: Vec<String>,
 }
 
 impl DiskCleanupPolicyEdit {
@@ -951,6 +952,7 @@ impl DiskCleanupPolicyEdit {
             && self.cleaner_root.is_empty()
             && self.clear_cleaner_root.is_empty()
             && self.cleaner_min_age_seconds.is_empty()
+            && self.cleaner_keep_newest.is_empty()
     }
 }
 
@@ -977,7 +979,7 @@ fn cleaner_pair(raw: &str, flag: &str) -> Result<(String, String), CmdError> {
 fn cleaner_age_floor(name: &str) -> i64 {
     match name {
         "huggingface_cache" => 3600,
-        "queue_workdirs" | "backup_twins" => 0,
+        "queue_workdirs" | "backup_twins" | "release_store" => 0,
         _ => 86400,
     }
 }
@@ -1148,6 +1150,22 @@ pub async fn disk_cleanup_policy(
                 CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
             })?
             .insert("min_age_seconds".to_string(), Value::from(seconds));
+    }
+    for raw in &edit.cleaner_keep_newest {
+        let (name, raw_count) = cleaner_pair(raw, "cleaner-keep-newest")?;
+        let count: i64 = raw_count.parse().map_err(|_| {
+            CmdError::usage(format!(
+                "--cleaner-keep-newest takes NAME=COUNT, got {raw:?}"
+            ))
+        })?;
+        enable(&name, cleaners);
+        cleaners
+            .get_mut(&name)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
+            })?
+            .insert("keep_newest".to_string(), Value::from(count));
     }
 
     entry.insert("disk_cleanup".to_string(), policy.clone());
@@ -4699,7 +4717,10 @@ fn retire_file_binding(
         request.expected_size,
         request.expected_mode,
     ) {
-        (None, None, None, None) => Ok(None),
+        (None, None, None, None) if request.dry_run => Ok(None),
+        (None, None, None, None) => Err(CmdError::usage(
+            "mutating retire-file requires transaction, expected-sha256, expected-size, and expected-mode from a reviewed receipt",
+        )),
         (Some(transaction), Some(expected_sha256), Some(expected_size), Some(expected_mode)) => {
             if request.dry_run {
                 return Err(CmdError::usage(
@@ -4708,7 +4729,7 @@ fn retire_file_binding(
             }
             if !safe_retirement_transaction(transaction) {
                 return Err(CmdError::usage(
-                    "transaction must be the exact token from a retire-file dry-run receipt",
+                    "transaction must be the exact token from a handoff or retire-file dry-run receipt",
                 ));
             }
             if expected_sha256.len() != 64
@@ -4725,7 +4746,7 @@ fn retire_file_binding(
                     .all(|byte| matches!(byte, b'0'..=b'7'))
             {
                 return Err(CmdError::usage(
-                    "expected-mode must be the four-digit octal mode from the dry-run receipt",
+                    "expected-mode must be the four-digit octal mode from the handoff or dry-run receipt",
                 ));
             }
             Ok(Some(RetireFileBinding {
@@ -5337,9 +5358,211 @@ pub fn retire_file_local(
     Ok(())
 }
 
-/// Resolve TARGET and invoke the same installed Rust primitive locally or over
-/// its declared host channel. Remote cleanup therefore requires the 0.15.1
-/// Stado delivery to be installed before any residue is touched.
+const RETIRE_SYSTEM_LAUNCHD_FILE: &str = r#"set -eu
+src=$1
+dst=$2
+dry=$3
+expected_sha=$4
+expected_size=$5
+expected_mode=$6
+if [ ! -e "$src" ]; then
+  printf 'STADO_RETIRE_SYSTEM\tabsent\t-\t-\t-\t-\n'
+  exit 0
+fi
+[ -f "$src" ] && [ ! -L "$src" ] || {
+  printf 'source is not a regular non-symlink file\n' >&2
+  exit 65
+}
+owner=$(/usr/bin/stat -f '%u' "$src")
+[ "$owner" = 0 ] || {
+  printf 'source is not owned by root\n' >&2
+  exit 65
+}
+size=$(/usr/bin/stat -f '%z' "$src")
+mode=$(/usr/bin/stat -f '%Lp' "$src")
+case ${#mode} in 3) mode=0$mode ;; esac
+sha=$(/usr/bin/shasum -a 256 "$src" | /usr/bin/awk '{print $1}')
+if [ "$expected_sha" != - ]; then
+  [ "$sha" = "$expected_sha" ] &&
+  [ "$size" = "$expected_size" ] &&
+  [ "$mode" = "$expected_mode" ] || {
+    printf 'source differs from the reviewed dry-run receipt\n' >&2
+    exit 65
+  }
+fi
+if [ "$dry" = yes ]; then
+  printf 'STADO_RETIRE_SYSTEM\tready\t%s\t%s\t%s\t%s\n' "$size" "$sha" "$mode" "$dst"
+  exit 0
+fi
+[ ! -e "$dst" ] || {
+  printf 'destination collision\n' >&2
+  exit 65
+}
+/bin/mv -n "$src" "$dst"
+if [ -e "$src" ] || [ ! -f "$dst" ] || [ -L "$dst" ]; then
+  [ ! -e "$src" ] && [ -e "$dst" ] && /bin/mv -n "$dst" "$src" || true
+  printf 'retirement path postcondition failed\n' >&2
+  exit 65
+fi
+after_size=$(/usr/bin/stat -f '%z' "$dst")
+after_mode=$(/usr/bin/stat -f '%Lp' "$dst")
+case ${#after_mode} in 3) after_mode=0$after_mode ;; esac
+after_sha=$(/usr/bin/shasum -a 256 "$dst" | /usr/bin/awk '{print $1}')
+if [ "$after_size" != "$size" ] || [ "$after_mode" != "$mode" ] || [ "$after_sha" != "$sha" ]; then
+  /bin/mv -n "$dst" "$src" || true
+  printf 'retired file digest, size, or mode changed; source restored\n' >&2
+  exit 65
+fi
+printf 'STADO_RETIRE_SYSTEM\tretired\t%s\t%s\t%s\t%s\n' "$size" "$sha" "$mode" "$dst"
+"#;
+
+async fn retire_system_launchd_file(
+    target: &crate::targets::ComputeTarget,
+    request: &RetireFileRequest<'_>,
+    binding: Option<&RetireFileBinding>,
+) -> Result<RetireFileOutcome, CmdError> {
+    if !target.release_platform.starts_with("darwin-") {
+        return Err(retire_refused(
+            "system launchd retirement requires a Darwin target",
+        ));
+    }
+    let source = Path::new(request.path);
+    if source.parent() != Some(Path::new("/Library/LaunchDaemons"))
+        || source.extension().and_then(OsStr::to_str) != Some("plist")
+    {
+        return Err(retire_refused(
+            "privileged retirement is limited to one /Library/LaunchDaemons/*.plist file",
+        ));
+    }
+    let name = source
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| retire_refused("system launchd source has no UTF-8 basename"))?;
+    let stem = name
+        .strip_suffix(".plist")
+        .ok_or_else(|| retire_refused("system launchd source must end in .plist"))?;
+    if stem.is_empty()
+        || !stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(retire_refused(
+            "system launchd basename contains unsupported characters",
+        ));
+    }
+    if !safe_backup_product(request.product) {
+        return Err(CmdError::usage(
+            "product must be 1-128 ASCII letters, digits, dots, underscores, or dashes and start with a letter or digit",
+        ));
+    }
+    let transaction = binding
+        .map(|binding| binding.transaction.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+                uuid::Uuid::new_v4().simple()
+            )
+        });
+    let destination = format!("/Library/LaunchDaemons/{name}.stado-retired-{transaction}");
+    let expected_size = binding
+        .map(|binding| binding.expected_size.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let expected_sha = binding
+        .map(|binding| binding.expected_sha256.as_str())
+        .unwrap_or("-");
+    let expected_mode = binding
+        .map(|binding| binding.expected_mode.as_str())
+        .unwrap_or("-");
+    let password = super::service::host_sudo_password(target)
+        .await?
+        .unwrap_or_default();
+    let output = crate::deploy::host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/sudo",
+            "-S",
+            "-p",
+            "",
+            "/bin/sh",
+            "-c",
+            RETIRE_SYSTEM_LAUNCHD_FILE,
+            "stado-retire-system-launchd",
+            request.path,
+            &destination,
+            if request.dry_run { "yes" } else { "no" },
+            expected_sha,
+            &expected_size,
+            expected_mode,
+        ],
+        &format!("{password}\n"),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(retire_refused(format!(
+            "{}: privileged launchd retirement failed: {}",
+            target.name,
+            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+        )));
+    }
+    let marker = output
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("STADO_RETIRE_SYSTEM\t"))
+        .ok_or_else(|| retire_refused("privileged launchd retirement returned no marker"))?;
+    let fields: Vec<&str> = marker.split('\t').collect();
+    if fields.len() != 6 {
+        return Err(retire_refused(
+            "privileged launchd retirement returned a malformed marker",
+        ));
+    }
+    if fields[1] == "absent" {
+        return Ok(RetireFileOutcome {
+            target: target.name.clone(),
+            source: request.path.to_string(),
+            destination: None,
+            transaction: None,
+            status: "absent".to_string(),
+            size: None,
+            sha256: None,
+            mode: None,
+            detail: Some("source does not exist".to_string()),
+        });
+    }
+    let expected_status = if request.dry_run { "ready" } else { "retired" };
+    if fields[1] != expected_status {
+        return Err(retire_refused(format!(
+            "privileged launchd retirement returned status {:?}, expected {expected_status:?}",
+            fields[1]
+        )));
+    }
+    let size = fields[2]
+        .parse::<u64>()
+        .map_err(|_| retire_refused("privileged launchd retirement returned an invalid size"))?;
+    if fields[3].len() != 64 || !fields[3].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(retire_refused(
+            "privileged launchd retirement returned an invalid SHA-256",
+        ));
+    }
+    Ok(RetireFileOutcome {
+        target: target.name.clone(),
+        source: request.path.to_string(),
+        destination: Some(fields[5].to_string()),
+        transaction: Some(transaction),
+        status: fields[1].to_string(),
+        size: Some(size),
+        sha256: Some(fields[3].to_string()),
+        mode: Some(fields[4].to_string()),
+        detail: None,
+    })
+}
+
+/// Resolve TARGET and perform one checked archive locally or over its declared
+/// host channel. User binaries invoke the same installed Rust primitive on a
+/// remote target; system launchd declarations use this build's fixed
+/// digest-bound privileged primitive with the target's approved sudo grant.
 async fn retire_file_document(
     target: &str,
     request: &RetireFileRequest<'_>,
@@ -5354,7 +5577,9 @@ async fn retire_file_document(
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut outcome = if crate::deploy::host_channel::target_is_this_host(&resolved) {
+    let mut outcome = if Path::new(path).parent() == Some(Path::new("/Library/LaunchDaemons")) {
+        retire_system_launchd_file(&resolved, request, binding).await?
+    } else if crate::deploy::host_channel::target_is_this_host(&resolved) {
         retire_file_local_document(request, binding)?
     } else {
         let runner = crate::deploy::production_runner();
@@ -10791,6 +11016,10 @@ pub async fn config_set(
             "configuration key must be a non-empty dotted name",
         ));
     }
+    // Before the write, not after: a declaration whose item does not exist
+    // closes the host's release publication boundary the moment the unit
+    // reloads, and the cheapest place to say so is here.
+    refuse_unminted_publisher(target, key, value).await?;
     remote_config(target, Some((key, value))).await?;
     warn_unbacked_object_namespace(target, key, value);
     if let Some(service) = reload_service {
@@ -10802,6 +11031,146 @@ pub async fn config_set(
         .await?;
     }
     Ok(())
+}
+
+/// Retract one configuration key from a fleet host.
+///
+/// Setting a declaration to `null` is not a retraction: a key present with a
+/// null value and a key that is absent read alike through `jq` and differently
+/// through the code that iterates the object, which is how a publisher nobody
+/// meant to declare kept being counted.
+pub async fn config_unset(
+    target: &str,
+    key: &str,
+    reload_service: Option<&str>,
+) -> Result<(), CmdError> {
+    if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
+        return Err(CmdError::click(
+            "configuration key must be a non-empty dotted name",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!(
+        "set -euo pipefail\n\
+         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+         binary=\"$HOME/.stado/bin/stado\"\n\
+         test -x \"$binary\"\n\
+         key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+         \"$binary\" config unset \"$key\"\n\
+         \"$binary\" config show\n",
+        STANDARD.encode(key.as_bytes())
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        // The host's own sentence, not just its last line: `stado config
+        // unset` prints why it refused and a tracing banner after it, so
+        // reporting the last line reports the banner and loses the reason.
+        let detail = output.detail().trim().to_string();
+        return Err(CmdError::click(if detail.is_empty() {
+            "remote Stado configuration command failed".to_string()
+        } else {
+            detail
+        }));
+    }
+    print!("{}", output.stdout);
+    if let Some(service) = reload_service {
+        super::service::reconcile_after_config_change(
+            service,
+            &resolved.name,
+            &format!("managed configuration {key} retracted"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Refuse a publisher declaration whose Skarbiec item the host does not hold.
+///
+/// `release_api.publishers.<product>` names an item the host's release verifier
+/// must be able to read. The host computes its grant's item set from that
+/// declaration and compares the two as sets, so one declaration whose item was
+/// never minted takes the WHOLE release publication boundary down: every
+/// `/api/object` read of a `system/release-catalog/*` key then answers 401 or
+/// 503, for every product, including the ones publishing perfectly.
+///
+/// That happened on `charless-mac-mini`: `weles-client` and
+/// `wisent-cost-tracker` were declared with no
+/// `weles-client-release-publisher` or `wisent-cost-tracker-release-publisher`
+/// in the vault, and the boundary reported
+/// `release verifier grant item set mismatch (missing=[...], unexpected=[...])`
+/// on the host and nowhere an operator was looking. A publisher declaration
+/// whose item does not exist is the defect, never the missing item: mint the
+/// item first, then declare it.
+async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Result<(), CmdError> {
+    let Some(product) = key.strip_prefix("release_api.publishers.") else {
+        return Ok(());
+    };
+    if product.is_empty() || product.contains('.') {
+        return Ok(());
+    }
+    let Some(item) = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|declared| {
+            declared
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    else {
+        return Ok(());
+    };
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the vault path could not be read, so it cannot be said whether {item} exists: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let vault = environment.stdout.trim().to_string();
+    if vault.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: the vault path is empty",
+            resolved.name
+        )));
+    }
+    let record = read_vault_phase(&resolved, &vault, &item, &runner)
+        .await
+        .map_err(CmdError::click)?;
+    if record.state != "absent" {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{host} does not hold Skarbiec item {item:?}, so declaring publisher {product:?} would \
+         close that host's whole release publication boundary: its release verifier compares the \
+         declared publisher set against its grant's item set, and one unmintable name makes them \
+         unequal for every product, answering 401 or 503 to every release-catalog read on the \
+         fleet. Mint the item on {host} first - `stado host vault-item-put {host} {item} --type \
+         token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
+         {product}`.",
+        host = resolved.name
+    )))
 }
 
 /// Say, at declaration time, what an object namespace without a grant costs.

@@ -1,10 +1,11 @@
-//! Managed CuaDriver lifecycle for a registry-owned macOS host.
+//! Managed GUI automation lifecycle for a registry-owned macOS host.
 //!
 //! The host command owns the complete reusable path: install one pinned,
-//! checksummed and signed CuaDriver release, register its app bundle, grant the
-//! login user's Accessibility row, report the resulting state, and remove it.
-//! Every remote action is one fixed program invocation through `host_channel`;
-//! no helper or shell script is installed or carried in this binary.
+//! checksummed and signed CuaDriver release, install the reviewed Apple
+//! challenge reader used by identity placement, grant both executables to the
+//! login user's Accessibility database, report the resulting state, and remove
+//! them. Every remote action is a fixed program invocation through
+//! `host_channel`; source and sensitive values travel only on stdin.
 
 use crate::deploy::{host_channel, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
@@ -17,6 +18,17 @@ pub const CUA_DRIVER_ARCHIVE_SHA256: &str =
     "9e521b16c8606896f20003f4d20ae62070a1cb3c8d33152d9d0593f62234fbb0";
 pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases/download/\
     cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-darwin-universal.tar.gz";
+
+pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "2";
+pub const APPLE_CHALLENGE_HELPER: &str = "/usr/local/libexec/stado-apple-challenge-capture";
+const APPLE_CHALLENGE_HELPER_BUNDLE_ID: &str = "com.wisent.stado.apple-challenge-capture";
+const APPLE_CHALLENGE_HELPER_SOURCE: &str =
+    include_str!("../../scripts/capture-apple-challenge.swift");
+
+pub(crate) struct AppleChallengeSession {
+    user: String,
+    uid: String,
+}
 
 const PLIST_BUDDY: &str = "/usr/libexec/PlistBuddy";
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/\
@@ -40,6 +52,12 @@ pub struct GuiAutomationReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AppIdentity {
     bundle: String,
+    version: String,
+    requirement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HelperIdentity {
     version: String,
     requirement: String,
 }
@@ -117,6 +135,101 @@ async fn run_sudo(
     run(target, &command, what, runner).await
 }
 
+async fn gui_user_id(
+    target: &ComputeTarget,
+    user: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    safe_identity(user, "GUI user")?;
+    let uid = run(
+        target,
+        &["/usr/bin/id", "-u", user],
+        "resolve GUI user id",
+        runner,
+    )
+    .await?
+    .stdout
+    .trim()
+    .to_string();
+    if uid.is_empty() || !uid.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(DeployError(format!(
+            "{} returned an invalid GUI user id: {uid}",
+            target.name
+        )));
+    }
+    Ok(uid)
+}
+
+async fn invoke_in_gui_session(
+    target: &ComputeTarget,
+    user: &str,
+    uid: &str,
+    words: &[&str],
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let mut command = Vec::with_capacity(words.len() + 10);
+    command.extend(
+        [
+            "/usr/bin/sudo",
+            "-n",
+            "/bin/launchctl",
+            "asuser",
+            uid,
+            "/usr/bin/sudo",
+            "-n",
+            "-u",
+            user,
+            "--",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    command.extend(words.iter().map(|word| (*word).to_string()));
+    let command: Vec<&str> = command.iter().map(String::as_str).collect();
+    host_channel::run_program(target, &command, runner).await
+}
+
+async fn invoke_as_gui_user(
+    target: &ComputeTarget,
+    user: &str,
+    words: &[&str],
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let uid = gui_user_id(target, user, runner).await?;
+    invoke_in_gui_session(target, user, &uid, words, runner).await
+}
+
+async fn run_in_gui_session(
+    target: &ComputeTarget,
+    user: &str,
+    uid: &str,
+    words: &[&str],
+    what: &str,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let output = invoke_in_gui_session(target, user, uid, words, runner).await?;
+    if output.ok() {
+        Ok(output)
+    } else {
+        Err(DeployError(format!(
+            "{}: {what} failed for GUI user {user}: {}",
+            target.name,
+            output.detail().trim()
+        )))
+    }
+}
+
+async fn run_as_gui_user(
+    target: &ComputeTarget,
+    user: &str,
+    words: &[&str],
+    what: &str,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let uid = gui_user_id(target, user, runner).await?;
+    run_in_gui_session(target, user, &uid, words, what, runner).await
+}
+
 async fn optional(
     target: &ComputeTarget,
     words: &[&str],
@@ -150,7 +263,7 @@ fn designated_requirement(output: &CommandOutput) -> Result<String, DeployError>
         .filter(|requirement| !requirement.is_empty())
         .ok_or_else(|| {
             DeployError(format!(
-                "CuaDriver has no designated code requirement: {}",
+                "signed executable has no designated code requirement: {}",
                 output.detail().trim()
             ))
         })
@@ -217,6 +330,56 @@ async fn app_identity(
     }))
 }
 
+fn apple_challenge_helper_path() -> &'static str {
+    APPLE_CHALLENGE_HELPER
+}
+
+async fn helper_identity(
+    target: &ComputeTarget,
+    path: &str,
+    runner: &Runner,
+) -> Result<Option<HelperIdentity>, DeployError> {
+    if !host_channel::remote_test(target, &format!("-f {}", super::shlex_quote(path)), runner)
+        .await?
+    {
+        return Ok(None);
+    }
+    run(
+        target,
+        &["/usr/bin/codesign", "--verify", "--strict", path],
+        "Apple challenge helper signature verification",
+        runner,
+    )
+    .await?;
+    let version_output = run(
+        target,
+        &[path, "--version"],
+        "Apple challenge helper version read",
+        runner,
+    )
+    .await?
+    .stdout;
+    let version = version_output
+        .strip_prefix("stado-apple-challenge-capture ")
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    safe_identity(&version, "Apple challenge helper version")?;
+    let requirement = designated_requirement(
+        &run(
+            target,
+            &["/usr/bin/codesign", "-d", "-r-", path],
+            "Apple challenge helper code requirement read",
+            runner,
+        )
+        .await?,
+    )?;
+    Ok(Some(HelperIdentity {
+        version,
+        requirement,
+    }))
+}
+
 async fn login_user(target: &ComputeTarget, runner: &Runner) -> Result<String, DeployError> {
     let login = run(
         target,
@@ -246,16 +409,217 @@ async fn login_user(target: &ComputeTarget, runner: &Runner) -> Result<String, D
     Ok(user)
 }
 
-/// The user whose GUI session this host's automation acts in.
-///
-/// Public because the answer decides more than enablement: a capture that has to read
-/// a notification can only read one delivered into this session, so a caller holding a
-/// per-user identity needs to compare the two before it dispatches anything.
-pub async fn automated_session_user(
+async fn session_ready_for(
     target: &ComputeTarget,
+    expected_user: &str,
+    readiness_key: &str,
+    runner: &Runner,
+) -> Result<bool, DeployError> {
+    let report = status(target, runner).await;
+    if let Some(error) = report.error {
+        return Err(DeployError(error));
+    }
+    let value = |key: &str| {
+        report
+            .items
+            .iter()
+            .find_map(|(name, value)| (name == key).then_some(value.as_str()))
+    };
+    Ok(value("console") == Some(expected_user)
+        && value("accessibility-user") == Some(expected_user)
+        && value(readiness_key) == Some("yes"))
+}
+
+/// Whether CuaDriver can drive this exact user's current GUI session.
+pub async fn automated_session_ready_for(
+    target: &ComputeTarget,
+    expected_user: &str,
+    runner: &Runner,
+) -> Result<bool, DeployError> {
+    session_ready_for(target, expected_user, "gui-ready", runner).await
+}
+
+/// Whether the signed helper can read this exact user's Apple challenge.
+pub async fn apple_challenge_session_ready_for(
+    target: &ComputeTarget,
+    expected_user: &str,
+    runner: &Runner,
+) -> Result<bool, DeployError> {
+    session_ready_for(target, expected_user, "apple-challenge-ready", runner).await
+}
+
+/// Exercise the exact signed AX client in the exact Aqua session without
+/// scanning windows or opening a system prompt.
+pub(crate) async fn preflight_apple_challenge(
+    target: &ComputeTarget,
+    expected_user: &str,
+    runner: &Runner,
+) -> Result<AppleChallengeSession, DeployError> {
+    safe_identity(expected_user, "GUI user")?;
+    if !apple_challenge_session_ready_for(target, expected_user, runner).await? {
+        return Err(DeployError(format!(
+            "{} does not have a ready Apple challenge session for {expected_user}",
+            target.name
+        )));
+    }
+    let user = login_user(target, runner).await?;
+    if user != expected_user {
+        return Err(DeployError(format!(
+            "{} is ready for GUI user {user}, not {expected_user}",
+            target.name
+        )));
+    }
+    let uid = gui_user_id(target, &user, runner).await?;
+    let output = invoke_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &[apple_challenge_helper_path(), "--preflight"],
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: the Apple challenge helper cannot use Accessibility in {user}'s Aqua session: {}",
+            target.name,
+            output.detail().trim()
+        )));
+    }
+    let report: serde_json::Value =
+        serde_json::from_str(output.stdout.trim()).map_err(|error| {
+            DeployError(format!(
+                "{}: Apple challenge preflight returned invalid JSON: {error}",
+                target.name
+            ))
+        })?;
+    if report.get("version").and_then(serde_json::Value::as_str)
+        != Some(APPLE_CHALLENGE_HELPER_VERSION)
+        || report.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
+        || report
+            .get("accessibilityTrusted")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+    {
+        return Err(DeployError(format!(
+            "{}: Apple challenge preflight did not confirm Accessibility",
+            target.name
+        )));
+    }
+    Ok(AppleChallengeSession { user, uid })
+}
+
+/// Capture one Apple trusted-device code inside the verified GUI user's Aqua
+/// session. The code exists only in an owner-only file on that host and in the
+/// returned in-memory value; diagnostics never include it.
+pub async fn capture_apple_challenge(
+    target: &ComputeTarget,
+    expected_user: &str,
+    capture_id: &str,
+    wait_seconds: u64,
     runner: &Runner,
 ) -> Result<String, DeployError> {
-    login_user(target, runner).await
+    safe_identity(expected_user, "GUI user")?;
+    safe_identity(capture_id, "Apple challenge capture id")?;
+    if !(1..=90).contains(&wait_seconds) {
+        return Err(DeployError(
+            "Apple challenge wait must be between 1 and 90 seconds".to_string(),
+        ));
+    }
+    let session = preflight_apple_challenge(target, expected_user, runner).await?;
+    let user = session.user;
+    let uid = session.uid;
+
+    let work = format!("/Users/{user}/.stado/work/apple-challenge");
+    let output_file = format!("{work}/{capture_id}.code");
+    run_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &["/bin/mkdir", "-p", &work],
+        "create Apple challenge work directory",
+        runner,
+    )
+    .await?;
+    run_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &["/bin/chmod", "700", &work],
+        "protect Apple challenge work directory",
+        runner,
+    )
+    .await?;
+    run_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &["/bin/rm", "-f", &output_file],
+        "remove stale Apple challenge file",
+        runner,
+    )
+    .await?;
+
+    let wait = wait_seconds.to_string();
+    let capture = invoke_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &[
+            apple_challenge_helper_path(),
+            "--output-file",
+            &output_file,
+            "--click-allow",
+            "--click-done",
+            "--wait-seconds",
+            &wait,
+        ],
+        runner,
+    )
+    .await?;
+    if !capture.ok() {
+        let _ = run_in_gui_session(
+            target,
+            &user,
+            &uid,
+            &["/bin/rm", "-f", &output_file],
+            "remove failed Apple challenge file",
+            runner,
+        )
+        .await;
+        return Err(DeployError(format!(
+            "{} could not capture the Apple challenge: {}",
+            target.name,
+            capture.detail().trim()
+        )));
+    }
+
+    let mut captured =
+        invoke_in_gui_session(target, &user, &uid, &["/bin/cat", &output_file], runner).await?;
+    let cleanup = run_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &["/bin/rm", "-f", &output_file],
+        "remove consumed Apple challenge file",
+        runner,
+    )
+    .await;
+    if !captured.ok() {
+        return Err(DeployError(format!(
+            "{} captured an Apple challenge but could not read its protected file",
+            target.name
+        )));
+    }
+    cleanup?;
+    let code = captured.stdout.trim().to_string();
+    captured.stdout.clear();
+    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(DeployError(format!(
+            "{} returned an invalid Apple challenge",
+            target.name
+        )));
+    }
+    Ok(code)
 }
 
 /// The macOS users this host's registry identity bindings name, each with the identity
@@ -344,6 +708,179 @@ async fn remove_if_present(
     Ok(())
 }
 
+async fn reconcile_apple_challenge_helper(
+    target: &ComputeTarget,
+    items: &mut Vec<(String, String)>,
+    runner: &Runner,
+) -> Result<HelperIdentity, DeployError> {
+    require_target(target)?;
+    let path = apple_challenge_helper_path();
+    if let Ok(Some(identity)) = helper_identity(target, path, runner).await {
+        if identity.version == APPLE_CHALLENGE_HELPER_VERSION {
+            items.push(("apple-challenge-helper".to_string(), "reused".to_string()));
+            items.push((
+                "apple-challenge-helper-version".to_string(),
+                identity.version.clone(),
+            ));
+            return Ok(identity);
+        }
+    }
+
+    let home = host_channel::remote_home(target, runner).await?;
+    let cache = format!("{home}/.stado/cache/apple-challenge-helper");
+    let source = format!("{cache}/capture.swift");
+    let staged = format!("{cache}/stado-apple-challenge-capture.staged");
+    run(
+        target,
+        &["/bin/mkdir", "-p", &cache],
+        "create Apple challenge helper cache",
+        runner,
+    )
+    .await?;
+    remove_if_present(target, &source, false, runner).await?;
+    remove_if_present(target, &staged, false, runner).await?;
+    let output_argument = format!("of={source}");
+    let source_write = host_channel::run_program_with_stdin(
+        target,
+        &["/bin/dd", &output_argument, "bs=65536"],
+        APPLE_CHALLENGE_HELPER_SOURCE,
+        runner,
+    )
+    .await?;
+    if !source_write.ok() {
+        return Err(DeployError(format!(
+            "{}: writing the Apple challenge helper source failed: {}",
+            target.name,
+            source_write.detail().trim()
+        )));
+    }
+    run(
+        target,
+        &["/bin/chmod", "600", &source],
+        "protect Apple challenge helper source",
+        runner,
+    )
+    .await?;
+    run(
+        target,
+        &["/usr/bin/xcrun", "swiftc", "-O", &source, "-o", &staged],
+        "compile Apple challenge helper",
+        runner,
+    )
+    .await?;
+    run(
+        target,
+        &[
+            "/usr/bin/codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--identifier",
+            APPLE_CHALLENGE_HELPER_BUNDLE_ID,
+            &staged,
+        ],
+        "sign Apple challenge helper",
+        runner,
+    )
+    .await?;
+    run_sudo(
+        target,
+        &["/bin/mkdir", "-p", "/usr/local/libexec"],
+        "create the system helper directory",
+        runner,
+    )
+    .await?;
+    run_sudo(
+        target,
+        &[
+            "/usr/bin/install",
+            "-o",
+            "root",
+            "-g",
+            "wheel",
+            "-m",
+            "755",
+            &staged,
+            path,
+        ],
+        "install Apple challenge helper",
+        runner,
+    )
+    .await?;
+    remove_if_present(target, &source, false, runner).await?;
+    remove_if_present(target, &staged, false, runner).await?;
+
+    let identity = helper_identity(target, path, runner)
+        .await?
+        .ok_or_else(|| DeployError("Apple challenge helper was not installed".to_string()))?;
+    if identity.version != APPLE_CHALLENGE_HELPER_VERSION {
+        return Err(DeployError(format!(
+            "Apple challenge helper is version {}, expected {}",
+            identity.version, APPLE_CHALLENGE_HELPER_VERSION
+        )));
+    }
+    items.push((
+        "apple-challenge-helper".to_string(),
+        "installed".to_string(),
+    ));
+    items.push((
+        "apple-challenge-helper-version".to_string(),
+        identity.version.clone(),
+    ));
+    Ok(identity)
+}
+
+async fn code_requirement_hex(
+    target: &ComputeTarget,
+    home: &str,
+    name: &str,
+    requirement: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    safe_identity(name, "code requirement name")?;
+    let cache = format!("{home}/.stado/cache/gui-automation");
+    let requirement_file = format!("{cache}/{name}.csreq");
+    run(
+        target,
+        &["/bin/mkdir", "-p", &cache],
+        "create GUI automation cache",
+        runner,
+    )
+    .await?;
+    remove_if_present(target, &requirement_file, false, runner).await?;
+    let requirement_argument = format!("={requirement}");
+    run(
+        target,
+        &[
+            "/usr/bin/csreq",
+            "-r",
+            &requirement_argument,
+            "-b",
+            &requirement_file,
+        ],
+        "compile GUI automation code requirement",
+        runner,
+    )
+    .await?;
+    let encoded = run(
+        target,
+        &["/usr/bin/xxd", "-p", &requirement_file],
+        "encode GUI automation code requirement",
+        runner,
+    )
+    .await?
+    .stdout
+    .split_whitespace()
+    .collect::<String>();
+    remove_if_present(target, &requirement_file, false, runner).await?;
+    if encoded.is_empty() || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DeployError(format!(
+            "compiled {name} code requirement is invalid"
+        )));
+    }
+    Ok(encoded)
+}
+
 async fn rollback_app(
     target: &ComputeTarget,
     backup: &str,
@@ -424,7 +961,10 @@ async fn reconcile_app(
         false
     };
     if !archive_valid {
-        remove_if_present(target, &partial, false, runner).await?;
+        // The host channel has a bounded command window. Keep a verified
+        // version-scoped partial and resume it on the next reconciliation;
+        // deleting it first makes every slow GitHub download restart at byte
+        // zero and therefore guarantees the same timeout forever.
         run(
             target,
             &[
@@ -432,6 +972,8 @@ async fn reconcile_app(
                 "-fL",
                 "--retry",
                 "3",
+                "--continue-at",
+                "-",
                 "--output",
                 &partial,
                 CUA_DRIVER_ARCHIVE_URL,
@@ -721,6 +1263,16 @@ async fn grant_accessibility_inner(
             identity.bundle, CUA_DRIVER_BUNDLE_ID
         )));
     }
+    let helper = helper_identity(target, apple_challenge_helper_path(), runner)
+        .await?
+        .ok_or_else(|| DeployError("Apple challenge helper is not installed".to_string()))?;
+    if helper.version != APPLE_CHALLENGE_HELPER_VERSION {
+        return Err(DeployError(format!(
+            "Apple challenge helper is version {}, expected {}",
+            helper.version, APPLE_CHALLENGE_HELPER_VERSION
+        )));
+    }
+
     let user = login_user(target, runner).await?;
     let home = format!("/Users/{user}");
     let database = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
@@ -763,51 +1315,29 @@ async fn grant_accessibility_inner(
         }
     }
 
-    let cache = format!("{home}/.stado/cache/cua-driver");
-    let requirement_file = format!("{cache}/accessibility.csreq");
-    run(
+    let command_home = host_channel::remote_home(target, runner).await?;
+    let cua_requirement = code_requirement_hex(
         target,
-        &["/bin/mkdir", "-p", &cache],
-        "create CuaDriver cache",
+        &command_home,
+        "cua-driver",
+        &identity.requirement,
         runner,
     )
     .await?;
-    remove_if_present(target, &requirement_file, false, runner).await?;
-    let requirement_argument = format!("={}", identity.requirement);
-    run(
+    let helper_requirement = code_requirement_hex(
         target,
-        &[
-            "/usr/bin/csreq",
-            "-r",
-            &requirement_argument,
-            "-b",
-            &requirement_file,
-        ],
-        "compile CuaDriver code requirement",
+        &command_home,
+        "apple-challenge",
+        &helper.requirement,
         runner,
     )
     .await?;
-    let csreq = run(
-        target,
-        &["/usr/bin/xxd", "-p", &requirement_file],
-        "encode CuaDriver code requirement",
-        runner,
-    )
-    .await?
-    .stdout
-    .split_whitespace()
-    .collect::<String>();
-    remove_if_present(target, &requirement_file, false, runner).await?;
-    if csreq.is_empty() || !csreq.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(DeployError(
-            "compiled CuaDriver code requirement is invalid".to_string(),
-        ));
-    }
 
     let backup_dir = format!("{home}/.stado/backups");
     let backup = format!("{backup_dir}/TCC.db.before-stado-accessibility");
-    run(
+    run_as_gui_user(
         target,
+        &user,
         &["/bin/mkdir", "-p", &backup_dir],
         "create TCC backup directory",
         runner,
@@ -843,39 +1373,63 @@ async fn grant_accessibility_inner(
         )
         .await?;
     }
-    // CuaDriver is launched directly by launchd and may also be reached through
-    // its app bundle. TCC identifies those two responsibility chains
-    // differently, so keep both grants tied to the same signed requirement.
+
+    // CuaDriver is launched directly and through LaunchServices; the Apple
+    // helper is a separate signed executable run in that same Aqua session.
+    // TCC identifies all three responsibility chains separately.
+    let insert = |client: &str, client_type: u8, requirement: &str| {
+        format!(
+            "INSERT INTO access (service, client, client_type, auth_value, auth_reason, \
+             auth_version, csreq, policy_id, indirect_object_identifier_type, \
+             indirect_object_identifier, indirect_object_code_identity, flags, last_modified) \
+             VALUES ('{ACCESSIBILITY_SERVICE}', '{client}', {client_type}, 2, 3, 1, \
+             X'{requirement}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now'));"
+        )
+    };
     let sql = format!(
-        "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND ((client = '{}' AND client_type = 0) OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1)); INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified) VALUES ('{ACCESSIBILITY_SERVICE}', '{}', 0, 2, 3, 1, X'{}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now')); INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified) VALUES ('{ACCESSIBILITY_SERVICE}', '{CUA_DRIVER_EXECUTABLE}', 1, 2, 3, 1, X'{}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now')); COMMIT;",
-        identity.bundle, identity.bundle, csreq, csreq
+        "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
+         AND ((client = '{}' AND client_type = 0) \
+         OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
+         OR (client = '{}' AND client_type = 1)); {} {} {} COMMIT;",
+        identity.bundle,
+        apple_challenge_helper_path(),
+        insert(&identity.bundle, 0, &cua_requirement),
+        insert(CUA_DRIVER_EXECUTABLE, 1, &cua_requirement),
+        insert(apple_challenge_helper_path(), 1, &helper_requirement),
     );
     run_sudo(
         target,
         &["/usr/bin/sqlite3", &database, &sql],
-        "grant CuaDriver Accessibility",
+        "grant GUI automation Accessibility",
         runner,
     )
     .await?;
     let verify_sql = format!(
-        "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND auth_value = 2 AND ((client = '{}' AND client_type = 0) OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1));",
-        identity.bundle
+        "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
+         AND auth_value = 2 AND ((client = '{}' AND client_type = 0) \
+         OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
+         OR (client = '{}' AND client_type = 1));",
+        identity.bundle,
+        apple_challenge_helper_path(),
     );
     let granted = run_sudo(
         target,
         &["/usr/bin/sqlite3", &database, &verify_sql],
-        "verify CuaDriver Accessibility",
+        "verify GUI automation Accessibility",
         runner,
     )
     .await?
     .stdout;
-    if granted.trim() != "2" {
+    if granted.trim() != "3" {
         return Err(DeployError(
-            "the CuaDriver bundle and executable Accessibility grants were not read back"
-                .to_string(),
+            "the CuaDriver and Apple challenge Accessibility grants were not read back".to_string(),
         ));
     }
     items.push(("accessibility".to_string(), "granted".to_string()));
+    items.push((
+        "apple-challenge-accessibility".to_string(),
+        "granted".to_string(),
+    ));
     items.push(("accessibility-user".to_string(), user));
     items.push(("accessibility-client".to_string(), identity.bundle));
     items.push(("accessibility-backup".to_string(), backup));
@@ -889,20 +1443,7 @@ async fn reconcile_runtime(
 ) -> Result<(), DeployError> {
     require_target(target)?;
     let user = login_user(target, runner).await?;
-    let uid_output = run(
-        target,
-        &["/usr/bin/id", "-u", &user],
-        "resolve GUI user id",
-        runner,
-    )
-    .await?;
-    let uid = uid_output.stdout.trim();
-    if uid.is_empty() || !uid.chars().all(|character| character.is_ascii_digit()) {
-        return Err(DeployError(format!(
-            "{} returned an invalid GUI user id: {}",
-            target.name, uid
-        )));
-    }
+    let uid = gui_user_id(target, &user, runner).await?;
     let home = format!("/Users/{user}");
     let launch_agents = format!("{home}/Library/LaunchAgents");
     let caches = format!("{home}/Library/Caches/cua-driver");
@@ -929,16 +1470,25 @@ async fn reconcile_runtime(
     ])
     .map_err(|error| DeployError(format!("cannot encode CuaDriver arguments: {error}")))?;
 
-    run(
+    run_as_gui_user(
         target,
+        &user,
         &["/bin/mkdir", "-p", &launch_agents, &caches, &logs],
         "create CuaDriver runtime directories",
         runner,
     )
     .await?;
-    remove_if_present(target, &staged, false, runner).await?;
-    run(
+    run_as_gui_user(
         target,
+        &user,
+        &["/bin/rm", "-f", &staged],
+        "remove stale CuaDriver LaunchAgent staging file",
+        runner,
+    )
+    .await?;
+    run_as_gui_user(
+        target,
+        &user,
         &["/usr/bin/plutil", "-create", "xml1", &staged],
         "create CuaDriver LaunchAgent",
         runner,
@@ -956,16 +1506,18 @@ async fn reconcile_runtime(
         } else {
             "-string"
         };
-        run(
+        run_as_gui_user(
             target,
+            &user,
             &["/usr/bin/plutil", "-insert", key, kind, value, &staged],
             "write CuaDriver LaunchAgent",
             runner,
         )
         .await?;
     }
-    run(
+    run_as_gui_user(
         target,
+        &user,
         &[
             "/usr/bin/plutil",
             "-insert",
@@ -978,8 +1530,9 @@ async fn reconcile_runtime(
         runner,
     )
     .await?;
-    run(
+    run_as_gui_user(
         target,
+        &user,
         &["/usr/bin/plutil", "-lint", &staged],
         "validate CuaDriver LaunchAgent",
         runner,
@@ -987,19 +1540,34 @@ async fn reconcile_runtime(
     .await?;
 
     let qualified = format!("gui/{uid}/{CUA_DRIVER_RUNTIME_LABEL}");
-    let definition_matches =
-        host_channel::run_program(target, &["/usr/bin/cmp", "-s", &staged, &plist], runner)
-            .await?
-            .ok();
-    let runtime_loaded =
-        host_channel::run_program(target, &["/bin/launchctl", "print", &qualified], runner)
-            .await?
-            .ok();
-    let socket_ready = host_channel::run_program(target, &["/bin/test", "-S", &socket], runner)
+    let definition_matches = invoke_as_gui_user(
+        target,
+        &user,
+        &["/usr/bin/cmp", "-s", &staged, &plist],
+        runner,
+    )
+    .await?
+    .ok();
+    let runtime_loaded = invoke_as_gui_user(
+        target,
+        &user,
+        &["/bin/launchctl", "print", &qualified],
+        runner,
+    )
+    .await?
+    .ok();
+    let socket_ready = invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], runner)
         .await?
         .ok();
     if definition_matches && runtime_loaded && socket_ready {
-        remove_if_present(target, &staged, false, runner).await?;
+        run_as_gui_user(
+            target,
+            &user,
+            &["/bin/rm", "-f", &staged],
+            "remove matched CuaDriver LaunchAgent staging file",
+            runner,
+        )
+        .await?;
         items.push(("cua-driver-runtime".to_string(), "running".to_string()));
         items.push(("cua-driver-socket".to_string(), socket));
         return Ok(());
@@ -1007,29 +1575,43 @@ async fn reconcile_runtime(
 
     for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
         let qualified = format!("gui/{uid}/{label}");
-        let _ =
-            host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
-                .await?;
+        let _ = invoke_as_gui_user(
+            target,
+            &user,
+            &["/bin/launchctl", "bootout", &qualified],
+            runner,
+        )
+        .await?;
     }
-    remove_if_present(target, &socket, false, runner).await?;
-    run(
+    run_as_gui_user(
         target,
+        &user,
+        &["/bin/rm", "-f", &socket],
+        "remove stale CuaDriver socket",
+        runner,
+    )
+    .await?;
+    run_as_gui_user(
+        target,
+        &user,
         &["/bin/mv", "-f", &staged, &plist],
         "install CuaDriver LaunchAgent",
         runner,
     )
     .await?;
     let domain = format!("gui/{uid}");
-    run(
+    run_as_gui_user(
         target,
+        &user,
         &["/bin/launchctl", "bootstrap", &domain, &plist],
         "bootstrap CuaDriver LaunchAgent",
         runner,
     )
     .await?;
     let qualified = format!("{domain}/{CUA_DRIVER_RUNTIME_LABEL}");
-    run(
+    run_as_gui_user(
         target,
+        &user,
         &["/bin/launchctl", "kickstart", "-k", &qualified],
         "start CuaDriver LaunchAgent",
         runner,
@@ -1038,9 +1620,10 @@ async fn reconcile_runtime(
 
     let mut socket_ready = false;
     for _ in 0..20 {
-        let probe =
-            host_channel::run_program(target, &["/bin/test", "-S", &socket], runner).await?;
-        if probe.ok() {
+        if invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], runner)
+            .await?
+            .ok()
+        {
             socket_ready = true;
             break;
         }
@@ -1120,58 +1703,100 @@ async fn status_inner(
     .unwrap_or_else(|| "unknown".to_string());
     items.push(("console".to_string(), console.clone()));
 
-    let Some(identity) = app_identity(target, CUA_DRIVER_APP, runner).await? else {
-        items.push(("cua-driver-app".to_string(), "absent".to_string()));
-        items.push(("accessibility".to_string(), "app-missing".to_string()));
-        items.push(("gui-ready".to_string(), "no".to_string()));
-        return Ok(());
-    };
-    items.push(("cua-driver-app".to_string(), "present".to_string()));
-    items.push(("cua-driver-version".to_string(), identity.version));
-    items.push(("cua-driver-client".to_string(), identity.bundle.clone()));
     let user = login_user(target, runner).await?;
     let database = format!("/Users/{user}/Library/Application Support/com.apple.TCC/TCC.db");
-    let query = format!(
-        "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND auth_value = 2 AND ((client = '{}' AND client_type = 0) OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1));",
-        identity.bundle
-    );
-    let value = optional_sudo(target, &["/usr/bin/sqlite3", &database, &query], runner)
-        .await?
-        .unwrap_or_default();
-    let state = match value.trim() {
-        "2" => "granted".to_string(),
-        "0" | "1" | "" => "not-set".to_string(),
-        other => format!("refused:{other}"),
-    };
-    items.push(("accessibility".to_string(), state.clone()));
-    items.push(("accessibility-user".to_string(), user.clone()));
-    let uid = optional(target, &["/usr/bin/id", "-u", &user], runner)
-        .await?
-        .unwrap_or_default();
-    let qualified = format!("gui/{}/{CUA_DRIVER_RUNTIME_LABEL}", uid.trim());
-    let runtime = if uid.trim().bytes().all(|byte| byte.is_ascii_digit())
-        && optional(target, &["/bin/launchctl", "print", &qualified], runner)
+    let identity = app_identity(target, CUA_DRIVER_APP, runner).await?;
+    if let Some(identity) = &identity {
+        items.push(("cua-driver-app".to_string(), "present".to_string()));
+        items.push(("cua-driver-version".to_string(), identity.version.clone()));
+        items.push(("cua-driver-client".to_string(), identity.bundle.clone()));
+    } else {
+        items.push(("cua-driver-app".to_string(), "absent".to_string()));
+    }
+
+    let helper = helper_identity(target, apple_challenge_helper_path(), runner).await?;
+    if let Some(helper) = &helper {
+        items.push(("apple-challenge-helper".to_string(), "present".to_string()));
+        items.push((
+            "apple-challenge-helper-version".to_string(),
+            helper.version.clone(),
+        ));
+    } else {
+        items.push(("apple-challenge-helper".to_string(), "absent".to_string()));
+    }
+
+    let accessibility = if let Some(identity) = &identity {
+        let query = format!(
+            "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
+             AND auth_value = 2 AND ((client = '{}' AND client_type = 0) \
+             OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1));",
+            identity.bundle
+        );
+        let value = optional_sudo(target, &["/usr/bin/sqlite3", &database, &query], runner)
             .await?
-            .is_some()
+            .unwrap_or_default();
+        match value.trim() {
+            "2" => "granted".to_string(),
+            "0" | "1" | "" => "not-set".to_string(),
+            other => format!("refused:{other}"),
+        }
+    } else {
+        "app-missing".to_string()
+    };
+    items.push(("accessibility".to_string(), accessibility.clone()));
+
+    let challenge_accessibility = if helper.is_some() {
+        let query = format!(
+            "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
+             AND auth_value = 2 AND client = '{}' AND client_type = 1;",
+            apple_challenge_helper_path()
+        );
+        let value = optional_sudo(target, &["/usr/bin/sqlite3", &database, &query], runner)
+            .await?
+            .unwrap_or_default();
+        match value.trim() {
+            "1" => "granted".to_string(),
+            "0" | "" => "not-set".to_string(),
+            other => format!("refused:{other}"),
+        }
+    } else {
+        "helper-missing".to_string()
+    };
+    items.push((
+        "apple-challenge-accessibility".to_string(),
+        challenge_accessibility.clone(),
+    ));
+    items.push(("accessibility-user".to_string(), user.clone()));
+
+    let uid = gui_user_id(target, &user, runner).await?;
+    let qualified = format!("gui/{uid}/{CUA_DRIVER_RUNTIME_LABEL}");
+    let runtime = if invoke_as_gui_user(
+        target,
+        &user,
+        &["/bin/launchctl", "print", &qualified],
+        runner,
+    )
+    .await?
+    .ok()
     {
         "running"
     } else {
         "absent"
     };
     let socket = format!("/Users/{user}/Library/Caches/cua-driver/probierz.sock");
-    let socket_ready = optional(target, &["/bin/test", "-S", &socket], runner)
+    let socket_ready = invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], runner)
         .await?
-        .is_some();
+        .ok();
     items.push(("cua-driver-runtime".to_string(), runtime.to_string()));
     items.push((
         "cua-driver-socket".to_string(),
         if socket_ready { "ready" } else { "absent" }.to_string(),
     ));
+
     let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
     // Whose session this is belongs in the readiness answer, not beside it. A host can
-    // hold a driver, a grant and a live socket in one user's session while the identity
-    // the fleet placed here lives in another, and `gui-ready yes` would then be a true
-    // sentence about the wrong user.
+    // hold a driver, grants and a live socket in one user's session while the identity
+    // the fleet placed here lives in another.
     for (named, held) in declared_gui_bindings(target) {
         items.push((format!("identity-user:{held}"), named));
     }
@@ -1182,12 +1807,22 @@ async fn status_inner(
     ));
     let gui_ready = console_ready
         && declared_session
-        && state == "granted"
+        && accessibility == "granted"
         && runtime == "running"
         && socket_ready;
     items.push((
         "gui-ready".to_string(),
         if gui_ready { "yes" } else { "no" }.to_string(),
+    ));
+    let challenge_ready = console_ready
+        && declared_session
+        && helper
+            .as_ref()
+            .is_some_and(|value| value.version == APPLE_CHALLENGE_HELPER_VERSION)
+        && challenge_accessibility == "granted";
+    items.push((
+        "apple-challenge-ready".to_string(),
+        if challenge_ready { "yes" } else { "no" }.to_string(),
     ));
     Ok(())
 }
@@ -1199,6 +1834,11 @@ async fn disable_inner(
     runner: &Runner,
 ) -> Result<(), DeployError> {
     require_target(target)?;
+    let user = login_user(target, runner).await?;
+    let uid = gui_user_id(target, &user, runner).await?;
+    let home = format!("/Users/{user}");
+    let command_home = host_channel::remote_home(target, runner).await?;
+
     if optional_sudo(
         target,
         &[
@@ -1248,6 +1888,7 @@ async fn disable_inner(
     } else {
         items.push(("kcpassword".to_string(), "absent".to_string()));
     }
+
     let _ = run_sudo(
         target,
         &[KICKSTART, "-deactivate", "-configure", "-access", "-off"],
@@ -1283,67 +1924,76 @@ async fn disable_inner(
         .await;
     }
     items.push(("remote-management".to_string(), "deactivated".to_string()));
+
     if !bundle.is_empty() {
         safe_identity(bundle, "bundle identifier")?;
-        let user = login_user(target, runner).await?;
-        let database = format!("/Users/{user}/Library/Application Support/com.apple.TCC/TCC.db");
-        let sql = format!("DELETE FROM access WHERE client = '{bundle}';");
-        run_sudo(
+    }
+    let database = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
+    let bundle_clause = if bundle.is_empty() {
+        String::new()
+    } else {
+        format!(" OR (client = '{bundle}' AND client_type = 0)")
+    };
+    let sql = format!(
+        "DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND \
+         ((client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
+         OR (client = '{}' AND client_type = 1){bundle_clause});",
+        apple_challenge_helper_path()
+    );
+    run_sudo(
+        target,
+        &["/usr/bin/sqlite3", &database, &sql],
+        "revoke GUI automation Accessibility",
+        runner,
+    )
+    .await?;
+    items.push((
+        "tcc-revoked".to_string(),
+        "CuaDriver and Apple challenge helper".to_string(),
+    ));
+
+    for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
+        let qualified = format!("gui/{uid}/{label}");
+        let _ = invoke_as_gui_user(
             target,
-            &["/usr/bin/sqlite3", &database, &sql],
-            "revoke Accessibility",
+            &user,
+            &["/bin/launchctl", "bootout", &qualified],
             runner,
         )
         .await?;
-        items.push(("tcc-revoked".to_string(), bundle.to_string()));
     }
-    let home = host_channel::remote_home(target, runner).await?;
-    let user = login_user(target, runner).await?;
-    let uid = run(
-        target,
-        &["/usr/bin/id", "-u", &user],
-        "resolve GUI user id",
-        runner,
-    )
-    .await?
-    .stdout;
-    for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
-        let qualified = format!("gui/{}/{label}", uid.trim());
-        let _ =
-            host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
-                .await?;
+    for path in [
+        format!("{home}/Library/LaunchAgents/{CUA_DRIVER_RUNTIME_LABEL}.plist"),
+        format!("{home}/Library/Caches/cua-driver/probierz.sock"),
+        format!("{home}/.local/bin/cua-driver"),
+        format!("{home}/.stado/cache/cua-driver"),
+        format!("{home}/.stado/cache/apple-challenge-helper"),
+        format!("{home}/.stado/cache/gui-automation"),
+    ] {
+        run_as_gui_user(
+            target,
+            &user,
+            &["/bin/rm", "-rf", &path],
+            "remove GUI automation user state",
+            runner,
+        )
+        .await?;
     }
-    remove_if_present(
-        target,
-        &format!("{home}/Library/LaunchAgents/{CUA_DRIVER_RUNTIME_LABEL}.plist"),
-        false,
-        runner,
-    )
-    .await?;
-    remove_if_present(
-        target,
-        &format!("{home}/Library/Caches/cua-driver/probierz.sock"),
-        false,
-        runner,
-    )
-    .await?;
     items.push(("cua-driver-runtime".to_string(), "removed".to_string()));
+
     remove_if_present(target, CUA_DRIVER_APP, true, runner).await?;
-    remove_if_present(
-        target,
-        &format!("{home}/.local/bin/cua-driver"),
-        false,
-        runner,
-    )
-    .await?;
-    remove_if_present(
-        target,
-        &format!("{home}/.stado/cache/cua-driver"),
-        false,
-        runner,
-    )
-    .await?;
+    remove_if_present(target, apple_challenge_helper_path(), true, runner).await?;
+    if command_home != home {
+        for path in [
+            format!("{command_home}/.stado/cache/cua-driver"),
+            format!("{command_home}/.stado/cache/apple-challenge-helper"),
+            format!("{command_home}/.stado/cache/gui-automation"),
+        ] {
+            remove_if_present(target, &path, false, runner).await?;
+        }
+    }
     items.push(("cua-driver-app".to_string(), "removed".to_string()));
+    items.push(("apple-challenge-helper".to_string(), "removed".to_string()));
     Ok(())
 }
 
@@ -1367,6 +2017,7 @@ pub async fn enable(
         require_declared_session(target, &user)?;
         items.push(("automated-session".to_string(), user));
         reconcile_app(target, &mut items, runner).await?;
+        reconcile_apple_challenge_helper(target, &mut items, runner).await?;
         reconcile_autologin(target, password, &mut items, runner).await?;
         grant_accessibility_inner(target, &mut items, runner).await?;
         reconcile_runtime(target, &mut items, runner).await
@@ -1381,6 +2032,7 @@ pub async fn grant_accessibility(target: &ComputeTarget, runner: &Runner) -> Gui
         let user = login_user(target, runner).await?;
         require_declared_session(target, &user)?;
         items.push(("automated-session".to_string(), user));
+        reconcile_apple_challenge_helper(target, &mut items, runner).await?;
         grant_accessibility_inner(target, &mut items, runner).await?;
         reconcile_runtime(target, &mut items, runner).await
     }

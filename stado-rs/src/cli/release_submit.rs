@@ -820,6 +820,334 @@ fn input(uri: &str, path: &str, sha: &str) -> Value {
     json!({"stado_uri":uri,"relative_path":path,"sha256":sha})
 }
 
+/// Run a release worker from the queue-owned persistent work root even when an
+/// older agent materialized this job under `/tmp`.
+///
+/// The bridge accepts only the physical forms of the two paths the old and new
+/// agents can assign to this exact canonical job id. It moves the
+/// already-materialized tree before the worker starts. A compatibility symlink
+/// lets the old agent's heartbeat and terminal uploader follow their hard-coded
+/// path. After the worker exits, successful output is uploaded and read back
+/// through the checked storage writer at both canonical status and exact
+/// attempt URIs, with the attempt receipt last; any failure changes the
+/// workload result to failure. A lifecycle-bound keeper uses the 0.15.10
+/// `job watch --follow --json` contract: that command emits `"terminal": true`
+/// even when it returns failure for a failed job. The keeper persists and
+/// inspects that exact response before unlinking the verified symlink, and also
+/// removes that link if the persistent workdir disappears, so an unbounded
+/// artifact-finalization retry remains reachable without leaving a permanent
+/// process or dangling link. Explicit log redirection and TMPDIR keep both
+/// diagnostics and the old worker's build scratch in the persistent tree even
+/// when `/tmp` is a separate filesystem.
+const RELEASE_OUTPUT_URI_MARK: &str = "@RELEASE_OUTPUT_URI@";
+const RELEASE_WORKER_COMMAND: &str = r#"set -u
+umask 077
+case "${WC_JOB_ID:-}" in
+  job-*) job_suffix=${WC_JOB_ID#job-} ;;
+  *)
+    printf '%s\n' '[release-worker-bootstrap] WC_JOB_ID is absent or noncanonical' >&2
+    exit 1
+    ;;
+esac
+if [ "${#job_suffix}" -ne 24 ]; then
+  printf '%s\n' '[release-worker-bootstrap] WC_JOB_ID is absent or noncanonical' >&2
+  exit 1
+fi
+case "$job_suffix" in
+  *[!0123456789abcdef]*)
+    printf '%s\n' '[release-worker-bootstrap] WC_JOB_ID is absent or noncanonical' >&2
+    exit 1
+    ;;
+esac
+old=$(/bin/pwd -P) || exit 1
+home_root=$(CDPATH= cd "$HOME" && /bin/pwd -P) || exit 1
+legacy_root=$(CDPATH= cd /tmp && /bin/pwd -P) || exit 1
+stado_root="$home_root/.stado"
+work_parent="$stado_root/work"
+root="$work_parent/jobs"
+work_name="wc-$WC_JOB_ID"
+work="$root/$work_name"
+legacy="$legacy_root/$work_name"
+case "$old" in
+  "$legacy"|"$work") ;;
+  *)
+    printf '%s\n' "[release-worker-bootstrap] refusing unexpected cwd: $old" >&2
+    exit 1
+    ;;
+esac
+job_pgid=$$
+terminate_job_group() {
+  trap '' TERM
+  /bin/kill -TERM "-$job_pgid" 2>/dev/null || true
+  /bin/sleep 2
+  /bin/kill -KILL "-$job_pgid" 2>/dev/null || true
+  exit 1
+}
+ensure_legacy_link() {
+  if [ "$old" = "$work" ]; then
+    return 0
+  fi
+  [ -d "$work" ] || return 1
+  if [ -L "$old" ]; then
+    [ "$(/usr/bin/readlink "$old")" = "$work" ]
+    return
+  fi
+  if [ -e "$old" ]; then
+    return 1
+  fi
+  /bin/ln -s "$work" "$old"
+}
+unlink_verified_legacy() {
+  if [ -L "$old" ]; then
+    [ "$(/usr/bin/readlink "$old")" = "$work" ] || return 1
+    /bin/rm -f -- "$old"
+    return
+  fi
+  [ ! -e "$old" ]
+}
+owner_uid=$(/usr/bin/id -u) || exit 1
+owned_directory() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  [ "$(/usr/bin/find "$1" -prune -type d -user "$owner_uid" -print 2>/dev/null)" = "$1" ]
+}
+owned_regular_file() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  [ "$(/usr/bin/find "$1" -prune -type f -user "$owner_uid" -print 2>/dev/null)" = "$1" ]
+}
+prepare_component() {
+  component="$1"
+  expected="$2"
+  if [ -L "$component" ]; then
+    printf '%s\n' "[release-worker-bootstrap] refusing symlinked component: $expected" >&2
+    return 1
+  fi
+  if [ ! -e "$component" ]; then
+    /bin/mkdir "$component" || return 1
+  fi
+  [ -d "$component" ] && [ ! -L "$component" ]
+}
+cd "$home_root" || exit 1
+[ "$(/bin/pwd -P)" = "$home_root" ] || exit 1
+owned_directory . || exit 1
+prepare_component .stado "$stado_root" || exit 1
+cd .stado || exit 1
+[ "$(/bin/pwd -P)" = "$stado_root" ] || exit 1
+owned_directory . || exit 1
+/bin/chmod 700 . || exit 1
+prepare_component work "$work_parent" || exit 1
+cd work || exit 1
+[ "$(/bin/pwd -P)" = "$work_parent" ] || exit 1
+owned_directory . || exit 1
+/bin/chmod 700 . || exit 1
+prepare_component jobs "$root" || exit 1
+cd jobs || exit 1
+if [ "$(/bin/pwd -P)" != "$root" ] || ! owned_directory .; then
+  printf '%s\n' "[release-worker-bootstrap] persistent root changed: $root" >&2
+  exit 1
+fi
+/bin/chmod 700 . || exit 1
+if [ "$old" = "$legacy" ]; then
+  if [ -e "$work_name" ] || [ -L "$work_name" ]; then
+    printf '%s\n' "[release-worker-bootstrap] persistent workdir already exists: $work" >&2
+    exit 1
+  fi
+  /bin/mv "$old" "$work_name" || exit 1
+fi
+if [ -L "$work_name" ] || ! owned_directory "$work_name"; then
+  printf '%s\n' "[release-worker-bootstrap] unsafe persistent workdir: $work" >&2
+  exit 1
+fi
+cd "$work_name" || exit 1
+if [ "$(/bin/pwd -P)" != "$work" ] || ! owned_directory .; then
+  printf '%s\n' "[release-worker-bootstrap] persistent workdir changed: $work" >&2
+  exit 1
+fi
+/bin/chmod 700 . || exit 1
+if [ "$old" = "$legacy" ]; then
+  ensure_legacy_link || exit 1
+fi
+for child in output tmp; do
+  prepare_component "$child" "$work/$child" || exit 1
+  cd "$child" || exit 1
+  if [ "$(/bin/pwd -P)" != "$work/$child" ] || ! owned_directory .; then
+    printf '%s\n' "[release-worker-bootstrap] unsafe workdir child: $work/$child" >&2
+    exit 1
+  fi
+  /bin/chmod 700 . || exit 1
+  cd .. || exit 1
+  [ "$(/bin/pwd -P)" = "$work" ] || exit 1
+done
+log_relative=output/command_output.log
+log="$work/$log_relative"
+owned_regular_file "$log_relative" || {
+  printf '%s\n' "[release-worker-bootstrap] unsafe command log: $log" >&2
+  exit 1
+}
+/bin/chmod 600 "$log_relative" || exit 1
+TMPDIR="$work/tmp"
+TMP="$TMPDIR"
+TEMP="$TMPDIR"
+export TMPDIR TMP TEMP
+exec >>"$log_relative" 2>&1
+attempt_output_uri=@RELEASE_OUTPUT_URI@
+namespace_and_path=${attempt_output_uri#stado://}
+queue_namespace=${namespace_and_path%%/*}
+canonical_output_uri="stado://$queue_namespace/status/$WC_JOB_ID/output"
+file_sha256() {
+  digest=
+  if [ -x /usr/bin/shasum ]; then
+    set -- $(/usr/bin/shasum -a 256 "$1") || return 1
+    digest="$1"
+  elif [ -x /usr/bin/sha256sum ]; then
+    set -- $(/usr/bin/sha256sum "$1") || return 1
+    digest="$1"
+  else
+    return 1
+  fi
+  printf '%s' "$digest"
+}
+upload_output_object() {
+  scope="$1"
+  base_uri="$2"
+  leaf="$3"
+  content_type="$4"
+  source="$work/output/$leaf"
+  owned_regular_file "$source" || return 1
+  source_sha=$(file_sha256 "$source") || return 1
+  set -- $(/usr/bin/wc -c <"$source") || return 1
+  source_bytes="$1"
+  owned_directory "$work/tmp" || return 1
+  proof=$(/usr/bin/mktemp "$work/tmp/stado-upload.XXXXXX") || return 1
+  owned_regular_file "$proof" || return 1
+  /bin/chmod 600 "$proof" || return 1
+  if ! "$HOME/.stado/bin/stado" storage put --content-type "$content_type" --json \
+    "$base_uri/$leaf" "$source" >"$proof"; then
+    /bin/rm -f -- "$proof"
+    return 1
+  fi
+  if ! owned_regular_file "$proof" ||
+    ! /usr/bin/grep -Eq '^[[:space:]]*"state":[[:space:]]*"(stored|replayed)",?[[:space:]]*$' "$proof" ||
+    ! /usr/bin/grep -Eq "^[[:space:]]*\"sha256\":[[:space:]]*\"$source_sha\",?[[:space:]]*$" "$proof" ||
+    ! /usr/bin/grep -Eq "^[[:space:]]*\"bytes\":[[:space:]]*$source_bytes,?[[:space:]]*$" "$proof"; then
+    /bin/rm -f -- "$proof"
+    return 1
+  fi
+  /bin/rm -f -- "$proof" || return 1
+  printf '%s\n' "[release-worker-bootstrap] durable_output scope=$scope leaf=$leaf sha256=$source_sha bytes=$source_bytes"
+}
+printf '%s\n' "[release-worker-bootstrap] workdir=$work tmpdir=$TMPDIR legacy_link=$old"
+"$HOME/.stado/bin/stado" release worker --request release-request.json &
+worker_pid=$!
+while kill -0 "$worker_pid" 2>/dev/null; do
+  if ! ensure_legacy_link; then
+    printf '%s\n' "[release-worker-bootstrap] cannot preserve legacy link: $old" >&2
+    terminate_job_group
+  fi
+  /bin/sleep 2
+done
+wait "$worker_pid"
+rc=$?
+evidence_upload_failed=0
+if ! upload_output_object canonical "$canonical_output_uri" command_output.log text/plain; then
+  evidence_upload_failed=1
+fi
+if ! upload_output_object attempt "$attempt_output_uri" command_output.log text/plain; then
+  evidence_upload_failed=1
+fi
+if [ "$rc" -eq 0 ]; then
+  if [ "$evidence_upload_failed" -eq 0 ]; then
+    if ! upload_output_object canonical "$canonical_output_uri" release.tar.gz application/gzip; then
+      evidence_upload_failed=1
+    fi
+    if ! upload_output_object attempt "$attempt_output_uri" release.tar.gz application/gzip; then
+      evidence_upload_failed=1
+    fi
+  fi
+  if [ "$evidence_upload_failed" -eq 0 ]; then
+    if ! upload_output_object canonical "$canonical_output_uri" receipt.json application/json; then
+      evidence_upload_failed=1
+    fi
+    if [ "$evidence_upload_failed" -eq 0 ] &&
+      ! upload_output_object attempt "$attempt_output_uri" receipt.json application/json; then
+      evidence_upload_failed=1
+    fi
+  fi
+else
+  if owned_regular_file "$work/output/receipt.json"; then
+    if ! upload_output_object canonical "$canonical_output_uri" receipt.json application/json; then
+      evidence_upload_failed=1
+    fi
+    if ! upload_output_object attempt "$attempt_output_uri" receipt.json application/json; then
+      evidence_upload_failed=1
+    fi
+  fi
+fi
+if [ "$evidence_upload_failed" -ne 0 ]; then
+  printf '%s\n' "[release-worker-bootstrap] output upload/read-back failed; worker_exit_code=$rc" >&2
+  if [ "$rc" -eq 0 ]; then
+    rc=1
+  fi
+fi
+if ! ensure_legacy_link; then
+  printf '%s\n' "[release-worker-bootstrap] cannot preserve legacy link: $old" >&2
+  terminate_job_group
+fi
+if [ "$old" != "$work" ]; then
+  (
+    while [ -d "$work" ]; do
+      if ! owned_directory "$work/tmp"; then
+        printf '%s\n' "[release-worker-bootstrap] unsafe proof directory: $work/tmp" >&2
+        break
+      fi
+      response=$(/usr/bin/mktemp "$work/tmp/stado-watch.XXXXXX") || {
+        /bin/sleep 2
+        continue
+      }
+      if ! owned_regular_file "$response" || ! /bin/chmod 600 "$response"; then
+        /bin/rm -f -- "$response"
+        /bin/sleep 2
+        continue
+      fi
+      "$HOME/.stado/bin/stado" job watch "$WC_JOB_ID" --follow --json >"$response" &
+      watch_pid=$!
+      while kill -0 "$watch_pid" 2>/dev/null; do
+        if [ ! -d "$work" ]; then
+          /bin/kill -TERM "$watch_pid" 2>/dev/null || true
+          break
+        fi
+        if ! ensure_legacy_link; then
+          if [ ! -d "$work" ]; then
+            /bin/kill -TERM "$watch_pid" 2>/dev/null || true
+            break
+          fi
+          terminate_job_group
+        fi
+        /bin/sleep 2
+      done
+      wait "$watch_pid" 2>/dev/null || true
+      if [ ! -d "$work" ]; then
+        /bin/rm -f -- "$response"
+        break
+      fi
+      if owned_regular_file "$response" &&
+        /usr/bin/grep -Eq '^[[:space:]]*"terminal":[[:space:]]*true,?[[:space:]]*$' "$response"; then
+        /bin/rm -f -- "$response"
+        printf '%s\n' "[release-worker-bootstrap] lifecycle job_id=$WC_JOB_ID terminal=true"
+        break
+      fi
+      /bin/rm -f -- "$response"
+      if ! ensure_legacy_link; then
+        [ ! -d "$work" ] && break
+        terminate_job_group
+      fi
+      /bin/sleep 2
+    done
+    unlink_verified_legacy || exit 1
+  ) </dev/null &
+fi
+exit "$rc"
+"#;
+
 // The build request's identity: every argument is a distinct coordinate the
 // worker is required to receive, and each is already validated by the caller.
 #[allow(clippy::too_many_arguments)]
@@ -933,6 +1261,10 @@ async fn enqueue(
         ),
         None => run_uri(&m.product, id, &format!("platforms/{platform}/output")),
     };
+    let command = RELEASE_WORKER_COMMAND.replace(
+        RELEASE_OUTPUT_URI_MARK,
+        &crate::deploy::shlex_quote(&output_uri),
+    );
     let options = SubmitOptions {
         pinned_host: consumer,
         priority: crate::constants::RELEASE_JOB_PRIORITY,
@@ -943,8 +1275,6 @@ async fn enqueue(
         secret_env: secret_refs(&recipe.secret_env),
         ..Default::default()
     };
-    let command =
-        "$HOME/.stado/bin/stado release worker --request release-request.json".to_string();
     let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
     let job = jobs
         .pop()
@@ -2673,7 +3003,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     if release_control::sha256_bytes(&source_bytes) != request.source_sha256 {
         return Err(CmdError::click("worker source digest mismatch"));
     }
-    let temp = tempfile::tempdir()?;
+    let queue_work_dir = std::env::current_dir()?;
+    let temp = tempfile::Builder::new()
+        .prefix(".stado-release-worker-")
+        .tempdir_in(&queue_work_dir)?;
     let source = temp.path().join("source");
     release_control::safe_extract_archive(&source_bytes, &source).map_err(CmdError::click)?;
     let inputs_root = temp.path().join("inputs");

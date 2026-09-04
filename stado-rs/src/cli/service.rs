@@ -839,6 +839,25 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Hand a placed logical service's lifecycle to its active signed release.
+    ///
+    /// The release must already be committed and ready, and the legacy unit
+    /// must already be inactive. One conditional registry write then removes
+    /// every legacy restart identity while preserving the logical route,
+    /// placement dependency, probes, and release policy.
+    HandoffReleaseControl {
+        /// Logical service in the service directory and placement profile.
+        service: String,
+        /// Active registry host serving the release-controlled stable bind.
+        #[arg(long)]
+        host: String,
+        /// Exact product in registry.release_control.
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Remove a service entirely: withdraw its declaration, stop it, and
     /// delete its unit file from the host — the operation an operator means
     /// by "remove this service", which `retire` deliberately is not. The file
@@ -1404,6 +1423,12 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
+        ServiceCommands::HandoffReleaseControl {
+            service,
+            host,
+            product,
+            json,
+        } => handoff_release_control(&service, &host, &product, json).await,
         ServiceCommands::Remove { unit, host, json } => remove(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
@@ -5295,6 +5320,495 @@ async fn retire_service_stably(
         report = service::retire_service(target, service, sudo_password, runner).await?;
     }
     Ok(report)
+}
+async fn remote_file_identity(
+    target: &crate::targets::ComputeTarget,
+    path: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<Value, CmdError> {
+    for words in [
+        vec!["/bin/test", "-f", path],
+        vec!["/bin/test", "!", "-L", path],
+    ] {
+        let shape = host_channel::run_program(target, &words, runner)
+            .await
+            .map_err(click)?;
+        if !shape.ok() {
+            return Err(CmdError::click(format!(
+                "{}: obsolete release-control artifact {path} must be a regular non-symlink file",
+                target.name
+            )));
+        }
+    }
+    let digest = host_channel::run_program(target, &["/usr/bin/shasum", "-a", "256", path], runner)
+        .await
+        .map_err(click)?;
+    if !digest.ok() {
+        return Err(CmdError::click(format!(
+            "{}: cannot hash obsolete release-control artifact {path}: {}",
+            target.name,
+            host_channel::last_error_line(&digest, "shasum failed")
+        )));
+    }
+    let sha256 = digest
+        .stdout
+        .split_whitespace()
+        .next()
+        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: shasum returned no SHA-256 for {path}",
+                target.name
+            ))
+        })?;
+    let metadata =
+        host_channel::run_program(target, &["/usr/bin/stat", "-f", "%z %Lp", path], runner)
+            .await
+            .map_err(click)?;
+    if !metadata.ok() {
+        return Err(CmdError::click(format!(
+            "{}: cannot inspect obsolete release-control artifact {path}: {}",
+            target.name,
+            host_channel::last_error_line(&metadata, "stat failed")
+        )));
+    }
+    let mut fields = metadata.stdout.split_ascii_whitespace();
+    let size = fields
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: stat returned no byte size for {path}",
+                target.name
+            ))
+        })?;
+    let mode = fields
+        .next()
+        .and_then(|value| u32::from_str_radix(value, 8).ok())
+        .filter(|mode| *mode <= 0o7777)
+        .map(|mode| format!("{mode:04o}"))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: stat returned no four-digit mode for {path}",
+                target.name
+            ))
+        })?;
+    let transaction = format!(
+        "{}-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        uuid::Uuid::new_v4().simple()
+    );
+    Ok(json!({
+        "path": path,
+        "transaction": transaction,
+        "sha256": sha256,
+        "size": size,
+        "mode": mode,
+    }))
+}
+async fn require_no_executable_caller(
+    target: &crate::targets::ComputeTarget,
+    path: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<(), CmdError> {
+    let processes =
+        host_channel::run_program(target, &["/bin/ps", "-axo", "pid=,command="], runner)
+            .await
+            .map_err(click)?;
+    if !processes.ok() {
+        return Err(CmdError::click(format!(
+            "{}: cannot prove obsolete executable {path} has no caller: {}",
+            target.name,
+            host_channel::last_error_line(&processes, "ps failed")
+        )));
+    }
+    if let Some(caller) = processes.stdout.lines().find(|line| {
+        line.split_ascii_whitespace()
+            .skip(1)
+            .any(|argument| argument == path)
+    }) {
+        return Err(CmdError::click(format!(
+            "{}: obsolete executable {path} is still referenced by process {}",
+            target.name,
+            caller.trim()
+        )));
+    }
+    Ok(())
+}
+
+fn externalize_release_controlled_profile(
+    document: &mut Value,
+    profile: &str,
+    service_name: &str,
+    product: &str,
+) -> Result<(), CmdError> {
+    let profiles = document
+        .get_mut("placement_profiles")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.placement_profiles is not an array"))?;
+    let profile = profiles
+        .iter_mut()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(profile))
+        .ok_or_else(|| CmdError::click(format!("placement profile {profile:?} disappeared")))?;
+    let hosts = profile
+        .get_mut("hosts")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| CmdError::click("placement profile hosts is not an object"))?;
+    for (host, template) in hosts {
+        let units = template
+            .get_mut("units")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("placement host {host:?} units is not an object"))
+            })?;
+        if !units.contains_key(service_name) {
+            return Err(CmdError::click(format!(
+                "placement host {host:?} has no template for service {service_name:?}"
+            )));
+        }
+        units.insert(
+            service_name.to_string(),
+            json!({
+                "name": service_name,
+                "controller": "release-control",
+                "product": product,
+            }),
+        );
+    }
+    Ok(())
+}
+
+fn remove_release_legacy_identity(
+    document: &mut Value,
+    product: &str,
+    host: &str,
+) -> Result<(), CmdError> {
+    let target = document
+        .get_mut("release_control")
+        .and_then(|control| control.get_mut("products"))
+        .and_then(|products| products.get_mut(product))
+        .and_then(|policy| policy.get_mut("targets"))
+        .and_then(|targets| targets.get_mut(host))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release-control product {product:?} target {host:?} disappeared"
+            ))
+        })?;
+    target.remove("legacy_launchd_label");
+    target.remove("legacy_launchd_plist");
+    let generation = document
+        .get_mut("release_control")
+        .and_then(Value::as_object_mut)
+        .and_then(|control| control.get_mut("generation"))
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| CmdError::click("registry.release_control.generation is not an integer"))?;
+    document["release_control"]["generation"] = Value::from(generation.saturating_add(1));
+    Ok(())
+}
+
+fn document_contains_string(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(value) => value == needle,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| document_contains_string(value, needle)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| document_contains_string(value, needle)),
+        _ => false,
+    }
+}
+/// Transfer one placed service from generic unit lifecycle to release-control.
+///
+/// Every runtime fact is established before the sole registry CAS. The target
+/// service row, placement restart data, and release fallback identity disappear
+/// together, so no intermediate registry can restart the legacy executable.
+async fn handoff_release_control(
+    service_name: &str,
+    host: &str,
+    product: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry_model = targets::load_registry_from_str(&serde_json::to_string(&document)?)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let target = host_channel::resolve_target(&registry_model, host)
+        .map_err(click)?
+        .clone();
+    let directory = crate::service_resolution::directory(&document)
+        .map_err(CmdError::click)?
+        .ok_or_else(|| CmdError::click("registry.service_directory is not configured"))?;
+    let route = directory.services.get(service_name).ok_or_else(|| {
+        CmdError::click(format!(
+            "service directory declares no service {service_name:?}"
+        ))
+    })?;
+    if route.active_host != host {
+        return Err(CmdError::click(format!(
+            "service {service_name:?} is active on {:?}, not {host:?}",
+            route.active_host
+        )));
+    }
+    let profile_name = route.placement_profile.as_deref().ok_or_else(|| {
+        CmdError::click(format!(
+            "service {service_name:?} is not backed by a placement profile"
+        ))
+    })?;
+    let profile = crate::placement::profiles(&document)
+        .map_err(CmdError::click)?
+        .into_iter()
+        .find(|profile| profile.name == profile_name)
+        .ok_or_else(|| CmdError::click(format!("placement profile {profile_name:?} is absent")))?;
+    for (template_host, template) in &profile.hosts {
+        let unit = template.units.get(service_name).ok_or_else(|| {
+            CmdError::click(format!(
+                "placement host {template_host:?} has no {service_name:?} template"
+            ))
+        })?;
+        if unit.managed().is_none() {
+            return Err(CmdError::click(format!(
+                "placement service {service_name:?} is already release-controlled"
+            )));
+        }
+    }
+
+    let control = crate::release_control::control(&document)?
+        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let policy = control.products.get(product).ok_or_else(|| {
+        CmdError::click(format!(
+            "release-control product {product:?} is not declared"
+        ))
+    })?;
+    if policy.service != service_name {
+        return Err(CmdError::click(format!(
+            "release-control product {product:?} owns service {:?}, not {service_name:?}",
+            policy.service
+        )));
+    }
+    let target_policy = policy.targets.get(host).ok_or_else(|| {
+        CmdError::click(format!(
+            "release-control product {product:?} has no target {host:?}"
+        ))
+    })?;
+    let desired = policy.desired.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "release-control product {product:?} has no desired release"
+        ))
+    })?;
+    let desired_artifact = desired
+        .artifacts
+        .get(&target_policy.platform)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "desired release {:?} has no artifact for {}",
+                desired.version, target_policy.platform
+            ))
+        })?;
+    let legacy_label = target_policy
+        .legacy_launchd_label
+        .as_deref()
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release-control target {host:?} has no legacy launchd label to hand off"
+            ))
+        })?;
+    let legacy_plist = target_policy
+        .legacy_launchd_plist
+        .as_deref()
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release-control target {host:?} has no legacy launchd plist to hand off"
+            ))
+        })?;
+    let legacy = service::declared_services(&target)
+        .into_iter()
+        .find(|declared| declared.name == service_name || declared.unit_id() == legacy_label)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{service_name:?} has no active target-managed legacy service row on {host:?}"
+            ))
+        })?;
+    if legacy.unit_id() != legacy_label || legacy.path != legacy_plist {
+        return Err(CmdError::click(format!(
+            "legacy service row does not match release-control identity {legacy_label} at \
+             {legacy_plist}"
+        )));
+    }
+
+    let runner = production_runner();
+    let state_path = crate::release_agent::host_state_path(&target_policy.state_dir, product);
+    let state_text = host_channel::remote_read_file(&target, &state_path, &runner)
+        .await
+        .map_err(click)?
+        .ok_or_else(|| {
+            CmdError::click(format!("{host}: release state is absent at {state_path}"))
+        })?;
+    let state = crate::release_agent::parse_state_document(
+        state_text.as_bytes(),
+        product,
+        host,
+        &state_path,
+    )
+    .map_err(CmdError::click)?;
+    let active = state.active.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "{host}: release-control has no active {product:?} process"
+        ))
+    })?;
+    if state.phase != crate::release_agent::RolloutPhase::Committed
+        || state.candidate.is_some()
+        || state.proxy_pid.is_none()
+        || state.rollout_generation != desired.rollout_generation
+        || active.version != desired.version
+        || active.artifact_sha256 != desired_artifact.artifact_sha256
+        || active.manifest_sha256 != desired_artifact.manifest_sha256
+    {
+        return Err(CmdError::click(format!(
+            "{host}: release-control {product:?} is not the settled desired release"
+        )));
+    }
+
+    let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
+    let active_binary = host_channel::run_program(
+        &target,
+        &[
+            &installed_stado,
+            "release",
+            "active-binary",
+            product,
+            "--target",
+            host,
+            "--json",
+        ],
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    if !active_binary.ok() {
+        return Err(CmdError::click(format!(
+            "{host}: installed Stado rejected active release binary: {}",
+            host_channel::last_error_line(&active_binary, "active-binary failed")
+        )));
+    }
+    let active_binary: Value =
+        serde_json::from_str(active_binary.stdout.trim()).map_err(|error| {
+            CmdError::click(format!(
+                "{host}: active-binary returned invalid JSON: {error}"
+            ))
+        })?;
+    if active_binary["state"] != "active"
+        || active_binary["product"] != product
+        || active_binary["target"] != host
+        || active_binary["version"] != desired.version
+        || active_binary["artifact_sha256"] != desired_artifact.artifact_sha256
+        || active_binary["manifest_sha256"] != desired_artifact.manifest_sha256
+    {
+        return Err(CmdError::click(format!(
+            "{host}: active-binary identity does not match the desired release"
+        )));
+    }
+
+    let serving = target_policy
+        .blue_green_serving()
+        .map_err(CmdError::click)?;
+    let readiness_url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
+    let readiness = host_channel::run_program(
+        &target,
+        &[
+            "/usr/bin/curl",
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--max-time",
+            "3",
+            "--output",
+            "/dev/null",
+            &readiness_url,
+        ],
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    if !readiness.ok() {
+        return Err(CmdError::click(format!(
+            "{host}: release-control readiness failed at {readiness_url}: {}",
+            host_channel::last_error_line(&readiness, "readiness request failed")
+        )));
+    }
+    let label = service_label_print::print_label(
+        &target,
+        legacy_label,
+        service::BootoutScope::System,
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    if label.loaded() {
+        return Err(CmdError::click(format!(
+            "{host}: legacy launchd label {legacy_label:?} is still loaded"
+        )));
+    }
+    require_no_executable_caller(&target, &legacy.program, &runner).await?;
+    let plist_identity = remote_file_identity(&target, legacy_plist, &runner).await?;
+    let binary_identity = remote_file_identity(&target, &legacy.program, &runner).await?;
+
+    service::remove_service(&mut document, host, legacy_label).map_err(click)?;
+    externalize_release_controlled_profile(&mut document, profile_name, service_name, product)?;
+    remove_release_legacy_identity(&mut document, product, host)?;
+    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+    for obsolete in [legacy_label, legacy_plist, legacy.program.as_str()] {
+        if obsolete.is_empty() || document_contains_string(&document, obsolete) {
+            return Err(CmdError::click(format!(
+                "registry handoff left obsolete executable identity {obsolete:?} reachable"
+            )));
+        }
+    }
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let generation = registry::push_document_if(&document, &expected_generation).await?;
+
+    let report = json!({
+        "schema": "stado.service-release-control-handoff.v1",
+        "status": "handed_off",
+        "service": service_name,
+        "host": host,
+        "profile": profile_name,
+        "controller": "release-control",
+        "product": product,
+        "expected_generation": expected_generation,
+        "generation": generation,
+        "release": {
+            "version": active.version,
+            "rollout_generation": state.rollout_generation,
+            "artifact_sha256": active.artifact_sha256,
+            "manifest_sha256": active.manifest_sha256,
+            "proxy_pid": state.proxy_pid,
+            "active_binary": active_binary["path"],
+            "readiness_url": readiness_url,
+        },
+        "legacy": {
+            "label": legacy_label,
+            "loaded": false,
+            "registry_referrers": [],
+        },
+        "retirement": {
+            "status": "pending",
+            "order": ["plist", "binary"],
+            "plist_receipt": plist_identity,
+            "binary_receipt": binary_identity,
+        },
+    });
+    if json_output {
+        print_json(&report)
+    } else {
+        println!(
+            "{host}: {service_name} handed to release-control product {product} at registry generation {generation}"
+        );
+        Ok(())
+    }
 }
 
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
