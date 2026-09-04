@@ -2024,6 +2024,18 @@ enum HostCommands {
         /// Inspect and report the exact source without moving it.
         #[arg(long)]
         dry_run: bool,
+        /// Dry-run transaction token binding an apply to its reviewed destination.
+        #[arg(long)]
+        transaction: Option<String>,
+        /// SHA-256 from the reviewed dry-run receipt.
+        #[arg(long)]
+        expected_sha256: Option<String>,
+        /// Byte count from the reviewed dry-run receipt.
+        #[arg(long)]
+        expected_size: Option<u64>,
+        /// Octal mode from the reviewed dry-run receipt.
+        #[arg(long)]
+        expected_mode: Option<String>,
         /// Emit the retirement report as JSON.
         #[arg(long)]
         json: bool,
@@ -2036,6 +2048,14 @@ enum HostCommands {
         product: String,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        transaction: Option<String>,
+        #[arg(long)]
+        expected_sha256: Option<String>,
+        #[arg(long)]
+        expected_size: Option<u64>,
+        #[arg(long)]
+        expected_mode: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -3146,14 +3166,44 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 path,
                 product,
                 dry_run,
+                transaction,
+                expected_sha256,
+                expected_size,
+                expected_mode,
                 json,
-            } => host::retire_file(&target, &path, &product, dry_run, json).await,
+            } => {
+                host::retire_file(
+                    &target,
+                    &path,
+                    &product,
+                    dry_run,
+                    transaction.as_deref(),
+                    expected_sha256.as_deref(),
+                    expected_size,
+                    expected_mode.as_deref(),
+                    json,
+                )
+                .await
+            }
             HostCommands::RetireFileLocal {
                 path,
                 product,
                 dry_run,
+                transaction,
+                expected_sha256,
+                expected_size,
+                expected_mode,
                 json,
-            } => host::retire_file_local(&path, &product, dry_run, json),
+            } => host::retire_file_local(
+                &path,
+                &product,
+                dry_run,
+                transaction.as_deref(),
+                expected_sha256.as_deref(),
+                expected_size,
+                expected_mode.as_deref(),
+                json,
+            ),
             HostCommands::Cron {
                 target,
                 prune,

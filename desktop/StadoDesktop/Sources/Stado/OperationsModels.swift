@@ -480,6 +480,7 @@ struct HostRetireFileReceipt: Decodable, Sendable {
     let target: String
     let source: String
     let destination: String?
+    let transaction: String?
     let status: String
     let size: UInt64?
     let sha256: String?

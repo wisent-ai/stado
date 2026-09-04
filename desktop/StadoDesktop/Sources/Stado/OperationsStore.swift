@@ -446,10 +446,23 @@ final class HostRetireFileStore: ObservableObject {
         ]
     }
 
-    nonisolated static func applyArguments(_ request: HostRetireFileRequest) -> [String] {
-        [
+    nonisolated static func applyArguments(
+        _ request: HostRetireFileRequest,
+        receipt: HostRetireFileReceipt
+    ) -> [String]? {
+        guard let transaction = receipt.transaction,
+              let sha256 = receipt.sha256,
+              let size = receipt.size,
+              let mode = receipt.mode
+        else { return nil }
+        return [
             "host", "retire-file", request.host, request.path,
-            "--product", request.product, "--json",
+            "--product", request.product,
+            "--transaction", transaction,
+            "--expected-sha256", sha256,
+            "--expected-size", String(size),
+            "--expected-mode", mode,
+            "--json",
         ]
     }
 
@@ -458,6 +471,7 @@ final class HostRetireFileStore: ObservableObject {
             && preview?.isReady == true
             && preview?.target == request.host
             && preview?.source == request.path
+            && preview.flatMap { Self.applyArguments(request, receipt: $0) } != nil
     }
 
     func preflight(_ request: HostRetireFileRequest) async {
@@ -477,7 +491,8 @@ final class HostRetireFileStore: ObservableObject {
             preview = receipt
             if receipt.isReady,
                receipt.target == request.host,
-               receipt.source == request.path
+               receipt.source == request.path,
+               Self.applyArguments(request, receipt: receipt) != nil
             {
                 previewRequest = request
                 mutation = .idle
@@ -494,7 +509,10 @@ final class HostRetireFileStore: ObservableObject {
     }
 
     func retire(_ request: HostRetireFileRequest) async {
-        guard hasReadyPreview(for: request) else {
+        guard hasReadyPreview(for: request),
+              let reviewed = preview,
+              let arguments = Self.applyArguments(request, receipt: reviewed)
+        else {
             mutation = .failed(
                 "Run and review the dry-run receipt for this exact target, path, and product first."
             )
@@ -506,12 +524,17 @@ final class HostRetireFileStore: ObservableObject {
         do {
             let receipt = try await cli.json(
                 HostRetireFileReceipt.self,
-                arguments: Self.applyArguments(request)
+                arguments: arguments
             )
             applied = receipt
             if receipt.isRetired,
                receipt.target == request.host,
-               receipt.source == request.path
+               receipt.source == request.path,
+               receipt.transaction == reviewed.transaction,
+               receipt.destination == reviewed.destination,
+               receipt.size == reviewed.size,
+               receipt.sha256 == reviewed.sha256,
+               receipt.mode == reviewed.mode
             {
                 preflightRefusal = nil
                 mutation = .succeeded(

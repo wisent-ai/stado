@@ -1290,8 +1290,12 @@ private struct HostRetireFileSheet: View {
 
     var body: some View {
         Group {
-            if isReviewing, let request, let preview = store.preview {
-                confirmation(request: request, preview: preview)
+            if isReviewing,
+               let request,
+               let preview = store.preview,
+               let arguments = HostRetireFileStore.applyArguments(request, receipt: preview)
+            {
+                confirmation(request: request, preview: preview, arguments: arguments)
             } else {
                 retirementForm
             }
@@ -1384,12 +1388,13 @@ private struct HostRetireFileSheet: View {
             title: applied ? "Retirement receipt" : "Dry-run receipt",
             detail: applied
                 ? "The mutation response as Stado reported it. A second retirement needs a new dry run."
-                : "Review every identity field below. Only a ready receipt for this unchanged request enables the mutation.",
+                : "Review the exact destination and every identity field below. Only this unchanged receipt enables the mutation.",
             trailing: receipt.status
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 receiptField("Source", receipt.source)
                 receiptField("Destination", receipt.destination ?? "Not reported")
+                receiptField("Transaction", receipt.transaction ?? "Not reported")
                 HStack(alignment: .top, spacing: WisentDesign.Space.x5) {
                     receiptField("Size", receipt.size.map { "\($0.formatted(.number)) bytes" } ?? "Not reported")
                     receiptField("Mode", receipt.mode ?? "Not reported")
@@ -1464,26 +1469,28 @@ private struct HostRetireFileSheet: View {
 
     private func confirmation(
         request: HostRetireFileRequest,
-        preview: HostRetireFileReceipt
+        preview: HostRetireFileReceipt,
+        arguments: [String]
     ) -> WisentDecisionDialog {
         WisentDecisionDialog(
             tone: .danger,
             title: "Retire this exact file on \(request.host)?",
             lines: [
-                "The dry run below reported this source as ready. Stado will revalidate the held file identity before moving it into its no-overwrite archive destination.",
-                "This confirmation applies only to the unchanged target, path, and product that produced this receipt.",
+                "The dry run below reported this source as ready. Stado will require the same size, SHA-256, and mode before moving it into the exact reviewed no-overwrite destination.",
+                "This confirmation carries the dry-run transaction token and applies only to the unchanged target, path, product, and receipt.",
             ],
             listing: [
                 "target: \(preview.target)",
                 "product: \(request.product)",
                 "source: \(preview.source)",
                 "destination: \(preview.destination ?? "Not reported")",
+                "transaction: \(preview.transaction ?? "Not reported")",
                 "size: \(preview.size.map { "\($0.formatted(.number)) bytes" } ?? "Not reported")",
                 "SHA-256: \(preview.sha256 ?? "Not reported")",
                 "mode: \(preview.mode ?? "Not reported")",
                 "refusal: \(preview.detail ?? "None")",
             ],
-            footnote: "Runs \(StadoCLI.commandLine(HostRetireFileStore.applyArguments(request))).",
+            footnote: "Runs \(StadoCLI.commandLine(arguments)).",
             actions: [
                 WisentAction("Back to the receipt", kind: .secondary) {
                     isReviewing = false

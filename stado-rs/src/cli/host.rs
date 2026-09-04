@@ -4588,6 +4588,7 @@ pub struct RetireFileOutcome {
     pub target: String,
     pub source: String,
     pub destination: Option<String>,
+    pub transaction: Option<String>,
     pub status: String,
     pub size: Option<u64>,
     pub sha256: Option<String>,
@@ -4616,6 +4617,80 @@ impl RetireFileOutcome {
 
 fn retire_refused(message: impl Into<String>) -> CmdError {
     CmdError::click(format!("retire-file refused: {}", message.into()))
+}
+
+#[derive(Debug)]
+struct RetireFileBinding {
+    transaction: String,
+    expected_sha256: String,
+    expected_size: u64,
+    expected_mode: String,
+}
+
+fn safe_retirement_transaction(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 49
+        && bytes[..8].iter().all(u8::is_ascii_digit)
+        && bytes[8] == b'T'
+        && bytes[9..15].iter().all(u8::is_ascii_digit)
+        && bytes[15] == b'Z'
+        && bytes[16] == b'-'
+        && bytes[17..].iter().all(u8::is_ascii_hexdigit)
+}
+
+fn retire_file_binding(
+    dry_run: bool,
+    transaction: Option<&str>,
+    expected_sha256: Option<&str>,
+    expected_size: Option<u64>,
+    expected_mode: Option<&str>,
+) -> Result<Option<RetireFileBinding>, CmdError> {
+    match (
+        transaction,
+        expected_sha256,
+        expected_size,
+        expected_mode,
+    ) {
+        (None, None, None, None) => Ok(None),
+        (Some(transaction), Some(expected_sha256), Some(expected_size), Some(expected_mode)) => {
+            if dry_run {
+                return Err(CmdError::usage(
+                    "preflight binding flags are accepted only by the mutating form",
+                ));
+            }
+            if !safe_retirement_transaction(transaction) {
+                return Err(CmdError::usage(
+                    "transaction must be the exact token from a retire-file dry-run receipt",
+                ));
+            }
+            if expected_sha256.len() != 64
+                || !expected_sha256.as_bytes().iter().all(u8::is_ascii_hexdigit)
+            {
+                return Err(CmdError::usage(
+                    "expected-sha256 must be a 64-digit hexadecimal SHA-256",
+                ));
+            }
+            if expected_mode.len() != 4
+                || !expected_mode
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| matches!(byte, b'0'..=b'7'))
+            {
+                return Err(CmdError::usage(
+                    "expected-mode must be the four-digit octal mode from the dry-run receipt",
+                ));
+            }
+            Ok(Some(RetireFileBinding {
+                transaction: transaction.to_string(),
+                expected_sha256: expected_sha256.to_ascii_lowercase(),
+                expected_size,
+                expected_mode: expected_mode.to_string(),
+            }))
+        }
+        _ => Err(CmdError::usage(
+            "transaction, expected-sha256, expected-size, and expected-mode must be supplied together",
+        )),
+    }
 }
 
 fn safe_backup_product(product: &str) -> bool {
@@ -4917,6 +4992,7 @@ fn retire_file_local_document(
     path: &str,
     product: &str,
     dry_run: bool,
+    binding: Option<&RetireFileBinding>,
 ) -> Result<RetireFileOutcome, CmdError> {
     if !path.starts_with('/')
         || path.split('/').any(|component| component == "..")
@@ -4960,6 +5036,7 @@ fn retire_file_local_document(
             target: String::new(),
             source: path.to_string(),
             destination: None,
+            transaction: None,
             status: "absent".to_string(),
             size: None,
             sha256: None,
@@ -4974,6 +5051,7 @@ fn retire_file_local_document(
             target: String::new(),
             source: path.to_string(),
             destination: None,
+            transaction: None,
             status: "absent".to_string(),
             size: None,
             sha256: None,
@@ -4986,6 +5064,7 @@ fn retire_file_local_document(
             target: String::new(),
             source: path.to_string(),
             destination: None,
+            transaction: None,
             status: "absent".to_string(),
             size: None,
             sha256: None,
@@ -5007,6 +5086,32 @@ fn retire_file_local_document(
     let size = source_metadata.len();
     let mode = format!("{:04o}", source_metadata.mode() & 0o7777);
     let sha256 = hash_open_file(&mut source_file)?;
+    if let Some(binding) = binding {
+        if size != binding.expected_size {
+            return Err(retire_refused(
+                "source size differs from the reviewed dry-run receipt",
+            ));
+        }
+        if mode != binding.expected_mode {
+            return Err(retire_refused(
+                "source mode differs from the reviewed dry-run receipt",
+            ));
+        }
+        if sha256 != binding.expected_sha256 {
+            return Err(retire_refused(
+                "source SHA-256 differs from the reviewed dry-run receipt",
+            ));
+        }
+    }
+    let transaction = binding
+        .map(|binding| binding.transaction.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+                uuid::Uuid::new_v4().simple()
+            )
+        });
 
     let destination_parts = [
         OsStr::new(".stado"),
@@ -5048,11 +5153,6 @@ fn retire_file_local_document(
         ));
     }
 
-    let transaction = format!(
-        "{}-{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
-        uuid::Uuid::new_v4().simple()
-    );
     let destination = home
         .join(".stado/products")
         .join(product)
@@ -5064,6 +5164,7 @@ fn retire_file_local_document(
             target: String::new(),
             source: path.to_string(),
             destination: Some(destination.to_string_lossy().into_owned()),
+            transaction: Some(transaction.clone()),
             status: "ready".to_string(),
             size: Some(size),
             sha256: Some(sha256),
@@ -5160,6 +5261,7 @@ fn retire_file_local_document(
         target: String::new(),
         source: path.to_string(),
         destination: Some(destination.to_string_lossy().into_owned()),
+        transaction: Some(transaction),
         status: "retired".to_string(),
         size: Some(size),
         sha256: Some(sha256),
@@ -5173,9 +5275,20 @@ pub fn retire_file_local(
     path: &str,
     product: &str,
     dry_run: bool,
+    transaction: Option<&str>,
+    expected_sha256: Option<&str>,
+    expected_size: Option<u64>,
+    expected_mode: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let outcome = retire_file_local_document(path, product, dry_run)?;
+    let binding = retire_file_binding(
+        dry_run,
+        transaction,
+        expected_sha256,
+        expected_size,
+        expected_mode,
+    )?;
+    let outcome = retire_file_local_document(path, product, dry_run, binding.as_ref())?;
     if json_output {
         println!("{}", serde_json::to_string(&outcome)?);
     } else {
@@ -5187,23 +5300,25 @@ pub fn retire_file_local(
 /// Resolve TARGET and invoke the same installed Rust primitive locally or over
 /// its declared host channel. Remote cleanup therefore requires the 0.15.0
 /// Stado delivery to be installed before any residue is touched.
-pub async fn retire_file_document(
+async fn retire_file_document(
     target: &str,
     path: &str,
     product: &str,
     dry_run: bool,
+    binding: Option<&RetireFileBinding>,
 ) -> Result<RetireFileOutcome, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let mut outcome = if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        retire_file_local_document(path, product, dry_run)?
+        retire_file_local_document(path, product, dry_run, binding)?
     } else {
         let runner = crate::deploy::production_runner();
         let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         let binary = format!("{home}/.stado/bin/stado");
+        let expected_size = binding.map(|binding| binding.expected_size.to_string());
         let mut words = vec![
             binary.as_str(),
             "host",
@@ -5215,6 +5330,20 @@ pub async fn retire_file_document(
         ];
         if dry_run {
             words.push("--dry-run");
+        }
+        if let Some(binding) = binding {
+            words.extend([
+                "--transaction",
+                binding.transaction.as_str(),
+                "--expected-sha256",
+                binding.expected_sha256.as_str(),
+                "--expected-size",
+                expected_size
+                    .as_deref()
+                    .expect("binding supplies expected size"),
+                "--expected-mode",
+                binding.expected_mode.as_str(),
+            ]);
         }
         let output = crate::deploy::host_channel::run_program(&resolved, &words, &runner)
             .await
@@ -5249,11 +5378,12 @@ fn print_retire_file_outcome(outcome: &RetireFileOutcome) {
         println!("{}: {} absent", outcome.target, outcome.source);
     } else {
         println!(
-            "{}: {} {} -> {} ({} bytes, sha256 {}, mode {})",
+            "{}: {} {} -> {} (transaction {}, {} bytes, sha256 {}, mode {})",
             outcome.target,
             outcome.source,
             outcome.status,
             outcome.destination.as_deref().unwrap_or("-"),
+            outcome.transaction.as_deref().unwrap_or("-"),
             outcome.size.unwrap_or(0),
             outcome.sha256.as_deref().unwrap_or("-"),
             outcome.mode.as_deref().unwrap_or("-"),
@@ -5267,9 +5397,20 @@ pub async fn retire_file(
     path: &str,
     product: &str,
     dry_run: bool,
+    transaction: Option<&str>,
+    expected_sha256: Option<&str>,
+    expected_size: Option<u64>,
+    expected_mode: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let outcome = retire_file_document(target, path, product, dry_run).await?;
+    let binding = retire_file_binding(
+        dry_run,
+        transaction,
+        expected_sha256,
+        expected_size,
+        expected_mode,
+    )?;
+    let outcome = retire_file_document(target, path, product, dry_run, binding.as_ref()).await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
