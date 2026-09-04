@@ -669,8 +669,7 @@ fn process_executable_matches(pid: i32, expected: &Path) -> bool {
             return false;
         };
         let actual = actual.to_string_lossy();
-        return actual.strip_suffix(" (deleted)").unwrap_or(&actual)
-            == expected.to_string_lossy();
+        return actual.strip_suffix(" (deleted)").unwrap_or(&actual) == expected.to_string_lossy();
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -782,11 +781,11 @@ async fn stable_bind_answer(
     }
 
     let proxy_path = proxy_state_path(target, product);
-    let proxy: ProxyState = serde_json::from_slice(
-        &std::fs::read(&proxy_path)
-            .map_err(|error| format!("cannot read proxy target {}: {error}", proxy_path.display()))?,
-    )
-    .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
+    let proxy: ProxyState =
+        serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
+            format!("cannot read proxy target {}: {error}", proxy_path.display())
+        })?)
+        .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
     let expected_upstream = format!("127.0.0.1:{}", active.port);
     if proxy.generation != generation || proxy.upstream != expected_upstream {
         return Err(format!(
@@ -942,11 +941,9 @@ async fn ensure_active_proxy(
     let proxy_pid = exact_proxy_pid(target, serving, product)
         .map_err(|why| format!("stable release proxy failed to start: {why}"))?;
     state.proxy_pid = Some(proxy_pid);
-    stable_bind_answer(
-        proxy_pid, target, serving, product, generation, active,
-    )
-    .await
-    .map_err(|why| format!("stable release proxy failed to start: {why}"))
+    stable_bind_answer(proxy_pid, target, serving, product, generation, active)
+        .await
+        .map_err(|why| format!("stable release proxy failed to start: {why}"))
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
@@ -1098,10 +1095,7 @@ pub(crate) fn active_binary(
     if active.version != desired.version || active.artifact_sha256 != artifact.artifact_sha256 {
         return Err(format!(
             "{product} active identity {} {} does not match desired identity {} {}",
-            active.version,
-            active.artifact_sha256,
-            desired.version,
-            artifact.artifact_sha256
+            active.version, active.artifact_sha256, desired.version, artifact.artifact_sha256
         ));
     }
 
@@ -2076,11 +2070,7 @@ async fn reconcile_product(
                         }
                         Err(why) => Err(format!(
                             "stable release proxy failed to start: {why}; stderr {}",
-                            log_tail(
-                                &release_log_path(target, product, "proxy", "err"),
-                                20,
-                                1200
-                            )
+                            log_tail(&release_log_path(target, product, "proxy", "err"), 20, 1200)
                         )),
                     }
                 }
