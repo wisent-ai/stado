@@ -82,7 +82,7 @@ fn a_name_outside_the_catalog_names_the_catalog_in_its_refusal() {
         r#"{{"schema_version": 2, "targets": [{{
             "name": "this-mac", "kind": "local", "ssh": null,
             "release_platform": "darwin-arm64",
-            "hostnames": ["{hostname}"], "slots": 1
+            "hostnames": ["{hostname}"]
         }}], "coordinators": []}}"#
     );
     std::fs::write(dir.path().join("registry.json"), document).unwrap();

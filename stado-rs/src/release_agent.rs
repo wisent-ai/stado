@@ -1295,6 +1295,30 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     }
     found
 }
+fn repair_recorded_active_pid(
+    state: &mut HostReleaseState,
+    processes: &[ReleaseProcess],
+    upstream_port: u16,
+) -> Option<(i32, i32)> {
+    let active = state.active.as_mut()?;
+    if active.port != upstream_port {
+        return None;
+    }
+    let release_dir = Path::new(&active.release_dir);
+    let mut candidates = processes.iter().filter(|process| {
+        process.version == active.version
+            && process.port == Some(upstream_port)
+            && process.release_dir == release_dir
+    });
+    let candidate = candidates.next()?;
+    if candidates.next().is_some() || candidate.pid == active.pid {
+        return None;
+    }
+    let recorded_pid = active.pid;
+    active.pid = candidate.pid;
+    Some((recorded_pid, candidate.pid))
+}
+
 async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     reqwest::Client::new()
@@ -1325,8 +1349,9 @@ async fn reconcile_stable_proxy(
         return Ok(());
     };
     let upstream = proxy_upstream_port(target, product);
+    let processes = release_processes(install_root);
     let upstream_is_owned = upstream.is_some_and(|upstream_port| {
-        release_processes(install_root)
+        processes
             .iter()
             .any(|process| process.port == Some(upstream_port))
     });
@@ -1337,8 +1362,16 @@ async fn reconcile_stable_proxy(
         stop_legacy(target)?;
     }
     if upstream_is_owned && stable_bind_ready(&serving).await {
+        let repaired_active_pid = upstream
+            .and_then(|upstream_port| repair_recorded_active_pid(state, &processes, upstream_port));
         state.proxy_pid = Some(proxy_pid);
         save_state(target, state)?;
+        if let Some((recorded_pid, active_pid)) = repaired_active_pid {
+            eprintln!(
+                "adopted {product} active release process pid={active_pid} after recorded \
+                 pid={recorded_pid} stopped matching the live release"
+            );
+        }
         eprintln!(
             "adopted {product} release proxy pid={proxy_pid} after interrupted handoff; \
              upstream {upstream:?} is ready"

@@ -5500,19 +5500,15 @@ pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFile
         r#"set -u
 path={quoted}
 report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
-# `/Library/LaunchDaemons/com.wisent.*.plist` is a managed area too. The fleet
-# INSTALLS there — `deploy::service::ENSURE_BODY` writes a system daemon with
-# `sudo -n /usr/bin/install -m 644 -o root -g wheel` — and until now it could
-# not delete what it wrote, so `service remove` refused with "outside the
-# managed home areas" and every always-on host only ever accumulated unit
-# files. charless-mac-mini reached 81 that the registry does not declare,
-# including a `com.wisent.compute.service.com.wisent.compute.service.stado-agent-mini`
-# whose KeepAlive job restarted a duplicate queue agent every time it was
-# stopped. Create and delete now share one grant and one guard set.
+# A service file is removable exactly where Stado installs service files.
+# Keeping this list beside the delete is deliberate: a missing Linux path left
+# retired user units on disk, ready for an older coordinator or a manual
+# `systemctl enable` to resurrect. Root-owned machine units keep the same
+# `com.wisent.*` namespace restriction as LaunchDaemons.
 privileged=no
 case "$path" in
-  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*) ;;
-  /Library/LaunchDaemons/com.wisent.*.plist) privileged=yes ;;
+  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*|"$HOME/.config/systemd/user/"*) ;;
+  /Library/LaunchDaemons/com.wisent.*.plist|/etc/systemd/system/com.wisent.*.service) privileged=yes ;;
   *) report refused "outside the managed areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
 esac
 if [ -L "$path" ]; then

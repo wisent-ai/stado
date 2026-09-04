@@ -11,13 +11,12 @@
 //! named a domain that could never load the unit. Every other always-on unit
 //! on that host is a system LaunchDaemon under `/Library/LaunchDaemons`.
 //!
-//! Nothing about that needs a host: the path says the domain and the target
-//! says the host runs unattended, so it is a registry finding. These tests
-//! defend that it is reported where an operator already looks — as a
-//! `misdeclared-domain` row in `stado registry doctor` and as a
-//! `declaration:` line under `stado service list` — that it stays silent for
-//! an interactive host, where a user agent is exactly right, and that the
-//! corrected declaration still validates.
+//! Nothing about the headless case needs a host: the path says the domain and
+//! the target says both that it runs unattended and that it owns no graphical
+//! workload. `always-on` alone is not enough — the Mac mini is always-on and
+//! keeps an autologin Aqua session for Weles. These tests defend both cases:
+//! a truly headless host reports the domain mismatch, while an always-on Weles
+//! host keeps its LaunchAgents valid.
 //!
 //! Every test drives the built `stado` binary (`CARGO_BIN_EXE_stado`) with
 //! WC_STORAGE_BACKEND=local + WC_LOCAL_STORAGE_PATH=<TempDir>. STADO_CONFIG
@@ -107,9 +106,14 @@ impl Harness {
     /// Seed the canonical registry: one always-on host and one interactive
     /// host, each declaring one launchd unit at `path`.
     ///
-    /// `hostnames` deliberately never names this machine, so no command under
-    /// test can be routed at the developer's own launchd.
-    fn declare_registry(&self, always_on_unit: &UnitSpec, interactive_unit: &UnitSpec) {
+    /// `graphical` declares Weles on the always-on host, which means that host
+    /// intentionally keeps an Aqua login alive.
+    fn declare_registry(
+        &self,
+        graphical: bool,
+        always_on_unit: &UnitSpec,
+        interactive_unit: &UnitSpec,
+    ) {
         let document = serde_json::json!({
             "schema_version": 2,
             "targets": [
@@ -119,9 +123,12 @@ impl Harness {
                     "ssh": "charles@10.9.9.21",
                     "release_platform": "darwin-arm64",
                     "hostnames": [format!("{ALWAYS_ON_HOST}.local")],
-                    "slots": 1,
                     "role": "always-on",
                     "host_heuristic": "always-on",
+                    "weles": graphical.then(|| serde_json::json!({
+                        "enabled": true,
+                        "actions": ["generic_capture"],
+                    })),
                     "services": [
                         always_on_unit.to_json(),
                         // Already a system LaunchDaemon: the shape every other
@@ -136,7 +143,6 @@ impl Harness {
                     "ssh": "lukaszbartoszcze@10.9.9.22",
                     "release_platform": "darwin-arm64",
                     "hostnames": [format!("{INTERACTIVE_HOST}.local")],
-                    "slots": 1,
                     "role": "interactive",
                     "services": [interactive_unit.to_json()],
                 },
@@ -267,6 +273,7 @@ fn service_row(out: &Output, unit: &str) -> serde_json::Value {
 fn doctor_reports_a_user_agent_declared_on_an_always_on_host() {
     let harness = Harness::new();
     harness.declare_registry(
+        false,
         &UnitSpec::new(AGENT, AGENT_PATH),
         &UnitSpec::new(
             STREAM,
@@ -322,6 +329,7 @@ fn doctor_stays_silent_for_a_user_agent_on_an_interactive_host() {
     // Both hosts declare a per-account LaunchAgent; only the always-on one is
     // a finding, so the interactive row is the control.
     harness.declare_registry(
+        false,
         &UnitSpec::new(
             WELES,
             "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
@@ -346,12 +354,44 @@ fn doctor_stays_silent_for_a_user_agent_on_an_interactive_host() {
     );
 }
 
+/// Uptime and a graphical login are independent. An always-on target that
+/// owns Weles keeps an Aqua account alive, so its LaunchAgents are deliberate.
+#[test]
+fn doctor_keeps_user_agents_on_an_always_on_weles_host() {
+    let harness = Harness::new();
+    harness.declare_registry(
+        true,
+        &UnitSpec::new(AGENT, AGENT_PATH),
+        &UnitSpec::new(
+            STREAM,
+            "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.transcript-lake-stream.plist",
+        ),
+    );
+    harness.declare_beacon(ALWAYS_ON_HOST, &[AGENT, WELES]);
+    harness.declare_beacon(INTERACTIVE_HOST, &[STREAM]);
+
+    let doctor = harness.stado(&["registry", "doctor", "--json"]);
+    assert!(
+        domain_findings(&doctor).is_empty(),
+        "always-on does not mean headless when the target declares Weles"
+    );
+
+    let services = harness.stado(&["service", "list", "--json"]);
+    assert!(
+        service_row(&services, AGENT)
+            .get("misdeclared_domain")
+            .is_none(),
+        "the graphical host's user service is valid"
+    );
+}
+
 /// `service list` prints the same sentence under the table, on the surface an
 /// operator reads when the unit is missing from it.
 #[test]
 fn service_list_names_the_declared_domain_and_the_loadable_one() {
     let harness = Harness::new();
     harness.declare_registry(
+        false,
         &UnitSpec::new(AGENT, AGENT_PATH),
         &UnitSpec::new(
             STREAM,
@@ -432,6 +472,7 @@ fn service_list_names_the_declared_domain_and_the_loadable_one() {
 fn the_corrected_daemon_declaration_validates_and_closes_the_finding() {
     let harness = Harness::new();
     harness.declare_registry(
+        false,
         &UnitSpec::new(AGENT, AGENT_DAEMON_PATH).running(AGENT_PROGRAM, &["agent", "--auto"]),
         &UnitSpec::new(
             STREAM,
@@ -480,6 +521,7 @@ fn the_corrected_daemon_declaration_validates_and_closes_the_finding() {
 fn the_misdeclared_domain_replaces_the_missing_plist_symptom() {
     let harness = Harness::new();
     harness.declare_registry(
+        false,
         &UnitSpec::new(AGENT, AGENT_PATH),
         &UnitSpec::new(
             STREAM,

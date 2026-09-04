@@ -763,8 +763,7 @@ const SHAPE_REMEDY: &str =
      tick, so a finding here is not waiting on anyone typing this";
 
 /// Per-host work times the fleet, so this row cannot share the flat probe
-/// budget: it reads listeners, loaded units and disk from every host with
-/// slots.
+/// budget: it reads listeners, loaded units and disk from every managed host.
 const FLEET_SHAPE_DEADLINE: Duration = Duration::from_secs(600);
 
 /// The standing checks in [`crate::fleet_shape`], as one doctor row.
@@ -792,7 +791,7 @@ async fn check_fleet_shape() -> Check {
         findings.note(
             Status::Fail,
             format!(
-                "every-host-is-measured: {host} — declared every host with slots is swept — \
+                "every-host-is-measured: {host} — every managed host is swept — \
                  observed not measured: {reason}"
             ),
         );
@@ -1406,7 +1405,7 @@ async fn check_quota(store: Option<&JobStorage>, store_error: &str) -> Check {
     if !any_capacity {
         findings.note(
             Status::Fail,
-            "no accelerator has a schedulable slot on any configured provider; every dispatch \
+            "no accelerator has schedulable capacity on any configured provider; every dispatch \
              attempt fails admission and the fleet stays at zero VMs"
                 .to_string(),
         );

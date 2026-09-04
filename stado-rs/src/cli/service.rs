@@ -15,18 +15,17 @@
 //!   best-effort host reads — launchd's last exit status and the stderr
 //!   tail — only for units whose beacon state is `failed`; those reads
 //!   degrade to a note, never to a failed command.
-//! - `adopt`, `retire` and `deploy` mutate the canonical registry through
+//! - Registry mutations use
 //!   `cli/registry.rs::{commit_document, push_document_if}` — the validated
-//!   conditional write path — and never hand-edit the document. Validation
-//!   runs before the write, so a mutation that would produce an invalid
-//!   registry is refused with nothing uploaded, and every write names the
-//!   generation it is conditional on: `commit_document` where the transform
-//!   is a pure function of the document, a single attempt from the command's
-//!   own read where something has already happened on the host.
+//!   conditional write path — and never hand-edit the document. `retire` and
+//!   `remove` also hold the autonomy reconciler's per-unit lease while they
+//!   withdraw the declaration and change the host, so a tick with an older
+//!   snapshot cannot start the unit during that transaction.
 
 use clap::Subcommand;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::future::Future;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -190,31 +189,20 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Ask launchd what it holds under one named label, in one named domain.
+    /// Ask the host init system what it holds under one named unit.
     ///
-    /// Every other ownership reader here enumerates a population first:
-    /// `list --undeclared` unions `launchctl list` with the unit files in the
-    /// three directories this fleet installs into, and the reap keep-set
-    /// probes only labels the registry declares. A job loaded in the system
-    /// domain whose plist has since been deleted is outside all of them, and
-    /// on charless-mac-mini one such job recreated an undeclared `stado agent`
-    /// for days while every command answered that no label held it.
-    ///
-    /// This reader does not enumerate. The operator names the label, which is
-    /// the only way to ask about one nothing lists. Read-only: it reports
-    /// `pid`, `state`, `last exit code`, `runs`, `path` and the argv, and
-    /// nothing else — `launchctl print` also dumps the job's environment, and
-    /// this fleet's units keep tokens there.
+    /// This reader does not enumerate. The operator names the launchd label or
+    /// systemd unit, so it can inspect a loaded unit whose file is gone. Only
+    /// fixed process, path, restart and trigger fields are returned; service
+    /// environments are never read.
     #[command(name = "label-print")]
     LabelPrint {
-        /// launchd label, as the host knows it.
+        /// launchd label or systemd unit, as the host knows it.
         label: String,
         /// Registry host to ask.
         #[arg(long)]
         host: String,
-        /// Which launchd domain to ask: `system`, `user`, or unset for both,
-        /// system first — the same order `bootout` acts in, so the two can
-        /// never disagree about which job is meant.
+        /// Init-system domain: `system`, `user`, or unset to ask both.
         #[arg(long)]
         domain: Option<String>,
         #[arg(long)]
@@ -851,13 +839,12 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Remove a service entirely: stop it, forget it, and delete its unit
-    /// file from the host — the operation an operator means by "remove this
-    /// service", which `retire` deliberately is not. The file path comes from
-    /// the registry declaration, never from operator words. Refuses before
-    /// anything moves when the unit cannot be stopped; a file the channel
-    /// may not delete leaves the service retired and says so, with the
-    /// privileged command that could remove it.
+    /// Remove a service entirely: withdraw its declaration, stop it, and
+    /// delete its unit file from the host — the operation an operator means
+    /// by "remove this service", which `retire` deliberately is not. The file
+    /// path comes from the registry declaration, never from operator words.
+    /// A host failure restores the declaration; a file-delete failure leaves
+    /// the service retired and reports that partial state.
     Remove {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
@@ -2002,11 +1989,10 @@ async fn watch_spawn(
     Ok(())
 }
 
-/// `service label-print LABEL --host HOST` — what launchd holds under one
-/// label, asked rather than enumerated.
+/// `service label-print LABEL --host HOST` — what the host init system holds
+/// under one exact unit identity, asked rather than enumerated.
 ///
-/// Exits non-zero when launchd holds nothing under the label, so a script can
-/// use it as the "is this ghost still loaded" test it exists to answer.
+/// Exits non-zero when neither launchd nor systemd holds the named unit.
 async fn label_print(
     label: &str,
     host: &str,
@@ -2023,17 +2009,14 @@ async fn label_print(
         return print_json(&state.to_json());
     }
     if let Some(system) = &state.unsupported {
-        println!(
-            "{}: label-print is Darwin-only; the host reports {system}",
-            state.host
-        );
+        println!("{}: label-print does not support {system}", state.host);
         return Ok(());
     }
     if !state.loaded() {
         println!(
-            "{}: launchd holds no job under {label} in the {} domain(s)",
+            "{}: the init system holds no unit under {label} in the {} domain(s)",
             state.host,
-            domain.unwrap_or("system, user and gui")
+            domain.unwrap_or("system and user")
         );
         return Err(CmdError::click(format!(
             "{}: {label} is not loaded",
@@ -2065,9 +2048,29 @@ async fn label_print(
                 dash(state.path.as_deref().unwrap_or("")),
             ],
             vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
+            vec![
+                "unit file state".to_string(),
+                dash(state.unit_file_state.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "restart".to_string(),
+                dash(state.restart.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "triggers".to_string(),
+                dash(state.triggers.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "triggered by".to_string(),
+                dash(state.triggered_by.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "part of".to_string(),
+                dash(state.part_of.as_deref().unwrap_or("")),
+            ],
         ],
     );
-    // A loaded job whose unit file is gone is the shape no directory scan can
+    // A loaded unit whose file is gone is the shape no directory scan can
     // report, so it is called out rather than left to be inferred from a path.
     if state.path.is_none() {
         println!(
@@ -5075,10 +5078,233 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
     let _ = crate::service_resolution::advance_generation(document);
 }
 
+/// Serialize an operator lifecycle mutation with the autonomy reconciler.
+///
+/// A reconciler tick takes its service snapshot before it takes the per-unit
+/// lease. Holding the same lease across withdrawal and the host action makes a
+/// stale tick stop at that boundary instead of starting the unit between the
+/// stop body and its postcondition probe.
+async fn with_service_mutation_lease<T, F, Fut>(
+    service: &ManagedService,
+    operation: F,
+) -> Result<T, CmdError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, CmdError>>,
+{
+    let store = beacon_store().await?;
+    let subject = format!("service:{}:{}", service.host, service.unit_id());
+    let decision = format!(
+        "service-lifecycle-{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    let mut lease = None;
+    for _ in 0..300 {
+        lease = crate::autonomy::storage::acquire_placement_lease(
+            &store,
+            &subject,
+            &decision,
+            "service-lifecycle",
+            1800,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if lease.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let lease = lease.ok_or_else(|| {
+        CmdError::click(format!(
+            "{subject} stayed under another mutation lease for 300 seconds"
+        ))
+    })?;
+    let result = operation().await;
+    let released =
+        crate::autonomy::storage::release_placement_lease(&store, &subject, &lease.token).await;
+    match (result, released) {
+        (Ok(value), Ok(true)) => Ok(value),
+        (Ok(_), Ok(false)) => Err(CmdError::click(format!(
+            "{subject} changed lease ownership before the lifecycle operation completed"
+        ))),
+        (Ok(_), Err(error)) => Err(CmdError::click(format!(
+            "{subject} completed, but releasing its mutation lease failed: {error}"
+        ))),
+        (Err(error), Ok(true)) => Err(error),
+        (Err(error), Ok(false)) => Err(CmdError::click(format!(
+            "{error}; {subject} changed lease ownership before failure cleanup completed"
+        ))),
+        (Err(error), Err(release)) => Err(CmdError::click(format!(
+            "{error}; releasing the {subject} mutation lease also failed: {release}"
+        ))),
+    }
+}
+
+#[derive(Clone)]
+struct ReconcilerFence {
+    baseline_report: Option<String>,
+    timeout_seconds: u64,
+}
+
+fn active_coordinator_interval(document: &Value) -> Option<u64> {
+    document
+        .get("coordinators")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|coordinator| coordinator.get("active").and_then(Value::as_bool) == Some(true))
+        .filter_map(|coordinator| coordinator.get("interval_seconds").and_then(Value::as_u64))
+        .max()
+        .map(|seconds| seconds.clamp(15, 600))
+}
+
+async fn reconciler_report_id(store: &JobStorage) -> Result<Option<String>, CmdError> {
+    crate::autonomy::storage::read_json::<
+        crate::autonomy::service_reconciler::ServiceReconcileReport,
+    >(
+        store,
+        crate::autonomy::service_reconciler::LATEST_REPORT,
+    )
+    .await
+    .map(|report| report.map(|report| report.created_at))
+    .map_err(|error| CmdError::click(error.to_string()))
+}
+
+async fn wait_for_reconciler_fence(fence: Option<&ReconcilerFence>) -> Result<(), CmdError> {
+    let Some(fence) = fence else {
+        return Ok(());
+    };
+    let store = beacon_store().await?;
+    let started = tokio::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(fence.timeout_seconds);
+    loop {
+        let read_error = match reconciler_report_id(&store).await {
+            Ok(Some(current)) if Some(&current) != fence.baseline_report.as_ref() => return Ok(()),
+            Ok(_) => None,
+            Err(error) => Some(error.to_string()),
+        };
+        if started.elapsed() >= timeout {
+            let detail = read_error
+                .map(|error| format!("; the last report read failed: {error}"))
+                .unwrap_or_default();
+            return Err(CmdError::click(format!(
+                "the active coordinator published no newer service-reconcile report within {} seconds{detail}",
+                fence.timeout_seconds
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Remove a declaration before stopping its unit.
+///
+/// A coordinator from before the per-service lease can already hold an old
+/// snapshot. The report fence waits until that pass has published its result;
+/// after that publication no action from the old snapshot remains in flight,
+/// while every later pass sees the withdrawn declaration.
+async fn suspend_service_declaration(
+    host: &str,
+    unit: &str,
+) -> Result<(ManagedService, String, Option<ReconcilerFence>), CmdError> {
+    let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
+    let fence = if let Some(interval) = active_coordinator_interval(&document) {
+        let store = beacon_store().await?;
+        Some(ReconcilerFence {
+            baseline_report: reconciler_report_id(&store).await?,
+            timeout_seconds: interval.saturating_mul(2).saturating_add(60).min(900),
+        })
+    } else {
+        None
+    };
+    let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+    let generation = registry::push_document_if(&document, &expected_generation).await?;
+    Ok((removed, generation, fence))
+}
+
+async fn restore_service_declaration(service: &ManagedService) -> Result<String, CmdError> {
+    let record = service.to_record();
+    registry::commit_document(|document| {
+        let already_restored = document
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|target| target.get("name").and_then(Value::as_str) == Some(&service.host))
+            .and_then(|target| target.get("services"))
+            .and_then(Value::as_array)
+            .is_some_and(|services| services.iter().any(|candidate| candidate == &record));
+        if already_restored {
+            return Ok(document.clone());
+        }
+        let mut restored = document.clone();
+        service::add_service(&mut restored, service).map_err(click)?;
+        Ok(restored)
+    })
+    .await
+}
+
+async fn retirement_failure(service: &ManagedService, failure: String) -> CmdError {
+    match restore_service_declaration(service).await {
+        Ok(generation) => CmdError::click(format!(
+            "{failure}; the registry declaration was restored at generation {generation}"
+        )),
+        Err(restore) => CmdError::click(format!(
+            "{failure}; restoring the registry declaration also failed: {restore}"
+        )),
+    }
+}
+
+async fn finish_directory_retirement(
+    service: &ManagedService,
+    query: &str,
+) -> Result<String, CmdError> {
+    registry::commit_document(|document| {
+        let mut next = document.clone();
+        remove_directory_declaration(&mut next, &service.name);
+        if service.unit_id() != service.name {
+            remove_directory_declaration(&mut next, service.unit_id());
+        }
+        if query != service.name && query != service.unit_id() {
+            remove_directory_declaration(&mut next, query);
+        }
+        Ok(next)
+    })
+    .await
+}
+
+/// Repeat only a host-confirmed retirement whose immediate end-state probe
+/// caught one last external start. The declaration stays withdrawn for the
+/// whole loop, and every pass reapplies the init-system fence; transport
+/// failures and explicit host refusals are never retried.
+async fn retire_service_stably(
+    target: &crate::targets::ComputeTarget,
+    service: &ManagedService,
+    sudo_password: Option<&str>,
+    runner: &crate::deploy::Runner,
+) -> Result<service::RemoteReport, DeployError> {
+    let mut report = service::retire_service(target, service, sudo_password, runner).await?;
+    for _ in 1..6 {
+        if report.succeeded("retired")
+            || report.status != "retired"
+            || report.postcondition_state != host_channel::POSTCONDITION_UNMET
+        {
+            return Ok(report);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        report = service::retire_service(target, service, sudo_password, runner).await?;
+    }
+    Ok(report)
+}
+
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let declared = service::declared_services(&target);
-    let Some(found) = declared.iter().find(|candidate| candidate.matches(unit)) else {
+    let Some(found) = declared
+        .iter()
+        .find(|candidate| candidate.matches(unit))
+        .cloned()
+    else {
         return Err(unmanaged(unit, Some(host)));
     };
     if found.source == SOURCE_RECOVERY {
@@ -5088,75 +5314,67 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
              management."
         )));
     }
-    // `service declare` intentionally writes a registry placeholder before
-    // any unit exists. Retiring that state is a registry-only operation:
-    // asking launchd to boot out an empty label produced the unusable-unit
-    // error and made a declaration impossible to undo from either CLI or GUI.
-    if found.unit_id().is_empty() && found.path.is_empty() {
-        // Expected generation: this read. `found` came from the target this
-        // command resolved before it, so the decision to retire was taken
-        // against a document that may already have moved; no retry, because a
-        // second round would remove a declaration nobody checked.
-        let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-        let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-        remove_directory_declaration(&mut document, unit);
-        let generation = registry::push_document_if(&document, &expected_generation).await?;
-        return render_mutation("retired", &removed, &generation, None, json);
-    }
-
     let runner = production_runner();
     let sudo_password = if UnitDomain::from_path(&found.path).requires_privileged_bootstrap() {
         host_sudo_password(&target).await?
     } else {
         None
     };
-    let report = service::retire_service(&target, found, sudo_password.as_deref(), &runner)
-        .await
-        .map_err(click)?;
-    if !report.succeeded("retired") {
-        // Forgetting a unit that is still running is exactly the state this
-        // command family exists to prevent, so the declaration stays until
-        // the host confirms it is stopped.
-        return Err(CmdError::click(format!(
-            "{host}: could not stop {unit}: {}; it is still declared in the registry",
-            report.failure()
-        )));
-    }
+    with_service_mutation_lease(&found, || async {
+        let (removed, _, fence) = suspend_service_declaration(host, unit).await?;
 
-    // Expected generation: this read, taken after the unit was stopped on the
-    // host. That stop is not repeatable, so a lost race is reported rather
-    // than retried: re-running the removal against a newer document would
-    // erase whatever the winning writer said about this service while the
-    // host was being drained.
-    let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-    let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-    remove_directory_declaration(&mut document, unit);
-    let generation = registry::push_document_if(&document, &expected_generation).await?;
-    render_mutation(
-        "retired",
-        &removed,
-        &generation,
-        Some(&report.to_json()),
-        json,
-    )
+        if removed.unit_id().is_empty() && removed.path.is_empty() {
+            let generation = finish_directory_retirement(&removed, unit).await?;
+            return render_mutation("retired", &removed, &generation, None, json);
+        }
+        if let Err(error) = wait_for_reconciler_fence(fence.as_ref()).await {
+            let failure =
+                format!("{host}: could not fence {unit} from the active coordinator: {error}");
+            return Err(retirement_failure(&removed, failure).await);
+        }
+
+        let report =
+            match retire_service_stably(&target, &removed, sudo_password.as_deref(), &runner).await
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    let failure = format!("{host}: could not stop {unit}: {error}");
+                    return Err(retirement_failure(&removed, failure).await);
+                }
+            };
+        if !report.succeeded("retired") {
+            let failure = format!("{host}: could not stop {unit}: {}", report.failure());
+            return Err(retirement_failure(&removed, failure).await);
+        }
+
+        let generation = finish_directory_retirement(&removed, unit).await?;
+        render_mutation(
+            "retired",
+            &removed,
+            &generation,
+            Some(&report.to_json()),
+            json,
+        )
+    })
+    .await
 }
 
-/// `service remove`: the whole of "remove this service", composed from the
-/// three halves the product already owns — stop and forget on the host
-/// (`retire`), drop the registry entry, and delete the declared unit file
-/// (`host remove-file`). The file path is the declaration's, which is the
-/// only path worth trusting here: an operator-typed path would make this a
-/// delete-anything verb, and a wrong delete on someone else's machine is the
-/// failure every guard in `remove-file` exists against.
+/// `service remove`: withdraw the declaration while holding the same mutation
+/// lease as the autonomy reconciler, stop the unit, then remove its directory
+/// entry and declared unit file. The file path comes from the registry rather
+/// than operator input.
 ///
-/// Partial states are said, not hidden: a stopped-and-forgotten service
-/// whose file the channel may not delete is `retired` with the file named
-/// and the privileged command beside it, and the command exits non-zero
-/// because the asked-for end state did not happen.
+/// Partial states are said, not hidden: a stopped-and-forgotten service whose
+/// file the channel may not delete is `retired` with the file named, and the
+/// command exits non-zero because the asked-for end state did not happen.
 async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let declared = service::declared_services(&target);
-    let Some(found) = declared.iter().find(|candidate| candidate.matches(unit)) else {
+    let Some(found) = declared
+        .iter()
+        .find(|candidate| candidate.matches(unit))
+        .cloned()
+    else {
         return Err(unmanaged(unit, Some(host)));
     };
     if found.source == SOURCE_RECOVERY {
@@ -5167,93 +5385,96 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
     let path = found.path.clone();
-    if found.unit_id().is_empty() && path.is_empty() {
-        // Expected generation: this read. `found` predates it, so the decision
-        // to remove was taken against a document that may have moved; no
-        // retry, for the same reason `retire` does not.
-        let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-        let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-        remove_directory_declaration(&mut document, unit);
-        let generation = registry::push_document_if(&document, &expected_generation).await?;
-        if json {
-            return print_json(&json!({
-                "target": target.name,
-                "unit": unit,
-                "action": "removed",
-                "generation": generation,
-                "file": {"path": "", "status": "absent", "detail": Value::Null},
-                "report": Value::Null,
-            }));
-        }
-        return render_mutation("removed", &removed, &generation, None, false);
-    }
-
     let runner = production_runner();
-    let sudo_password = if UnitDomain::from_path(&found.path).requires_privileged_bootstrap() {
+    let sudo_password = if UnitDomain::from_path(&path).requires_privileged_bootstrap() {
         host_sudo_password(&target).await?
     } else {
         None
     };
-    let report = service::retire_service(&target, found, sudo_password.as_deref(), &runner)
-        .await
-        .map_err(click)?;
-    if !report.succeeded("retired") {
-        return Err(CmdError::click(format!(
-            "{host}: could not stop {unit}: {}; it is still declared in the registry, and its file was not touched",
-            report.failure()
-        )));
-    }
+    with_service_mutation_lease(&found, || async {
+        let (removed, _, fence) = suspend_service_declaration(host, unit).await?;
 
-    // Expected generation: this read, taken after the unit was stopped and
-    // before its file is deleted. Neither half is repeatable, so a lost race
-    // is reported and the file is left alone rather than deleted under a
-    // declaration somebody else has just rewritten.
-    let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-    let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-    remove_directory_declaration(&mut document, unit);
-    let generation = registry::push_document_if(&document, &expected_generation).await?;
-
-    // The registry is already clean: the file half runs last, because a
-    // failed delete must leave a service the fleet can still see, not a file
-    // nobody declared. Its report is the second document of the answer.
-    let file = crate::cli::host::remove_file_document(&target.name, &path).await;
-    if json {
-        let (file_status, file_detail) = match &file {
-            Ok(outcome) => (outcome.status.clone(), outcome.detail.clone()),
-            Err(error) => ("failed".to_string(), Some(error.to_string())),
-        };
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target.name,
-                "unit": unit,
-                "action": "removed",
-                "generation": generation,
-                "file": {
-                    "path": path,
-                    "status": file_status,
-                    "detail": file_detail,
-                },
-                "report": report.to_json(),
-            }))?
-        );
-    } else {
-        render_mutation(
-            "removed",
-            &removed,
-            &generation,
-            Some(&report.to_json()),
-            json,
-        )?;
-        match &file {
-            Ok(outcome) if outcome.succeeded() => {
-                println!("{}: {} {}", outcome.target, outcome.path, outcome.status)
+        if removed.unit_id().is_empty() && path.is_empty() {
+            let generation = finish_directory_retirement(&removed, unit).await?;
+            if json {
+                return print_json(&json!({
+                    "target": target.name,
+                    "unit": unit,
+                    "action": "removed",
+                    "generation": generation,
+                    "file": {"path": "", "status": "absent", "detail": Value::Null},
+                    "report": Value::Null,
+                }));
             }
-            Ok(outcome) => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
-            Err(error) => println!("{error}"),
+            return render_mutation("removed", &removed, &generation, None, false);
         }
-    }
-    file.map(|_| ())
+        if let Err(error) = wait_for_reconciler_fence(fence.as_ref()).await {
+            let failure = format!(
+                "{host}: could not fence {unit} from the active coordinator: {error}; its file was not touched"
+            );
+            return Err(retirement_failure(&removed, failure).await);
+        }
+
+        let report =
+            match retire_service_stably(&target, &removed, sudo_password.as_deref(), &runner).await
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    let failure =
+                        format!("{host}: could not stop {unit}: {error}; its file was not touched");
+                    return Err(retirement_failure(&removed, failure).await);
+                }
+            };
+        if !report.succeeded("retired") {
+            let failure = format!(
+                "{host}: could not stop {unit}: {}; its file was not touched",
+                report.failure()
+            );
+            return Err(retirement_failure(&removed, failure).await);
+        }
+
+        let generation = finish_directory_retirement(&removed, unit).await?;
+
+        // The registry is already clean: the file half runs last, because a
+        // failed delete must leave a service the fleet can still see, not a file
+        // nobody declared. Its report is the second document of the answer.
+        let file = crate::cli::host::remove_file_document(&target.name, &path).await;
+        if json {
+            let (file_status, file_detail) = match &file {
+                Ok(outcome) => (outcome.status.clone(), outcome.detail.clone()),
+                Err(error) => ("failed".to_string(), Some(error.to_string())),
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "target": target.name,
+                    "unit": removed.unit_id(),
+                    "action": if file.is_ok() { "removed" } else { "retired" },
+                    "generation": generation,
+                    "report": report.to_json(),
+                    "file": {
+                        "path": path,
+                        "status": file_status,
+                        "detail": file_detail,
+                    },
+                }))?
+            );
+        } else {
+            render_mutation(
+                if file.is_ok() { "removed" } else { "retired" },
+                &removed,
+                &generation,
+                Some(&report.to_json()),
+                false,
+            )?;
+            match &file {
+                Ok(outcome) => println!("file {}: {}", outcome.status, outcome.path),
+                Err(error) => eprintln!("file failed: {error}"),
+            }
+        }
+        file.map(|_| ())
+    })
+    .await
 }
 
 /// One declared service name: lowercase letters and digits at the edges,
@@ -5598,8 +5819,10 @@ async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
         )));
     }
 
-    let record =
+    let mut record =
         service::record_from_report(&host, host_heuristic.as_deref(), name, &report, &now());
+    record.program = plan.program.clone();
+    record.args = args.to_vec();
     let generation = match record_declaration(&record).await {
         Ok(generation) => generation,
         // The unit is on the host and running; only the declaration failed.
@@ -5668,6 +5891,35 @@ pub(crate) struct UnitProgram {
 pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
     let unit_id = service.unit_id();
     Some(unit_id.strip_suffix(".service").unwrap_or(unit_id)).filter(|label| !label.is_empty())
+}
+
+/// Stable unit identity supplied by the managed-product declaration.
+///
+/// Service names are operator-facing leaves (`stado-resolver`), while the
+/// product catalog carries the init system's full identity
+/// (`com.wisent.stado-resolver`). A registry record may contain the broken
+/// historical spelling, so it cannot be the authority for this lookup.
+fn canonical_managed_unit(name: &str, target: &str) -> Result<Option<String>, CmdError> {
+    let requested = name.strip_suffix(".service").unwrap_or(name);
+    let mut matched: Option<String> = None;
+    let products = crate::deploy::products::declared().map_err(click)?;
+    for product in products {
+        for unit in &product.units {
+            let label = unit.label_for(target);
+            let bare = label.strip_suffix(".service").unwrap_or(&label);
+            let leaf = bare.rsplit('.').next().unwrap_or(bare);
+            if label != name && bare != requested && leaf != requested {
+                continue;
+            }
+            if matched.as_deref().is_some_and(|existing| existing != label) {
+                return Err(CmdError::click(format!(
+                    "managed product declarations give {name} more than one unit identity"
+                )));
+            }
+            matched = Some(label);
+        }
+    }
+    Ok(matched)
 }
 
 /// The program and argument vector `ensure` renders the unit from.
@@ -5882,16 +6134,28 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         return Err(CmdError::click("--as-launch-agent is Darwin-only"));
     }
 
-    // Resolve both the operator-facing product name and the stable catalog
-    // unit. An older registry may carry only the latter; treating that as no
-    // declaration minted a duplicate unit beside the canonical daemon.
+    // Resolve the operator-facing name against both declarations that may
+    // supply a stable init-system identity. The service catalog owns authored
+    // services; the managed-product catalog owns units that execute a delivered
+    // product binary.
     let declared = service::declared_services(&target);
     let catalog_entry = crate::deploy::service_catalog::lookup(options.name)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let catalog_unit = catalog_entry.as_ref().and_then(|entry| entry.unit.clone());
+    let managed_unit = canonical_managed_unit(options.name, &target.name)?;
+    let canonical_unit = match (catalog_unit, managed_unit) {
+        (Some(service_unit), Some(product_unit)) if service_unit != product_unit => {
+            return Err(CmdError::click(format!(
+                "service and managed-product declarations disagree about {}: {} versus {}",
+                options.name, service_unit, product_unit
+            )));
+        }
+        (Some(unit), _) | (_, Some(unit)) => Some(unit),
+        (None, None) => None,
+    };
     let existing = declared.iter().find(|candidate| {
         candidate.matches(options.name)
-            || catalog_unit
+            || canonical_unit
                 .as_deref()
                 .is_some_and(|unit| candidate.matches(unit))
     });
@@ -5948,12 +6212,13 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit.args.join(" ")
         );
     }
-    // A canonical catalog identity wins, then the unit already declared on
-    // this host. Minting a label from the product name beside either one
-    // creates a duplicate service, not an installation.
-    let plan = match unit
-        .unit
+    // A canonical declaration wins, then the identity carried by the resolved
+    // program, then the unit already declared on this host. The canonical
+    // identity must win even when the registry supplies the program: otherwise
+    // a stale doubled unit name is faithfully re-rendered forever.
+    let plan = match canonical_unit
         .as_deref()
+        .or(unit.unit.as_deref())
         .or_else(|| existing.and_then(declared_label))
     {
         Some(label) => service::plan_deploy_labelled(

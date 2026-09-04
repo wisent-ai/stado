@@ -51,7 +51,6 @@ const REGISTRY: &str = r#"{
             "ssh": "charles@10.0.0.253",
             "release_platform": "darwin-arm64",
             "hostnames": ["mini.local"],
-            "slots": 1,
             "pinned_only": true,
             "services": [
                 {
@@ -71,7 +70,6 @@ const REGISTRY: &str = r#"{
             "release_platform": "linux-amd64",
             "hostnames": ["rtx-box"],
             "gpu_type": "nvidia-rtx-pro-6000",
-            "slots": 2,
             "pinned_only": true
         },
         {
@@ -79,8 +77,7 @@ const REGISTRY: &str = r#"{
             "kind": "local",
             "ssh": "op@10.0.0.234",
             "release_platform": "darwin-arm64",
-            "hostnames": ["laptop.local"],
-            "slots": 2
+            "hostnames": ["laptop.local"]
         }
     ],
     "coordinators": []

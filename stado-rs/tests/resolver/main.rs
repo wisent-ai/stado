@@ -132,7 +132,6 @@ fn proxy_registry_document(
         "ssh": "u@10.0.0.1",
         "release_platform": "darwin-arm64",
         "hostnames": ["w1.local", this_host()],
-        "slots": 1,
         "services": service.clone(),
         "service_resolver": {
             "api_bind": format!("127.0.0.1:{api_port}"),
@@ -157,7 +156,6 @@ fn proxy_registry_document(
                 "ssh": destination,
                 "release_platform": "darwin-arm64",
                 "hostnames": ["w2.local"],
-                "slots": 1,
                 "services": service,
             }));
             "w2"

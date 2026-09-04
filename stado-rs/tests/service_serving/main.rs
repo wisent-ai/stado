@@ -72,7 +72,6 @@ impl Fleet {
                 "ssh": "nobody@127.0.0.1",
                 "release_platform": platform(),
                 "hostnames": [hostname],
-                "slots": 1,
                 "services": [{
                     "label": SERVICE,
                     "name": SERVICE,

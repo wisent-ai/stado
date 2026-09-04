@@ -325,8 +325,7 @@ fn registry(home: &Path, storage: &Path, public_key: &str, platform: &str) {
                 "label": "ci-release-probe",
                 "path": home.join("Library/LaunchAgents/ci-release-probe.plist"),
                 "unit": ""
-            }],
-            "slots": 1
+            }]
         }],
         "service_directory": {
             "authority": {

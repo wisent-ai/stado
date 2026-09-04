@@ -1233,8 +1233,8 @@ async fn disk_headroom(
             check: DISK_CHECK,
             subject: target.name.clone(),
             declared: "no disk_cleanup policy".to_string(),
-            observed: "a managed host with slots and no watermark, so nothing on it is ever \
-                       obliged to free space"
+            observed: "a managed compute host has no watermark, so nothing on it is ever obliged \
+                       to free space"
                 .to_string(),
             command: format!(
                 "add targets[{}].disk_cleanup to the registry, then stado registry validate and push",

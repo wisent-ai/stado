@@ -627,15 +627,13 @@ fn an_unreachable_authority_publishes_its_own_sentence_as_a_refusal() {
                 "name": "silence-test-local",
                 "kind": "local",
                 "release_platform": "darwin-arm64",
-                "hostnames": [hostname()],
-                "slots": 1
+                "hostnames": [hostname()]
             },
             {
                 "name": "silence-test-authority",
                 "kind": "local",
                 "ssh": "stado@silence-test-authority.invalid",
                 "release_platform": "darwin-arm64",
-                "slots": 1,
                 "services": [
                     {"name": "brama", "kind": "launchd", "path": "/opt/stado/brama.plist"}
                 ]

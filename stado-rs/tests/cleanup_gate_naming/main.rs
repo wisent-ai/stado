@@ -59,7 +59,6 @@ fn target() -> ComputeTarget {
         "ssh": "u@10.0.0.1",
         "release_platform": "darwin-arm64",
         "hostnames": ["t1.local"],
-        "slots": 1,
         "disk_cleanup": {
             "mode": "enforce",
             "check_interval_seconds": INTERVAL_SECONDS,

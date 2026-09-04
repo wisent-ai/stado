@@ -199,7 +199,6 @@ const REGISTRY: &str = r#"{
       "ssh": "approved@10.9.9.9",
       "release_platform": "darwin-arm64",
       "hostnames": ["fake-mini.local"],
-      "slots": 1,
       "services": [
         {
           "name": "com.wisent.always-on.stado-object-api",
@@ -224,8 +223,7 @@ const REGISTRY: &str = r#"{
       "kind": "local",
       "ssh": "approved@10.9.9.10",
       "release_platform": "darwin-arm64",
-      "hostnames": ["fake-agent-mini.local"],
-      "slots": 1
+      "hostnames": ["fake-agent-mini.local"]
     }
   ],
   "coordinators": []
