@@ -64,9 +64,10 @@ const PIPELINE_REVISION: &str = "WISENT_SOURCE_COMMIT";
 /// repository will not collide.
 const REVISION_LENGTH: &str = "--short=12";
 
-/// Run `git` in the repository root and return trimmed stdout, or `None` when
-/// git is absent, this is not a repository, or the command fails for any other
-/// reason. Nothing here is allowed to panic or to fail the build.
+/// Run `git` in the repository root and return trimmed stdout, including an
+/// empty string for a successful command with no output. `None` means git is
+/// absent, this is not a repository, or the command failed for another reason.
+/// Nothing here is allowed to panic or to fail the build.
 fn git(arguments: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(arguments)
@@ -76,12 +77,7 @@ fn git(arguments: &[&str]) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
 }
 
 /// The revision this build should claim, by the order documented above.
@@ -112,8 +108,8 @@ fn source_revision() -> String {
     // A tree with uncommitted changes did not come from `revision` alone, and
     // saying so is the whole reason this exists.
     match git(&["status", "--porcelain", "--untracked-files=no"]) {
-        Some(_) => format!("{revision}-dirty"),
-        None => revision,
+        Some(status) if !status.is_empty() => format!("{revision}-dirty"),
+        Some(_) | None => revision,
     }
 }
 
