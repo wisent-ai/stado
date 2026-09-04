@@ -22,6 +22,7 @@ final class StadoAppDelegate: NSObject, NSApplicationDelegate {
     let enrollmentStore = MachineEnrollmentStore()
     let auth = WisentAuthStore(productName: "Stado")
     let router = ConsoleRouter()
+    let firstUseJourney = StadoFirstUseJourney()
 
     private var fallbackWindow: NSWindow?
 
@@ -35,6 +36,7 @@ final class StadoAppDelegate: NSObject, NSApplicationDelegate {
                     fleetStore: fleetStore,
                     enrollmentStore: enrollmentStore,
                     auth: auth,
+                    journey: firstUseJourney,
                     router: router
                 )
             }
@@ -55,6 +57,7 @@ struct StadoApp: App {
                 fleetStore: delegate.fleetStore,
                 enrollmentStore: delegate.enrollmentStore,
                 auth: delegate.auth,
+                journey: delegate.firstUseJourney,
                 router: delegate.router
             )
         }
@@ -74,7 +77,8 @@ struct StadoApp: App {
         Settings {
             SettingsView(
                 deploymentStore: delegate.deploymentStore,
-                operationsStore: delegate.operationsStore
+                operationsStore: delegate.operationsStore,
+                journey: delegate.firstUseJourney
             )
         }
     }

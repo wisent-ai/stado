@@ -4,6 +4,8 @@ import WisentDesignSystem
 struct SettingsView: View {
     @ObservedObject var deploymentStore: DeploymentStore
     @ObservedObject var operationsStore: OperationsStore
+    @ObservedObject var journey: StadoFirstUseJourney
+    @State private var walkthrough: WisentMutationOutcome = .idle
 
     var body: some View {
         Form {
@@ -32,6 +34,23 @@ struct SettingsView: View {
                 .font(WisentTypeScale.caption())
                 .foregroundStyle(WisentDesign.secondary)
             }
+
+            Section("First-run walkthrough") {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                    Text("See the walkthrough this product shows on a first run.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                    WisentActionButton(
+                        action: WisentAction(
+                            "Show it again",
+                            symbol: "arrow.counterclockwise",
+                            isEnabled: !walkthrough.isWorking
+                        ) { showWalkthroughAgain() }
+                    )
+                    WisentMutationBar(outcome: walkthrough) { walkthrough = .idle }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 560)
@@ -42,6 +61,12 @@ struct SettingsView: View {
         if operationsStore.snapshot?.ready == true { return "Connected" }
         if operationsStore.errorMessage != nil { return "Unavailable" }
         return operationsStore.isRefreshing ? "Connecting" : "Configured"
+    }
+
+    private func showWalkthroughAgain() {
+        guard !walkthrough.isWorking else { return }
+        walkthrough = .working("Starting the walkthrough…")
+        Task { walkthrough = await journey.replay() }
     }
 
     private func endpointRow(_ endpoint: String) -> some View {
