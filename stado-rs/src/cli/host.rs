@@ -4251,7 +4251,9 @@ fn judge_spis_trust(text: &str) -> Result<(), String> {
         .as_object()
         .ok_or("the rendered receipt trust is not a JSON object")?;
     if fields.len() != SPIS_TRUST_FIELDS.len()
-        || !SPIS_TRUST_FIELDS.iter().all(|name| fields.contains_key(*name))
+        || !SPIS_TRUST_FIELDS
+            .iter()
+            .all(|name| fields.contains_key(*name))
     {
         return Err(format!(
             "the rendered receipt trust must carry exactly {}",
@@ -4259,10 +4261,14 @@ fn judge_spis_trust(text: &str) -> Result<(), String> {
         ));
     }
     if fields.get("schema").and_then(Value::as_str) != Some(SPIS_TRUST_SCHEMA) {
-        return Err(format!("the rendered receipt trust schema is not {SPIS_TRUST_SCHEMA}"));
+        return Err(format!(
+            "the rendered receipt trust schema is not {SPIS_TRUST_SCHEMA}"
+        ));
     }
     if fields.get("allowedAction").and_then(Value::as_str) != Some(SPIS_TRUST_ACTION) {
-        return Err(format!("the rendered allowedAction is not {SPIS_TRUST_ACTION}"));
+        return Err(format!(
+            "the rendered allowedAction is not {SPIS_TRUST_ACTION}"
+        ));
     }
     let organization = fields
         .get("organizationId")
@@ -4304,11 +4310,7 @@ fn judge_spis_trust(text: &str) -> Result<(), String> {
         // here and rejected at the first real receipt.
         match key.as_str() {
             Some(text) if text.contains("-----BEGIN PUBLIC KEY-----") => {}
-            _ => {
-                return Err(format!(
-                    "receipt key {identifier} is not a PEM public key"
-                ))
-            }
+            _ => return Err(format!("receipt key {identifier} is not a PEM public key")),
         }
     }
     // A private half in a document destined for a public repository is the one
@@ -4399,7 +4401,9 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
         let found = looked_up.stdout.trim().to_string();
         if found.is_empty() {
             remove_remote(&resolved, &[installed.as_str()], &runner).await;
-            return Err(refused("no Node runtime is installed on this host".to_string()));
+            return Err(refused(
+                "no Node runtime is installed on this host".to_string(),
+            ));
         }
         found
     };
@@ -4428,7 +4432,9 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
     // fleet installs it under.
     let mut assignments = vec![format!(
         "PATH={}",
-        crate::deploy::shlex_quote("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        crate::deploy::shlex_quote(
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        )
     )];
     for (key, value) in &declared {
         assignments.push(format!("{key}={}", crate::deploy::shlex_quote(value)));
@@ -5236,6 +5242,111 @@ pub async fn vault_item_put(
             "{}: stored {item} as {item_type}; state {} -> {}, revision {} -> {}",
             resolved.name, before.state, after.state, before.revision, after.revision
         );
+    }
+    Ok(())
+}
+
+/// Authorize one consumer to read one field of one item in TARGET's vault.
+///
+/// A Skarbiec grant is per item and per field, so widening what a unit or a
+/// release job may read is a write into the *host's* vault, not into this
+/// laptop's. The bearer never enters an argument vector: the consumer's
+/// existing token file on the target is named, and Skarbiec reads it there.
+pub async fn grant_item_read(
+    target: &str,
+    consumer: &str,
+    item: &str,
+    field: &str,
+    token_file: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("consumer", consumer)?;
+    vault_word("vault item", item)?;
+    vault_word("item field", field)?;
+    if token_file.trim().is_empty() {
+        return Err(CmdError::usage(
+            "--token-file must name the consumer's existing bearer file on the target",
+        ));
+    }
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the Skarbiec environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
+    let gnupg_home = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let tool_path = skarbiec_tool_path(&home);
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let bearer_path = if token_file.starts_with('/') {
+        token_file.to_string()
+    } else {
+        format!("{home}/{}", token_file.trim_start_matches("~/"))
+    };
+    let invocation = [
+        "/usr/bin/env",
+        tool_path.as_str(),
+        gnupg_environment.as_str(),
+        vault_environment.as_str(),
+        skarbiec.as_str(),
+        "token-ensure-read",
+        consumer,
+        item,
+        "--field",
+        field,
+        "--token-file",
+        bearer_path.as_str(),
+    ];
+    let granted = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !granted.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec refused to grant {consumer} a read of {item}#{field}: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&granted, "remote command failed")
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "consumer": consumer,
+                "item": item,
+                "field": field,
+                "token_file": bearer_path,
+                "granted": true,
+            }))?
+        );
+    } else {
+        println!("{}: {consumer} may read {item}#{field}", resolved.name);
     }
     Ok(())
 }
