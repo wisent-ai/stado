@@ -76,7 +76,7 @@ impl Client {
             ));
         }
         Self::direct(
-            crate::config::skarbiec_url(),
+            crate::config::release_skarbiec_url(),
             crate::config::release_signing_skarbiec_consumer(),
             crate::config::release_signing_skarbiec_token_file(),
             GrantMode::RereadPerRequest,

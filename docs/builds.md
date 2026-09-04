@@ -16,6 +16,21 @@ The Stado delivery job starts its worker from the digest-pinned candidate
 archive and that worker uses itself for `install-local`; a broken older
 installed worker therefore cannot prevent the release that repairs it.
 
+## Release publication authority
+
+Release signing and authenticated release-object publication resolve one
+declared credential authority: `release_api.skarbiec.url`. They use separate
+least-privilege identities and owner-only token files on that same Skarbiec:
+`stado-release-coordinator` reads only the signing key, while
+`stado-release-api-verifier` reads the product publisher bearer named by
+`release_api.publishers`. `STADO_API_TOKEN` remains a generic object API
+credential and is never substituted for a product's release publisher.
+
+Exact `GET /api/release/object?uri=stado://releases/...` reads are public so a
+damaged credential plane cannot make signed recovery artifacts unreachable.
+Release writes and listings remain authenticated by the product publisher
+contract above.
+
 ## Resolve the executable that is actually active
 
 ```console
