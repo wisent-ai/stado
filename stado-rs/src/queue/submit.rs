@@ -296,12 +296,24 @@ pub fn submission_job_key(request_digest: &str, index: usize, command: &str) -> 
 /// excluded because Stado deliberately mutates them after admission:
 /// lifecycle state/timestamps and provider attachment; retry, preemption and
 /// yield counters; scheduler assignment/dispatch estimates; operator priority;
-/// measured sizing/output observations.
+/// measured sizing/output observations; and scheduler placement.
+///
+/// `provider` and `pin_to_provider` are placement, not submission: the
+/// autonomy optimizer writes both onto a queued job when it places it
+/// (`autonomy::optimizer::update_job_placement`), exactly as the makespan
+/// scheduler writes `assigned_to`. Until 2026-09-03 they were counted as
+/// immutable here, so a job the reaper had just requeued and the optimizer
+/// then placed no longer matched its own completed transition, and the
+/// agent on `charless-mac-mini` died on "does not match completed
+/// transition" at every start for the rest of the day while the queue
+/// behind that job waited.
 pub(crate) fn immutable_job_projection(job: &Job) -> Value {
     let mut value = serde_json::to_value(job).expect("Job serialization is infallible");
     let object = value.as_object_mut().expect("Job serializes as an object");
     for field in [
         "state",
+        "provider",
+        "pin_to_provider",
         "started_at",
         "completed_at",
         "lease_expires_at",

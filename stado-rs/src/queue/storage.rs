@@ -734,6 +734,19 @@ impl JobStorage {
         }
         self.retire_transition_source(transition).await?;
         tombstone::on_transition(self, &destination, &transition.to_prefix).await;
+        // The transition has done its work: the destination is installed and
+        // the source is fenced. Saying so in the record stops every later
+        // claim of this job — and every other binary in the fleet — from
+        // re-verifying a destination that may since have been legitimately
+        // rewritten by the scheduler. On 2026-09-03 a requeued job the
+        // optimizer had placed failed that re-verification at each claim
+        // attempt for four hours, on a record whose work had been done since
+        // 18:49. The finished state is spelled `aborted` on purpose: it is
+        // the one terminal state every binary already deployed skips on
+        // read, and a new spelling (`done`) killed the 0.14.5 agent on
+        // charless-mac-mini with "invalid state" the moment it was written.
+        self.set_transition_state(&transition.transition_id, &transition.job_id, "aborted")
+            .await?;
         Ok(true)
     }
 
@@ -1139,6 +1152,12 @@ impl JobStorage {
         F: Fn(&mut Job),
     {
         let path = format!("queue/{job_id}.json");
+        // A transition still pending on this job is finished before the
+        // document is rewritten, so the rewrite never lands under a fence
+        // another writer is about to retire — and an operator's own
+        // `job set-priority` becomes a way to finish a transition the agent
+        // cannot, which is what cleared `charless-mac-mini` on 2026-09-03.
+        self.recover_job_transition(job_id).await?;
         for _ in 0..3 {
             let Some(versioned) = self.read_text_versioned(&path).await? else {
                 return Ok(None);
@@ -1229,6 +1248,29 @@ impl JobStorage {
     }
 
     /// CAS-update the makespan assignment without recreating moved work.
+    /// CAS-update one current queued generation's placement: the provider it
+    /// is pinned to and the capacity it is assigned to. Goes through the same
+    /// rewrite as priority and assignment so a transition still pending on
+    /// the job is recovered before the document is touched; a placement
+    /// written under a pending transition is what left `charless-mac-mini`
+    /// refusing to claim on 2026-09-03.
+    pub async fn update_queued_placement(
+        &self,
+        job_id: &str,
+        provider: &str,
+        assigned_to: Option<&str>,
+    ) -> Result<Option<Job>, StorageError> {
+        self.rewrite_queued_job(job_id, |job| {
+            job.provider = provider.to_string();
+            job.pin_to_provider = true;
+            match assigned_to {
+                Some(target) => job.assigned_to = target.to_string(),
+                None => job.assigned_to.clear(),
+            }
+        })
+        .await
+    }
+
     pub async fn update_queued_assignment(
         &self,
         job_id: &str,
