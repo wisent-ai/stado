@@ -413,6 +413,143 @@ final class HostGatesStore: ObservableObject {
     }
 }
 
+struct HostRetireFileRequest: Equatable, Sendable {
+    let host: String
+    let path: String
+    let product: String
+}
+
+/// Two-step Desktop owner for `stado host retire-file`.
+///
+/// The store retains the exact request that produced a `ready` receipt and
+/// refuses mutation when any field has changed. It runs only the CLI argv a
+/// terminal operator would run; filesystem policy and mutation remain in Stado.
+@MainActor
+final class HostRetireFileStore: ObservableObject {
+    @Published private(set) var preview: HostRetireFileReceipt?
+    @Published private(set) var applied: HostRetireFileReceipt?
+    @Published private(set) var preflightRefusal: String?
+    @Published private(set) var isPreviewing = false
+    @Published private(set) var mutation: WisentMutationOutcome = .idle
+
+    private let cli: StadoCLI
+    private var previewRequest: HostRetireFileRequest?
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    nonisolated static func previewArguments(_ request: HostRetireFileRequest) -> [String] {
+        [
+            "host", "retire-file", request.host, request.path,
+            "--product", request.product, "--dry-run", "--json",
+        ]
+    }
+
+    nonisolated static func applyArguments(_ request: HostRetireFileRequest) -> [String] {
+        [
+            "host", "retire-file", request.host, request.path,
+            "--product", request.product, "--json",
+        ]
+    }
+
+    func hasReadyPreview(for request: HostRetireFileRequest) -> Bool {
+        previewRequest == request
+            && preview?.isReady == true
+            && preview?.target == request.host
+            && preview?.source == request.path
+    }
+
+    func preflight(_ request: HostRetireFileRequest) async {
+        guard !isPreviewing, !mutation.isWorking else { return }
+        isPreviewing = true
+        defer { isPreviewing = false }
+        preview = nil
+        applied = nil
+        previewRequest = nil
+        preflightRefusal = nil
+        mutation = .working("Inspecting the exact file on \(request.host)")
+        do {
+            let receipt = try await cli.json(
+                HostRetireFileReceipt.self,
+                arguments: Self.previewArguments(request)
+            )
+            preview = receipt
+            if receipt.isReady,
+               receipt.target == request.host,
+               receipt.source == request.path
+            {
+                previewRequest = request
+                mutation = .idle
+            } else {
+                preflightRefusal = receipt.detail
+                    ?? "Stado reported \(receipt.status), not a ready retirement."
+                mutation = .failed(preflightRefusal ?? "The file is not ready to retire.")
+            }
+        } catch {
+            let message = Self.message(for: error)
+            preflightRefusal = message
+            mutation = .failed(message)
+        }
+    }
+
+    func retire(_ request: HostRetireFileRequest) async {
+        guard hasReadyPreview(for: request) else {
+            mutation = .failed(
+                "Run and review the dry-run receipt for this exact target, path, and product first."
+            )
+            return
+        }
+        preview = nil
+        previewRequest = nil
+        mutation = .working("Retiring \(request.path) on \(request.host)")
+        do {
+            let receipt = try await cli.json(
+                HostRetireFileReceipt.self,
+                arguments: Self.applyArguments(request)
+            )
+            applied = receipt
+            if receipt.isRetired,
+               receipt.target == request.host,
+               receipt.source == request.path
+            {
+                preflightRefusal = nil
+                mutation = .succeeded(
+                    "Archived \(receipt.source) as \(receipt.destination ?? "an unreported destination")."
+                )
+            } else {
+                let message = receipt.detail
+                    ?? "Stado reported \(receipt.status), not a completed retirement."
+                preflightRefusal = message
+                mutation = .failed(message)
+            }
+        } catch {
+            let message = Self.message(for: error)
+            preflightRefusal = message
+            mutation = .failed(message)
+        }
+    }
+
+    func clearEvidence() {
+        preview = nil
+        applied = nil
+        previewRequest = nil
+        preflightRefusal = nil
+        mutation = .idle
+    }
+
+    func clearMutation() {
+        mutation = .idle
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+}
+
 /// Every registry-managed service with the state its host's latest health
 /// beacon reports, plus the one write an operator is allowed from here:
 /// restarting a user-domain unit.

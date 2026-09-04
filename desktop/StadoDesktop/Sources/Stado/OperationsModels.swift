@@ -471,6 +471,25 @@ struct HostGatesCapacity: Decodable, Sendable {
     }
 }
 
+/// Typed receipt from `stado host retire-file --json`.
+///
+/// The CLI is the policy authority. Desktop keeps these fields verbatim so the
+/// preflight an operator reviews is the same source, destination, identity, and
+/// byte evidence the mutation must consume.
+struct HostRetireFileReceipt: Decodable, Sendable {
+    let target: String
+    let source: String
+    let destination: String?
+    let status: String
+    let size: UInt64?
+    let sha256: String?
+    let mode: String?
+    let detail: String?
+
+    var isReady: Bool { status == "ready" }
+    var isRetired: Bool { status == "retired" }
+}
+
 /// One `stado host reclaim` pass, in either mode. `mode` is the command's own
 /// word for what it did, so a preview and an applied pass cannot be confused
 /// for one another after the fact.
