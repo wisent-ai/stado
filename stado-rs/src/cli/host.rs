@@ -4251,7 +4251,9 @@ fn judge_spis_trust(text: &str) -> Result<(), String> {
         .as_object()
         .ok_or("the rendered receipt trust is not a JSON object")?;
     if fields.len() != SPIS_TRUST_FIELDS.len()
-        || !SPIS_TRUST_FIELDS.iter().all(|name| fields.contains_key(*name))
+        || !SPIS_TRUST_FIELDS
+            .iter()
+            .all(|name| fields.contains_key(*name))
     {
         return Err(format!(
             "the rendered receipt trust must carry exactly {}",
@@ -4259,10 +4261,14 @@ fn judge_spis_trust(text: &str) -> Result<(), String> {
         ));
     }
     if fields.get("schema").and_then(Value::as_str) != Some(SPIS_TRUST_SCHEMA) {
-        return Err(format!("the rendered receipt trust schema is not {SPIS_TRUST_SCHEMA}"));
+        return Err(format!(
+            "the rendered receipt trust schema is not {SPIS_TRUST_SCHEMA}"
+        ));
     }
     if fields.get("allowedAction").and_then(Value::as_str) != Some(SPIS_TRUST_ACTION) {
-        return Err(format!("the rendered allowedAction is not {SPIS_TRUST_ACTION}"));
+        return Err(format!(
+            "the rendered allowedAction is not {SPIS_TRUST_ACTION}"
+        ));
     }
     let organization = fields
         .get("organizationId")
@@ -4304,11 +4310,7 @@ fn judge_spis_trust(text: &str) -> Result<(), String> {
         // here and rejected at the first real receipt.
         match key.as_str() {
             Some(text) if text.contains("-----BEGIN PUBLIC KEY-----") => {}
-            _ => {
-                return Err(format!(
-                    "receipt key {identifier} is not a PEM public key"
-                ))
-            }
+            _ => return Err(format!("receipt key {identifier} is not a PEM public key")),
         }
     }
     // A private half in a document destined for a public repository is the one
@@ -4399,7 +4401,9 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
         let found = looked_up.stdout.trim().to_string();
         if found.is_empty() {
             remove_remote(&resolved, &[installed.as_str()], &runner).await;
-            return Err(refused("no Node runtime is installed on this host".to_string()));
+            return Err(refused(
+                "no Node runtime is installed on this host".to_string(),
+            ));
         }
         found
     };
@@ -4428,7 +4432,9 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
     // fleet installs it under.
     let mut assignments = vec![format!(
         "PATH={}",
-        crate::deploy::shlex_quote("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        crate::deploy::shlex_quote(
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        )
     )];
     for (key, value) in &declared {
         assignments.push(format!("{key}={}", crate::deploy::shlex_quote(value)));
