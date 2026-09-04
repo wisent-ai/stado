@@ -248,7 +248,33 @@ fn local_apple_accounts() -> Option<Vec<String>> {
     }
 }
 
-fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Option<bool>) -> Value {
+/// Can the fleet act inside the session this binding names?
+///
+/// A per-user identity is only usable where its own session can be driven: a two-factor
+/// notification for an Apple account is delivered into the session of the user signed
+/// into it, and no other session on that Mac can read or answer it. The fleet drives
+/// exactly one session per host -- the one `gui-automation` configures, whose autologin
+/// credential is the single host account the vault holds for that target.
+///
+/// `Some(false)` is therefore a hard answer, not a warning: the binding names a user
+/// the fleet has no way to log in, so every run placed here will reach the prompt and
+/// stop. Worth knowing before dispatch, because reaching that point spends an Apple
+/// sign-in attempt, and repeated attempts are how an Apple ID gets locked.
+async fn drivable_session(target: &ComputeTarget, binding: &IdentityBinding) -> Option<bool> {
+    let declared = binding.user.as_deref()?;
+    let runner = crate::deploy::production_runner();
+    let session = crate::deploy::host_gui_automation::automated_session_user(target, &runner)
+        .await
+        .ok()?;
+    Some(session == declared)
+}
+
+fn binding_row(
+    target: &ComputeTarget,
+    binding: &IdentityBinding,
+    observed: Option<bool>,
+    drivable: Option<bool>,
+) -> Value {
     json!({
         // The registry's name for the machine, and deliberately not an address.
         // Callers route work to the holder through the registry channel, which
@@ -261,6 +287,9 @@ fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Opti
         "user": binding.user,
         "declared": true,
         "observed": observed,
+        // Whether the fleet can act in this binding's session. `null` when the host
+        // could not be asked, and never conflated with `false`.
+        "drivable_session": drivable,
         "verified_at": binding.verified_at,
     })
 }
@@ -276,7 +305,9 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
             target
                 .identities
                 .iter()
-                .map(move |binding| binding_row(target, binding, None))
+                // `list` prints the declaration alone and reaches no host, so both
+                // measured columns are absent here rather than guessed.
+                .map(move |binding| binding_row(target, binding, None, None))
         })
         .collect();
     if json_output {
@@ -351,7 +382,8 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 _ => None,
             };
             satisfied |= observed == Some(true);
-            rows.push(binding_row(target, binding, observed));
+            let drivable = drivable_session(target, binding).await;
+            rows.push(binding_row(target, binding, observed, drivable));
         }
     }
 
@@ -375,11 +407,19 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 Some(false) => "MISSING",
                 None => "unknown",
             };
+            // Two separate questions, so two separate words: whether the identity is
+            // there, and whether the fleet can act where it is.
+            let session = match row["drivable_session"].as_bool() {
+                Some(true) => "drivable",
+                Some(false) => "OTHER-SESSION",
+                None => "unknown",
+            };
             println!(
-                "{:<24} {:<32} {}",
+                "{:<24} {:<32} {:<8} {}",
                 row["host"].as_str().unwrap_or("-"),
                 row["identity"].as_str().unwrap_or("-"),
-                observed
+                observed,
+                session
             );
         }
     }

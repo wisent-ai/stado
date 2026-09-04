@@ -246,6 +246,18 @@ async fn login_user(target: &ComputeTarget, runner: &Runner) -> Result<String, D
     Ok(user)
 }
 
+/// The user whose GUI session this host's automation acts in.
+///
+/// Public because the answer decides more than enablement: a capture that has to read
+/// a notification can only read one delivered into this session, so a caller holding a
+/// per-user identity needs to compare the two before it dispatches anything.
+pub async fn automated_session_user(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    login_user(target, runner).await
+}
+
 /// The macOS users this host's registry identity bindings name, each with the identity
 /// it holds.
 ///
