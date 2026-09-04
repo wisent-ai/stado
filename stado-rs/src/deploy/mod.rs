@@ -122,6 +122,7 @@ pub mod service_catalog;
 pub mod service_env_file;
 pub mod service_file_fetch;
 pub mod service_label_print;
+pub mod service_pointers;
 pub mod service_serving;
 pub mod service_spawn_watch;
 pub mod ssh_key;

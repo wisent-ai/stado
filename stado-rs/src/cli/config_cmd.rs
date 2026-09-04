@@ -425,6 +425,25 @@ fn show() -> Result<(), CmdError> {
         "stado_deployment_id".into(),
         Value::from(config::stado_deployment_id()),
     );
+    // The base control-plane vault coordinate. Every scoped pointer beside it
+    // (`object_`, `release_`, `service_`) was already reported and this one
+    // was not, which is how it stayed wrong and invisible: on 2026-09-03 the
+    // object API's per-namespace verifier read `object_api.skarbiec.url`
+    // (correct, 8895) while its authorization boundary read this key
+    // (`secrets.skarbiec.url`, still the release CANDIDATE port 18895), so
+    // moving the vault only swapped which half failed. `config show` on the
+    // host could not show the disagreement because it printed three of the
+    // four pointers. A coordinate a process actually dials is not optional
+    // output.
+    resolved.insert("skarbiec_url".into(), Value::from(config::skarbiec_url()));
+    resolved.insert(
+        "skarbiec_consumer".into(),
+        Value::from(config::skarbiec_consumer()),
+    );
+    resolved.insert(
+        "skarbiec_token_file".into(),
+        Value::from(config::skarbiec_token_file()),
+    );
     resolved.insert(
         "object_skarbiec_url".into(),
         Value::from(config::object_skarbiec_url()),

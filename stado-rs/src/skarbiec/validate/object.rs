@@ -51,8 +51,21 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
+        // The set must match EXACTLY, so one newly declared namespace whose
+        // read was never added refuses all of them: on 2026-09-03
+        // `missing=[spis-crawls-object-api]` closed the object boundary over
+        // nineteen healthy items and answered
+        // `503 object authorization unavailable` for the whole fleet. The
+        // message named the gap and not the thing that closes it, so the hour
+        // after reading it went into finding the command. A declaration and
+        // the grant that authorizes it are a pair that drifts silently; a
+        // refusal about the pair says how to reconcile it.
         return Err(SkarbiecError::Deployment(format!(
-            "object verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+            "object verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}]): \
+             the grant must match every declared object namespace exactly, so one missing read \
+             refuses all of them — reconcile it with `stado host reconcile-object-verifier <host>`, \
+             which copies the route bearer without rotating it and preserves the existing bearer \
+             and expiry"
         )));
     }
 

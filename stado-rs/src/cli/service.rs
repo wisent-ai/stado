@@ -665,6 +665,34 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Do all the pointers to one service agree on its port, and which one is
+    /// the odd one out?
+    ///
+    /// Five independent places name it — the product's `stable_bind`, the
+    /// service directory's endpoint, the placement health probe, the launchd
+    /// unit's own argument vector, and every loopback coordinate in the host's
+    /// effective configuration. On 2026-09-03 four of them said 8895 and the
+    /// live vault unit said 18895, a port listed two lines away in the same
+    /// document as a release CANDIDATE port left behind by a quarantined
+    /// qualification. Nothing compared them, so the fleet answered
+    /// `503 object authorization unavailable` for hours and the answer took
+    /// hours to find. Collecting all five is the slow part; this command is
+    /// that collection plus the verdict, and the verdict names the minority.
+    Pointers {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// The single registry host to judge.
+        #[arg(long)]
+        host: String,
+        /// Skip the host round trip and compare only the registry-side
+        /// pointers. An unread host configuration is reported as one fewer
+        /// pointer, never as agreement.
+        #[arg(long)]
+        registry_only: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Reconcile one Skarbiec consumer grant with an existing owner-only token file.
     ///
     /// The bearer never leaves the managed host: its local Skarbiec reads the
@@ -1307,6 +1335,12 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             })
             .await
         }
+        ServiceCommands::Pointers {
+            name,
+            host,
+            registry_only,
+            json,
+        } => pointers(&name, &host, registry_only, json).await,
         ServiceCommands::GrantSync {
             name,
             host,
@@ -4336,6 +4370,32 @@ async fn directory_port(name: &str, host: &str) -> Option<u16> {
     url::Url::parse(&endpoint.url).ok()?.port()
 }
 
+/// The ports this host's placement profile probes for NAME, from the same
+/// pointer reader `service pointers` uses so the two can never disagree about
+/// one service.
+async fn probe_ports(name: &str, host: &str) -> Vec<u16> {
+    let Ok(registry) = host_channel::canonical_registry().await else {
+        return Vec::new();
+    };
+    let key = if registry.service(name).is_some() {
+        name.to_string()
+    } else {
+        registry
+            .service_named_by_unit(name, host)
+            .unwrap_or(name)
+            .to_string()
+    };
+    let Ok(document) = serde_json::to_value(&registry) else {
+        return Vec::new();
+    };
+    crate::deploy::service_pointers::collect(&document, None, &key, host)
+        .pointers
+        .into_iter()
+        .filter(|pointer| pointer.source.contains("placement probe"))
+        .map(|pointer| pointer.port)
+        .collect()
+}
+
 /// The host's declaration for NAME, accepting the directory's own key for the
 /// service as well as the launchd label the host declares.
 ///
@@ -4401,6 +4461,21 @@ async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError> {
         if wanted.is_empty() {
             if let Some(port) = directory_port(name, host).await {
                 wanted.push(port);
+            }
+            // The placement profile's own health probes, which until now were
+            // declared and read by NOTHING: `PlacementProbe` was
+            // deserialized in `targets.rs` and no code in this repository
+            // ever executed or compared one. On 2026-09-03 the fleet's probe
+            // for the vault named `http://127.0.0.1:8895/health` while the
+            // unit was bound to 18895, so the one declaration that would have
+            // caught the outage was failing into nobody's hands for as long
+            // as the port had been wrong. A probe URL is a statement that
+            // this service answers on that port; here that statement is
+            // finally checked against the world.
+            for port in probe_ports(name, host).await {
+                if !wanted.contains(&port) {
+                    wanted.push(port);
+                }
             }
         }
         if wanted.is_empty() {
@@ -4472,6 +4547,117 @@ async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError> {
         print_json(&Value::Array(payload))?;
     }
     fail_if_any(&failures, "serving check")
+}
+
+/// Compare every pointer to one service on one host, and name the outlier.
+///
+/// The host configuration is fetched unless `--registry-only`, because the
+/// pointer that was wrong on 2026-09-03 lived there and not in the registry:
+/// three scoped vault coordinates were right and the base one
+/// (`secrets.skarbiec.url`) still named the release candidate port, inside a
+/// single process that dialled both.
+async fn pointers(
+    name: &str,
+    host: &str,
+    registry_only: bool,
+    as_json: bool,
+) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let registry = host_channel::canonical_registry().await.map_err(click)?;
+    let document = serde_json::to_value(&registry)?;
+    // The directory's own key for the service, so a caller may name either it
+    // or the launchd label the host declares — the same tolerance `serving`
+    // has, for the same reason.
+    let key = if registry.service(name).is_some() {
+        name.to_string()
+    } else {
+        registry
+            .service_named_by_unit(name, host)
+            .unwrap_or(name)
+            .to_string()
+    };
+
+    let mut host_config: Option<Value> = None;
+    let mut config_note: Option<String> = None;
+    if !registry_only {
+        match super::host::remote_config_output(&target, None, &production_runner()).await {
+            Ok(stdout) => match stdout
+                .find('{')
+                .and_then(|start| serde_json::from_str::<Value>(&stdout[start..]).ok())
+            {
+                Some(value) => host_config = Some(value),
+                None => {
+                    config_note = Some("the host answered no parseable configuration".to_string())
+                }
+            },
+            Err(error) => config_note = Some(error.to_string()),
+        }
+    }
+
+    let report =
+        crate::deploy::service_pointers::collect(&document, host_config.as_ref(), &key, host);
+
+    if as_json {
+        print_json(&json!({
+            "schema": "stado.service-pointers.v1",
+            "service": report.service,
+            "host": report.host,
+            "rollout_state": report.rollout_state,
+            "candidate_ports": report.candidate_ports,
+            "agrees": report.agrees(),
+            "host_configuration_read": host_config.is_some(),
+            "host_configuration_note": config_note,
+            "pointers": report
+                .pointers
+                .iter()
+                .map(|pointer| json!({"source": pointer.source, "port": pointer.port}))
+                .collect::<Vec<Value>>(),
+            "findings": report
+                .findings
+                .iter()
+                .map(|finding| Value::from(finding.sentence(&report.service, &report.host)))
+                .collect::<Vec<Value>>(),
+        }))?;
+    } else {
+        println!("service:  {}", report.service);
+        println!("host:     {}", report.host);
+        println!("rollout:  {}", report.rollout_state);
+        if !report.candidate_ports.is_empty() {
+            println!(
+                "candidate ports: {}",
+                report
+                    .candidate_ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            );
+        }
+        table::print(
+            &["PORT", "POINTER"],
+            &report
+                .pointers
+                .iter()
+                .map(|pointer| vec![pointer.port.to_string(), pointer.source.clone()])
+                .collect::<Vec<Vec<String>>>(),
+        );
+        if let Some(note) = &config_note {
+            println!("host configuration NOT read, so one pointer is missing: {note}");
+        }
+        for finding in &report.findings {
+            println!("! {}", finding.sentence(&report.service, &report.host));
+        }
+        if report.agrees() {
+            println!("every pointer agrees");
+        }
+    }
+
+    let failures: Vec<String> = report
+        .findings
+        .iter()
+        .map(|finding| finding.sentence(&report.service, &report.host))
+        .collect();
+    fail_if_any(&failures, "pointer agreement")
 }
 
 struct GrantSyncOptions<'a> {
