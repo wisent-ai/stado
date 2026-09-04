@@ -16,6 +16,16 @@ The Stado delivery job starts its worker from the digest-pinned candidate
 archive and that worker uses itself for `install-local`; a broken older
 installed worker therefore cannot prevent the release that repairs it.
 
+`stado release redeliver PRODUCT RUN_ID DELIVERY --retry-token TOKEN` is the
+operator recovery path for one delivery from the exact newest completed run. It
+does not publish a new candidate or move a channel. The retry token identifies
+a fixed per-run CAS transaction and stable queue submission, so repeating the
+same command resumes after interruption. A different token is refused while a
+transaction is active. Success replaces that delivery's job, output, state, and
+receipt evidence before restoring the run's prior state; failure preserves the
+previous passed delivery while recording the terminal failure and restoring the
+run state.
+
 ## Release publication authority
 
 Release signing and authenticated release-object publication resolve one

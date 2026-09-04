@@ -1300,7 +1300,11 @@ struct DeclaredUnit {
 /// key is unknown to [`ComputeTarget`], so it round-trips through
 /// [`ComputeTarget::extra`]; a target that declares none is checked for
 /// liveness only, never for units.
-fn declared_units(target: &ComputeTarget) -> Vec<DeclaredUnit> {
+fn declared_units(
+    target: &ComputeTarget,
+    release_control: Option<&crate::release_control::ReleaseControl>,
+) -> Vec<DeclaredUnit> {
+    let legacy_labels = service::legacy_launchd_labels(target, release_control);
     let Some(services) = target.extra.get("services").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -1317,6 +1321,9 @@ fn declared_units(target: &ComputeTarget) -> Vec<DeclaredUnit> {
             let id = text("label")
                 .or_else(|| text("unit"))
                 .or_else(|| text("name"))?;
+            if legacy_labels.contains(id) {
+                return None;
+            }
             Some(DeclaredUnit {
                 name: text("name").unwrap_or(id).to_string(),
                 id: id.to_string(),
@@ -2087,25 +2094,21 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     .about(unit),
             );
         }
-        // Same shape and the same reason it belongs before any beacon: a host
-        // that declares no version for a product it is delivered is wrong
-        // whether or not the host is answering, and it is why every version
-        // diagnostic is silent about that product.
+        // `managed_versions` belongs only to the compiled `host release`
+        // catalog. Release-control products already carry their desired
+        // version in that block, while arbitrary `service update` trees carry
+        // an artifact identity instead of an invented semver contract.
         for undeclared in
-            service::products_without_declared_version(target, release_control.as_ref())
+            service::managed_units_without_declared_version(target, release_control.as_ref())
         {
-            let mut finding = Finding::new(
-                "undeclared-service-version",
-                &target.name,
-                undeclared.sentence(),
+            findings.push(
+                Finding::new(
+                    "undeclared-service-version",
+                    &target.name,
+                    undeclared.sentence(),
+                )
+                .about(undeclared.unit),
             );
-            // A unit is named when one exists that is not this product's
-            // legacy label; a delivered product with no unit at all still
-            // gets its row, which is the case the unit-derived check missed.
-            if let Some(unit) = undeclared.unit.clone() {
-                finding = finding.about(unit);
-            }
-            findings.push(finding);
         }
         // The same shape again, and the reason this one needed the check
         // extended rather than a second one built beside it: both loops
@@ -2222,7 +2225,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                 ),
             )),
         }
-        for declared in declared_units(target) {
+        for declared in declared_units(target, release_control.as_ref()) {
             match beacon.unit_state(&declared.id) {
                 None => findings.push(
                     Finding::new(

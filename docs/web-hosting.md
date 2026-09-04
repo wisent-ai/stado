@@ -515,7 +515,10 @@ mount under that hostname stays.
 Stand up the edge once for the whole fleet:
 
 ```console
-stado web edge provision --name wisent-edge --region westus2 \
+stado fleet key generate wisent-edge
+stado config set azure.subscription_id <subscription>
+stado config set azure.ssh_public_key "<the public key generate printed>"
+stado web edge provision wisent-edge --region westus2 \
   --size Standard_B2pts_v2 --contact ops@wisent.com
 stado web edge status
 stado web edge hostnames
@@ -528,6 +531,46 @@ capacity the fleet accounts for like any other — not a machine that exists
 outside the plane. It creates a public address, an edge-only security group
 opening 80 and 443, a NIC and the VM, in that order, and unwinds them in
 reverse if any step fails, naming anything Azure would not release.
+
+Three things must be true before `provision` can run, and each refusal names
+itself. `azure.subscription_id` and `azure.ssh_public_key` are configuration
+bindings, not derived: the edge is rendered with
+`disablePasswordAuthentication`, so Azure would refuse a VM with no way in at
+all. `stado fleet key generate wisent-edge` mints the pair into the selected
+credential store as `stado-ssh-wisent-edge` and prints the public half, which
+is the value the second `config set` takes; the private half never leaves the
+store, and Stado derives that item id from the target name when it opens the
+channel. The service principal in the Skarbiec item `stado-azure` supplies the
+credential, so nothing is copied by hand but those two identifiers.
+
+`provision` also needs the subscription's RBAC to permit network writes. A
+first run answered
+
+```
+HTTP 403: AuthorizationFailed ... does not have authorization to perform
+action 'Microsoft.Network/publicIPAddresses/write'
+```
+
+which `stado azure repair-rbac --resource-group wisent-compute` settles: it
+applies the control-plane and agent roles and reports each one `applied` or
+`already_present`.
+
+**The subscription then refuses the edge on purpose.** With RBAC repaired,
+creating the address answers
+
+```
+HTTP 403: RequestDisallowedByPolicy ... policyAssignment
+"Deny charge-bearing resources until Azure spending limit is On"
+```
+
+That assignment is a deliberate cost guard, and the Azure grant this fleet
+holds has its spending limit removed - which is exactly the state the policy
+denies charge-bearing resources in. So the edge cannot be created until the
+operator either turns the spending limit On or exempts the edge's four
+resources from that assignment. It is a spending decision, so Stado does not
+take it, and no part of this document works around it: `stado web edge
+declare` remains the way to record an edge Stado did not create, for a host
+that already holds a public address.
 
 `stado web edge remove` is the one command that undoes it. It deletes the VM,
 the NIC, the security group and the public address in reverse creation order,

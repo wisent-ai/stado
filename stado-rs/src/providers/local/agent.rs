@@ -572,7 +572,7 @@ pub async fn maybe_yield_for_priority(
                         consumer_id,
                         slots.len(),
                         false,
-                    )
+                    ) && super::slots::job_system_packages_eligible(job, kind)
                 },
                 // Preempting a running job is a priority-fidelity decision,
                 // not a reachability one: it must be taken against the head
@@ -591,14 +591,29 @@ pub async fn maybe_yield_for_priority(
             .then_with(|| a.created_at.cmp(&b.created_at))
     });
     let mut target: Option<(crate::models::Job, i64)> = None;
-    for j in &candidates {
+    for candidate in &candidates {
+        let Some(j) = store.read_job("queue", &candidate.job_id).await? else {
+            continue;
+        };
+        if !helpers::job_eligible(
+            &j,
+            gpu_type,
+            total_vram_gb,
+            kind,
+            consumer_id,
+            slots.len(),
+            false,
+        ) || !super::slots::job_system_packages_eligible(&j, kind)
+        {
+            continue;
+        }
         let need_j = j
             .gpu_mem_gb
             .max(estimate_gpu_memory(&j.command, sizing, store).await?);
         if need_j <= free_vram_gb {
             continue; // already fits — not a VRAM-eviction case
         }
-        target = Some((j.clone(), need_j));
+        target = Some((j, need_j));
         break;
     }
     let Some((target, need)) = target else {
@@ -675,7 +690,7 @@ async fn queued_gpu_job_for_inference(
                         consumer_id,
                         active_job_count,
                         pinned_only,
-                    )
+                    ) && super::slots::job_system_packages_eligible(job, kind)
                 },
                 // A claim loop wants reachability and so takes the shared
                 // rotation: a job past this poll's window is reached by a
@@ -710,6 +725,7 @@ async fn queued_gpu_job_for_inference(
                 active_job_count,
                 pinned_only,
             )
+            || !super::slots::job_system_packages_eligible(&job, kind)
         {
             continue;
         }
@@ -913,7 +929,7 @@ fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
         return None;
     }
     let text = String::from_utf8(output.stdout).ok()?;
-    text.split_whitespace().last().map(str::to_string)
+    text.split_whitespace().nth(1).map(str::to_string)
 }
 
 /// A release handoff worth taking: the marker names a release this process is
@@ -1987,7 +2003,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                                 &consumer_id,
                                 slots.len(),
                                 pinned_only,
-                            )
+                            ) && super::slots::job_system_packages_eligible(job, kind)
                         },
                         // A claim loop wants reachability and so takes the
                         // shared rotation: a job past this poll's window is
@@ -2261,6 +2277,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     Value::from(job.job_id.clone()),
                 );
                 agent_diag.insert("last_eligibility_reject_reason".into(), Value::from(reason));
+                continue;
+            }
+            // The listing is only a snapshot. Reapply every admission
+            // predicate to the fresh queue record before taking the workload
+            // lock or performing any claim/start side effect.
+            if !super::slots::job_system_packages_eligible(job, kind) {
+                diag_eligibility_rejected += 1;
                 continue;
             }
             diag_eligible += 1;

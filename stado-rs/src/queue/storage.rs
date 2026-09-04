@@ -534,6 +534,36 @@ impl JobStorage {
     /// Create a queued job exactly once. Existing content is never overwritten;
     /// callers must read it back and verify its submission identity.
     pub async fn create_queued_job_if_absent(&self, job: &Job) -> Result<bool, StorageError> {
+        // This is first admission, not lifecycle recovery. A crash may leave
+        // the durable run entry at `enqueuing` after this job has already
+        // moved out of every visible lifecycle prefix. Settle any active move
+        // first, then let durable transition history fence that replay even
+        // when the record is already retired.
+        self.recover_job_transition(&job.job_id).await?;
+        let mut lifecycle_exists = false;
+        for prefix in [
+            "cancelled",
+            "failed",
+            "uploaded",
+            "completed",
+            "running",
+            "queue",
+        ] {
+            if self.read_job(prefix, &job.job_id).await?.is_some() {
+                lifecycle_exists = true;
+                break;
+            }
+        }
+        if self.backend.exists(&transition_path(&job.job_id)).await? {
+            return Err(StorageError::StorageConflict(format!(
+                "durable prior admission exists for {}; refusing first-admission queue recreation",
+                job.job_id
+            )));
+        }
+        if lifecycle_exists {
+            return Ok(false);
+        }
+
         let blob_path = format!("queue/{}.json", job.job_id);
         // Index ordering rule (see `queue::listing` module docs): the marker
         // is written BEFORE the job blob is settled. Blob-then-marker leaves

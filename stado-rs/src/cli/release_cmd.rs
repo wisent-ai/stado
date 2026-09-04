@@ -32,6 +32,8 @@ pub enum ReleaseCommands {
     PolicyApply(ReleasePolicyApplyArgs),
     /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
     Submit(crate::cli::release_submit::ReleaseSubmitArgs),
+    /// Re-run one delivery from an exact completed release without promotion.
+    Redeliver(crate::cli::release_submit::ReleaseRedeliverArgs),
     /// Manage the Stado-owned product and source policy catalog.
     Catalog(crate::cli::release_catalog::CatalogArgs),
     /// Internal provider-neutral release build worker.
@@ -1592,6 +1594,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
         ReleaseCommands::PolicyApply(args) => apply_policy(&args).await,
         ReleaseCommands::Submit(args) => crate::cli::release_submit::submit(&args).await,
+        ReleaseCommands::Redeliver(args) => crate::cli::release_submit::redeliver(&args).await,
         ReleaseCommands::Catalog(args) => crate::cli::release_catalog::dispatch(args).await,
         ReleaseCommands::Worker(args) => crate::cli::release_submit::worker(&args).await,
         ReleaseCommands::DeliveryWorker(args) => {
