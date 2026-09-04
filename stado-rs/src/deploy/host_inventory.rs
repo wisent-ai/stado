@@ -1063,14 +1063,16 @@ pub fn verdict(
     (Some(port), if listening { MATCHED } else { STALE })
 }
 
-/// The bare version number inside one [`ManagedBinary::version`] field.
+/// The bare semantic version inside one [`ManagedBinary::version`] field.
 ///
 /// A declared program answers in the shape its declaration names, and this
-/// function reduces either shape to the bare coordinate BY NAME rather than
-/// sniffing for one:
+/// function reduces only its own documented banner shape to the bare
+/// coordinate:
 ///
-/// - `stado --version` prints `stado 0.5.1`, so the binary's own name
-///   followed by whitespace is the one prefix that is ever removed;
+/// - `stado --version` prints
+///   `stado 0.15.5 (rev <40 lowercase hex digits>)`; releases before the full
+///   source-identity cutover used a 12-digit revision. The name and either
+///   exact build-identity suffix are removed;
 /// - `skarbiec version` prints a JSON object, and the remote script has
 ///   already pulled its `version` member out, so it arrives bare (`0.1.3`).
 ///
@@ -1080,9 +1082,26 @@ pub fn verdict(
 /// against a declaration and reports the wrong verdict with confidence.
 pub fn reported_version<'a>(binary: &str, version: &'a str) -> Option<&'a str> {
     let trimmed = version.trim();
-    let bare = match trimmed.strip_prefix(binary) {
+    let named = match trimmed.strip_prefix(binary) {
         Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => rest.trim_start(),
         _ => trimmed,
+    };
+    let bare = if binary == "stado" {
+        named
+            .strip_suffix(')')
+            .and_then(|banner| banner.split_once(" (rev "))
+            .and_then(|(version, revision)| {
+                let core = revision.strip_suffix("-dirty").unwrap_or(revision);
+                (revision == crate::build_identity::UNKNOWN_REVISION
+                    || ([12, 40].contains(&core.len())
+                        && core
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))))
+                .then_some(version)
+            })
+            .unwrap_or(named)
+    } else {
+        named
     };
     if bare.is_empty() {
         None

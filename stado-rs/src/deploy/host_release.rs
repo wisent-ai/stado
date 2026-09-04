@@ -830,6 +830,7 @@ bin_dir="$install_root"
 active_path="$bin_dir/$binary"
 staged_path="$stado_home/releases/$binary/$version/$platform/$binary"
 pending="$bin_dir/.$binary.pending"
+release_version_incoming="$bin_dir/stado.release-version.release-incoming"
 
 if [ -L "$staged_path" ] || [ ! -f "$staged_path" ] || [ ! -x "$staged_path" ]; then
   say verify staged_missing
@@ -844,9 +845,16 @@ say verify ok
 
 /bin/mkdir -p "$bin_dir"
 /bin/rm -f "$pending"
+if [ "$binary" = stado ]; then
+  /bin/rm -f "$release_version_incoming"
+  printf '%s\n' "$version" > "$release_version_incoming"
+fi
 /bin/ln "$staged_path" "$pending"
 /bin/chmod 755 "$pending"
 /bin/mv -f "$pending" "$active_path"
+if [ "$binary" = stado ]; then
+  /bin/mv -f "$release_version_incoming" "$bin_dir/stado.release-version"
+fi
 say activated "$version"
 
 # The receipt, beside the artefact it describes.
