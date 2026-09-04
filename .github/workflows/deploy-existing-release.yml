@@ -30,18 +30,30 @@ jobs:
       - name: Reconcile public release origin
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          "$stado_bin" host recover-object-api charless-mac-mini --json \
-            > "$RUNNER_TEMP/public-release-ingress.json"
-          "$stado_bin" host exec charless-mac-mini -- \
-            tailscale serve status --json |
-            jq -e '
-              any(
-                .Web | to_entries[];
-                (.key | endswith(":443")) and
-                .value.Handlers["/api/release/object"].Proxy ==
-                  "http://127.0.0.1:8765/api/release/object"
-              )
-            '
+          ingress_ok() {
+            "$stado_bin" host exec charless-mac-mini -- \
+              tailscale serve status --json |
+              jq -e '
+                any(
+                  .Web | to_entries[];
+                  (.key | endswith(":443")) and
+                  .value.Handlers["/api/release/object"].Proxy ==
+                    "http://127.0.0.1:8765/api/release/object"
+                )
+              ' >/dev/null
+          }
+          # The check is the goal, the recovery is the repair for when it
+          # fails. Running the repair first made a correct, serving ingress
+          # depend on the mini's skarbiec blue-green policy record being
+          # complete, and on 2026-09-04 that record carries null legacy fields
+          # — the recovery refused with "skarbiec bootstrap refused: release
+          # target is incomplete" and the 0.14.9 delivery died although the
+          # route it reconciles was answering the whole time.
+          if ! ingress_ok; then
+            "$stado_bin" host recover-object-api charless-mac-mini --json \
+              > "$RUNNER_TEMP/public-release-ingress.json"
+          fi
+          ingress_ok
       - name: Resume the exact immutable publication
         env:
           STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}
