@@ -1930,6 +1930,17 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let mut diag_vram_rejected = 0i64;
         let mut diag_eligibility_rejected = 0i64;
         let mut diag_eligible = 0i64;
+        let mut diag_claim_errors = 0i64;
+        // These keys describe one completed scan. The previous scan was
+        // already published before this point; carrying its last error into a
+        // later clean scan would turn a historical refusal into current state.
+        for key in [
+            "last_claim_error_job",
+            "last_claim_error",
+            "last_claim_error_at",
+        ] {
+            agent_diag.remove(key);
+        }
         let max_claims = env_i64("WC_LOCAL_MAX_CLAIMS_PER_TICK", 0);
         let raw_reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
         let raw_min_free = env_f64_chain(
@@ -2105,7 +2116,34 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             .await
             {
                 Ok(slot) => slot,
-                Err(exc) => {
+                Err(super::slots::StartSlotError::Claim(exc)) => {
+                    // One job's claim is that job's problem. Returning here
+                    // ends the tick, and `cli::agent` restarts the whole loop:
+                    // on charless-mac-mini a single queued job whose durable
+                    // transition record could not be verified killed the loop
+                    // every few seconds for hours, so the nine other queued
+                    // jobs were never reached, the census keys never survived
+                    // a publish, and every gate read the host as healthy. The
+                    // same doctrine `cli::doctor` states for probes holds here:
+                    // one failure names itself and the scan continues.
+                    disk_cleanup::release_workload_lock(workload_lock, log_fn);
+                    log_fn(&format!(
+                        "claim refused for {}: {}; skipping this job and continuing the scan",
+                        job.job_id, exc
+                    ));
+                    diag_claim_errors += 1;
+                    agent_diag.insert(
+                        "last_claim_error_job".into(),
+                        Value::from(job.job_id.clone()),
+                    );
+                    agent_diag.insert("last_claim_error".into(), Value::from(exc.to_string()));
+                    agent_diag.insert(
+                        "last_claim_error_at".into(),
+                        Value::from(isoformat_utc(Utc::now())),
+                    );
+                    continue;
+                }
+                Err(super::slots::StartSlotError::Other(exc)) => {
                     disk_cleanup::release_workload_lock(workload_lock, log_fn);
                     return Err(exc.into());
                 }
@@ -2161,6 +2199,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         );
         agent_diag.insert("eligible_count".into(), Value::from(diag_eligible));
         agent_diag.insert("claimed_this_loop".into(), Value::from(started));
+        agent_diag.insert("claim_errors".into(), Value::from(diag_claim_errors));
         agent_diag.insert(
             "last_claim_attempt_at".into(),
             Value::from(isoformat_utc(Utc::now())),
