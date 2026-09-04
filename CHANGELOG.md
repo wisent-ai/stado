@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.5
+
+- **Atomic handoff fencing:** `service handoff-release-control` now refuses a placement profile already owned by an active move transaction before it contacts the host. Runtime checks and the sole registry compare-and-swap run under the existing per-unit service lifecycle lease. Before that CAS, the command durably writes the exact cleanup identities and intended handoff as a `prepared` product work receipt; after it, the receipt advances immediately to `registry_committed`, then records a post-CAS reconciler-report baseline, waits for a newer report, and rechecks both the unloaded legacy label and absence of old-executable callers. Reinvocation validates a matching receipt, exact release, and targeted registry state, skips an already successful CAS, reacquires the same lease, and finishes the fence.
+- **Migration:** no persisted-state rewrite is required. Install this release on every registry reader before performing a release-control handoff.
+- **Rollback boundary:** rolling back restores the race in which an already-claimed placement move or stale generic service reconciliation can act on the legacy lifecycle while handoff removes it, and removes the write-ahead cleanup receipt, interruption-safe resume path, and post-CAS reconciler-report fence.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; locked compilation covers the source change, while release publication supplies signed platform manifests and delivery receipts.
+
 ## 0.16.4
 
 - **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.

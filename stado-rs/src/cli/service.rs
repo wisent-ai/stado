@@ -5155,8 +5155,9 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
 /// lease. Holding the same lease across withdrawal and the host action makes a
 /// stale tick stop at that boundary instead of starting the unit between the
 /// stop body and its postcondition probe.
-async fn with_service_mutation_lease<T, F, Fut>(
-    service: &ManagedService,
+async fn with_service_mutation_subject<T, F, Fut>(
+    host: &str,
+    unit: &str,
     operation: F,
 ) -> Result<T, CmdError>
 where
@@ -5164,7 +5165,7 @@ where
     Fut: Future<Output = Result<T, CmdError>>,
 {
     let store = beacon_store().await?;
-    let subject = format!("service:{}:{}", service.host, service.unit_id());
+    let subject = format!("service:{host}:{unit}");
     let decision = format!(
         "service-lifecycle-{}",
         chrono::Utc::now().timestamp_micros()
@@ -5212,6 +5213,17 @@ where
     }
 }
 
+async fn with_service_mutation_lease<T, F, Fut>(
+    service: &ManagedService,
+    operation: F,
+) -> Result<T, CmdError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, CmdError>>,
+{
+    with_service_mutation_subject(&service.host, service.unit_id(), operation).await
+}
+
 #[derive(Clone)]
 struct ReconcilerFence {
     baseline_report: Option<String>,
@@ -5240,6 +5252,19 @@ async fn reconciler_report_id(store: &JobStorage) -> Result<Option<String>, CmdE
     .await
     .map(|report| report.map(|report| report.created_at))
     .map_err(|error| CmdError::click(error.to_string()))
+}
+
+async fn capture_reconciler_fence(
+    document: &Value,
+) -> Result<Option<ReconcilerFence>, CmdError> {
+    let Some(interval) = active_coordinator_interval(document) else {
+        return Ok(None);
+    };
+    let store = beacon_store().await?;
+    Ok(Some(ReconcilerFence {
+        baseline_report: reconciler_report_id(&store).await?,
+        timeout_seconds: interval.saturating_mul(2).saturating_add(60).min(900),
+    }))
 }
 
 async fn wait_for_reconciler_fence(fence: Option<&ReconcilerFence>) -> Result<(), CmdError> {
@@ -5279,15 +5304,7 @@ async fn suspend_service_declaration(
     unit: &str,
 ) -> Result<(ManagedService, String, Option<ReconcilerFence>), CmdError> {
     let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-    let fence = if let Some(interval) = active_coordinator_interval(&document) {
-        let store = beacon_store().await?;
-        Some(ReconcilerFence {
-            baseline_report: reconciler_report_id(&store).await?,
-            timeout_seconds: interval.saturating_mul(2).saturating_add(60).min(900),
-        })
-    } else {
-        None
-    };
+    let fence = capture_reconciler_fence(&document).await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
     let generation = registry::push_document_if(&document, &expected_generation).await?;
     Ok((removed, generation, fence))
@@ -5560,10 +5577,239 @@ fn document_contains_string(value: &Value, needle: &str) -> bool {
             .iter()
             .any(|value| document_contains_string(value, needle)),
         Value::Object(values) => values
+
             .values()
             .any(|value| document_contains_string(value, needle)),
         _ => false,
     }
+}
+fn handoff_receipt_path(product: &str, version: &str, host: &str) -> std::path::PathBuf {
+    crate::config_file::expand_tilde("~")
+        .join(".stado/work/service-release")
+        .join(product)
+        .join(version)
+        .join(format!("handoff-{host}.json"))
+}
+
+fn persist_handoff_receipt(
+    path: &std::path::Path,
+    report: &Value,
+    replace: bool,
+) -> Result<(), CmdError> {
+    use std::io::Write as _;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| CmdError::click("handoff receipt path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut bytes = serde_json::to_vec_pretty(report)?;
+    bytes.push(b'\n');
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(&bytes)?;
+    staged.as_file().sync_all()?;
+    if replace {
+        staged.persist(path).map_err(|error| error.error)?;
+    } else if let Err(error) = staged.persist_noclobber(path) {
+        let existing = std::fs::read(path)?;
+        if existing != bytes {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} already exists with different content",
+                path.display()
+            )));
+        }
+        drop(error);
+    }
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn read_handoff_receipt(path: &std::path::Path) -> Result<Option<Value>, CmdError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
+            CmdError::click(format!(
+                "handoff receipt {} is invalid JSON: {error}",
+                path.display()
+            ))
+        })?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn registry_has_intended_handoff(
+    document: &Value,
+    profile: &str,
+    service_name: &str,
+    product: &str,
+    host: &str,
+    legacy_label: &str,
+    legacy_plist: &str,
+    legacy_program: &str,
+) -> bool {
+    let units_external = document
+        .get("placement_profiles")
+        .and_then(Value::as_array)
+        .and_then(|profiles| {
+            profiles
+                .iter()
+                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(profile))
+        })
+        .and_then(|profile| profile.get("hosts"))
+        .and_then(Value::as_object)
+        .map(|hosts| {
+            !hosts.is_empty()
+                && hosts.values().all(|template| {
+                    template
+                        .get("units")
+                        .and_then(|units| units.get(service_name))
+                        .is_some_and(|unit| {
+                            unit.get("controller").and_then(Value::as_str)
+                                == Some("release-control")
+                                && unit.get("product").and_then(Value::as_str) == Some(product)
+                        })
+                })
+        })
+        == Some(true);
+    let legacy_removed = document
+        .get("release_control")
+        .and_then(|control| control.get("products"))
+        .and_then(|products| products.get(product))
+        .and_then(|policy| policy.get("targets"))
+        .and_then(|targets| targets.get(host))
+        .is_some_and(|target| {
+            target.get("legacy_launchd_label").is_none()
+                && target.get("legacy_launchd_plist").is_none()
+        });
+    let legacy_unreachable = [legacy_label, legacy_plist, legacy_program]
+        .into_iter()
+        .all(|identity| !identity.is_empty() && !document_contains_string(document, identity));
+    units_external && legacy_removed && legacy_unreachable
+}
+
+fn same_remote_file_identity(left: &Value, right: &Value) -> bool {
+    ["path", "sha256", "size", "mode"]
+        .into_iter()
+        .all(|field| left.get(field) == right.get(field))
+}
+
+async fn finish_committed_handoff(
+    document: &Value,
+    target: &crate::targets::ComputeTarget,
+    installed_stado: &str,
+    receipt_path: &std::path::Path,
+    mut report: Value,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let host = report["host"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no host"))?
+        .to_owned();
+    let product = report["product"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no product"))?
+        .to_owned();
+    let service_name = report["service"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no service"))?
+        .to_owned();
+    let legacy_label = report["legacy"]["label"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?
+        .to_owned();
+    let legacy_program = report["retirement"]["binary_receipt"]["path"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no legacy binary path"))?
+        .to_owned();
+    let runner = production_runner();
+    with_service_mutation_subject(&host, &legacy_label, || async {
+        let active = host_channel::run_program(
+            target,
+            &[
+                installed_stado,
+                "release",
+                "active-binary",
+                &product,
+                "--target",
+                &host,
+                "--json",
+            ],
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if !active.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: installed Stado rejected active release binary: {}",
+                host_channel::last_error_line(&active, "active-binary failed")
+            )));
+        }
+        let active: Value = serde_json::from_str(active.stdout.trim()).map_err(|error| {
+            CmdError::click(format!("{host}: active-binary returned invalid JSON: {error}"))
+        })?;
+        if active["state"] != "active"
+            || active["product"] != product
+            || active["target"] != host
+        {
+            return Err(CmdError::click(format!(
+                "{host}: active-binary identity no longer matches the durable handoff receipt"
+            )));
+        }
+        for field in ["version", "artifact_sha256", "manifest_sha256"] {
+            if active[field] != report["release"][field] {
+                return Err(CmdError::click(format!(
+                    "{host}: active release {field} no longer matches the durable handoff receipt"
+                )));
+            }
+        }
+
+        report["status"] = json!("registry_committed");
+        let fence_capture = capture_reconciler_fence(document).await;
+        report["reconciler_fence"] = json!({
+            "status": if fence_capture.is_ok() { "pending" } else { "capture_failed" },
+            "baseline_report_id": fence_capture
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .and_then(|fence| fence.baseline_report.as_deref()),
+            "timeout_seconds": fence_capture
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .map(|fence| fence.timeout_seconds),
+            "error": fence_capture.as_ref().err().map(ToString::to_string),
+        });
+        persist_handoff_receipt(receipt_path, &report, true)?;
+        let fence = fence_capture?;
+        wait_for_reconciler_fence(fence.as_ref()).await?;
+        let label = service_label_print::print_label(
+            target,
+            &legacy_label,
+            service::BootoutScope::System,
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if label.loaded() {
+            return Err(CmdError::click(format!(
+                "{host}: legacy launchd label {legacy_label:?} was restarted after registry handoff"
+            )));
+        }
+        require_no_executable_caller(target, &legacy_program, &runner).await?;
+        report["status"] = json!("handed_off");
+        report["retirement"]["status"] = json!("eligible");
+        report["reconciler_fence"]["status"] = json!("satisfied");
+        persist_handoff_receipt(receipt_path, &report, true)?;
+        if json_output {
+            print_json(&report)
+        } else {
+            println!(
+                "{host}: {service_name} handed to release-control product {product} at registry generation {}",
+                report["generation"]
+            );
+            Ok(())
+        }
+    })
+    .await
 }
 /// Transfer one placed service from generic unit lifecycle to release-control.
 ///
@@ -5618,18 +5864,6 @@ async fn handoff_release_control(
             transaction.id
         )));
     }
-    for (template_host, template) in &profile.hosts {
-        let unit = template.units.get(service_name).ok_or_else(|| {
-            CmdError::click(format!(
-                "placement host {template_host:?} has no {service_name:?} template"
-            ))
-        })?;
-        if unit.managed().is_none() {
-            return Err(CmdError::click(format!(
-                "placement service {service_name:?} is already release-controlled"
-            )));
-        }
-    }
 
     let control = crate::release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
@@ -5663,6 +5897,73 @@ async fn handoff_release_control(
                 desired.version, target_policy.platform
             ))
         })?;
+    let receipt_path = handoff_receipt_path(product, &desired.version, host);
+    let prior_receipt = read_handoff_receipt(&receipt_path)?;
+    if let Some(receipt) = prior_receipt.as_ref() {
+        let same_intent = receipt["schema"] == "stado.service-release-control-handoff.v1"
+            && receipt["service"] == service_name
+            && receipt["host"] == host
+            && receipt["profile"] == profile_name
+            && receipt["product"] == product
+            && receipt["release"]["version"] == desired.version
+            && receipt["release"]["artifact_sha256"] == desired_artifact.artifact_sha256
+            && receipt["release"]["manifest_sha256"] == desired_artifact.manifest_sha256;
+        if !same_intent {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} records a different operation",
+                receipt_path.display()
+            )));
+        }
+        let receipt_label = receipt["legacy"]["label"]
+            .as_str()
+            .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?;
+        let receipt_plist = receipt["retirement"]["plist_receipt"]["path"]
+            .as_str()
+            .ok_or_else(|| CmdError::click("handoff receipt has no legacy plist path"))?;
+        let receipt_program = receipt["retirement"]["binary_receipt"]["path"]
+            .as_str()
+            .ok_or_else(|| CmdError::click("handoff receipt has no legacy binary path"))?;
+        if registry_has_intended_handoff(
+            &document,
+            profile_name,
+            service_name,
+            product,
+            host,
+            receipt_label,
+            receipt_plist,
+            receipt_program,
+        ) {
+            let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
+            return finish_committed_handoff(
+                &document,
+                &target,
+                &installed_stado,
+                &receipt_path,
+                receipt.clone(),
+                json_output,
+            )
+            .await;
+        }
+        if receipt["status"] != "prepared" {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} says {:?}, but the registry does not match its intended handoff",
+                receipt_path.display(),
+                receipt["status"]
+            )));
+        }
+    }
+    for (template_host, template) in &profile.hosts {
+        let unit = template.units.get(service_name).ok_or_else(|| {
+            CmdError::click(format!(
+                "placement host {template_host:?} has no {service_name:?} template"
+            ))
+        })?;
+        if unit.managed().is_none() {
+            return Err(CmdError::click(format!(
+                "placement service {service_name:?} is already release-controlled"
+            )));
+        }
+    }
     let legacy_label = target_policy
         .legacy_launchd_label
         .as_deref()
@@ -5693,6 +5994,7 @@ async fn handoff_release_control(
              {legacy_plist}"
         )));
     }
+
 
     with_service_mutation_lease(&legacy, || async {
     let runner = production_runner();
@@ -5809,8 +6111,24 @@ async fn handoff_release_control(
         )));
     }
     require_no_executable_caller(&target, &legacy.program, &runner).await?;
-    let plist_identity = remote_file_identity(&target, legacy_plist, &runner).await?;
-    let binary_identity = remote_file_identity(&target, &legacy.program, &runner).await?;
+    let observed_plist_identity = remote_file_identity(&target, legacy_plist, &runner).await?;
+    let observed_binary_identity =
+        remote_file_identity(&target, &legacy.program, &runner).await?;
+    let (plist_identity, binary_identity) = if let Some(receipt) = prior_receipt.as_ref() {
+        let stored_plist = &receipt["retirement"]["plist_receipt"];
+        let stored_binary = &receipt["retirement"]["binary_receipt"];
+        if !same_remote_file_identity(stored_plist, &observed_plist_identity)
+            || !same_remote_file_identity(stored_binary, &observed_binary_identity)
+        {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} no longer matches the exact legacy files",
+                receipt_path.display()
+            )));
+        }
+        (stored_plist.clone(), stored_binary.clone())
+    } else {
+        (observed_plist_identity, observed_binary_identity)
+    };
 
     service::remove_service(&mut document, host, legacy_label).map_err(click)?;
     externalize_release_controlled_profile(&mut document, profile_name, service_name, product)?;
@@ -5825,39 +6143,102 @@ async fn handoff_release_control(
     }
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let generation = registry::push_document_if(&document, &expected_generation).await?;
 
-    let report = json!({
-        "schema": "stado.service-release-control-handoff.v1",
-        "status": "handed_off",
-        "service": service_name,
-        "host": host,
-        "profile": profile_name,
-        "controller": "release-control",
-        "product": product,
-        "expected_generation": expected_generation,
-        "generation": generation,
-        "release": {
-            "version": active.version,
-            "rollout_generation": state.rollout_generation,
-            "artifact_sha256": active.artifact_sha256,
-            "manifest_sha256": active.manifest_sha256,
-            "proxy_pid": state.proxy_pid,
-            "active_binary": active_binary["path"],
-            "readiness_url": readiness_url,
-        },
-        "legacy": {
-            "label": legacy_label,
-            "loaded": false,
-            "registry_referrers": [],
-        },
-        "retirement": {
-            "status": "pending",
-            "order": ["plist", "binary"],
-            "plist_receipt": plist_identity,
-            "binary_receipt": binary_identity,
-        },
+    let mut report = if let Some(receipt) = prior_receipt.as_ref() {
+        if receipt["expected_generation"] != expected_generation {
+            return Err(CmdError::click(format!(
+                "prepared handoff receipt {} expects registry generation {:?}, not {:?}",
+                receipt_path.display(),
+                receipt["expected_generation"],
+                expected_generation
+            )));
+        }
+        receipt.clone()
+    } else {
+        json!({
+            "schema": "stado.service-release-control-handoff.v1",
+            "status": "prepared",
+            "service": service_name,
+            "host": host,
+            "profile": profile_name,
+            "controller": "release-control",
+            "product": product,
+            "expected_generation": expected_generation,
+            "generation": Value::Null,
+            "receipt_path": receipt_path,
+            "intended_post_handoff": {
+                "controller": "release-control",
+                "product": product,
+                "legacy_registry_identities_removed": true,
+            },
+            "release": {
+                "version": active.version,
+                "rollout_generation": state.rollout_generation,
+                "artifact_sha256": active.artifact_sha256,
+                "manifest_sha256": active.manifest_sha256,
+                "proxy_pid": state.proxy_pid,
+                "active_binary": active_binary["path"],
+                "readiness_url": readiness_url,
+            },
+            "reconciler_fence": {
+                "status": "not_captured",
+            },
+            "legacy": {
+                "label": legacy_label,
+                "loaded": false,
+                "registry_referrers": [],
+            },
+            "retirement": {
+                "status": "pending",
+                "order": ["plist", "binary"],
+                "plist_receipt": plist_identity,
+                "binary_receipt": binary_identity,
+            },
+        })
+    };
+    persist_handoff_receipt(&receipt_path, &report, false)?;
+    let generation = registry::push_document_if(&document, &expected_generation).await?;
+    report["status"] = json!("registry_committed");
+    report["generation"] = json!(generation);
+    persist_handoff_receipt(&receipt_path, &report, true)?;
+
+    let fence_capture = capture_reconciler_fence(&document).await;
+    report["reconciler_fence"] = json!({
+        "status": if fence_capture.is_ok() { "pending" } else { "capture_failed" },
+        "baseline_report_id": fence_capture
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(|fence| fence.baseline_report.as_deref()),
+        "timeout_seconds": fence_capture
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|fence| fence.timeout_seconds),
+        "error": fence_capture.as_ref().err().map(ToString::to_string),
     });
+    persist_handoff_receipt(&receipt_path, &report, true)?;
+    let fence = fence_capture?;
+    wait_for_reconciler_fence(fence.as_ref()).await?;
+    let label = service_label_print::print_label(
+        &target,
+        legacy_label,
+        service::BootoutScope::System,
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    if label.loaded() {
+        return Err(CmdError::click(format!(
+            "{host}: legacy launchd label {legacy_label:?} was restarted after registry handoff"
+        )));
+    }
+    require_no_executable_caller(&target, &legacy.program, &runner).await?;
+
+    report["status"] = json!("handed_off");
+    report["retirement"]["status"] = json!("eligible");
+    report["reconciler_fence"]["status"] = json!("satisfied");
+    persist_handoff_receipt(&receipt_path, &report, true)?;
     if json_output {
         print_json(&report)
     } else {
