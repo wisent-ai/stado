@@ -19,6 +19,7 @@ pub mod build_caches;
 pub mod chromium_clones;
 pub mod hf;
 pub mod queue_workdirs;
+pub mod release_store;
 pub mod safefs;
 pub mod weles;
 
@@ -358,6 +359,7 @@ pub struct CleanupReport {
     pub clones: CleanerReport,
     pub workdirs: CleanerReport,
     pub backup_twins: CleanerReport,
+    pub release_store: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_job_count: i64,
@@ -438,6 +440,7 @@ impl CleanupReport {
             clones: CleanerReport::default(),
             workdirs: CleanerReport::default(),
             backup_twins: CleanerReport::default(),
+            release_store: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_job_count: active_job_count.max(0),
@@ -488,6 +491,14 @@ impl CleanupReport {
             .or_insert(0) += count;
     }
 
+    pub fn skip_release_store(&mut self, reason: &str, count: i64) {
+        *self
+            .release_store
+            .skipped
+            .entry(reason.to_string())
+            .or_insert(0) += count;
+    }
+
     /// The report as JSON (key order normalized at serialization sites
     /// with [`canonical_json`], matching Python `json.dumps(sort_keys=True)`).
     pub fn to_value(&self) -> Value {
@@ -512,6 +523,7 @@ impl CleanupReport {
                 chromium_clones::CLEANER: cleaner(&self.clones),
                 queue_workdirs::CLEANER: cleaner(&self.workdirs),
                 backup_twins::CLEANER: cleaner(&self.backup_twins),
+                release_store::CLEANER: cleaner(&self.release_store),
             })
         } else {
             Value::Null
@@ -1467,6 +1479,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             backup_twins::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
             ),
+            release_store::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(release_store::CLEANER)),
+            ),
         }),
     };
     // The declared cleaners the pass never reached, kept in the public form
@@ -2282,12 +2297,37 @@ fn run_with_lock(
         deadline,
         &mut report,
     );
+    let remaining_after_twins = (policy.max_scan_items
+        - report.hf.scanned_items
+        - report.weles.scanned_items
+        - report.builds.scanned_items
+        - report.clones.scanned_items
+        - report.workdirs.scanned_items
+        - report.backup_twins.scanned_items)
+        .max(0);
+    if remaining_after_twins == 0 && policy.cleaners.contains_key(release_store::CLEANER) {
+        report.caps.scan = true;
+    }
+    // Immutable release versions nothing on this host still names, scanned
+    // last: it deletes whole version directories, so it takes the smallest
+    // share and only after every cleaner that reclaims scratch has had its
+    // turn — a release is the one class here that costs a rebuild to get
+    // back.
+    release_store::scan_release_store(
+        home,
+        &policy,
+        crate::config::wc_stado_storage_namespace(),
+        remaining_after_twins,
+        deadline,
+        &mut report,
+    );
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
         + report.clones.scanned_items
         + report.workdirs.scanned_items
-        + report.backup_twins.scanned_items;
+        + report.backup_twins.scanned_items
+        + report.release_store.scanned_items;
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
@@ -2314,6 +2354,7 @@ fn run_with_lock(
         (chromium_clones::CLEANER, &report.clones),
         (queue_workdirs::CLEANER, &report.workdirs),
         (backup_twins::CLEANER, &report.backup_twins),
+        (release_store::CLEANER, &report.release_store),
     ]
     .into_iter()
     .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
