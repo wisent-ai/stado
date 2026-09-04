@@ -829,6 +829,7 @@ async fn enqueue(
     m: &ReleasePipelineManifest,
     version: &str,
     platform: &str,
+    retry_after: Option<&str>,
     commit: &str,
     source_sha: &str,
     source_uri: &str,
@@ -917,10 +918,18 @@ async fn enqueue(
     let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
     queue_immutable(&request_path, &bytes).await?;
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
+    // Replaying one submission must return its existing job, but a terminal
+    // failure needs a new queue run. Binding that run to the failed job id
+    // makes each retry distinct while an interrupted retry stays idempotent.
+    let mut submission_token = format!("{id}\0{platform}");
+    if let Some(job_id) = retry_after {
+        submission_token.push_str("\0retry-after\0");
+        submission_token.push_str(job_id);
+    }
     let options = SubmitOptions {
         pinned_host: consumer,
         priority: crate::constants::RELEASE_JOB_PRIORITY,
-        run_id: stable_run_id("release-platform", &format!("{id}\0{platform}")),
+        run_id: stable_run_id("release-platform", &submission_token),
         output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
         input_artifacts: resolved.clone(),
         resolved_input_artifacts: resolved,
@@ -1358,13 +1367,17 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 save(&mut run).await?;
             }
         }
-        if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
+        let retry_after = run.platforms.get(p).and_then(|platform| {
+            (platform.state == PlatformRunState::Failed).then(|| platform.job_id.clone())
+        });
+        if !run.platforms.contains_key(p) || retry_after.is_some() {
             let r = match enqueue(
                 &store,
                 &id,
                 &m,
                 &args.version,
                 p,
+                retry_after.as_deref(),
                 &commit,
                 &source_sha,
                 &source_input_uri,
