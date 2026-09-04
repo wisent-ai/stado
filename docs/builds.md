@@ -15,6 +15,8 @@ the product has a separate release-control rollout policy.
 The Stado delivery job starts its worker from the digest-pinned candidate
 archive and that worker uses itself for `install-local`; a broken older
 installed worker therefore cannot prevent the release that repairs it.
+A non-Stado archive contains that product rather than another Stado binary, so
+its delivery runs the installed Stado worker against the digest-pinned archive.
 
 Repeating `stado release submit` resumes the same release run. An initial
 platform submission keeps its original stable job identity and output URI. If

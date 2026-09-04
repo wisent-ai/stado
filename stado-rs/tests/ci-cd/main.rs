@@ -522,7 +522,7 @@ fn wait_for_recovery_delivery(
                 let Ok(job) = serde_json::from_slice::<Value>(&bytes) else {
                     continue;
                 };
-                if job["command"] == stado::constants::RELEASE_DELIVERY_JOB_COMMAND
+                if job["command"] == stado::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
                     && job["pinned_host"] == consumer
                 {
                     return job;
@@ -842,7 +842,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     assert_eq!(delivery["priority"], stado::constants::RELEASE_JOB_PRIORITY);
     assert_eq!(
         delivery["command"],
-        stado::constants::RELEASE_DELIVERY_JOB_COMMAND
+        stado::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
     );
     assert!(
         delivery["output_uri"]
@@ -991,9 +991,12 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let _ = agent.wait();
     assert!(
         result.status.success(),
-        "retried release submit failed:\nstdout:\n{}\nstderr:\n{}",
+        "retried release submit failed:\nstdout:\n{}\nstderr:\n{}\nagent stdout:\n{}\nagent stderr:\n{}\nstore:{}",
         String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
+        String::from_utf8_lossy(&result.stderr),
+        fs::read_to_string(home.path().join("agent.out")).unwrap_or_default(),
+        fs::read_to_string(home.path().join("agent.err")).unwrap_or_default(),
+        store_snapshot(&storage)
     );
     let release: Value = serde_json::from_slice(&result.stdout).unwrap();
     let retry_job_id = release["platforms"][platform]["job_id"].as_str().unwrap();

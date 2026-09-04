@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.22
+
+- **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
+- **Migration:** no configuration or persisted-state migration is required.
+- **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+
 ## 0.15.21
 
 - **Run retention:** the coordinator can retain an exact terminal job named by a validated durable run even when that historical job predates submission-linkage fields. Missing linkage is accepted only when all three linkage fields are absent and the remaining immutable job projection matches the manifest; partial or conflicting linkage still fails closed.
