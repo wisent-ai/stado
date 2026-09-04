@@ -781,11 +781,11 @@ async fn stable_bind_answer(
     }
 
     let proxy_path = proxy_state_path(target, product);
-    let proxy: ProxyState = serde_json::from_slice(
-        &std::fs::read(&proxy_path)
-            .map_err(|error| format!("cannot read proxy target {}: {error}", proxy_path.display()))?,
-    )
-    .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
+    let proxy: ProxyState =
+        serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
+            format!("cannot read proxy target {}: {error}", proxy_path.display())
+        })?)
+        .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
     let expected_upstream = format!("127.0.0.1:{}", active.port);
     if proxy.generation != generation || proxy.upstream != expected_upstream {
         return Err(format!(
