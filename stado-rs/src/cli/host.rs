@@ -389,28 +389,34 @@ pub async fn recover(
             .await
             .map_err(|exc| CmdError::click(exc.to_string()))?
     };
-    let resolved = registry
-        .lookup(target)
-        .cloned()
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
-    // Repair the authority before any release catalog read. This path uses the
-    // already loaded registry identity and the host's physical local store, so
-    // the object API does not need to be available in order to recover itself.
-    let object_api = recover_object_api_on_target(&resolved, &runner).await?;
-    let mut report = match release {
+    let (report, object_api) = match release {
         Some(version) => {
-            crate::deploy::host_recovery_release::recover(&registry, target, version, &runner).await
+            let resolved = registry
+                .lookup(target)
+                .cloned()
+                .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+            // A signed recovery release is fetched through the object API.
+            // Repair that authority first without depending on the authority
+            // itself. An ordinary host recovery reads no release object and
+            // must not mutate an unrelated object-API service.
+            let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+            (
+                crate::deploy::host_recovery_release::recover(&registry, target, version, &runner)
+                    .await,
+                Some(object_api),
+            )
         }
-        None => {
+        None => (
             crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
-                .await
-        }
-    }
-    .map_err(|exc| CmdError::click(exc.to_string()))?;
-    if let Some(object) = report.as_object_mut() {
+                .await,
+            None,
+        ),
+    };
+    let mut report = report.map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let (Some(object), Some(detail)) = (report.as_object_mut(), object_api) {
         object.insert(
             "object_api".to_string(),
-            json!({"status": "healthy", "detail": object_api}),
+            json!({"status": "healthy", "detail": detail}),
         );
     }
     println!(
