@@ -1,12 +1,18 @@
 # Changelog
 
+## 0.15.24
+
+- **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
+- **Migration:** no configuration or persisted-state migration is required.
+- **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+
 ## 0.15.23
 
 - **Run retention:** validation of an already-retained terminal outcome now uses the same legacy-linkage rule as the reaper that records it. A terminal job may omit all three submission-linkage fields only when its job id and remaining immutable projection exactly match the durable manifest entry; live and partially linked jobs still require exact submission identity.
-- **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
-- **Migration:** no configuration or persisted-state rewrite is required. The coordinator can validate and complete the normal reaper repair for affected v3 run manifests.
-- **Rollback boundary:** rolling back lets the reaper write a migrated outcome but makes the next manifest validation reject that outcome as different submission content, and it makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
-- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the run-retention journey drives the built coordinator through the migrated terminal state, and the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+- **Migration:** no persisted-state rewrite is required. The coordinator can validate and complete the normal reaper repair for affected v3 run manifests.
+- **Rollback boundary:** rolling back lets the reaper write the migrated outcome but makes the next manifest validation reject that same outcome as different submission content.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the run-retention journey drives the built coordinator through the migrated terminal state.
 
 ## 0.15.22
 
