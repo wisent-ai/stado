@@ -75,13 +75,18 @@ run state.
 
 ## Release publication authority
 
-Release signing and authenticated release-object publication resolve one
-declared credential authority: `release_api.skarbiec.url`. They use separate
-least-privilege identities and owner-only token files on that same Skarbiec:
-`stado-release-coordinator` reads only the signing key, while
-`stado-release-api-verifier` reads the product publisher bearer named by
-`release_api.publishers`. `STADO_API_TOKEN` remains a generic object API
-credential and is never substituted for a product's release publisher.
+The publisher command reads the bearer named by `release_api.publishers` through
+its selected credential store and configured `WC_SKARBIEC_CONSUMER` grant.
+When owner credentials are available, Stado adds only that item's `token` read
+to the same grant before reading it; an already authorized read does not depend
+on that repair being available.
+
+The release server uses `release_api.skarbiec.url` and its separate
+`stado-release-api-verifier` grant to verify the publisher bearer. Release
+signing uses the same declared authority with `stado-release-coordinator`,
+which reads only the signing key. The publisher command never authenticates
+its credential read as the server verifier, and `STADO_API_TOKEN` remains a
+generic object API credential, never a product release bearer.
 
 The public release route accepts exactly one `uri` query field. Exact
 `GET /api/release/object?uri=stado://releases/...` reads and byte ranges are
