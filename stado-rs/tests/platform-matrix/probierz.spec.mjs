@@ -50,8 +50,7 @@ const verifyDarwin = async () => {
 const linuxCommand = [
   'set -eu',
   'export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-  'export CARGO_TARGET_DIR="$HOME/.stado/work/platform-matrix-cargo-target"',
-  'mkdir -p "$CARGO_TARGET_DIR"',
+  'export CARGO_TARGET_DIR="$PWD/.wisent-output/platform-matrix-cargo-target"',
   'curl -fsSLo .probierz-skarbiec.tar.gz https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-linux-amd64.tar.gz',
   'printf "4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68  .probierz-skarbiec.tar.gz\\n" | sha256sum -c -',
   'mkdir .probierz-skarbiec-bin',

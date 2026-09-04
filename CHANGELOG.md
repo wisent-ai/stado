@@ -4,6 +4,7 @@
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
 - **Host disk diagnostics:** `stado host disk` now attributes Linux pressure inside the managed home, `/home`, `/mnt`, `/var`, and `/opt` instead of returning an empty inventory after a depth-two root report only named its parent directories.
+- **Build cache recovery:** platform-matrix Cargo output now belongs to its queue workdir and follows terminal-job cleanup. `host reclaim` can remove the former exact managed cache only after checking its Cargo identity, age, symlink boundaries, and absence of live users; `host build-caches` reports missing tags and scan failures instead of hiding them as an empty result.
 - **Migration:** no configuration or persisted-state migration is required.
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
