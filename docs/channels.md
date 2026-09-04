@@ -116,7 +116,7 @@ The two units were not a mistake anyone made. The Weles release deployer creates
 
 Stado is the fleet control plane, so the registry now describes what actually runs: `com.wisent.weles-worker` is adopted — with `--host-heuristic always-on` so the declarative placement carries, and its `weles` onboarding metadata re-attached field for field — and `com.wisent.always-on.weles` is retired. The next `auto-deploy.sh` run therefore re-creates a unit Stado already declares instead of a rival. `service serving com.wisent.weles-worker --host charless-mac-mini --port 58101` now answers `serving`, `served_by_unit`, owner declared `true`.
 
-Reversing it is two declarations and a restart, because the retired unit's plist is still on disk — `retire` removes a service from management and never deletes files:
+Reversing it is two declarations and a checked restart, because `retire` deliberately keeps the unit file while withdrawing its registry entry:
 
 ```console
 stado service adopt com.wisent.always-on.weles --host-heuristic always-on
@@ -124,7 +124,7 @@ stado service onboarding com.wisent.always-on.weles --host charless-mac-mini --p
 stado service restart com.wisent.always-on.weles --host charless-mac-mini
 ```
 
-One gap is left named rather than papered over, and it is in Stado, not in Weles. `retire` boots out and disables only the two per-login spellings (`RETIRE_BODY`), so it cannot `launchctl disable system/<label>`. Retiring a system LaunchDaemon therefore needs `service stop` first — which does have the privileged path, through the host account credential the registry's `account_ref` names — and even then the label is only booted out, not disabled. `/Library/LaunchDaemons/com.wisent.always-on.weles.plist` remains, so launchd will load it again after a reboot and the rival returns. The durable fix is a privileged branch in `retire` mirroring `stop_service_with_password`: `sudo launchctl bootout system/<label>` followed by `sudo launchctl disable system/<label>`, gated on the same `account_ref` credential and refusing with the exact privileged command when no password is readable.
+`retire` now handles the unit's real domain instead of assuming a per-login job. A system LaunchDaemon is stopped through the host account credential, then both `system/<label>` and its recovery job are disabled with privileged `launchctl`; a Linux user unit is stopped, disabled, and runtime-masked so an older coordinator cannot revive it from a stale read. `service remove` composes the same fenced retirement with deletion of the exact managed unit file, while `retire` keeps that file for an explicit rollback.
 
 ### A live process still executing a binary that was replaced underneath it
 

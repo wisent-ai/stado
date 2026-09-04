@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.14
+
+- **Dynamic capacity:** hosts no longer declare a fixed slot count. Admission now uses the CPU, memory, disk, accelerator, and active-workload measurements the host publishes, and the CLI, desktop fleet view, documentation, and behavior tests use the same model.
+- **Service identity:** systemd unit names remain canonical instead of accumulating `.service` suffixes. `service label-print` now reads Linux units through the host channel, so migrations can prove the canonical unit is healthy before retiring duplicate legacy names.
+- **Safe retirement:** `service retire` and `service remove` withdraw the declaration under the autonomy lease, wait for the active reconciler to observe that fence, disable and runtime-mask Linux units, verify they stay stopped, and delete their managed unit files without a coordinator reviving them mid-transaction.
+- **Graphical services:** a graphical service remains a per-user LaunchAgent on an always-on macOS host; always-on placement no longer moves GUI-dependent programs into a LaunchDaemon session that has no graphical account.
+- **Migration:** no persisted capacity conversion is required; obsolete slot fields are ignored rather than treated as host limits. Duplicate managed unit names can be adopted and removed one at a time after their canonical replacement is observed running.
+- **Rollback boundary:** rolling back restores fixed machine slot limits, reopens the retirement race with the autonomy reconciler, and can recreate duplicate systemd names or place graphical services in the system launchd domain.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; release CI supplies the existing qualification evidence before publication.
+
 ## 0.15.13
 
 - **Release identity:** `release active-binary` now binds the exact serving executable to the process group Stado recorded at spawn. This accepts the payload child supervised by macOS `sudo` without accepting an unrelated process that merely shares its version or port.
