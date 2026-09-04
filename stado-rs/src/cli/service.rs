@@ -1145,6 +1145,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 reload_unit,
                 require_release_version,
                 supersede_unit: supersede_unit.as_deref(),
+                supersede_same_label_user: false,
                 json,
                 emit: true,
             })
@@ -2572,6 +2573,7 @@ struct ServiceReleaseOptions<'a> {
     reload_unit: bool,
     require_release_version: bool,
     supersede_unit: Option<&'a str>,
+    supersede_same_label_user: bool,
     json: bool,
     emit: bool,
 }
@@ -2594,6 +2596,7 @@ pub(crate) async fn release_pipeline_product(
         reload_unit: false,
         require_release_version: true,
         supersede_unit: None,
+        supersede_same_label_user: true,
         json: false,
         emit: false,
     })
@@ -3053,6 +3056,12 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             options.host, options.name
         )));
     };
+    let automatic_supersede_unit = (options.supersede_same_label_user
+        && UnitDomain::from_path(&declared.path) == UnitDomain::System)
+        .then(|| declared.unit_id().to_string());
+    let requested_supersede_unit = options
+        .supersede_unit
+        .or(automatic_supersede_unit.as_deref());
     if options.require_release_version && options.readiness_url.is_none() {
         return Err(CmdError::usage(
             "--require-release-version requires --readiness-url",
@@ -3065,7 +3074,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         ));
     }
     let runner = production_runner();
-    if let Some(label) = options.supersede_unit {
+    let supersede_unit = if let Some(label) = requested_supersede_unit {
         // One launchd label may exist in both the system and user domains.
         // A managed system daemon superseding its same-named legacy
         // LaunchAgent is safe because every operation below is explicitly
@@ -3081,10 +3090,20 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
                  LaunchDaemon replacing its same-named legacy user LaunchAgent",
             ));
         }
-        service::check_user_launchagent(&target, label, &runner)
-            .await
-            .map_err(click)?;
-    }
+        let present = if options.supersede_unit.is_some() {
+            service::check_user_launchagent(&target, label, &runner)
+                .await
+                .map_err(click)?;
+            true
+        } else {
+            service::restorable_user_launchagent_exists(&target, label, &runner)
+                .await
+                .map_err(click)?
+        };
+        present.then_some(label)
+    } else {
+        None
+    };
     let shown = service::show_service(&target, declared, &runner)
         .await
         .map_err(click)?;
@@ -3114,7 +3133,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     )?;
     let previous_directory = current_service_version(&target, directory, &runner).await?;
 
-    let superseded_was_running = if let Some(label) = options.supersede_unit {
+    let superseded_was_running = if let Some(label) = supersede_unit {
         // `--supersede-unit` names a user LaunchAgent by definition, and the
         // unscoped call would have taken out a system job of the same label
         // first, which is the opposite of superseding.
@@ -3145,7 +3164,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     .await
     {
         if superseded_was_running {
-            if let Some(label) = options.supersede_unit {
+            if let Some(label) = supersede_unit {
                 service::restore_user_launchagent(&target, label, &runner)
                     .await
                     .map_err(click)?;
@@ -3195,7 +3214,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         )
         .await;
         let legacy_restore = if superseded_was_running {
-            if let Some(label) = options.supersede_unit {
+            if let Some(label) = supersede_unit {
                 service::restore_user_launchagent(&target, label, &runner)
                     .await
                     .map_err(click)
@@ -3234,7 +3253,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             ))),
         };
     }
-    if let Some(label) = options.supersede_unit {
+    if let Some(label) = supersede_unit {
         service::delete_user_launchagent(&target, label, &runner)
             .await
             .map_err(click)?;
@@ -3248,7 +3267,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         Some(options.version),
         Some(&bundle.artifact.artifact_sha256),
         bundle.previous_version.as_deref(),
-        if options.supersede_unit.is_some() {
+        if supersede_unit.is_some() {
             "service readiness passed; superseded user LaunchAgent removed"
         } else if options.readiness_url.is_some() {
             "service restart and readiness passed"
@@ -3269,7 +3288,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         "artifact_directory": installed_directory,
         "status": "released",
         "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
-        "superseded_unit": options.supersede_unit,
+        "superseded_unit": supersede_unit,
     });
     if options.emit {
         if options.json {

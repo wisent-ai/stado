@@ -7307,6 +7307,15 @@ if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   report refused "not a launchd host"
   exit 0
 fi
+if [ "$action" = inspect ] && [ ! -e "$path" ] && [ ! -L "$path" ]; then
+  if /bin/launchctl print "$gui/$label" >/dev/null 2>&1 ||
+     /bin/launchctl print "$user/$label" >/dev/null 2>&1; then
+    report refused "$label is loaded without a restorable LaunchAgent plist"
+  else
+    report absent "$path"
+  fi
+  exit 0
+fi
 if [ "$action" != delete ]; then
   if [ ! -f "$path" ] || [ -L "$path" ]; then
     report refused "$path is not a regular non-symlink LaunchAgent plist"
@@ -7319,6 +7328,9 @@ if [ "$action" != delete ]; then
 fi
 case "$action" in
   check)
+    report ready "$path"
+    ;;
+  inspect)
     report ready "$path"
     ;;
   restore)
@@ -7372,7 +7384,7 @@ async fn user_launchagent_action(
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     validate_unit_id(label)?;
-    if !matches!(action, "check" | "restore" | "delete") {
+    if !matches!(action, "check" | "inspect" | "restore" | "delete") {
         return Err(DeployError(format!(
             "unsupported internal LaunchAgent action {action:?}"
         )));
@@ -7417,6 +7429,22 @@ pub async fn check_user_launchagent(
         Err(DeployError(format!(
             "cannot supersede user LaunchAgent {label}: {detail}"
         )))
+    }
+}
+
+/// Whether a same-named user LaunchAgent exists and can be restored on rollback.
+pub async fn restorable_user_launchagent_exists(
+    target: &ComputeTarget,
+    label: &str,
+    runner: &Runner,
+) -> Result<bool, DeployError> {
+    let (state, detail) = user_launchagent_action(target, label, "inspect", runner).await?;
+    match state.as_str() {
+        "ready" => Ok(true),
+        "absent" => Ok(false),
+        _ => Err(DeployError(format!(
+            "cannot supersede user LaunchAgent {label}: {detail}"
+        ))),
     }
 }
 

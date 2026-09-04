@@ -785,10 +785,13 @@ jobs:
 
       - name: Deliver verified native release
         run: |
-          STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL" \
-          STADO_RELEASE_PLATFORM="$STADO_NATIVE_RELEASE_PLATFORM" \
-          STADO_RELEASE_DIR="$STADO_NATIVE_RELEASE_DIR" \
-            bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          "$stado_bin" host declare-version "$COORD_TARGET" \
+            --binary stado \
+            --version "$STADO_NATIVE_RELEASE_VERSION" \
+            --json
+          "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
 
       - name: Reconcile public release ingress
         run: |
