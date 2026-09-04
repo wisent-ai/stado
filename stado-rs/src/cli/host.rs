@@ -9026,8 +9026,8 @@ pub async fn weles_browser_runtime(
     let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    // One set decides both what is judged and what a repair installs, so the
-    // verdict can never fail on something --repair would not have fixed.
+    // This set decides required_state and what a repair installs. Browser-engine
+    // readiness is measured separately and its refusal names an explicit engine.
     let required: Vec<String> = if components.is_empty() {
         vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
     } else {
@@ -9055,8 +9055,10 @@ pub async fn weles_browser_runtime(
         object.insert("repaired".to_string(), serde_json::json!(installed));
         println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
     } else {
-        println!("host:     {}", resolved.name);
-        println!("runtime:  {}", report.verdict());
+        println!("host:           {}", resolved.name);
+        println!("runtime:        {}", report.verdict());
+        println!("required state: {}", report.required_state());
+        println!("browser engine: {}", report.browser_engine_state());
         for line in &installed {
             println!("repair:   {line}");
         }
@@ -11081,6 +11083,7 @@ pub async fn config_set(
     refuse_unminted_publisher(target, key, value).await?;
     remote_config(target, Some((key, value))).await?;
     warn_unbacked_object_namespace(target, key, value);
+    warn_unbacked_verifier_item(target, key, value);
     if let Some(service) = reload_service {
         super::service::reconcile_after_config_change(
             service,
@@ -11294,6 +11297,58 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
          item set from THIS machine's configuration, so declare the namespace here as well and \
          then run it: stado config set {key} '<the same JSON>' && stado host \
          reconcile-object-verifier {target}"
+    );
+}
+
+/// The same warning for the other three verifier maps.
+///
+/// `object_api.namespaces` was the only map that said anything at declaration
+/// time, and the other three fail exactly the same way: a publisher, client or
+/// deployer whose Skarbiec item is outside the host's verifier grant closes
+/// that verifier, and `stado doctor` then answers `release verifier grant item
+/// set mismatch (missing=[...])` — which happened four times on 2026-09-04
+/// alone, each time hours after the declaration, each time blocking a release
+/// train, and each time repaired by the one command this note names.
+///
+/// Only the remedy differs per map, so only the remedy is looked up here.
+fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {
+    let maps: [(&str, &str); 3] = [
+        (
+            "release_api.publishers.",
+            "stado host reconcile-release-verifier {target} --product {name}",
+        ),
+        (
+            "machine_api.clients.",
+            "stado host reconcile-object-verifier {target}",
+        ),
+        (
+            "service_api.deployers.",
+            "stado host reconcile-service-verifier {target}",
+        ),
+    ];
+    let Some((name, remedy)) = maps.iter().find_map(|(prefix, remedy)| {
+        key.strip_prefix(prefix)
+            .filter(|name| !name.is_empty() && !name.contains('.'))
+            .map(|name| (name, *remedy))
+    }) else {
+        return;
+    };
+    let Some(item) = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|declared| {
+            declared
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    else {
+        return;
+    };
+    let remedy = remedy.replace("{target}", target).replace("{name}", name);
+    eprintln!(
+        "note: {target}'s verifier grant must cover Skarbiec item {item:?} for {key}. Until it \
+         does, that whole verifier fails closed — `stado doctor` reports a grant item set \
+         mismatch and every gateway read it authorizes answers 403 — so run: {remedy}"
     );
 }
 

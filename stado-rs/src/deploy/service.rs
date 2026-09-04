@@ -233,6 +233,8 @@ pub struct ManagedService {
     pub program: String,
     /// The argument vector [`ManagedService::program`] is started with.
     pub args: Vec<String>,
+    /// Non-secret environment rendered into the unit and preserved by repairs.
+    pub env: BTreeMap<String, String>,
     /// [`SOURCE_REGISTRY`] or [`SOURCE_RECOVERY`].
     pub source: String,
     /// When the unit entered management; empty for a recovery-sourced one,
@@ -290,6 +292,9 @@ impl ManagedService {
                 Value::Array(self.args.iter().cloned().map(Value::String).collect()),
             );
         }
+        if !self.env.is_empty() {
+            record["env"] = json!(self.env);
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
                 serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
@@ -313,6 +318,7 @@ impl ManagedService {
             "managed_since": self.managed_since,
             "program": self.program,
             "args": self.args,
+            "env": self.env,
         });
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
@@ -372,6 +378,17 @@ impl ManagedService {
                         .collect()
                 })
                 .unwrap_or_default(),
+            env: record
+                .get("env")
+                .and_then(Value::as_object)
+                .map(|env| {
+                    env.iter()
+                        .filter_map(|(key, value)| {
+                            value.as_str().map(|value| (key.clone(), value.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             onboarding: record
                 .get("onboarding")
                 .and_then(|value| serde_json::from_value(value.clone()).ok()),
@@ -400,6 +417,7 @@ pub fn launchd_service(
         managed_since: since.to_string(),
         program: String::new(),
         args: Vec::new(),
+        env: BTreeMap::new(),
         onboarding: None,
     }
 }
@@ -424,6 +442,7 @@ pub fn systemd_service(
         managed_since: since.to_string(),
         program: String::new(),
         args: Vec::new(),
+        env: BTreeMap::new(),
         onboarding: None,
     }
 }
@@ -815,6 +834,8 @@ pub struct LocalUnitFile {
     /// finding is about which variables reach the unit, and a diagnostic has
     /// no business printing the values of the ones that do.
     pub carries: Vec<String>,
+    /// Values retained only for comparison; diagnostic sentences print names.
+    pub env: BTreeMap<String, String>,
     /// The first [`LocalUnitFile::arguments`] entry: the file the unit
     /// declares it starts. Empty for a systemd unit, whose `ExecStart` this
     /// reader does not parse.
@@ -858,18 +879,18 @@ pub fn local_unit_file(path: &str, kind: &str) -> Option<LocalUnitFile> {
                     .map(|program| vec![program.to_string()])
             })
             .unwrap_or_default();
+        let env: BTreeMap<String, String> = plist_env(&document).into_iter().collect();
         Some(LocalUnitFile {
-            carries: plist_env(&document)
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect(),
+            carries: env.keys().cloned().collect(),
+            env,
             program: arguments.first().cloned().unwrap_or_default(),
             arguments,
         })
     } else {
         let parsed = parse_systemd_unit(&text);
         Some(LocalUnitFile {
-            carries: parsed.env.into_iter().map(|(name, _)| name).collect(),
+            carries: parsed.env.iter().map(|(name, _)| name.clone()).collect(),
+            env: parsed.env.into_iter().collect(),
             program: String::new(),
             arguments: Vec::new(),
         })
@@ -1245,7 +1266,16 @@ pub fn unreachable_product_environments(
             path: service.path.clone(),
             gap,
         };
-        if !named_anywhere {
+        let pinned_locally = readable_here
+            && local_unit_file(&service.path, &service.kind).is_some_and(|unit| {
+                let home = crate::deploy::service_catalog::home_for(target);
+                policy.environment.iter().all(|(name, value)| {
+                    let expected = value.replace("{home}", &home);
+                    service.env.get(name) == Some(&expected)
+                        && unit.env.get(name) == Some(&expected)
+                })
+            });
+        if !named_anywhere && !pinned_locally {
             let mut named_hosts: Vec<String> = policy.targets.keys().cloned().collect();
             named_hosts.sort();
             rows.push(row(EnvironmentGap::HostNamedByNoTarget { named_hosts }));
@@ -7015,94 +7045,200 @@ pub fn quote_command_match(value: &str) -> Result<String, DeployError> {
     Ok(trimmed.to_string())
 }
 
-/// Boot one loaded launchd label out of the system domain or the calling
-/// account's launchd domain.
+/// Boot one exact init-system unit out of the system or calling-account scope.
 ///
 /// The last gap in the world-to-declaration direction. `service list
-/// --undeclared` can now name a label the registry never declared, and
-/// `host remove-file` can now delete its unit file — but nothing could take the
-/// JOB out of launchd, and `service stop` refuses a label with no declaration
-/// to resolve. So `com.wisent.compute.service.stado-agent-mini` sat loaded with
-/// its file already deleted, running nothing, and `ensure` refused to install
-/// over it: "is loaded and runs [], not [...]; retire it first" — with nothing
-/// able to retire it.
+/// --undeclared` can name a unit the registry never declared, and
+/// `host remove-file` can delete its unit file — but `service stop` refuses a
+/// unit with no declaration to resolve. A loaded unit whose file is already
+/// gone otherwise has no owner left that can stop it.
 ///
-/// System jobs use the same `sudo -n` grant `ENSURE_BODY` uses. User jobs are
-/// removed from their explicit `gui/<uid>` or `user/<uid>` domains: an
-/// unqualified `launchctl remove` can see the label through `launchctl list`
-/// yet leave a KeepAlive LaunchAgent loaded. Each domain is proven absent
-/// before this reports success. A label launchd does not hold is reported
-/// `absent`, not an error: booting out something already gone is the state this
-/// command exists to reach.
+/// On launchd, system jobs use the same `sudo -n` grant `ENSURE_BODY` uses.
+/// User jobs are removed from both explicit `gui/<uid>` and `user/<uid>`
+/// domains, and each domain is proven absent before success. On systemd,
+/// system jobs use that same non-interactive privilege path and user jobs use
+/// the calling account's explicit runtime bus. The exact requested unit is
+/// disabled with `--now`; its identity, disabled state, and inactive state are
+/// then read back before success. Neither branch removes a unit file.
 ///
-/// `scope` exists because the system domain is tried first and returns: a label
-/// declared in `/Library/LaunchDaemons` AND as a user LaunchAgent has two jobs,
-/// and the unqualified command can only ever reach the system one. On
-/// charless-mac-mini those two jobs held DIFFERENT programs — the system job
-/// ran the declared `stado coordinator`, the user job a `stado dashboard` from
-/// 2026-08-26 whose forced cleanup pass had been starving the host's janitor
-/// for five days — so the only job an operator needed to end was the only one
-/// this command could not name.
+/// `scope` exists because the system scope is tried first and returns. The same
+/// name can identify distinct system and user jobs on either service manager,
+/// so `User` is how an operator retires an undeclared duplicate without
+/// touching its canonical system sibling. A unit the selected manager does not
+/// hold is `absent`, not an error: repeated cleanup is safe.
 const BOOTOUT_SCRIPT: &str = r#"set -u
 label=@LABEL@
 scope=@SCOPE@
 report() { printf 'STADO_BOOTOUT\t%s\t%s\n' "$1" "$2"; }
-if [ "$(/usr/bin/uname -s)" != Darwin ]; then
-  report refused "not a launchd host"
-  exit 0
-fi
-if [ "$scope" != user ] \
-  && /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
-  if ! /usr/bin/sudo -n /bin/launchctl bootout "system/$label" 2>/dev/null; then
-    report refused "sudo -n launchctl bootout system/$label was refused"
-    exit 0
-  fi
-  attempts=0
-  while /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; do
-    attempts=$((attempts + 1))
-    if [ "$attempts" -ge 150 ]; then
-      report refused "system/$label remained loaded after bootout"
-      exit 0
-    fi
-    /bin/sleep 0.1
-  done
-  report booted_out "system/$label"
-  exit 0
-fi
-uid=$(/usr/bin/id -u)
-removed=
-for domain in "gui/$uid" "user/$uid"; do
-  if [ "$scope" = system ]; then continue; fi
-  if /bin/launchctl print "$domain/$label" >/dev/null 2>&1; then
-    if ! /bin/launchctl bootout "$domain/$label" 2>/dev/null; then
-      report refused "launchctl bootout $domain/$label was refused"
+os=$(/usr/bin/uname -s)
+if [ "$os" = Darwin ]; then
+  if [ "$scope" != user ] \
+    && /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+    if ! /usr/bin/sudo -n /bin/launchctl bootout "system/$label" 2>/dev/null; then
+      report refused "sudo -n launchctl bootout system/$label was refused"
       exit 0
     fi
     attempts=0
-    while /bin/launchctl print "$domain/$label" >/dev/null 2>&1; do
+    while /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; do
       attempts=$((attempts + 1))
       if [ "$attempts" -ge 150 ]; then
-        report refused "$domain/$label remained loaded after bootout"
+        report refused "system/$label remained loaded after bootout"
         exit 0
       fi
       /bin/sleep 0.1
     done
-    removed="$removed $domain/$label"
+    report booted_out "system/$label"
+    exit 0
   fi
-done
-if [ -n "$removed" ]; then
-  report booted_out "${removed# }"
-else
-  report absent "launchd holds no $scope job for $label (system, gui/$uid and user/$uid all read empty)"
+  uid=$(/usr/bin/id -u)
+  removed=
+  for domain in "gui/$uid" "user/$uid"; do
+    if [ "$scope" = system ]; then continue; fi
+    if /bin/launchctl print "$domain/$label" >/dev/null 2>&1; then
+      if ! /bin/launchctl bootout "$domain/$label" 2>/dev/null; then
+        report refused "launchctl bootout $domain/$label was refused"
+        exit 0
+      fi
+      attempts=0
+      while /bin/launchctl print "$domain/$label" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -ge 150 ]; then
+          report refused "$domain/$label remained loaded after bootout"
+          exit 0
+        fi
+        /bin/sleep 0.1
+      done
+      removed="$removed $domain/$label"
+    fi
+  done
+  if [ -n "$removed" ]; then
+    report booted_out "${removed# }"
+  else
+    report absent "launchd holds no $scope job for $label (system, gui/$uid and user/$uid all read empty)"
+  fi
+  exit 0
 fi
+if [ "$os" != Linux ]; then
+  report refused "unsupported service manager on $os"
+  exit 0
+fi
+
+uid=$(/usr/bin/id -u)
+if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
+systemd_refuse() {
+  refusal=$(printf '%s' "$2" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-300)
+  if [ -n "$refusal" ]; then
+    report refused "$1: $refusal"
+  else
+    report refused "$1"
+  fi
+  exit 0
+}
+systemdctl() {
+  manager_scope=$1
+  shift
+  if [ "$manager_scope" = system ]; then
+    if [ "$uid" = 0 ]; then
+      /usr/bin/systemctl "$@"
+    else
+      "$sudo_bin" -n /usr/bin/systemctl "$@"
+    fi
+    return
+  fi
+  runtime="/run/user/$uid"
+  /usr/bin/env \
+    XDG_RUNTIME_DIR="$runtime" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+    /usr/bin/systemctl --user "$@"
+}
+systemd_probe() {
+  probe_scope=$1
+  probe_output=$(systemdctl "$probe_scope" show --property=Id --property=LoadState -- "$label" 2>&1)
+  probe_rc=$?
+  if [ "$probe_rc" -ne 0 ]; then
+    systemd_refuse "cannot inspect systemd $probe_scope/$label (status $probe_rc)" "$probe_output"
+  fi
+  probe_load=$(printf '%s\n' "$probe_output" | /usr/bin/awk -F= '$1 == "LoadState" { print $2; exit }')
+  probe_id=$(printf '%s\n' "$probe_output" | /usr/bin/awk -F= '$1 == "Id" { sub(/^[^=]*=/, ""); print; exit }')
+  case "$probe_load" in
+    not-found) return 1 ;;
+    loaded|masked) ;;
+    error|bad-setting)
+      systemd_refuse "systemd $probe_scope/$label has unusable load state $probe_load" "$probe_output"
+      ;;
+    *)
+      systemd_refuse "systemd $probe_scope/$label returned unexpected load state ${probe_load:-empty}" "$probe_output"
+      ;;
+  esac
+  if [ "$probe_id" != "$label" ]; then
+    systemd_refuse "systemd $probe_scope name $label resolves to ${probe_id:-no unit id}; refusing a non-exact unit" ""
+  fi
+  return 0
+}
+
+selected=
+if [ "$scope" != user ] && systemd_probe system; then selected=system; fi
+if [ -z "$selected" ] && [ "$scope" != system ] && systemd_probe user; then selected=user; fi
+if [ -z "$selected" ]; then
+  case "$scope" in
+    system|user) report absent "systemd $scope manager holds no exact unit named $label" ;;
+    *) report absent "systemd system and user managers hold no exact unit named $label" ;;
+  esac
+  exit 0
+fi
+
+disable_output=$(systemdctl "$selected" disable --now -- "$label" 2>&1)
+disable_rc=$?
+if [ "$disable_rc" -ne 0 ]; then
+  systemd_refuse "systemctl $selected disable --now $label failed (status $disable_rc)" "$disable_output"
+fi
+
+attempts=0
+while :; do
+  state_output=$(systemdctl "$selected" show --property=Id --property=LoadState --property=ActiveState -- "$label" 2>&1)
+  state_rc=$?
+  if [ "$state_rc" -ne 0 ]; then
+    systemd_refuse "cannot verify systemd $selected/$label after disable (status $state_rc)" "$state_output"
+  fi
+  load_state=$(printf '%s\n' "$state_output" | /usr/bin/awk -F= '$1 == "LoadState" { print $2; exit }')
+  active_state=$(printf '%s\n' "$state_output" | /usr/bin/awk -F= '$1 == "ActiveState" { print $2; exit }')
+  state_id=$(printf '%s\n' "$state_output" | /usr/bin/awk -F= '$1 == "Id" { sub(/^[^=]*=/, ""); print; exit }')
+  if [ "$load_state" = not-found ]; then
+    active_state=not-found
+    break
+  fi
+  if [ "$state_id" != "$label" ]; then
+    systemd_refuse "systemd $selected/$label changed identity to ${state_id:-no unit id} during verification" "$state_output"
+  fi
+  if [ "$active_state" = inactive ]; then break; fi
+  attempts=$((attempts + 1))
+  if [ "$attempts" -ge 150 ]; then
+    systemd_refuse "systemd $selected/$label remained ${active_state:-unknown} after disable --now" "$state_output"
+  fi
+  /bin/sleep 0.1
+done
+
+enabled_output=$(systemdctl "$selected" is-enabled -- "$label" 2>&1)
+enabled_rc=$?
+enabled_state=$(printf '%s\n' "$enabled_output" | /usr/bin/awk 'NF { state=$0 } END { print state }')
+case "$enabled_state" in
+  disabled|static|indirect|generated|transient|masked|masked-runtime|not-found) ;;
+  enabled|enabled-runtime|linked|linked-runtime|alias)
+    systemd_refuse "systemd $selected/$label remained enabled after disable --now" "$enabled_output"
+    ;;
+  *)
+    systemd_refuse "cannot verify that systemd $selected/$label is disabled (status $enabled_rc)" "$enabled_output"
+    ;;
+esac
+report booted_out "systemd $selected/$label is inactive and not enabled ($enabled_state)"
 "#;
 
-/// Which launchd domain a bootout may act in.
+/// Which init-system scope a bootout may act in.
 ///
-/// `Any` is the historical behaviour: system first, and the user domains only
-/// when the system domain holds nothing. The other two exist for a label that
-/// is loaded in both, where the historical order can only ever reach one of
-/// them.
+/// `Any` preserves the historical behaviour on both supported service
+/// managers: system first, and the calling account only when the system scope
+/// holds no exact unit by that name. The explicit variants distinguish names
+/// that exist in both scopes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootoutScope {
     Any,
@@ -7127,13 +7263,13 @@ impl BootoutScope {
             Some("system") => Ok(Self::System),
             Some("user") => Ok(Self::User),
             Some(other) => Err(DeployError(format!(
-                "{other:?} is not a launchd domain: system, user, or any"
+                "{other:?} is not an init-system scope: system, user, or any"
             ))),
         }
     }
 }
 
-/// [`BOOTOUT_SCRIPT`] for one label. Returns `(state, detail)`.
+/// Run [`BOOTOUT_SCRIPT`] for one exact unit name. Returns `(state, detail)`.
 pub async fn bootout_label(
     target: &ComputeTarget,
     label: &str,
@@ -7141,6 +7277,12 @@ pub async fn bootout_label(
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     validate_unit_id(label)?;
+    if label.contains('/') {
+        return Err(DeployError(format!(
+            "unit {} is not one exact launchd label or systemd unit name",
+            py_str_repr(label)
+        )));
+    }
     let script = BOOTOUT_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
         .replace("@SCOPE@", scope.word());

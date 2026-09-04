@@ -102,29 +102,28 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Boot one loaded launchd label out of its system or user domain.
+    /// Boot one exact launchd label or systemd unit out of its system or user
+    /// scope.
     ///
-    /// `stop` ends a declared unit and the processes launchd disowned from it.
-    /// Nothing ended a process whose label the registry never declared, or
-    /// whose label was removed while the process kept running. On
-    /// charless-mac-mini that is how a `stado agent` from 2026-08-27 kept
-    /// publishing the host's capacity through three release deliveries, two
-    /// restarts, a `service stop` and a `service remove`, refusing 55 pinned
-    /// jobs for a week — and why `service list --undeclared` could name the
-    /// state while no command could end it.
+    /// `stop` and `retire` require a registry declaration. This command is for
+    /// a loaded unit the registry does not declare, including an obsolete
+    /// duplicate that `service list --undeclared` found. It never removes the
+    /// unit's file.
     ///
-    /// For a label the registry does not declare, which `stop` cannot resolve
-    /// and `retire` cannot reach. `service list --undeclared` names them.
+    /// On Linux the selected systemd manager stops and disables only the exact
+    /// requested unit, then Stado reads back that it is inactive and not
+    /// enabled. On Darwin the selected launchd domain is booted out as before.
     Bootout {
-        /// launchd label, as the host knows it.
+        /// Exact launchd label or systemd unit name, as the host knows it.
         label: String,
         /// Registry host that has it loaded.
         #[arg(long)]
         host: String,
-        /// Which launchd domain to act in: `system`, `user`, or unset for the
-        /// historical order (system first, user domains only if the system
-        /// domain holds nothing). A label loaded in BOTH domains has two jobs
-        /// and the unset order can only ever reach the system one.
+        /// Which init-system scope to act in: `system`, `user`, or unset for
+        /// `any`. The unset order is system first, then the calling account
+        /// only when the system scope holds no exact unit by this name. A name
+        /// loaded in both scopes identifies two jobs; pass `user` to leave its
+        /// system sibling untouched.
         #[arg(long)]
         domain: Option<String>,
         #[arg(long)]
@@ -982,6 +981,10 @@ pub enum ServiceCommands {
         /// program and the two are never mixed.
         #[arg(long = "arg")]
         args: Vec<String>,
+        /// Non-secret NAME=VALUE persisted with the unit; repeat for each key.
+        /// Use secret-sync for credentials, never put them on the command line.
+        #[arg(long = "env", value_name = "NAME=VALUE")]
+        env: Vec<String>,
         /// Why this host must run this unit. Required: `ensure` installs units
         /// and restarts running ones, and every such change is recorded beside
         /// the registry document it declared the unit in.
@@ -1460,6 +1463,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host,
             from,
             args,
+            env,
             reason,
             as_daemon,
             as_launch_agent,
@@ -1470,6 +1474,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 host: &host,
                 from: from.as_deref(),
                 args: &args,
+                env: &env,
                 reason: &reason,
                 as_daemon,
                 as_launch_agent,
@@ -1795,13 +1800,13 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     fail_if_any(&failures, "scan for undeclared units")
 }
 
-/// `service bootout LABEL --host HOST [--domain system|user]` — take one loaded
-/// label out of launchd, declared or not.
+/// `service bootout LABEL --host HOST [--domain system|user]` — take one exact
+/// unit out of launchd or systemd, whether the registry declares it or not.
 ///
-/// Without `--domain` the system domain is tried first and the user domains
-/// only if it holds nothing, which is right for the usual single job and cannot
-/// reach the second job of a label loaded in both. `--domain user` is what ends
-/// a stale LaunchAgent copy while leaving the declared system daemon running.
+/// Without `--domain`, the system scope is tried first and the calling
+/// account's scope only when the system manager holds no exact unit by that
+/// name. Explicit `user` is what ends a stale user unit while leaving its
+/// canonical system sibling running.
 async fn bootout(
     label: &str,
     host: &str,
@@ -2048,53 +2053,80 @@ async fn label_print(
             state.host
         )));
     }
-    table::print(
-        &["FIELD", "VALUE"],
-        &[
-            vec![
-                "domain".to_string(),
-                dash(state.domain.as_deref().unwrap_or("")),
-            ],
-            vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
-            vec![
-                "state".to_string(),
-                dash(state.state.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "last exit code".to_string(),
-                dash(state.last_exit_code.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "runs".to_string(),
-                dash(state.runs.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "path".to_string(),
-                dash(state.path.as_deref().unwrap_or("")),
-            ],
-            vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
-            vec![
-                "unit file state".to_string(),
-                dash(state.unit_file_state.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "restart".to_string(),
-                dash(state.restart.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "triggers".to_string(),
-                dash(state.triggers.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "triggered by".to_string(),
-                dash(state.triggered_by.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "part of".to_string(),
-                dash(state.part_of.as_deref().unwrap_or("")),
-            ],
+    let mut rows = vec![
+        vec![
+            "domain".to_string(),
+            dash(state.domain.as_deref().unwrap_or("")),
         ],
-    );
+        vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
+        vec![
+            "state".to_string(),
+            dash(state.state.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "last exit code".to_string(),
+            dash(state.last_exit_code.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "runs".to_string(),
+            dash(state.runs.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "path".to_string(),
+            dash(state.path.as_deref().unwrap_or("")),
+        ],
+        vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
+    ];
+    if state.event_read_status.is_some() {
+        rows.extend([
+            vec![
+                "stdout path".to_string(),
+                dash(state.stdout_path.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "stderr path".to_string(),
+                dash(state.stderr_path.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "recent launchd events".to_string(),
+                dash(
+                    &state
+                        .recent_events
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" | "),
+                ),
+            ],
+            vec![
+                "launchd event read".to_string(),
+                dash(state.event_read_status.as_deref().unwrap_or("")),
+            ],
+        ]);
+    }
+    rows.extend([
+        vec![
+            "unit file state".to_string(),
+            dash(state.unit_file_state.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "restart".to_string(),
+            dash(state.restart.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "triggers".to_string(),
+            dash(state.triggers.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "triggered by".to_string(),
+            dash(state.triggered_by.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "part of".to_string(),
+            dash(state.part_of.as_deref().unwrap_or("")),
+        ],
+    ]);
+    table::print(&["FIELD", "VALUE"], &rows);
     // A loaded unit whose file is gone is the shape no directory scan can
     // report, so it is called out rather than left to be inferred from a path.
     if state.path.is_none() {
@@ -2522,7 +2554,11 @@ async fn update(
     let report = service::show_service(&target, declared, &runner)
         .await
         .map_err(click)?;
-    let program = report.detail.trim();
+    let program = if declared.program.trim().is_empty() {
+        report.detail.split_whitespace().next().unwrap_or_default()
+    } else {
+        declared.program.trim()
+    };
     let directory = program
         .split("/services/")
         .nth(usize::from(true))
@@ -2552,14 +2588,22 @@ async fn update(
         println!("{host}: {name} -> {version} (takes effect on the next restart)");
         return Ok(());
     }
+    // The relink is the dangerous half: `current` moves and launchd's next
+    // spawn reads a path that may not exist in the tree that just arrived.
+    // Checking the archive's member list against the unit's own program path
+    // costs one local read and is the difference between a refusal and an
+    // outage. On 2026-09-04 the object API unit, whose program is
+    // `current/darwin-arm/stado`, was pointed at a published stado archive
+    // that holds exactly `bin/stado`; `current` relinked, launchd could not
+    // spawn, the job left the system domain, and every `/api/object` read on
+    // the fleet failed for eleven minutes.
+    if let Some(path) = archive {
+        let members = archive_members(path)?;
+        refuse_archive_without_program(program, &members).map_err(CmdError::click)?;
+    }
     let installed = match (reference, archive) {
         (Some(reference), None) => install_from_artifact(&target, &directory, reference).await?,
         (None, Some(path)) => {
-            let program = if declared.program.trim().is_empty() {
-                program.split_whitespace().next().unwrap_or_default()
-            } else {
-                declared.program.trim()
-            };
             let marker = format!("/services/{directory}/");
             let required = if let Some((_, rest)) = program.split_once(&marker) {
                 rest.split_once('/')
@@ -3095,6 +3139,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             host: options.host,
             from: None,
             args: &[],
+            env: &[],
             reason: &reason,
             as_daemon: true,
             as_launch_agent: false,
@@ -6405,6 +6450,7 @@ struct EnsureOptions<'a> {
     host: &'a str,
     from: Option<&'a str>,
     args: &'a [String],
+    env: &'a [String],
     reason: &'a str,
     as_daemon: bool,
     as_launch_agent: bool,
@@ -6423,8 +6469,7 @@ pub(crate) struct UnitProgram {
     pub(crate) source: &'static str,
     /// Stable unit identity supplied by a registry or catalog declaration.
     pub(crate) unit: Option<String>,
-    /// Environment the catalog declares for the unit, placeholders intact;
-    /// empty for every other source, which declares none.
+    /// Non-secret environment declared by this unit, with target placeholders intact.
     pub(crate) env: std::collections::BTreeMap<String, String>,
 }
 pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
@@ -6486,7 +6531,9 @@ pub(crate) fn unit_program(
             args: args.to_vec(),
             source: "flag",
             unit: None,
-            env: Default::default(),
+            env: declared
+                .map(|service| service.env.clone())
+                .unwrap_or_default(),
         });
     }
     if !args.is_empty() {
@@ -6501,7 +6548,7 @@ pub(crate) fn unit_program(
             args: declared.args.clone(),
             source: "registry",
             unit: Some(declared.unit_id().to_string()),
-            env: Default::default(),
+            env: declared.env.clone(),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -6536,7 +6583,7 @@ pub(crate) fn unit_program(
             args: shipped.args,
             source: "shipped",
             unit: Some(unit),
-            env: Default::default(),
+            env: shipped.env,
         });
     }
     Err(CmdError::usage(format!(
@@ -6604,6 +6651,7 @@ pub(crate) async fn ensure_local_dependency(
         host: &host,
         from: None,
         args: &[],
+        env: &[],
         reason,
         as_daemon,
         as_launch_agent: false,
@@ -6641,6 +6689,7 @@ pub(crate) async fn reconcile_after_config_change(
         host,
         from: None,
         args: &[],
+        env: &[],
         reason,
         as_daemon: true,
         as_launch_agent: false,
@@ -6751,6 +6800,26 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit.args.join(" ")
         );
     }
+    let home = crate::deploy::service_catalog::home_for(&target);
+    let mut env_overrides = unit.env;
+    for assignment in options.env {
+        let (name, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| CmdError::usage("--env requires NAME=VALUE"))?;
+        env_overrides.insert(name.to_string(), value.to_string());
+    }
+    for (name, value) in env_overrides {
+        let value = crate::deploy::service_catalog::resolve_word(
+            &value,
+            &home,
+            Some(&target.release_platform),
+            &target.name,
+        );
+        match unit_env.iter_mut().find(|(key, _)| key == &name) {
+            Some((_, current)) => *current = value,
+            None => unit_env.push((name, value)),
+        }
+    }
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise
@@ -6768,7 +6837,14 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             &unit.args,
             &unit_env,
         ),
-        None => service::plan_deploy(&target, options.name, &unit.program, &unit.args),
+        None => service::plan_deploy_labelled(
+            &target,
+            options.name,
+            &crate::deploy::local_install::label(service::DEPLOY_KIND, options.name),
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
     }
     .map_err(click)?;
     let mut plan = plan;
@@ -6821,6 +6897,7 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;
     record.args = unit.args;
+    record.env = unit_env.into_iter().collect();
     let generation = match &already {
         // Declared, at the same file and running the same program, by the
         // registry: the document already says what this pass just confirmed,
@@ -6830,7 +6907,8 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
                 && existing.path == record.path
                 && existing.kind == record.kind
                 && existing.program == record.program
-                && existing.args == record.args =>
+                && existing.args == record.args
+                && existing.env == record.env =>
         {
             None
         }
@@ -7132,9 +7210,83 @@ async fn install_from_artifact(
 /// exists because a bundle has to reach a host before the fleet has a store
 /// both machines can read, and the alternative people reach for in that gap is
 /// copying a file by hand onto a running service. The archive is streamed over
-/// the approved channel, checksummed on the far side, and extracted beside the
-/// immutable version. Only a complete archive carrying the declared executable
-/// may replace `current`; an existing version is never removed while extracting.
+/// the approved channel, checksummed on the far side, unpacked into a version
+/// directory named for its own digest, and `current` is relinked only after the
+/// digest matches.
+/// The paths a gzip-compressed release archive carries, in archive order.
+///
+/// Read locally, before anything is copied to a host: the cheapest moment to
+/// learn that a bundle cannot satisfy the unit it is meant for.
+fn archive_members(path: &str) -> Result<Vec<String>, CmdError> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| CmdError::click(format!("cannot read archive {path}: {error}")))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let entries = archive
+        .entries()
+        .map_err(|error| CmdError::click(format!("{path} is not a tar archive: {error}")))?;
+    let mut members = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| CmdError::click(format!("{path} could not be listed: {error}")))?;
+        let path = entry.path().map_err(|error| {
+            CmdError::click(format!("{path} holds an unreadable name: {error}"))
+        })?;
+        members.push(normalize_member(&path.to_string_lossy()));
+    }
+    Ok(members)
+}
+
+/// One archive path, comparable: no `./` prefix, no trailing slash.
+fn normalize_member(raw: &str) -> String {
+    raw.trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Refuse an archive that does not carry the file the unit executes.
+///
+/// The unit's program is an absolute path through `current`, so what the
+/// archive must hold is the part after it: a unit running
+/// `.../current/darwin-arm/stado` needs a member `darwin-arm/stado`. Both
+/// sides are named in the refusal, because the useful sentence is the
+/// mismatch, not the fact of one.
+fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(), String> {
+    let Some(relative) = program.split("/current/").nth(usize::from(true)) else {
+        // A unit pinned to a version directory rather than `current` is a
+        // different fault, reported by `follow_current`; there is no program
+        // path to look for here and inventing one would refuse every archive.
+        return Ok(());
+    };
+    let relative = normalize_member(relative);
+    if relative.is_empty() || members.iter().any(|member| member == &relative) {
+        return Ok(());
+    }
+    let mut held: Vec<&str> = members
+        .iter()
+        .filter(|member| !member.ends_with('/'))
+        .map(String::as_str)
+        .take(6)
+        .collect();
+    if members.len() > held.len() {
+        held.push("…");
+    }
+    Err(format!(
+        "refusing to relink `current`: the unit runs current/{relative}; the archive holds {}. \
+         Pointing `current` at a tree without that file does not fail here - it fails at \
+         launchd's next spawn, which cannot report why, and a KeepAlive job that cannot spawn \
+         leaves its domain. Install an archive whose layout matches the unit's program, or \
+         change the unit's program to a path this archive carries.",
+        if held.is_empty() {
+            "nothing".to_string()
+        } else {
+            held.join(", ")
+        }
+    ))
+}
+
+/// Extract beside the immutable version and confirm the declared executable
+/// before atomically replacing `current`. Never remove an installed version
+/// while extracting its replacement.
 async fn install_from_archive(
     target: &crate::targets::ComputeTarget,
     directory: &str,
@@ -7240,8 +7392,8 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
-/bin/mkdir -p "$incoming/darwin-arm"
-/usr/bin/tar -xzf "$archive" -C "$incoming/darwin-arm"
+/bin/mkdir -p "$incoming"
+/usr/bin/tar -xzf "$archive" -C "$incoming"
 if [ ! -f "$incoming/$required" ] || [ ! -x "$incoming/$required" ]; then
   printf '%s\n' "archive does not carry the declared executable $required; current is unchanged" >&2
   exit 1
@@ -7511,6 +7663,78 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::process::Command;
     use std::time::Duration;
+
+    /// Write a real gzip-compressed tar holding the named paths, so the member
+    /// reader is exercised against an archive rather than a list someone typed.
+    fn archive_fixture(directory: &std::path::Path, members: &[&str]) -> String {
+        let path = directory.join("bundle.tar.gz");
+        let file = std::fs::File::create(&path).expect("create fixture");
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            file,
+            flate2::Compression::fast(),
+        ));
+        for member in members {
+            let body = b"binary";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, member, &body[..])
+                .expect("append member");
+        }
+        builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip");
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn archive_members_reads_the_paths_a_bundle_carries() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = archive_fixture(directory.path(), &["bin/stado", "./darwin-arm/stado"]);
+        let members = archive_members(&path).expect("list members");
+        assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
+    }
+
+    /// The exact 2026-09-04 outage: the object API unit runs
+    /// `current/darwin-arm/stado` and every published stado archive holds
+    /// `bin/stado`. The refusal must name both halves.
+    #[test]
+    fn an_archive_without_the_unit_program_is_refused_naming_both() {
+        let members = vec!["bin/stado".to_string()];
+        let refusal = refuse_archive_without_program(
+            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+            &members,
+        )
+        .expect_err("an archive without the program must be refused");
+        assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
+        assert!(refusal.contains("bin/stado"), "{refusal}");
+    }
+
+    #[test]
+    fn an_archive_carrying_the_unit_program_is_accepted() {
+        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
+        refuse_archive_without_program(
+            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+            &members,
+        )
+        .expect("the program is in the archive");
+    }
+
+    /// A unit pinned to a version directory has no `current` segment. That is a
+    /// different fault and refusing every archive over it would be wrong.
+    #[test]
+    fn a_unit_not_running_through_current_is_not_judged_here() {
+        let members = vec!["bin/stado".to_string()];
+        refuse_archive_without_program(
+            "/Users/charles/.stado/services/x/sha256-abc/darwin-arm/stado",
+            &members,
+        )
+        .expect("no current segment, nothing to check");
+    }
 
     /// Serve one fixed JSON body on 200 to every request that arrives, on a
     /// loopback port the kernel picks, until the handle is dropped. The probe

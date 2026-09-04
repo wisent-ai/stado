@@ -145,7 +145,18 @@ fn resolved_plan(
     let mut unit =
         crate::cli::service::unit_program(&target.name, &declared.name, None, &[], Some(declared))
             .map_err(|error| error.to_string())?;
-    let mut unit_env: Vec<(String, String)> = Vec::new();
+    let home = crate::deploy::service_catalog::home_for(target);
+    let mut unit_env = crate::deploy::service_catalog::lookup(&declared.name)?
+        .map(|entry| {
+            crate::deploy::service_catalog::resolve_entry(
+                &entry,
+                &home,
+                Some(&target.release_platform),
+                &target.name,
+            )
+            .2
+        })
+        .unwrap_or_default();
     if unit.source == "catalog" {
         let entry = crate::deploy::service_catalog::CatalogService {
             name: declared.name.clone(),
@@ -165,6 +176,18 @@ fn resolved_plan(
         unit.args = args;
         unit_env = env;
     }
+    for (name, value) in &unit.env {
+        let value = crate::deploy::service_catalog::resolve_word(
+            value,
+            &home,
+            Some(&target.release_platform),
+            &target.name,
+        );
+        match unit_env.iter_mut().find(|(key, _)| key == name) {
+            Some((_, current)) => *current = value,
+            None => unit_env.push((name.clone(), value)),
+        }
+    }
     let mut plan = match unit
         .unit
         .as_deref()
@@ -178,7 +201,14 @@ fn resolved_plan(
             &unit.args,
             &unit_env,
         ),
-        None => service::plan_deploy(target, &declared.name, &unit.program, &unit.args),
+        None => service::plan_deploy_labelled(
+            target,
+            &declared.name,
+            &crate::deploy::local_install::label(service::DEPLOY_KIND, &declared.name),
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
     }
     .map_err(|error| error.to_string())?;
     if service::UnitDomain::from_path(&declared.path).is_per_login() {
@@ -200,6 +230,7 @@ async fn replace_declaration(
     corrected.onboarding = existing.onboarding.clone();
     corrected.program = program;
     corrected.args = args;
+    corrected.env = existing.env.clone();
     if corrected == *existing {
         return Ok(false);
     }
