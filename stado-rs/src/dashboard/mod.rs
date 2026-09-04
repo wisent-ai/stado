@@ -1319,6 +1319,20 @@ impl Dashboard {
 
     async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
+        // The immutable release channel is the recovery root for every other
+        // boundary, so its exact read-only route must not consult host trust or
+        // Skarbiec-backed authorization. Namespace validation remains in
+        // `get_routes`; no list, mutation, or other object route enters here.
+        if path_no_query == "/api/release/object" {
+            return match self.get_routes(request).await {
+                Ok(response) => response,
+                Err(_) => Response::text(
+                    http_status("500"),
+                    "Internal Server Error",
+                    "dashboard error",
+                ),
+            };
+        }
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             if path_no_query == "/api/machine/status" {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
@@ -1387,7 +1401,6 @@ impl Dashboard {
         if path_no_query == "/api/fleet/invite/key" {
             return fleet_join::invite_key(&self.store, request).await;
         }
-        let release_object_route = path_no_query == "/api/release/object";
         let object_route = path_no_query == "/api/object"
             || path_no_query == "/api/object/list"
             || path_no_query == "/api/object/stat";
@@ -1455,7 +1468,7 @@ impl Dashboard {
                     )
                 }
             }
-        } else if !release_object_route {
+        } else {
             // At most one of these two paths matches, so at most one boundary
             // is ever revalidated here.
             if path_no_query == "/api/service/status"

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::net::SocketAddr;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -181,6 +181,15 @@ struct PublishedStatus<'a> {
     previous_version: Option<&'a str>,
     detail: &'a str,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveBinary {
+    pub path: PathBuf,
+    pub version: String,
+    pub platform: String,
+    pub artifact_sha256: String,
+    pub manifest_sha256: String,
 }
 
 /// The rollout state document one product keeps on one host.
@@ -502,11 +511,6 @@ fn log_evidence(path: &Path, lines: usize, max_chars: usize) -> LogEvidence {
     }
 }
 
-/// The bounded tail alone, for a record with nothing to classify from.
-fn log_tail(path: &Path, lines: usize, max_chars: usize) -> String {
-    log_evidence(path, lines, max_chars).rendered
-}
-
 fn expand_home(value: &str, home: &str) -> String {
     value.replace("{home}", home)
 }
@@ -653,17 +657,162 @@ async fn await_ready_because(
     }
 }
 
-/// Does the expected release answer the stable bind's readiness path?
-///
-/// A successful readiness response alone is not enough: the legacy process can
-/// answer the same path while the proxy spawn fails with `Address already in
-/// use`. Adoption therefore requires the response's immutable build version to
-/// match the active release. Without that identity check the agent reported a
-/// routed candidate while public traffic still reached its predecessor.
-async fn stable_bind_answer(
+fn process_executable_matches(pid: i32, expected: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(actual) = std::fs::read_link(format!("/proc/{pid}/exe")) else {
+            return false;
+        };
+        let actual = actual.to_string_lossy();
+        actual.strip_suffix(" (deleted)").unwrap_or(&actual) == expected.to_string_lossy()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let Ok(output) = Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+        else {
+            return false;
+        };
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).trim() == expected.to_string_lossy()
+    }
+}
+
+fn proxy_process_matches(
+    pid: i32,
+    target: &ReleaseTargetPolicy,
     serving: &BlueGreenServing,
-    expected_version: &str,
+    product: &str,
+) -> Result<bool, String> {
+    if !pid_alive(pid) {
+        return Ok(false);
+    }
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
+    if !process_executable_matches(pid, &executable) {
+        return Ok(false);
+    }
+    let expected_command = format!(
+        "{} release proxy --state {} --bind {}",
+        executable.display(),
+        proxy_state_path(target, product).display(),
+        serving.stable_bind
+    );
+    let output = Command::new("/bin/ps")
+        .args(["-ww", "-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map_err(|error| format!("cannot inspect stable proxy pid {pid}: {error}"))?;
+    Ok(output.status.success()
+        && String::from_utf8_lossy(&output.stdout).trim() == expected_command)
+}
+
+/// Find the live Stado proxy whose executable and complete argument vector own
+/// this exact state file and bind.
+///
+/// A release proxy binds before entering its accept loop and exits when the
+/// bind fails. After the caller's spawn grace period, a live exact match is
+/// therefore the process that owns the bind, not merely another program that
+/// happens to answer the product's readiness URL.
+fn exact_proxy_pid(
+    target: &ReleaseTargetPolicy,
+    serving: &BlueGreenServing,
+    product: &str,
+) -> Result<Option<i32>, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
+    let expected_command = format!(
+        "{} release proxy --state {} --bind {}",
+        executable.display(),
+        proxy_state_path(target, product).display(),
+        serving.stable_bind
+    );
+    let output = Command::new("/bin/ps")
+        .args(["axww", "-o", "pid=", "-o", "command="])
+        .output()
+        .map_err(|error| format!("cannot inspect stable proxy processes: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot inspect stable proxy processes: /bin/ps exited {}",
+            output.status
+        ));
+    }
+    let mut matches = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let split = line.find(char::is_whitespace)?;
+            let pid = line[..split].parse::<i32>().ok()?;
+            (line[split..].trim_start() == expected_command
+                && pid_alive(pid)
+                && process_executable_matches(pid, &executable))
+            .then_some(pid)
+        })
+        .collect::<Vec<_>>();
+    matches.sort_unstable();
+    matches.dedup();
+    match matches.as_slice() {
+        [pid] => Ok(Some(*pid)),
+        [] => Ok(None),
+        many => Err(format!(
+            "{} live Stado release proxies claim {} with state {}",
+            many.len(),
+            serving.stable_bind,
+            proxy_state_path(target, product).display()
+        )),
+    }
+}
+
+/// Prove that the exact live Stado proxy routes the exact staged release and
+/// that the product accepts its declared readiness request on the stable bind.
+///
+/// Release identity does not belong to the product's readiness document. The
+/// signed manifest and immutable archive establish the candidate's version and
+/// digest before it starts; the process record and proxy target then bind that
+/// identity to one candidate port. Requiring an undeclared `build.version`
+/// field here made otherwise-valid readiness contracts impossible to satisfy.
+async fn stable_bind_answer(
+    proxy_pid: i32,
+    target: &ReleaseTargetPolicy,
+    serving: &BlueGreenServing,
+    product: &str,
+    generation: u64,
+    active: &ProcessRecord,
 ) -> Result<(), String> {
+    if !pid_alive(proxy_pid) {
+        return Err(format!("stable release proxy pid {proxy_pid} is gone"));
+    }
+    let marker = std::fs::read(marker_path(Path::new(&active.release_dir))).map_err(|error| {
+        format!(
+            "cannot read active release identity {}: {error}",
+            active.release_dir
+        )
+    })?;
+    let manifest: ReleaseManifest = serde_json::from_slice(&marker)
+        .map_err(|error| format!("active release identity is invalid: {error}"))?;
+    let manifest_sha =
+        release_control::sha256_bytes(&release_control::canonical_manifest(&manifest)?);
+    if manifest_sha != active.manifest_sha256
+        || manifest.version != active.version
+        || manifest.artifact_sha256 != active.artifact_sha256
+    {
+        return Err("active process does not match its immutable release identity".to_string());
+    }
+
+    let proxy_path = proxy_state_path(target, product);
+    let proxy: ProxyState =
+        serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
+            format!("cannot read proxy target {}: {error}", proxy_path.display())
+        })?)
+        .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
+    let expected_upstream = format!("127.0.0.1:{}", active.port);
+    if proxy.generation != generation || proxy.upstream != expected_upstream {
+        return Err(format!(
+            "stable proxy target is generation {} upstream {}, expected generation {generation} upstream {expected_upstream}",
+            proxy.generation, proxy.upstream
+        ));
+    }
+
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     let response = reqwest::Client::new()
         .get(&url)
@@ -681,19 +830,6 @@ async fn stable_bind_answer(
         })?;
     if !response.status().is_success() {
         return Err(format!("{url} answered HTTP {}", response.status()));
-    }
-    let document: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|error| format!("{url} returned unreadable build identity: {error}"))?;
-    let observed_version = document
-        .pointer("/build/version")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("{url} readiness response carries no build.version"))?;
-    if observed_version != expected_version {
-        return Err(format!(
-            "{url} serves version {observed_version}, expected {expected_version}"
-        ));
     }
     Ok(())
 }
@@ -742,10 +878,6 @@ fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
             "legacy launchd service bootstrap exited with {status}"
         ))
     }
-}
-
-fn proxy_alive(state: &HostReleaseState) -> bool {
-    state.proxy_pid.is_some_and(pid_alive)
 }
 
 fn write_proxy_target(
@@ -804,30 +936,37 @@ async fn ensure_active_proxy(
     if !ready(active, &serving.readiness_path).await {
         return Err("active release lost readiness".to_string());
     }
-    if proxy_alive(state) {
-        return write_proxy_target(target, product, generation, active.port);
-    }
+    write_proxy_target(target, product, generation, active.port)?;
 
-    stop_legacy(target)?;
-    state.proxy_pid = Some(start_proxy(
-        target,
-        serving,
-        product,
-        generation,
-        active.port,
-    )?);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    if proxy_alive(state) {
-        return Ok(());
-    }
-
-    match stable_bind_answer(serving, &active.version).await {
-        Ok(()) => {
-            state.proxy_pid = None;
-            Ok(())
+    let recorded_proxy = match state.proxy_pid {
+        Some(proxy_pid) if proxy_process_matches(proxy_pid, target, serving, product)? => {
+            Some(proxy_pid)
         }
-        Err(why) => Err(format!("stable release proxy failed to start: {why}")),
-    }
+        _ => None,
+    };
+    let proxy_pid = if let Some(proxy_pid) = recorded_proxy {
+        proxy_pid
+    } else if let Some(proxy_pid) = exact_proxy_pid(target, serving, product)? {
+        proxy_pid
+    } else {
+        stop_legacy(target)?;
+        let spawned_pid = start_proxy(target, serving, product, generation, active.port)?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let proxy_pid = exact_proxy_pid(target, serving, product)
+            .map_err(|why| format!("stable release proxy failed to start: {why}"))?
+            .ok_or_else(|| "spawned stable release proxy is not live".to_string())?;
+        if proxy_pid != spawned_pid {
+            return Err(format!(
+                "spawned stable release proxy pid {spawned_pid}, but exact owner is pid {proxy_pid}"
+            ));
+        }
+        proxy_pid
+    };
+
+    state.proxy_pid = Some(proxy_pid);
+    stable_bind_answer(proxy_pid, target, serving, product, generation, active)
+        .await
+        .map_err(|why| format!("stable release proxy is invalid: {why}"))
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
@@ -931,6 +1070,113 @@ fn stage_release(
     }
     release_control::safe_extract_archive(archive, directory)?;
     atomic_json(&marker_path(directory), manifest)
+}
+
+/// Resolve the executable from the exact release the local agent currently
+/// records and routes as active. Desired state is deliberately irrelevant:
+/// a rejected newer candidate may be quarantined while its healthy predecessor
+/// remains the release actually serving the stable bind.
+pub(crate) fn active_binary(
+    product: &str,
+    target_name: &str,
+    policy: &ProductReleasePolicy,
+    target: &ReleaseTargetPolicy,
+) -> Result<ActiveBinary, String> {
+    let state = load_state(target, product, target_name)?;
+    let active = state.active.as_ref().ok_or_else(|| {
+        format!(
+            "{product} is release-controlled on {target_name} but has no observed active release (phase {:?})",
+            state.phase
+        )
+    })?;
+    if !pid_alive(active.pid) {
+        return Err(format!(
+            "{product} observed active process pid {} is not live",
+            active.pid
+        ));
+    }
+    if state.quarantined.contains_key(&active.artifact_sha256) {
+        return Err(format!(
+            "{product} observed active digest {} is quarantined",
+            active.artifact_sha256
+        ));
+    }
+
+    let serving = target.blue_green_serving()?;
+    let proxy_pid = state
+        .proxy_pid
+        .ok_or_else(|| format!("{product} observed active release has no recorded stable proxy"))?;
+    if !proxy_process_matches(proxy_pid, target, &serving, product)? {
+        return Err(format!(
+            "{product} recorded stable proxy pid {proxy_pid} does not match the exact executable and arguments"
+        ));
+    }
+    let proxy_path = proxy_state_path(target, product);
+    let proxy: ProxyState =
+        serde_json::from_slice(&std::fs::read(&proxy_path).map_err(|error| {
+            format!("cannot read proxy target {}: {error}", proxy_path.display())
+        })?)
+        .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
+    let expected_upstream = format!("127.0.0.1:{}", active.port);
+    if proxy.generation != state.rollout_generation || proxy.upstream != expected_upstream {
+        return Err(format!(
+            "{product} stable proxy targets generation {} upstream {}, not observed active generation {} upstream {expected_upstream}",
+            proxy.generation, proxy.upstream, state.rollout_generation
+        ));
+    }
+
+    let directory = PathBuf::from(&active.release_dir);
+    let marker_path = marker_path(&directory);
+    let marker = std::fs::read(&marker_path).map_err(|error| {
+        format!(
+            "cannot read active release marker {}: {error}",
+            marker_path.display()
+        )
+    })?;
+    let manifest: ReleaseManifest = serde_json::from_slice(&marker)
+        .map_err(|error| format!("active release marker is invalid: {error}"))?;
+    release_control::validate_manifest(&manifest)?;
+    let manifest_sha =
+        release_control::sha256_bytes(&release_control::canonical_manifest(&manifest)?);
+    if manifest_sha != active.manifest_sha256
+        || manifest.product != product
+        || manifest.version != active.version
+        || manifest.platform != target.platform
+        || manifest.artifact_sha256 != active.artifact_sha256
+        || manifest.binary != policy.binary
+        || manifest.qualification.status != QualificationStatus::Passed
+    {
+        return Err(format!(
+            "{product} observed active release marker does not match its process identity"
+        ));
+    }
+    let expected_directory = release_control::install_directory(policy, target, &manifest);
+    if directory != expected_directory {
+        return Err(format!(
+            "{product} active release directory {} is not the policy-derived directory {}",
+            directory.display(),
+            expected_directory.display()
+        ));
+    }
+    let path = directory.join(&policy.binary);
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("cannot inspect active binary {}: {error}", path.display()))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.permissions().mode() & 0o111 == 0
+    {
+        return Err(format!(
+            "active binary is not an executable regular file: {}",
+            path.display()
+        ));
+    }
+    Ok(ActiveBinary {
+        path,
+        version: manifest.version,
+        platform: manifest.platform,
+        artifact_sha256: manifest.artifact_sha256,
+        manifest_sha256: manifest_sha,
+    })
 }
 
 /// The port the proxy currently forwards to, read from its own target file.
@@ -1154,27 +1400,10 @@ async fn rollback(
         );
     }
     if let Some(previous) = state.previous.take() {
-        if proxy_alive(state) {
-            write_proxy_target(
-                target,
-                &state.product,
-                state.rollout_generation,
-                previous.port,
-            )?;
-        } else {
-            let serving = target.blue_green_serving()?;
-            state.proxy_pid = Some(start_proxy(
-                target,
-                &serving,
-                &state.product,
-                state.rollout_generation,
-                previous.port,
-            )?);
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            if !proxy_alive(state) {
-                return Err("rollback proxy failed to start".to_string());
-            }
-        }
+        let serving = target.blue_green_serving()?;
+        let product = state.product.clone();
+        let generation = state.rollout_generation;
+        ensure_active_proxy(target, &serving, &product, generation, &previous, state).await?;
         if let Some(record) = &failed {
             terminate(record);
         }
@@ -1804,41 +2033,15 @@ async fn reconcile_product(
     state.cutover_at = Some(Utc::now());
     save_state(target, &mut state)?;
 
-    let proxy_result = if proxy_alive(&state) {
-        write_proxy_target(target, product, desired.rollout_generation, port)
-    } else {
-        stop_legacy(target)?;
-        state.proxy_pid = Some(start_proxy(
-            target,
-            &serving,
-            product,
-            desired.rollout_generation,
-            port,
-        )?);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if proxy_alive(&state) {
-            Ok(())
-        } else {
-            // Someone may already serve the stable bind: the target file this
-            // agent just wrote is what every Stado proxy reads, so a proxy left by
-            // an earlier run is already forwarding to this candidate. Spawning a
-            // second binder returns `Address already in use (os error 48)`, and the
-            // rollout used to fail for a bind that was serving correctly -- state
-            // said "no proxy", the port said otherwise, and nothing compared them.
-            match stable_bind_answer(&serving, &process.version).await {
-                Ok(()) => {
-                    state.proxy_pid = None;
-                    state.detail =
-                        format!("adopted the proxy already serving {}", serving.stable_bind);
-                    Ok(())
-                }
-                Err(why) => Err(format!(
-                    "stable release proxy failed to start: {why}; stderr {}",
-                    log_tail(&release_log_path(target, product, "proxy", "err"), 20, 1200)
-                )),
-            }
-        }
-    };
+    let proxy_result = ensure_active_proxy(
+        target,
+        &serving,
+        product,
+        desired.rollout_generation,
+        &process,
+        &mut state,
+    )
+    .await;
     if let Err(reason) = proxy_result {
         if policy.strategy.automatic_rollback {
             rollback(target, &mut state, reason).await?;

@@ -58,6 +58,14 @@ use crate::targets::{ComputeTarget, Registry};
 /// exact key in the capacity broadcast's `diag`.
 pub const DISK_PRESSURE_UNRESOLVED: &str = "disk_pressure_unresolved";
 
+/// The agent's exact word for "the disk is below its low watermark".
+///
+/// Unlike [`DISK_PRESSURE_UNRESOLVED`], this is a measured condition rather
+/// than a missing reading. The agent remains alive and accepts signed Stado
+/// release deliveries so a newer binary can recover the host, but it refuses
+/// release builds and ordinary queue work because those consume more disk.
+pub const DISK_PRESSURE_ACTIVE: &str = "disk_pressure_active";
+
 /// The agent publishes `disk_cleanup_policy_known: false` when it has no
 /// validated low watermark at all. Reported as its negation because a blocker
 /// list reads as a list of things that are wrong; the underlying key, and the

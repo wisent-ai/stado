@@ -11,8 +11,15 @@
 //! every refusal — bad name, unknown host, non-immutable digest, missing
 //! consumers, unknown verify kind — refuses with its exact sentence and
 //! leaves the document untouched.
+//!
+//! The Linux lifecycle case keeps that same real-binary boundary. Its only
+//! fake is the SSH destination: the generated remote program executes against
+//! a systemd host model that records every init-system call, so the test can
+//! prove a unit under `/etc/systemd/system` is adopted and restarted through
+//! the system manager rather than silently redirected to `systemd --user`.
 
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// A valid registry-v2 document: one host, plus a service directory whose
@@ -282,5 +289,248 @@ fn as_daemon_ensure_addresses_the_system_daemon_file() {
     assert_eq!(
         stado::deploy::service::ensure_unit_path(&daemon),
         AGENT_DAEMON_FILE
+    );
+}
+
+const SYSTEMD_AGENT: &str = "wisent-compute-agent.service";
+
+const SYSTEMD_REGISTRY: &str = r#"{
+  "schema_version": 2,
+  "targets": [{
+    "name": "linux-builder",
+    "kind": "local",
+    "ssh": "approved@10.9.9.20",
+    "release_platform": "linux-amd64",
+    "hostnames": ["linux-builder.invalid"],
+    "slots": 2
+  }],
+  "coordinators": []
+}"#;
+
+/// The product's fixed remote program arrives on stdin. Only host-owned
+/// executables are redirected; the program itself is the production one.
+///
+/// The one filesystem substitution changes the existence probe, not the path
+/// the program resolves: the report must still carry
+/// `/etc/systemd/system/<unit>`, while the fixture stays inside the tempdir.
+const SYSTEMD_FAKE_SSH: &str = r#"#!/bin/sh
+PATH="$STADO_FAKE_HOST_BIN:/usr/bin:/bin"; export PATH
+/usr/bin/sed \
+  -e 's#\[ -f "/etc/systemd/system/\$unit" \]#[ -f "$STADO_FAKE_STATE/system/$unit" ]#' \
+  -e 's#/usr/bin/uname#uname#g' \
+  -e 's#/usr/bin/id#id#g' \
+  -e 's#/usr/bin/stat#stat#g' \
+  -e 's#/usr/bin/systemctl#systemctl#g' \
+  -e 's#/usr/bin/loginctl#loginctl#g' \
+  -e 's#/usr/bin/sudo#sudo#g' \
+  -e 's#/bin/sudo#sudo#g' \
+  -e 's#/bin/sleep#sleep#g' \
+  | /bin/bash -s
+"#;
+
+const SYSTEMD_FAKE_UNAME: &str = "#!/bin/sh\necho Linux\n";
+
+const SYSTEMD_FAKE_ID: &str = r#"#!/bin/sh
+case "${1:-}" in
+  -u)
+    if [ "${2:-}" = root ]; then echo 0; else echo 1000; fi
+    ;;
+  -un) echo approved ;;
+  *) echo 1000 ;;
+esac
+"#;
+
+const SYSTEMD_FAKE_STAT: &str = r#"#!/bin/sh
+if [ "${1:-}" = -c ] && [ "${2:-}" = %U ]; then
+  echo root
+  exit 0
+fi
+exit 1
+"#;
+
+/// A real call log plus the minimum systemd state the restart contract reads.
+const SYSTEMD_FAKE_SYSTEMCTL: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$STADO_FAKE_STATE/systemctl.log"
+case "${1:-}" in
+  cat|daemon-reload) exit 0 ;;
+  restart)
+    printf 'active\n' > "$STADO_FAKE_STATE/active"
+    exit 0
+    ;;
+  is-active)
+    [ -f "$STADO_FAKE_STATE/active" ]
+    ;;
+  show)
+    [ -f "$STADO_FAKE_STATE/active" ] || exit 1
+    printf '570420\n'
+    ;;
+  *) exit 64 ;;
+esac
+"#;
+
+/// The approved host account has passwordless, non-interactive systemd
+/// administration. The `-n` is kept in its own log because dropping it would
+/// let a lifecycle command wait forever for a password on an SSH pipe.
+const SYSTEMD_FAKE_SUDO: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$STADO_FAKE_STATE/sudo.log"
+[ "${1:-}" = -n ] || exit 65
+shift
+exec "$@"
+"#;
+
+const SYSTEMD_FAKE_LOGINCTL: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$STADO_FAKE_STATE/loginctl.log"
+exit 66
+"#;
+
+const SYSTEMD_FAKE_SLEEP: &str = "#!/bin/sh\nexit 0\n";
+
+fn systemd_tool(directory: &Path, name: &str, body: &str) {
+    let path = directory.join(name);
+    std::fs::write(&path, body).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+struct SystemdHost {
+    root: tempfile::TempDir,
+}
+
+impl SystemdHost {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        for child in ["ssh-bin", "host-bin", "state/system", "storage", "home"] {
+            std::fs::create_dir_all(root.path().join(child)).unwrap();
+        }
+        systemd_tool(&root.path().join("ssh-bin"), "ssh", SYSTEMD_FAKE_SSH);
+        let host_bin = root.path().join("host-bin");
+        systemd_tool(&host_bin, "uname", SYSTEMD_FAKE_UNAME);
+        systemd_tool(&host_bin, "id", SYSTEMD_FAKE_ID);
+        systemd_tool(&host_bin, "stat", SYSTEMD_FAKE_STAT);
+        systemd_tool(&host_bin, "systemctl", SYSTEMD_FAKE_SYSTEMCTL);
+        systemd_tool(&host_bin, "sudo", SYSTEMD_FAKE_SUDO);
+        systemd_tool(&host_bin, "loginctl", SYSTEMD_FAKE_LOGINCTL);
+        systemd_tool(&host_bin, "sleep", SYSTEMD_FAKE_SLEEP);
+
+        std::fs::write(
+            root.path().join("state/system").join(SYSTEMD_AGENT),
+            "[Service]\nExecStart=/home/approved/.stado/bin/stado agent --auto\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("storage/registry.json"), SYSTEMD_REGISTRY).unwrap();
+        let key = root.path().join("state/ssh-key");
+        std::fs::write(&key, "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        Self { root }
+    }
+
+    fn stado(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_stado"))
+            .args(args)
+            .env_clear()
+            .env("HOME", self.root.path().join("home"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+                    self.root.path().join("ssh-bin").display()
+                ),
+            )
+            .env("STADO_FAKE_HOST_BIN", self.root.path().join("host-bin"))
+            .env("STADO_FAKE_STATE", self.root.path().join("state"))
+            .env(
+                "STADO_HOST_SSH_KEY_FILE",
+                self.root.path().join("state/ssh-key"),
+            )
+            .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_LOCAL_STORAGE_PATH", self.root.path().join("storage"))
+            .env(
+                "STADO_CONFIG",
+                self.root.path().join("storage/no-such-config.json"),
+            )
+            .output()
+            .expect("stado binary runs")
+    }
+
+    fn document(&self) -> serde_json::Value {
+        let body = std::fs::read_to_string(self.root.path().join("storage/registry.json")).unwrap();
+        serde_json::from_str(&body).unwrap()
+    }
+
+    fn state(&self, name: &str) -> String {
+        std::fs::read_to_string(self.root.path().join("state").join(name)).unwrap()
+    }
+}
+
+/// The live Ubuntu builder carried this exact split: its agent was active as a
+/// machine unit while adoption searched only the approved login's user
+/// manager. The command now records the machine path, and restart addresses
+/// that same manager without `--user` or a meaningless linger mutation.
+#[test]
+fn systemd_system_unit_is_adopted_and_restarted_in_the_system_scope() {
+    let host = SystemdHost::new();
+    let adopted = host.stado(&[
+        "service",
+        "adopt",
+        SYSTEMD_AGENT,
+        "--host",
+        "linux-builder",
+        "--json",
+    ]);
+    assert!(
+        adopted.status.success(),
+        "adopt failed: {}",
+        stderr(&adopted)
+    );
+
+    let document = host.document();
+    let service = &document["targets"][0]["services"][0];
+    assert_eq!(service["unit"], SYSTEMD_AGENT);
+    assert_eq!(service["kind"], "systemd");
+    assert_eq!(
+        service["path"],
+        format!("/etc/systemd/system/{SYSTEMD_AGENT}")
+    );
+
+    let restarted = host.stado(&[
+        "service",
+        "restart",
+        SYSTEMD_AGENT,
+        "--host",
+        "linux-builder",
+        "--json",
+    ]);
+    assert!(
+        restarted.status.success(),
+        "restart failed: {}{}",
+        String::from_utf8_lossy(&restarted.stdout),
+        stderr(&restarted)
+    );
+    let reports: serde_json::Value = serde_json::from_slice(&restarted.stdout).unwrap();
+    let report = &reports[0];
+    assert_eq!(report["status"], "restarted");
+    assert_eq!(report["detail"], "systemd system scope");
+    assert_eq!(report["launchd_domain"]["name"], "system");
+    assert_eq!(report["postcondition"]["state"], "met");
+
+    let calls = host.state("systemctl.log");
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == format!("restart {SYSTEMD_AGENT}")),
+        "system manager was not asked to restart the unit:\n{calls}"
+    );
+    assert!(
+        calls.lines().all(|line| !line.contains("--user")),
+        "a system unit was sent to the per-user manager:\n{calls}"
+    );
+    assert!(
+        !host.root.path().join("state/loginctl.log").exists(),
+        "a system unit must not alter per-user linger state"
+    );
+    assert!(
+        host.state("sudo.log")
+            .lines()
+            .all(|line| line.starts_with("-n systemctl ")),
+        "system management must stay non-interactive"
     );
 }

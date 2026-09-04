@@ -854,6 +854,26 @@ async fn materialize_stado_inputs(
 // start_slot
 // ---------------------------------------------------------------------------
 
+/// Errors before or after the queue claim are agent failures. A claim error is
+/// scoped to one queued job and may be reported while the scan continues.
+#[derive(Debug)]
+pub enum StartSlotError {
+    Claim(StorageError),
+    Other(StorageError),
+}
+
+impl From<StorageError> for StartSlotError {
+    fn from(error: StorageError) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<std::io::Error> for StartSlotError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Other(error.into())
+    }
+}
+
 /// Spawn a subprocess for `job`, register it in 'running' state, return the
 /// slot. Python `start_slot`.
 ///
@@ -873,7 +893,7 @@ pub async fn start_slot(
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
     gpu_uuid: Option<&str>,
-) -> Result<Option<ActiveSlot>, StorageError> {
+) -> Result<Option<ActiveSlot>, StartSlotError> {
     let job_id = job.job_id;
     let Some(mut job) = store.read_job("queue", &job_id).await? else {
         log_fn(&format!("claim lost for {job_id}: queued record is absent"));
@@ -946,7 +966,11 @@ pub async fn start_slot(
     job.state = job_state::RUNNING.to_string();
     job.started_at = Some(isoformat_utc(Utc::now()));
     job.instance_ref = Some(format!("local@{hostname}"));
-    if !store.claim_queued_job(&job).await? {
+    let claimed = store
+        .claim_queued_job(&job)
+        .await
+        .map_err(StartSlotError::Claim)?;
+    if !claimed {
         log_fn(&format!(
             "claim lost for {}: another worker or cancellation won",
             job.job_id
