@@ -7362,33 +7362,92 @@ pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Resul
     render_verifier_report(&report, json_output)
 }
 
-/// Reconcile one product's release verifier dependency on TARGET.
-pub async fn reconcile_release_verifier(
-    target: &str,
-    product: &str,
-    json_output: bool,
+fn release_publisher_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
+    let publishers = document
+        .pointer("/resolved/release_api_publishers")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            CmdError::click(
+                "release_verifier_reconcile_host_declaration_unreadable: remote config has no resolved release_api_publishers",
+            )
+        })?;
+    publishers
+        .iter()
+        .map(|(product, declaration)| {
+            let item = declaration
+                .get("item")
+                .and_then(Value::as_str)
+                .filter(|item| !item.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "release_verifier_reconcile_host_declaration_unreadable: product {product:?} has no item"
+                    ))
+                })?;
+            Ok((product.clone(), item.to_string()))
+        })
+        .collect()
+}
+
+fn ensure_release_verifier_declarations_match(
+    host: &BTreeMap<String, String>,
+    local: &BTreeMap<String, String>,
 ) -> Result<(), CmdError> {
+    let missing = host
+        .iter()
+        .filter(|(product, item)| local.get(*product) != Some(*item))
+        .map(|(product, item)| format!("{product}={item}"))
+        .collect::<Vec<_>>();
+    let unexpected = local
+        .iter()
+        .filter(|(product, item)| host.get(*product) != Some(*item))
+        .map(|(product, item)| format!("{product}={item}"))
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "release_verifier_reconcile_declaration_mismatch: local release_api.publishers cannot \
+         prove TARGET's declaration (missing_local=[{}], unexpected_local=[{}]); copy the \
+         host's exact publisher declarations locally before reconciling",
+        missing.join(","),
+        unexpected.join(",")
+    )))
+}
+
+/// Reconcile the release verifier on TARGET to every configured publisher.
+pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         CmdError::click(format!(
             "invalid release_api.publishers: {}",
             problems.join("; ")
         ))
     })?;
-    let publisher = publishers.get(product).ok_or_else(|| {
+    let local = publishers
+        .iter()
+        .map(|(product, publisher)| (product.clone(), publisher.item().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let items = local.values().cloned().collect::<BTreeSet<_>>();
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout =
+        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
-            "release_api.publishers declares no publisher for {product:?}"
+            "release_verifier_reconcile_host_declaration_unreadable: {error}"
         ))
     })?;
-    let items = std::collections::BTreeSet::from([publisher.item().to_string()]);
+    let host = release_publisher_items(&document)?;
+    ensure_release_verifier_declarations_match(&host, &local)?;
     let report = reconcile_verifier(
         target,
         "release",
-        &format!("release_api.publishers.{product}"),
+        "matching local and target release_api.publishers",
         crate::config::RELEASE_API_VERIFIER_CONSUMER,
         "WC_RELEASE_SKARBIEC_TOKEN_FILE",
         "stado-release-api-verifier-skarbiec-token",
         items,
-        false,
+        true,
     )
     .await?;
     render_verifier_report(&report, json_output)

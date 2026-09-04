@@ -875,6 +875,29 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     ));
                     continue;
                 };
+                if parsed.get("outcome").and_then(Value::as_str)
+                    == Some("invalid_or_unavailable_policy")
+                {
+                    let detail = parsed
+                        .get("errors")
+                        .and_then(Value::as_array)
+                        .map(|errors| {
+                            errors
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .filter(|detail| !detail.is_empty())
+                        .unwrap_or_else(|| {
+                            "host janitor reported invalid_or_unavailable_policy".to_string()
+                        });
+                    reclamation.janitor_plan = Some(parsed);
+                    reclamation
+                        .stages
+                        .push(unavailable(REGISTRY_CLEANUP_STAGE, &detail));
+                    continue;
+                }
                 let counted: i64 = cleaner_plans(&parsed)
                     .iter()
                     .map(|cleaner| {

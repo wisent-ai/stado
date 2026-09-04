@@ -240,18 +240,19 @@ stado host reconcile-object-verifier <target> --json
 The command derives the item set from `object_api.namespaces`, asks Skarbiec on the target to bind the existing bearer to that exact set, and reports item names and expiry only. It never prints the bearer.
 
 Release publication has a separate verifier and per-product policy set. Reconcile
-only the product being published:
+the verifier to the complete declared publisher set:
 
 ```console
-stado host reconcile-release-verifier <target> --product <product> --json
+stado host reconcile-release-verifier <target> --json
 ```
 
-The command resolves `<product>` through `release_api.publishers`, reads only that
-controller-owned publisher item, writes only its target-local shadow, and adds
-only its `token` read to the existing verifier grant. Other product capabilities
-and shadows are preserved and are never rotated by this operation. Release
-preflight proves the caller credential with an authenticated operation under the
-same product prefix. A public `releases/` stat proves neither boundary.
+The command compares the caller's `release_api.publishers` with the configuration
+the target actually consumes and refuses before mutation when they differ. It
+copies every controller-owned publisher item into the target-local shadows and
+binds the existing verifier bearer to exactly their `token` reads, removing
+capabilities for retired publishers without rotating or printing the bearer.
+Release preflight proves the caller credential with an authenticated operation
+under the same product prefix. A public `releases/` stat proves neither boundary.
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.1
+## 0.16.3
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
 - **Host disk diagnostics:** `stado host disk` now attributes Linux pressure inside the managed home, `/home`, `/mnt`, `/var`, and `/opt` instead of returning an empty inventory after a depth-two root report only named its parent directories.
@@ -8,6 +8,23 @@
 - **Migration:** no configuration or persisted-state migration is required.
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+
+## 0.16.2
+
+- **Release verifier:** `stado host reconcile-release-verifier TARGET` now compares the caller's publisher declarations with the target's effective configuration and binds the existing verifier bearer to the complete exact item set. Retired publishers no longer leave stale capabilities that close the release publication boundary.
+- **Migration:** run the reconciler once on the release-object host. The command preserves the bearer and expiry, copies current publisher shadows, and removes only capabilities absent from the exact shared declaration.
+- **Rollback boundary:** rolling back restores additive, product-at-a-time reconciliation, so a retired publisher capability can close publication again.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation and the live exact verifier report cover this repair, while release publication supplies signed platform manifests and delivery receipts.
+
+## 0.16.1
+
+- **Workload liveness:** local-agent job shells now give Git HTTPS transfers a two-minute low-speed deadline and disable terminal credential prompts, so a connected but non-progressing fetch cannot hold a heartbeat lease and disk-cleanup lock forever.
+- **Resource fidelity:** Cargo builds inherit `CARGO_BUILD_JOBS` from the CPU cores Stado reserved for that job. An undeclared job therefore keeps Cargo to its one-core fallback instead of each of ten admitted jobs fanning out across the whole host.
+- **Reclaim availability:** when the configured queue primary is the local Stado object API, disk cleanup reads its live-job safety fence from the explicitly declared direct server backing store. Exhausting the host disk can no longer make an unavailable listener disable the canonical workdir janitor needed to recover that disk.
+- **Release catalog:** synchronization stops at each checkout's manifest instead of importing build and dependency copies. Publisher commands read their bearer with the same configured consumer grant they acquire, not with the server's separate verifier identity.
+- **Migration:** no persisted-state rewrite is required. Existing jobs receive the bounds when they next start under the updated local agent.
+- **Rollback boundary:** rolling back restores unbounded Git HTTPS progress waits and lets each Cargo process ignore its Stado CPU reservation.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the repository release pipeline supplies its standard qualification evidence before publication.
 
 ## 0.15.26
 
