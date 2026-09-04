@@ -12,10 +12,10 @@
 //! consumers, unknown verify kind — refuses with its exact sentence and
 //! leaves the document untouched.
 //!
-//! The Linux lifecycle case keeps that same real-binary boundary. Its only
+//! The Linux lifecycle cases keep that same real-binary boundary. Their only
 //! fake is the SSH destination: the generated remote program executes against
-//! a systemd host model that records every init-system call, so the test can
-//! prove a unit under `/etc/systemd/system` is adopted and restarted through
+//! a systemd host model that records every init-system call, so the tests prove
+//! a unit under `/etc/systemd/system` is adopted, restarted, and read through
 //! the system manager rather than silently redirected to `systemd --user`.
 
 use std::os::unix::fs::PermissionsExt;
@@ -321,6 +321,7 @@ PATH="$STADO_FAKE_HOST_BIN:/usr/bin:/bin"; export PATH
   -e 's#/usr/bin/id#id#g' \
   -e 's#/usr/bin/stat#stat#g' \
   -e 's#/usr/bin/systemctl#systemctl#g' \
+  -e 's#/usr/bin/journalctl#journalctl#g' \
   -e 's#/usr/bin/loginctl#loginctl#g' \
   -e 's#/usr/bin/sudo#sudo#g' \
   -e 's#/bin/sudo#sudo#g' \
@@ -368,6 +369,11 @@ case "${1:-}" in
 esac
 "#;
 
+const SYSTEMD_FAKE_JOURNALCTL: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$STADO_FAKE_STATE/journalctl.log"
+printf '%s\n' 'agent stopped after release handoff'
+"#;
+
 /// The approved host account has passwordless, non-interactive systemd
 /// administration. The `-n` is kept in its own log because dropping it would
 /// let a lifecycle command wait forever for a password on an SSH pipe.
@@ -407,6 +413,7 @@ impl SystemdHost {
         systemd_tool(&host_bin, "id", SYSTEMD_FAKE_ID);
         systemd_tool(&host_bin, "stat", SYSTEMD_FAKE_STAT);
         systemd_tool(&host_bin, "systemctl", SYSTEMD_FAKE_SYSTEMCTL);
+        systemd_tool(&host_bin, "journalctl", SYSTEMD_FAKE_JOURNALCTL);
         systemd_tool(&host_bin, "sudo", SYSTEMD_FAKE_SUDO);
         systemd_tool(&host_bin, "loginctl", SYSTEMD_FAKE_LOGINCTL);
         systemd_tool(&host_bin, "sleep", SYSTEMD_FAKE_SLEEP);
@@ -454,6 +461,24 @@ impl SystemdHost {
     fn document(&self) -> serde_json::Value {
         let body = std::fs::read_to_string(self.root.path().join("storage/registry.json")).unwrap();
         serde_json::from_str(&body).unwrap()
+    }
+
+    fn declare_systemd_agent(&self) {
+        let mut document = self.document();
+        document["targets"][0]["services"] = serde_json::json!([{
+            "name": SYSTEMD_AGENT,
+            "unit": SYSTEMD_AGENT,
+            "label": "",
+            "path": format!("/etc/systemd/system/{SYSTEMD_AGENT}"),
+            "kind": "systemd",
+            "source": "registry",
+            "managed_since": "2026-09-04T00:00:00Z"
+        }]);
+        std::fs::write(
+            self.root.path().join("storage/registry.json"),
+            serde_json::to_vec_pretty(&document).unwrap(),
+        )
+        .unwrap();
     }
 
     fn state(&self, name: &str) -> String {
@@ -532,5 +557,47 @@ fn systemd_system_unit_is_adopted_and_restarted_in_the_system_scope() {
             .lines()
             .all(|line| line.starts_with("-n systemctl ")),
         "system management must stay non-interactive"
+    );
+}
+
+/// A machine unit writes to the system journal. `service logs` must address
+/// that journal without `--user`, or it reports `-- No entries --` while the
+/// failure that stopped the fleet's only Linux builder remains unread.
+#[test]
+fn systemd_system_unit_logs_come_from_the_system_journal() {
+    let host = SystemdHost::new();
+    host.declare_systemd_agent();
+
+    let logged = host.stado(&[
+        "service",
+        "logs",
+        SYSTEMD_AGENT,
+        "--host",
+        "linux-builder",
+        "--lines",
+        "20",
+        "--json",
+    ]);
+    assert!(
+        logged.status.success(),
+        "logs failed: {}{}",
+        String::from_utf8_lossy(&logged.stdout),
+        stderr(&logged)
+    );
+    let reports: serde_json::Value = serde_json::from_slice(&logged.stdout).unwrap();
+    let report = &reports[0];
+    assert_eq!(report["origin"], format!("journalctl -u {SYSTEMD_AGENT}"));
+    assert_eq!(
+        report["lines"],
+        serde_json::json!(["agent stopped after release handoff"])
+    );
+
+    let calls = host.state("journalctl.log");
+    assert_eq!(calls.trim(), format!("-u {SYSTEMD_AGENT} -n 20 --no-pager"));
+    let sudo = host.state("sudo.log");
+    assert!(
+        sudo.lines()
+            .any(|line| line == format!("-n journalctl -u {SYSTEMD_AGENT} -n 20 --no-pager")),
+        "system journal access must stay non-interactive:\n{sudo}"
     );
 }
