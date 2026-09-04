@@ -1836,17 +1836,14 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Ensure TARGET's release verifier can read one declared product publisher.
+    /// Make TARGET's release-verifier grant match release_api.publishers exactly.
     ///
-    /// The existing bearer, expiry, and unrelated product capabilities are
-    /// preserved. Only PRODUCT's controller-owned shadow and read capability
-    /// are reconciled, without printing either bearer.
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing publisher reads are added without printing the
+    /// bearer or moving it through argv.
     #[command(name = "reconcile-release-verifier")]
     ReconcileReleaseVerifier {
         target: String,
-        /// Exact product key from release_api.publishers.
-        #[arg(long)]
-        product: String,
         /// Emit the reconciled item set as JSON.
         #[arg(long)]
         json: bool,
@@ -3387,11 +3384,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
             }
-            HostCommands::ReconcileReleaseVerifier {
-                target,
-                product,
-                json,
-            } => host::reconcile_release_verifier(&target, &product, json).await,
+            HostCommands::ReconcileReleaseVerifier { target, json } => {
+                host::reconcile_release_verifier(&target, json).await
+            }
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await
             }

@@ -106,7 +106,7 @@ jobs:
           }
           release_product="$(jq -er '.product' "$GITHUB_WORKSPACE/product/.wisent-release.json")"
           retry_reconcile "$stado_bin" host reconcile-release-verifier \
-            charless-mac-mini --product "$release_product" --json
+            charless-mac-mini --json
           canary="$RUNNER_TEMP/product-release-write-preflight.json"
           printf '{"schema":"stado.product-release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"

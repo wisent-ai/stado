@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.2
+
+- **Release verifier:** `stado host reconcile-release-verifier TARGET` now compares the caller's publisher declarations with the target's effective configuration and binds the existing verifier bearer to the complete exact item set. Retired publishers no longer leave stale capabilities that close the release publication boundary.
+- **Migration:** run the reconciler once on the release-object host. The command preserves the bearer and expiry, copies current publisher shadows, and removes only capabilities absent from the exact shared declaration.
+- **Rollback boundary:** rolling back restores additive, product-at-a-time reconciliation, so a retired publisher capability can close publication again.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation and the live exact verifier report cover this repair, while release publication supplies signed platform manifests and delivery receipts.
+
 ## 0.16.1
 
 - **Workload liveness:** local-agent job shells now give Git HTTPS transfers a two-minute low-speed deadline and disable terminal credential prompts, so a connected but non-progressing fetch cannot hold a heartbeat lease and disk-cleanup lock forever.

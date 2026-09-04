@@ -381,12 +381,14 @@ jobs:
           }
           reconcile_release_lifecycles() {
             retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --product stado --json \
+              charless-mac-mini --json \
               > "$RUNNER_TEMP/release-lifecycles.json"
             jq -e '
-              .items == ["stado-release-publisher"] and
+              .exact == true and
+              (.items | type == "array") and
+              (.items | index("stado-release-publisher")) != null and
               (.source_lifecycles | type == "array") and
-              (.source_lifecycles | length) == 1 and
+              (.source_lifecycles | length) == (.items | length) and
               all(
                 .source_lifecycles[];
                 (.item | type == "string" and length > 0) and
