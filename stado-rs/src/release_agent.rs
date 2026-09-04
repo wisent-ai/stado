@@ -669,8 +669,7 @@ fn process_executable_matches(pid: i32, expected: &Path) -> bool {
             return false;
         };
         let actual = actual.to_string_lossy();
-        return actual.strip_suffix(" (deleted)").unwrap_or(&actual)
-            == expected.to_string_lossy();
+        return actual.strip_suffix(" (deleted)").unwrap_or(&actual) == expected.to_string_lossy();
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -942,11 +941,9 @@ async fn ensure_active_proxy(
     let proxy_pid = exact_proxy_pid(target, serving, product)
         .map_err(|why| format!("stable release proxy failed to start: {why}"))?;
     state.proxy_pid = Some(proxy_pid);
-    stable_bind_answer(
-        proxy_pid, target, serving, product, generation, active,
-    )
-    .await
-    .map_err(|why| format!("stable release proxy failed to start: {why}"))
+    stable_bind_answer(proxy_pid, target, serving, product, generation, active)
+        .await
+        .map_err(|why| format!("stable release proxy failed to start: {why}"))
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
@@ -1098,10 +1095,7 @@ pub(crate) fn active_binary(
     if active.version != desired.version || active.artifact_sha256 != artifact.artifact_sha256 {
         return Err(format!(
             "{product} active identity {} {} does not match desired identity {} {}",
-            active.version,
-            active.artifact_sha256,
-            desired.version,
-            artifact.artifact_sha256
+            active.version, active.artifact_sha256, desired.version, artifact.artifact_sha256
         ));
     }
 
