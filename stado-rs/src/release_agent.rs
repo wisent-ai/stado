@@ -1104,10 +1104,22 @@ pub(crate) fn active_binary(
             state.phase
         )
     })?;
-    if !pid_alive(active.pid) {
+    let directory = PathBuf::from(&active.release_dir);
+    let active_process_matches = release_processes(&policy.install_root)
+        .into_iter()
+        .any(|process| {
+            process.pid == active.pid
+                && process.version == active.version
+                && process.port == Some(active.port)
+                && process.release_dir == directory
+        });
+    if !active_process_matches {
         return Err(format!(
-            "{product} observed active process pid {} is not live",
-            active.pid
+            "{product} observed active process tuple pid={} version={} port={} release_dir={} does not match a live release process",
+            active.pid,
+            active.version,
+            active.port,
+            directory.display()
         ));
     }
     if state.quarantined.contains_key(&active.artifact_sha256) {
@@ -1140,7 +1152,6 @@ pub(crate) fn active_binary(
         ));
     }
 
-    let directory = PathBuf::from(&active.release_dir);
     let marker_path = marker_path(&directory);
     let marker = std::fs::read(&marker_path).map_err(|error| {
         format!(
@@ -1211,14 +1222,21 @@ fn proxy_upstream_port(target: &ReleaseTargetPolicy, product: &str) -> Option<u1
         .ok()
 }
 
-/// Every process running out of this product's `releases/` directory:
-/// `(pid, version, port)`, the port parsed from a `--port N` argument when the
-/// launcher passed one.
+#[derive(Debug)]
+struct ReleaseProcess {
+    pid: i32,
+    version: String,
+    port: Option<u16>,
+    release_dir: PathBuf,
+}
+
+/// Every process running out of this product's `releases/` directory, including
+/// the immutable release directory named by its exact argument vector.
 ///
 /// These processes are all children of some run of this agent -- nothing else
 /// executes from that directory -- so any of them the state file does not name is
 /// a leak from a run that died between spawning and recording.
-fn release_processes(install_root: &str) -> Vec<(i32, String, Option<u16>)> {
+fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     let output = match std::process::Command::new("/bin/ps")
         .args(["-eo", "pid=,command="])
         .output()
@@ -1236,20 +1254,35 @@ fn release_processes(install_root: &str) -> Vec<(i32, String, Option<u16>)> {
         let Some(pid) = fields.next().and_then(|first| first.parse::<i32>().ok()) else {
             continue;
         };
-        let version = line
-            .split(&marker)
-            .nth(1)
-            .and_then(|tail| tail.split('/').next())
-            .unwrap_or("?")
-            .to_string();
         let arguments: Vec<&str> = fields.collect();
+        let Some((version, release_dir)) = arguments.iter().find_map(|argument| {
+            let path = argument.split_once('=').map_or(*argument, |(_, value)| value);
+            let (prefix, tail) = path.split_once(&marker)?;
+            let mut components = tail.split('/');
+            let version = components.next()?;
+            let platform = components.next()?;
+            if version.is_empty() || platform.is_empty() {
+                return None;
+            }
+            Some((
+                version.to_string(),
+                PathBuf::from(format!("{prefix}{marker}{version}/{platform}")),
+            ))
+        }) else {
+            continue;
+        };
         let mut port = None;
         for pair in arguments.windows(2) {
             if pair[0] == "--port" {
                 port = pair[1].parse().ok();
             }
         }
-        found.push((pid, version, port));
+        found.push(ReleaseProcess {
+            pid,
+            version,
+            port,
+            release_dir,
+        });
     }
     found
 }
@@ -1281,19 +1314,23 @@ fn sweep_leaked_processes(
         known.push(pid);
     }
     let upstream = proxy_upstream_port(target, product);
-    for (pid, version, port) in release_processes(install_root) {
-        if known.contains(&pid) {
+    for process in release_processes(install_root) {
+        if known.contains(&process.pid) {
             continue;
         }
-        if upstream.is_some() && port == upstream {
+        if upstream.is_some() && process.port == upstream {
             eprintln!(
-                "leaked {product} {version} pid={pid} still carries traffic on \
-                 {port:?}; retiring by cutover, not by kill"
+                "leaked {product} {} pid={} still carries traffic on \
+                 {:?}; retiring by cutover, not by kill",
+                process.version, process.pid, process.port
             );
             continue;
         }
-        let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
-        eprintln!("swept leaked {product} {version} pid={pid} port={port:?}");
+        let _ = kill(Pid::from_raw(process.pid), Signal::SIGTERM);
+        eprintln!(
+            "swept leaked {product} {} pid={} port={:?}",
+            process.version, process.pid, process.port
+        );
     }
 }
 

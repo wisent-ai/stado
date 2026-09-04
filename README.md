@@ -521,6 +521,14 @@ software report, the tail of the candidate's stderr off the host
 the desired one first (`stado release quarantine list`). Clearing a digest is
 done here, with a typed reason, and starts nothing by itself.*
 
+`stado release active-binary <product> --json` is the machine-readable answer
+for an executable another service should launch. It accepts only the observed
+active release whose live process tuple, exact stable proxy route, immutable
+manifest identity, and policy-derived executable agree; desired or quarantined
+bytes merely left on disk are never returned. A declared product/target with no
+observed active release is unavailable rather than eligible for a legacy-path
+fallback.
+
 ![Stado Desktop Hosts screen: two hosts claiming no work, their blockers and disk policy, and the inspector for control-host](desktop/StadoDesktop/docs/screenshots/hosts.png)
 
 *Hosts — find out why a host is claiming no work: the blockers its own agent
