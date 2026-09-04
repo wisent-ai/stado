@@ -33,16 +33,11 @@ impl Journey {
             .unwrap();
         let storage = home.path().join("store");
         fs::create_dir_all(&storage).unwrap();
-        let hostname = String::from_utf8(
-            Command::new("hostname")
-                .arg("-f")
-                .output()
+        let hostname =
+            String::from_utf8(Command::new("hostname").arg("-f").output().unwrap().stdout)
                 .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_ascii_lowercase();
+                .trim()
+                .to_ascii_lowercase();
         let registry = json!({
             "schema_version": 2,
             "targets": [{
@@ -216,18 +211,26 @@ fn live_resources_admit_two_jobs_despite_legacy_single_slot_limits() {
     let second = journey.submit_blocked("second");
     journey.start_agent();
 
-    journey.wait_for("both workloads to be running", Duration::from_secs(45), |state| {
-        state.home.path().join("first.started").exists()
-            && state.home.path().join("second.started").exists()
-            && !state.home.path().join("release").exists()
-    });
+    journey.wait_for(
+        "both workloads to be running",
+        Duration::from_secs(45),
+        |state| {
+            state.home.path().join("first.started").exists()
+                && state.home.path().join("second.started").exists()
+                && !state.home.path().join("release").exists()
+        },
+    );
     journey.wait_for(
         "a capacity publication describing both running jobs",
         Duration::from_secs(30),
         |state| {
             state.newest_capacity().is_some_and(|capacity| {
-                capacity["running_jobs"].as_i64().is_some_and(|count| count >= 2)
-                    && capacity["total_cpu_cores"].as_i64().is_some_and(|count| count >= 2)
+                capacity["running_jobs"]
+                    .as_i64()
+                    .is_some_and(|count| count >= 2)
+                    && capacity["total_cpu_cores"]
+                        .as_i64()
+                        .is_some_and(|count| count >= 2)
                     && capacity.get("available_cpu_cores").is_some()
                     && capacity.get("free_ram_gb").is_some()
                     && capacity.get("available_accelerators").is_some()

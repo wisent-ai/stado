@@ -344,7 +344,8 @@ async fn collect_offers(
         if !policy.placement.allowed_providers.contains(&provider_id) {
             continue;
         }
-        match crate::scheduler::quota::get_available_instances(store, provider.as_ref(), name).await {
+        match crate::scheduler::quota::get_available_instances(store, provider.as_ref(), name).await
+        {
             Ok(available) => {
                 for (accelerator, count) in available {
                     if count <= i64::default() {

@@ -1769,15 +1769,18 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
             let cpu = gates
                 .available_cpu_cores
                 .zip(gates.total_cpu_cores)
-                .map_or_else(|| "-/-".to_string(), |(free, total)| format!("{free}/{total}"));
-            let ram = gates
-                .free_ram_gb
-                .zip(gates.total_ram_gb)
-                .map_or_else(|| "-/-".to_string(), |(free, total)| format!("{free:.1}/{total:.1}"));
-            let vram = gates
-                .free_vram_gb
-                .zip(gates.total_vram_gb)
-                .map_or_else(|| "-/-".to_string(), |(free, total)| format!("{free}/{total}"));
+                .map_or_else(
+                    || "-/-".to_string(),
+                    |(free, total)| format!("{free}/{total}"),
+                );
+            let ram = gates.free_ram_gb.zip(gates.total_ram_gb).map_or_else(
+                || "-/-".to_string(),
+                |(free, total)| format!("{free:.1}/{total:.1}"),
+            );
+            let vram = gates.free_vram_gb.zip(gates.total_vram_gb).map_or_else(
+                || "-/-".to_string(),
+                |(free, total)| format!("{free}/{total}"),
+            );
             println!(
                 "capacity: {admission}, {} running job(s), CPU {cpu} cores available/total, \
                  RAM {ram} GiB free/total, VRAM {vram} GiB free/total; published {} ({published})",
@@ -1798,9 +1801,9 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
                 );
             }
         }
-        None => println!(
-            "capacity: nothing published for this host, so the scheduler cannot see it"
-        ),
+        None => {
+            println!("capacity: nothing published for this host, so the scheduler cannot see it")
+        }
     }
     // The consequence beside the cause: what this host's refusal is starving,
     // oldest first, so "blocked" has a size and an age.

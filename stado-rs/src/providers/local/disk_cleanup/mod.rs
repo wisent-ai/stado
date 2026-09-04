@@ -81,6 +81,16 @@ const LOCK_HOLDER_NAME: &str = "disk-cleanup.lock.holder";
 /// this grace. A holder past that has either stopped or lied about its
 /// budget, and both are states nobody should have to wait out.
 const LOCK_TAKEOVER_GRACE_S: f64 = 300.0;
+/// Retired lock inodes remain linked under this prefix until their original
+/// holder releases them. A replacement lock must never authorize deletion
+/// while one of these files is still locked.
+const RETIRED_LOCK_PREFIX: &str = "disk-cleanup.lock.retired.";
+/// Serializes the short compare-and-replace sequence between takeover
+/// contenders. It is never held while a cleanup pass runs.
+const TAKEOVER_LOCK_NAME: &str = "disk-cleanup.lock.takeover";
+/// Inode-specific holder records survive a legacy predecessor removing the
+/// canonical holder pathname after its lock inode has been retired.
+const LOCK_HOLDER_INODE_PREFIX: &str = "disk-cleanup.lock.holder.inode.";
 
 /// How long one pass may wait on the queue store for its workdir keep-list.
 ///
@@ -697,21 +707,26 @@ fn lock_contended(exc: &io::Error) -> bool {
 
 /// An exclusive cleanup-run lock that always issues `LOCK_UN` before close.
 ///
-/// Explicit unlock is required for consistent semantics on macOS, where
-/// closing one descriptor is not a sufficient release boundary when the
-/// process has opened the same lock file more than once.
+/// The holder token makes record removal conditional. Without it, a process
+/// whose old lock inode was retired could finish later and delete the current
+/// holder's record merely because both records use the same pathname.
 struct ExclusiveLock {
     file: File,
-    holder_record: Option<PathBuf>,
+    holder_records: Vec<PathBuf>,
+    holder_token: Option<String>,
 }
 
 impl Drop for ExclusiveLock {
     fn drop(&mut self) {
         let _ = fs2::FileExt::unlock(&self.file);
-        // The record answers "who holds this, and until when". A record left
-        // behind by a finished pass would answer for nobody.
-        if let Some(path) = &self.holder_record {
-            let _ = std::fs::remove_file(path);
+        let Some(token) = &self.holder_token else {
+            return;
+        };
+        for path in &self.holder_records {
+            let current_token = read_lock_holder_at(path).map(|holder| holder.token);
+            if current_token.as_deref() == Some(token.as_str()) {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 }
@@ -726,6 +741,10 @@ struct LockHolder {
     deadline_at: f64,
     writer: String,
     writer_version: String,
+    /// Unique ownership token. Empty only for records written by an older
+    /// Stado release; those remain readable during the rolling upgrade.
+    #[serde(default)]
+    token: String,
 }
 
 /// Why a contended lock is contended, in the terms an operator needs.
@@ -748,23 +767,103 @@ fn holder_record_path(state_dir: &Path) -> PathBuf {
     state_dir.join(LOCK_HOLDER_NAME)
 }
 
-fn read_lock_holder(state_dir: &Path) -> Option<LockHolder> {
-    let raw = std::fs::read_to_string(holder_record_path(state_dir)).ok()?;
+fn holder_inode_record_path(state_dir: &Path, file: &File) -> Result<PathBuf, JanitorError> {
+    let info = file.metadata()?;
+    Ok(state_dir.join(format!(
+        "{LOCK_HOLDER_INODE_PREFIX}{}.{}",
+        info.dev(),
+        info.ino()
+    )))
+}
+
+fn read_lock_holder_at(path: &Path) -> Option<LockHolder> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)
+        .ok()?;
+    let info = file.metadata().ok()?;
+    if !info.is_file() || info.uid() != euid() {
+        return None;
+    }
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-fn write_lock_holder(state_dir: &Path, pass_seconds: f64, writer: &str) {
+fn read_lock_holder(state_dir: &Path, lock: &File) -> Option<LockHolder> {
+    holder_inode_record_path(state_dir, lock)
+        .ok()
+        .and_then(|path| read_lock_holder_at(&path))
+        .or_else(|| read_lock_holder_at(&holder_record_path(state_dir)))
+}
+
+fn lock_token() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}-{nanos}", std::process::id())
+}
+
+fn write_lock_holder(
+    state_dir: &Path,
+    lock: &File,
+    pass_seconds: f64,
+    writer: &str,
+) -> Result<(String, Vec<PathBuf>), JanitorError> {
     let now = epoch_now();
+    let token = lock_token();
     let record = LockHolder {
         pid: std::process::id() as i32,
         acquired_at: now,
         deadline_at: now + pass_seconds,
         writer: writer.to_string(),
         writer_version: env!("CARGO_PKG_VERSION").to_string(),
+        token: token.clone(),
     };
-    if let Ok(body) = serde_json::to_string(&record) {
-        let _ = std::fs::write(holder_record_path(state_dir), body);
+    let body = serde_json::to_vec(&record)?;
+    let records = vec![
+        holder_inode_record_path(state_dir, lock)?,
+        holder_record_path(state_dir),
+    ];
+    let mut written = Vec::new();
+    for destination in &records {
+        if let Ok(info) = std::fs::symlink_metadata(destination) {
+            if info.file_type().is_symlink() || !info.is_file() || info.uid() != euid() {
+                for path in &written {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(JanitorError::os("unsafe cleanup lock holder record"));
+            }
+        }
+        let file_name = destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| JanitorError::os("invalid cleanup lock holder record path"))?;
+        let staged = state_dir.join(format!(".{file_name}.{token}"));
+        let result = (|| -> Result<(), JanitorError> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .custom_flags(nix::libc::O_NOFOLLOW)
+                .mode(0o600)
+                .open(&staged)?;
+            file.write_all(&body)?;
+            file.sync_data()?;
+            std::fs::rename(&staged, destination)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&staged);
+            for path in &written {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(error);
+        }
+        written.push(destination.clone());
     }
+    Ok((token, records))
 }
 
 /// Is a pid still a process on this host?
@@ -784,61 +883,195 @@ fn pid_alive(pid: i32) -> bool {
     }
 }
 
-/// Exclusive flock, with a bounded answer for a hold that will never end.
+fn open_existing_lock_at(path: &Path) -> Result<File, JanitorError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)?;
+    let info = file.metadata()?;
+    if !info.is_file() || info.uid() != euid() {
+        return Err(JanitorError::os("unsafe cleanup lock file"));
+    }
+    Ok(file)
+}
+
+fn path_names_file(path: &Path, file: &File) -> bool {
+    let Ok(path_info) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    let Ok(file_info) = file.metadata() else {
+        return false;
+    };
+    !path_info.file_type().is_symlink()
+        && path_info.is_file()
+        && path_info.uid() == euid()
+        && path_info.dev() == file_info.dev()
+        && path_info.ino() == file_info.ino()
+}
+
+/// Check every retired predecessor inode while holding the current exclusive
+/// lock. An unlocked predecessor is removed; a still-locked one keeps this
+/// pass report-only so two lock generations can never authorize deletion at
+/// the same time.
+fn retired_locks_active(state_dir: &Path, current_lock: &File) -> Result<bool, JanitorError> {
+    let current_info = current_lock.metadata()?;
+    let mut active = false;
+    for entry in std::fs::read_dir(state_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with(RETIRED_LOCK_PREFIX) {
+            continue;
+        }
+        let path = entry.path();
+        let file = open_existing_lock_at(&path)?;
+        let info = file.metadata()?;
+        if info.dev() == current_info.dev() && info.ino() == current_info.ino() {
+            // A contender can die after creating the hard link but before
+            // replacing the canonical pathname. This process owns that same
+            // inode exclusively, so the extra name is safe to remove.
+            if path_names_file(&path, &file) {
+                std::fs::remove_file(path)?;
+            }
+            continue;
+        }
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => {
+                let still_named = path_names_file(&path, &file);
+                let stale_holder = holder_inode_record_path(state_dir, &file)?;
+                fs2::FileExt::unlock(&file)?;
+                if still_named {
+                    std::fs::remove_file(path)?;
+                    let _ = std::fs::remove_file(stale_holder);
+                }
+            }
+            Err(error) if lock_contended(&error) => active = true,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(active)
+}
+
+fn overdue_holder(state_dir: &Path, lock: &File) -> Option<(LockHolder, f64)> {
+    let holder = read_lock_holder(state_dir, lock)?;
+    let overdue_seconds = epoch_now() - (holder.deadline_at + LOCK_TAKEOVER_GRACE_S);
+    (overdue_seconds > 0.0).then_some((holder, overdue_seconds))
+}
+
+/// Exclusive flock, with a bounded and mutually exclusive recovery path.
 ///
-/// The takeover replaces the lock FILE: the overdue holder keeps its flock on
-/// an inode nothing resolves any more, and every later process — including
-/// the shared workload holds — locks the new file. That is the only mechanism
-/// available, because a live process's flock cannot be revoked, and it is
-/// also why the criterion has to be the holder's own recorded deadline plus
-/// [`LOCK_TAKEOVER_GRACE_S`] rather than elapsed time: for the window of one
-/// pass, the taking process and the wedged one hold locks on different files,
-/// so the workload guard is briefly not mutual. `cleanup_once` pins that one
-/// pass to `report` mode for exactly this reason.
+/// A takeover keeps a hard link to the predecessor inode before atomically
+/// replacing the canonical pathname. Every later cleanup probes that retired
+/// inode and remains report-only until its kernel lock is released. The short
+/// hard-link/rename section has its own mutex, preventing two contenders from
+/// retiring different generations concurrently.
 fn acquire_lock_state(
     state_dir: &Path,
     pass_seconds: f64,
     writer: &str,
 ) -> Result<LockState, JanitorError> {
+    let canonical = state_dir.join(LOCK_NAME);
     let file = open_lock(state_dir)?;
     match fs2::FileExt::try_lock_exclusive(&file) {
         Ok(()) => {
-            write_lock_holder(state_dir, pass_seconds, writer);
+            let (token, records) = write_lock_holder(state_dir, &file, pass_seconds, writer)?;
             return Ok(LockState::Held(ExclusiveLock {
                 file,
-                holder_record: Some(holder_record_path(state_dir)),
+                holder_records: records,
+                holder_token: Some(token),
             }));
         }
-        Err(exc) if lock_contended(&exc) => {}
-        Err(exc) => return Err(exc.into()),
+        Err(error) if lock_contended(&error) => {}
+        Err(error) => return Err(error.into()),
     }
-    let holder = read_lock_holder(state_dir);
-    let overdue = holder
-        .as_ref()
-        .map(|holder| epoch_now() - (holder.deadline_at + LOCK_TAKEOVER_GRACE_S))
-        .filter(|overdue| *overdue > 0.0);
-    let Some((holder, overdue_seconds)) = holder.as_ref().zip(overdue) else {
-        return Ok(LockState::Busy { holder });
-    };
-    // Replace the lock file with one this process owns. `rename` is atomic, so
-    // no reader ever sees the path missing.
-    let staged = state_dir.join(format!("{LOCK_NAME}.takeover.{}", std::process::id()));
-    let fresh = open_lock_at(&staged)?;
-    if fs2::FileExt::try_lock_exclusive(&fresh).is_err() {
-        let _ = std::fs::remove_file(&staged);
+    let initial_holder = read_lock_holder(state_dir, &file);
+    if overdue_holder(state_dir, &file).is_none() {
         return Ok(LockState::Busy {
-            holder: Some(holder.clone()),
+            holder: initial_holder,
         });
     }
-    std::fs::rename(&staged, state_dir.join(LOCK_NAME))?;
-    let from_pid = holder.pid;
-    write_lock_holder(state_dir, pass_seconds, writer);
+
+    let takeover_file = open_lock_at(&state_dir.join(TAKEOVER_LOCK_NAME))?;
+    match fs2::FileExt::try_lock_exclusive(&takeover_file) {
+        Ok(()) => {}
+        Err(error) if lock_contended(&error) => {
+            return Ok(LockState::Busy {
+                holder: initial_holder,
+            });
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let _takeover_guard = ExclusiveLock {
+        file: takeover_file,
+        holder_records: Vec::new(),
+        holder_token: None,
+    };
+
+    // Re-open and re-evaluate after winning the takeover mutex. Another
+    // contender may have replaced or released the lock while we waited.
+    let current = open_lock(state_dir)?;
+    match fs2::FileExt::try_lock_exclusive(&current) {
+        Ok(()) => {
+            let (token, records) = write_lock_holder(state_dir, &current, pass_seconds, writer)?;
+            return Ok(LockState::Held(ExclusiveLock {
+                file: current,
+                holder_records: records,
+                holder_token: Some(token),
+            }));
+        }
+        Err(error) if lock_contended(&error) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let Some((holder, overdue_seconds)) = overdue_holder(state_dir, &current) else {
+        return Ok(LockState::Busy {
+            holder: read_lock_holder(state_dir, &current),
+        });
+    };
+
+    let replacement_token = lock_token();
+    let current_info = current.metadata()?;
+    let retired = state_dir.join(format!(
+        "{RETIRED_LOCK_PREFIX}{}.{}.{}",
+        current_info.dev(),
+        current_info.ino(),
+        replacement_token
+    ));
+    std::fs::hard_link(&canonical, &retired)?;
+    if !path_names_file(&canonical, &current) {
+        let _ = std::fs::remove_file(&retired);
+        return Ok(LockState::Busy {
+            holder: Some(holder),
+        });
+    }
+
+    let staged = state_dir.join(format!(".{LOCK_NAME}.takeover.{replacement_token}"));
+    let fresh = open_lock_at(&staged)?;
+    if let Err(error) = fs2::FileExt::try_lock_exclusive(&fresh) {
+        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_file(&retired);
+        return Err(error.into());
+    }
+    if let Err(error) = std::fs::rename(&staged, &canonical) {
+        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_file(&retired);
+        return Err(error.into());
+    }
+    let (token, records) = match write_lock_holder(state_dir, &fresh, pass_seconds, writer) {
+        Ok(holder) => holder,
+        Err(error) => {
+            // Put the predecessor inode back under the canonical name. Its
+            // holder record still describes it, so the next pass can retry.
+            let _ = std::fs::rename(&retired, &canonical);
+            return Err(error);
+        }
+    };
     Ok(LockState::TakenOver {
         lock: ExclusiveLock {
             file: fresh,
-            holder_record: Some(holder_record_path(state_dir)),
+            holder_records: records,
+            holder_token: Some(token),
         },
-        from_pid,
+        from_pid: holder.pid,
         overdue_seconds,
     })
 }
@@ -1077,13 +1310,14 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
 // ---------------------------------------------------------------------------
 
 /// Python `_PUBLIC_OUTCOMES`.
-const PUBLIC_OUTCOMES: [&str; 12] = [
+const PUBLIC_OUTCOMES: [&str; 13] = [
     "never_run",
     "invalid_or_unavailable_policy",
     "lock_busy",
     "interval_noop",
     "healthy_noop",
     "report_only",
+    "lock_recovery_report_only",
     "blocked_running_jobs",
     "reclaimed_target",
     "reclaimed_progress",
@@ -1711,10 +1945,13 @@ fn run_with_lock(
     started: Instant,
     attempted_at: f64,
     force: bool,
-    // Plan only: pin an `enforce` policy down to the janitor's own
-    // `report` mode for this pass, and persist nothing. See
-    // `preview_cleanup_once`.
+    // Plan only: pin an `enforce` policy down to the janitor's own `report`
+    // mode and persist nothing. See `preview_cleanup_once`.
     preview: bool,
+    // A predecessor lock inode is still live, or was replaced during this
+    // pass. Scan and persist diagnostics, but never delete until every
+    // predecessor kernel lock has actually been released.
+    lock_recovery: bool,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     // A preview leaves no trace. The state file is the janitor's record of
@@ -1734,13 +1971,11 @@ fn run_with_lock(
     // mode walks the identical scan and counts every eligible item without
     // unlinking one — `hf::run_hf` and `weles::scan_weles` both return
     // before their removal step whenever the mode is not `"enforce"` — so
-    // a preview is this pass with that one word changed, not a second
-    // implementation of the policy.
+    // preview and lock recovery are this pass with that one word changed,
+    // not second implementations of the policy.
     //
-    // `off` and `report` policies are left exactly as the registry states
-    // them: a cleanup that is switched off would delete nothing, and the
-    // preview has to say so rather than pretend the host is armed.
-    if preview && policy.mode == "enforce" {
+    // `off` and `report` policies are left exactly as the registry states.
+    if (preview || lock_recovery) && policy.mode == "enforce" {
         policy.mode = "report".to_string();
     }
     report.target_name = Some(target.name);
@@ -2113,7 +2348,9 @@ fn run_with_lock(
     // nothing to delete" and "I got 7,297 directories into one repository's
     // `node_modules` and ran out of time", with 174 tagged build caches and
     // a 62 GiB `target/` unexamined behind it.
-    if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
+    if lock_recovery {
+        report.outcome = "lock_recovery_report_only".to_string();
+    } else if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
         report.outcome = "cap_reached".to_string();
     } else if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
@@ -2322,8 +2559,8 @@ async fn cleanup_once(
             let detail = format!(
                 "took the janitor run lock from pid {from_pid} ({liveness}), {:.0}s past the \
                  deadline that holder recorded plus the {LOCK_TAKEOVER_GRACE_S:.0}s grace; this \
-                 pass runs in report mode because the replaced lock file cannot be mutual with a \
-                 workload hold the old holder may still have",
+                 pass runs in report mode, and enforcement stays disabled until the retired \
+                 predecessor inode no longer has a kernel lock",
                 overdue_seconds
             );
             log_fn(&format!("disk cleanup: {detail}"));
@@ -2392,6 +2629,20 @@ async fn cleanup_once(
             return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
     };
+    let predecessor_active = match retired_locks_active(&state_dir, &lock.file) {
+        Ok(active) => active,
+        Err(error) => {
+            report.add_error("lock_recovery", &error);
+            true
+        }
+    };
+    if predecessor_active {
+        let detail =
+            "a retired cleanup lock inode is still held; this pass scans and persists diagnostics but deletes nothing";
+        log_fn(&format!("disk cleanup: {detail}"));
+        report.add_error("lock_predecessor_active", &JanitorError::os(detail));
+    }
+    let lock_recovery = taken_over || predecessor_active;
 
     run_with_lock(
         &home,
@@ -2403,11 +2654,8 @@ async fn cleanup_once(
         started,
         attempted_at,
         force,
-        // A taken-over pass scans and counts and deletes nothing, for exactly
-        // one pass: from the moment the lock file is replaced every later
-        // holder, workload holds included, contends on the same file again, so
-        // the mutual guarantee is restored for the pass after this one.
-        preview || taken_over,
+        preview,
+        lock_recovery,
         log_fn,
     )
 }

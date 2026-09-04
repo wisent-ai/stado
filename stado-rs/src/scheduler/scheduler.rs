@@ -454,10 +454,8 @@ async fn schedule_queued_jobs_inner(
     // in this tick does not spend the same live resource twice.
     let consumer_caps = capacity::read_consumer_capacity(store).await?;
     let local_provider = [crate::capabilities::ProviderId::Local.as_str()];
-    let local_free = capacity::total_available_accelerators(
-        &consumer_caps,
-        Some(local_provider.as_slice()),
-    );
+    let local_free =
+        capacity::total_available_accelerators(&consumer_caps, Some(local_provider.as_slice()));
     let local_vram_pool =
         capacity::consumers_by_free_vram(&consumer_caps, Some(local_provider.as_slice()));
     if !local_free.is_empty() {

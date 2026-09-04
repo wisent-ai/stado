@@ -4,10 +4,11 @@
 //! Standard directory supplies genuinely regenerable state; the assertions read
 //! the filesystem and persisted janitor report after preview and enforcement.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use fs2::FileExt;
 use serde_json::{json, Value};
 
 const CACHE_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n";
@@ -112,7 +113,10 @@ impl Journey {
             .arg(&directory)
             .status()
             .unwrap();
-        assert!(touched.success(), "fixture directory mtime was not backdated");
+        assert!(
+            touched.success(),
+            "fixture directory mtime was not backdated"
+        );
         directory
     }
 
@@ -127,6 +131,23 @@ impl Journey {
         self.home
             .path()
             .join(".cache/wisent-compute/disk-cleanup-state.json")
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.home.path().join(".cache/wisent-compute")
+    }
+
+    fn retired_locks(&self) -> Vec<PathBuf> {
+        fs::read_dir(self.state_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("disk-cleanup.lock.retired.")
+            })
+            .collect()
     }
 }
 
@@ -146,7 +167,10 @@ fn dry_run_reports_eligible_cache_without_deleting_or_persisting() {
     assert_eq!(report["active_job_count"], 0);
     assert!(tagged.is_dir(), "preview must preserve an eligible cache");
     assert!(untagged.is_dir(), "preview must preserve unrelated source");
-    assert!(!journey.state_path().exists(), "preview must write no janitor state");
+    assert!(
+        !journey.state_path().exists(),
+        "preview must write no janitor state"
+    );
 }
 
 #[test]
@@ -163,7 +187,10 @@ fn enforce_deletes_only_tagged_cache_and_persists_reclaimed_progress() {
     assert_eq!(report["cleaners"]["build_caches"]["eligible_items"], 1);
     assert_eq!(report["cleaners"]["build_caches"]["deleted_items"], 1);
     assert_eq!(report["errors"], json!([]));
-    assert!(!tagged.exists(), "enforcement must remove the eligible cache");
+    assert!(
+        !tagged.exists(),
+        "enforcement must remove the eligible cache"
+    );
     assert!(
         untagged.join("valuable-source.txt").is_file(),
         "enforcement must preserve an untagged source directory"
@@ -172,6 +199,63 @@ fn enforce_deletes_only_tagged_cache_and_persists_reclaimed_progress() {
     let state: Value = serde_json::from_slice(&fs::read(journey.state_path()).unwrap()).unwrap();
     assert_eq!(state["report"]["outcome"], "reclaimed_progress");
     assert_eq!(state["report"]["writer"], "disk-cleanup-cli");
+}
+
+#[test]
+#[ignore = "Probierz records the real stale-lock recovery journey"]
+fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released() {
+    let journey = Journey::new();
+    let tagged = journey.tagged_cache("lock-recovery-candidate");
+    let state_dir = journey.state_dir();
+    fs::create_dir_all(&state_dir).unwrap();
+    let lock_path = state_dir.join("disk-cleanup.lock");
+    let held = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    held.lock_exclusive().unwrap();
+    fs::write(
+        state_dir.join("disk-cleanup.lock.holder"),
+        serde_json::to_vec(&json!({
+            "pid": std::process::id(),
+            "acquired_at": 0.0,
+            "deadline_at": 0.0,
+            "writer": "legacy-agent",
+            "writer_version": "legacy"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let takeover = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    assert_eq!(takeover["mode"], "report");
+    assert_eq!(takeover["outcome"], "lock_recovery_report_only");
+    assert!(tagged.is_dir(), "takeover pass must not delete");
+    assert_eq!(journey.retired_locks().len(), 1);
+    let persisted: Value =
+        serde_json::from_slice(&fs::read(journey.state_path()).unwrap()).unwrap();
+    assert_eq!(persisted["report"]["outcome"], "lock_recovery_report_only");
+
+    let still_held = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    assert_eq!(still_held["outcome"], "lock_recovery_report_only");
+    assert!(
+        tagged.is_dir(),
+        "a second pass must not delete through the replacement lock"
+    );
+
+    FileExt::unlock(&held).unwrap();
+    drop(held);
+    let recovered = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    assert_eq!(recovered["mode"], "enforce");
+    assert_eq!(recovered["outcome"], "reclaimed_progress");
+    assert!(
+        !tagged.exists(),
+        "enforcement resumes only after the predecessor releases its inode"
+    );
+    assert!(journey.retired_locks().is_empty());
 }
 
 #[test]

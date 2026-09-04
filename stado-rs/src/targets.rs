@@ -1162,7 +1162,6 @@ pub fn box_capabilities() -> &'static TargetCapabilities {
 // __init__.py — data models
 // ---------------------------------------------------------------------------
 
-
 fn default_runtime() -> String {
     "daemon".to_string()
 }

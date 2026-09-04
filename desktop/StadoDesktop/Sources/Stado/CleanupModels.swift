@@ -59,6 +59,8 @@ struct CleanupReport: Codable, Sendable {
             OutcomePresentation(title: "Checked recently", detail: "The registry-controlled interval has not elapsed.", symbol: "clock.fill", severity: .neutral)
         case "report_only":
             OutcomePresentation(title: "Report only", detail: "Policy observed pressure without deleting data.", symbol: "doc.text.magnifyingglass", severity: .warning)
+        case "lock_recovery_report_only":
+            OutcomePresentation(title: "Lock recovery", detail: "Cleanup is scanning without deletion until the previous kernel lock is released.", symbol: "lock.trianglebadge.exclamationmark.fill", severity: .warning)
         case "blocked_running_jobs":
             OutcomePresentation(title: "Waiting for active work", detail: "Cleanup is blocked while jobs are running.", symbol: "pause.circle.fill", severity: .warning)
         case "cap_reached":
