@@ -12,6 +12,7 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -7036,6 +7037,63 @@ fn render_verifier_report(report: &Value, json_output: bool) -> Result<(), CmdEr
     Ok(())
 }
 
+fn object_namespace_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
+    let namespaces = document
+        .pointer("/resolved/object_api_namespaces")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            CmdError::click(
+                "object_verifier_reconcile_host_declaration_unreadable: remote config has no resolved object_api_namespaces",
+            )
+        })?;
+    namespaces
+        .iter()
+        .map(|(namespace, declaration)| {
+            let item = declaration
+                .get("item")
+                .and_then(Value::as_str)
+                .filter(|item| !item.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "object_verifier_reconcile_host_declaration_unreadable: namespace {namespace:?} has no item"
+                    ))
+                })?;
+            Ok((namespace.clone(), item.to_string()))
+        })
+        .collect()
+}
+
+fn ensure_object_verifier_declarations_match(
+    host: &BTreeMap<String, String>,
+    local_items: &BTreeSet<String>,
+) -> Result<(), CmdError> {
+    let local = local_items
+        .iter()
+        .filter(|item| item.as_str() != crate::config::HOST_HEALTH_API_ITEM)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let host_items = host.values().cloned().collect::<BTreeSet<_>>();
+    let missing = host
+        .iter()
+        .filter(|(_, item)| !local.contains(item.as_str()))
+        .map(|(namespace, item)| format!("{namespace}={item}"))
+        .collect::<Vec<_>>();
+    let unexpected = local
+        .difference(&host_items)
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "object_verifier_reconcile_declaration_mismatch: local object_api.namespaces cannot \
+         prove TARGET's declaration (missing_local=[{}], unexpected_local_items=[{}]); copy \
+         the host's exact namespace declarations locally before reconciling",
+        missing.join(","),
+        unexpected.join(",")
+    )))
+}
+
 async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         CmdError::click(format!(
@@ -7044,10 +7102,28 @@ async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdErro
         ))
     })?;
     let items = crate::config::object_verifier_items(namespaces);
+    // Reconciliation used to derive "exact" solely from this machine's
+    // declaration. On 2026-09-04 the target declared `spis-crawls`, this
+    // machine did not, and the command removed nothing missing locally before
+    // reporting exact=true while the target's whole object boundary stayed
+    // closed. Read the configuration the target's services actually consume
+    // and refuse before touching its grant when the two inputs differ.
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout =
+        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let document: Value = serde_json::from_str(&stdout).map_err(|error| {
+        CmdError::click(format!(
+            "object_verifier_reconcile_host_declaration_unreadable: {error}"
+        ))
+    })?;
+    let host = object_namespace_items(&document)?;
+    ensure_object_verifier_declarations_match(&host, &items)?;
     reconcile_verifier(
         target,
         "object",
-        "object_api.namespaces and the host-health route",
+        "matching local and target object_api.namespaces plus the host-health route",
         crate::config::OBJECT_API_VERIFIER_CONSUMER,
         "WC_OBJECT_SKARBIEC_TOKEN_FILE",
         "stado-object-api-verifier-skarbiec-token",
