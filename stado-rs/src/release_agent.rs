@@ -1114,8 +1114,14 @@ pub(crate) fn active_binary(
     let install_root = install_root
         .to_str()
         .ok_or_else(|| format!("{product} install root is not valid UTF-8"))?;
+    // `spawn_release` starts a new process group whose leader is the `sudo`
+    // monitor recorded in state. On macOS sudo keeps that monitor alive and
+    // runs the release binary as its child, so the serving process has a
+    // different pid but the same pgid. Bind the exact release executable,
+    // version, directory and port to that recorded group; accepting only the
+    // leader makes every healthy sudo-launched release unverifiable.
     let active_process_matches = release_processes(install_root).into_iter().any(|process| {
-        process.pid == active.pid
+        process.process_group == active.pid
             && process.version == active.version
             && process.port == Some(active.port)
             && process.release_dir == directory
@@ -1232,6 +1238,7 @@ fn proxy_upstream_port(target: &ReleaseTargetPolicy, product: &str) -> Option<u1
 #[derive(Debug)]
 struct ReleaseProcess {
     pid: i32,
+    process_group: i32,
     version: String,
     port: Option<u16>,
     release_dir: PathBuf,
@@ -1245,7 +1252,7 @@ struct ReleaseProcess {
 /// a leak from a run that died between spawning and recording.
 fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     let output = match std::process::Command::new("/bin/ps")
-        .args(["-eo", "pid=,command="])
+        .args(["-eo", "pid=,pgid=,command="])
         .output()
     {
         Ok(output) => output,
@@ -1259,6 +1266,9 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
         }
         let mut fields = line.split_whitespace();
         let Some(pid) = fields.next().and_then(|first| first.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Some(process_group) = fields.next().and_then(|field| field.parse::<i32>().ok()) else {
             continue;
         };
         let arguments: Vec<&str> = fields.collect();
@@ -1288,6 +1298,7 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
         }
         found.push(ReleaseProcess {
             pid,
+            process_group,
             version,
             port,
             release_dir,
@@ -1444,7 +1455,7 @@ fn sweep_leaked_processes(
     }
     let upstream = proxy_upstream_port(target, product);
     for process in release_processes(install_root) {
-        if known.contains(&process.pid) {
+        if known.contains(&process.process_group) {
             continue;
         }
         if upstream.is_some() && process.port == upstream {

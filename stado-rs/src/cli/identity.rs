@@ -109,43 +109,78 @@ async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Ve
     }
 
     // Read the preference file directly: the account identifiers it holds,
-    // `unreadable` when the file exists but this channel may not open it, or
-    // `none` when there is no such file. Only the first is an observation; the
-    // other two are the probe admitting its limit, which is the distinction
-    // the whole thing exists to make. Read-only throughout: a preference file
-    // is opened and nothing is written anywhere.
+    // `unreadable` when the channel may not open it, or `none` when there is
+    // no such file. Only the first and the last are observations; the middle
+    // one is the probe admitting its limit, which is the distinction the whole
+    // thing exists to make. Read-only throughout: a preference file is opened
+    // and nothing is written anywhere.
+    //
+    // The order below is the correction. `test -f` inside another user's home
+    // fails on macOS for lack of search permission — homes are 700 — and this
+    // returned that as `Some(vec![])`, which reads as "that user is not signed
+    // in". On 2026-09-04 it said exactly that about an account the operator
+    // had been signed into on that Mac for weeks, and the Developer ID run
+    // refused with `no host holds apple-account`. The `-r` test meant to catch
+    // it sat BEHIND the `-f` test, so it could never fire. Absence is only
+    // claimed once the directory has been shown to be searchable.
     let plist = format!("/Users/{user}/Library/Preferences/MobileMeAccounts.plist");
     let quoted = crate::deploy::shlex_quote(&plist);
-    if !crate::deploy::host_channel::remote_test(&target, &format!("-f {quoted}"), &runner)
+    let directory = crate::deploy::shlex_quote(&format!("/Users/{user}/Library/Preferences"));
+    let readable =
+        crate::deploy::host_channel::remote_test(&target, &format!("-r {quoted}"), &runner)
+            .await
+            .ok()?;
+    if readable {
+        let printed = crate::deploy::host_channel::run_program(
+            &target,
+            &["/usr/bin/plutil", "-p", &plist],
+            &runner,
+        )
         .await
-        .ok()?
-    {
-        return Some(Vec::new());
+        .ok()?;
+        return Some(plutil_account_ids(&printed.stdout));
     }
-    // `unreadable` is the probe declining to answer, which must stay unknown
-    // rather than becoming "not signed in".
-    if !crate::deploy::host_channel::remote_test(&target, &format!("-r {quoted}"), &runner)
-        .await
-        .ok()?
-    {
-        return None;
-    }
-    let printed = crate::deploy::host_channel::run_program(
+    // Not readable as the channel's user. The fleet already reaches root on
+    // these hosts for `launchctl` and `install`, so the same grant answers
+    // this question rather than leaving it to a guess; a host that does not
+    // grant it stays unknown.
+    let privileged = crate::deploy::host_channel::run_program(
         &target,
-        &["/usr/bin/plutil", "-p", &plist],
+        &["/usr/bin/sudo", "-n", "/usr/bin/plutil", "-p", &plist],
         &runner,
     )
     .await
     .ok()?;
-    // A failed plutil is a pipeline whose awk found no AccountID lines -- the
-    // same `none` the retired probe reported for an empty list.
-    let accounts: Vec<String> = printed
-        .stdout
+    if privileged.ok() {
+        return Some(plutil_account_ids(&privileged.stdout));
+    }
+    // Neither read worked. Absence is a claim, and it is only made when the
+    // channel could look at the directory and found no file there.
+    let searchable =
+        crate::deploy::host_channel::remote_test(&target, &format!("-x {directory}"), &runner)
+            .await
+            .ok()?;
+    let present =
+        crate::deploy::host_channel::remote_test(&target, &format!("-f {quoted}"), &runner)
+            .await
+            .ok()?;
+    if searchable && !present {
+        return Some(Vec::new());
+    }
+    None
+}
+
+/// Every `AccountID` a `plutil -p` dump names, in the order printed.
+///
+/// A separate parser from [`account_ids`] on purpose: `defaults read` writes
+/// `AccountID = "x";` and `plutil -p` writes `"AccountID" => "x"`, so one
+/// quoted-segment index cannot read both.
+fn plutil_account_ids(printed: &str) -> Vec<String> {
+    printed
         .lines()
         .filter(|line| line.contains("AccountID"))
         .filter_map(|line| line.split('"').nth(3).map(str::to_string))
-        .collect();
-    Some(accounts)
+        .collect()
 }
 
 /// Does the approved channel land on the very user this binding names?
@@ -213,7 +248,33 @@ fn local_apple_accounts() -> Option<Vec<String>> {
     }
 }
 
-fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Option<bool>) -> Value {
+/// Can the fleet act inside the session this binding names?
+///
+/// A per-user identity is only usable where its own session can be driven: a two-factor
+/// notification for an Apple account is delivered into the session of the user signed
+/// into it, and no other session on that Mac can read or answer it. The fleet drives
+/// exactly one session per host -- the one `gui-automation` configures, whose autologin
+/// credential is the single host account the vault holds for that target.
+///
+/// `Some(false)` is therefore a hard answer, not a warning: the binding names a user
+/// the fleet has no way to log in, so every run placed here will reach the prompt and
+/// stop. Worth knowing before dispatch, because reaching that point spends an Apple
+/// sign-in attempt, and repeated attempts are how an Apple ID gets locked.
+async fn drivable_session(target: &ComputeTarget, binding: &IdentityBinding) -> Option<bool> {
+    let declared = binding.user.as_deref()?;
+    let runner = crate::deploy::production_runner();
+    let session = crate::deploy::host_gui_automation::automated_session_user(target, &runner)
+        .await
+        .ok()?;
+    Some(session == declared)
+}
+
+fn binding_row(
+    target: &ComputeTarget,
+    binding: &IdentityBinding,
+    observed: Option<bool>,
+    drivable: Option<bool>,
+) -> Value {
     json!({
         // The registry's name for the machine, and deliberately not an address.
         // Callers route work to the holder through the registry channel, which
@@ -226,6 +287,9 @@ fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Opti
         "user": binding.user,
         "declared": true,
         "observed": observed,
+        // Whether the fleet can act in this binding's session. `null` when the host
+        // could not be asked, and never conflated with `false`.
+        "drivable_session": drivable,
         "verified_at": binding.verified_at,
     })
 }
@@ -241,7 +305,9 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
             target
                 .identities
                 .iter()
-                .map(move |binding| binding_row(target, binding, None))
+                // `list` prints the declaration alone and reaches no host, so both
+                // measured columns are absent here rather than guessed.
+                .map(move |binding| binding_row(target, binding, None, None))
         })
         .collect();
     if json_output {
@@ -316,7 +382,8 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 _ => None,
             };
             satisfied |= observed == Some(true);
-            rows.push(binding_row(target, binding, observed));
+            let drivable = drivable_session(target, binding).await;
+            rows.push(binding_row(target, binding, observed, drivable));
         }
     }
 
@@ -340,11 +407,19 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 Some(false) => "MISSING",
                 None => "unknown",
             };
+            // Two separate questions, so two separate words: whether the identity is
+            // there, and whether the fleet can act where it is.
+            let session = match row["drivable_session"].as_bool() {
+                Some(true) => "drivable",
+                Some(false) => "OTHER-SESSION",
+                None => "unknown",
+            };
             println!(
-                "{:<24} {:<32} {}",
+                "{:<24} {:<32} {:<8} {}",
                 row["host"].as_str().unwrap_or("-"),
                 row["identity"].as_str().unwrap_or("-"),
-                observed
+                observed,
+                session
             );
         }
     }

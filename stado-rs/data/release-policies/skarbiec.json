@@ -33,7 +33,9 @@
         "logs_root": "/Users/charles/.stado/logs",
         "stable_bind": "127.0.0.1:8895",
         "candidate_ports": [18895, 18896],
-        "readiness_path": "/readyz"
+        "readiness_path": "/readyz",
+        "legacy_launchd_label": "com.wisent.always-on.skarbiec",
+        "legacy_launchd_plist": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist"
       }
     },
     "desired": null,

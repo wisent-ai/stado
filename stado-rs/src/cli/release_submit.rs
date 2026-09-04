@@ -41,6 +41,18 @@ pub struct ReleaseSubmitArgs {
     #[arg(long)]
     json: bool,
 }
+
+#[derive(Args)]
+pub struct ReleaseRedeliverArgs {
+    product: String,
+    run_id: String,
+    delivery: String,
+    /// Caller-retained idempotency token for this exact redelivery attempt.
+    #[arg(long)]
+    retry_token: String,
+    #[arg(long)]
+    json: bool,
+}
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum SubmitChannel {
     Candidate,
@@ -747,10 +759,14 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
     })
 }
 
-/// The live consumer id of one exact registry target, for a delivery pinned
-/// to the host it installs on. Same capacity-publication resolution as
-/// [`builder`], narrowed from "any live host of this platform" to "this
-/// host, live, or a named refusal".
+/// Resolve the consumer id last published by one exact registry target.
+///
+/// Delivery jobs are the recovery lane that installs a Stado version able to
+/// clear a target's current gate. Requiring the target's general capacity row
+/// to be fresh here deadlocks that lane: a long-running job or disk-pressure
+/// gate can age the row past the scheduler horizon while the agent still has
+/// enough identity to claim the exact pinned delivery. Builders still use
+/// [`builder`] and therefore still require fresh, claimable capacity.
 async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -758,23 +774,32 @@ async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let capacity = crate::queue::capacity::read_consumer_capacity(&store)
+    let publications = crate::queue::capacity::read_publications(&store)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    for consumer in capacity.keys() {
-        let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
-        if registry
+    let mut newest = None;
+    for (consumer, publication) in publications {
+        let identity = consumer.strip_prefix("local-").unwrap_or(&consumer);
+        let matches_target = registry
             .lookup_self(identity)
             .map_err(|error| CmdError::click(error.to_string()))?
-            .is_some_and(|target| target.name == target_name)
-        {
-            return Ok(consumer.clone());
+            .is_some_and(|target| target.name == target_name);
+        if !matches_target {
+            continue;
+        }
+        let replace = newest
+            .as_ref()
+            .is_none_or(|(_, stamp)| publication.stamp > *stamp);
+        if replace {
+            newest = Some((consumer, publication.stamp));
         }
     }
-    Err(CmdError::click(format!(
-        "delivery target {target_name} is not broadcasting capacity, so the delivery pinned to \
-         it cannot run; see stado host gates {target_name}"
-    )))
+    newest.map(|(consumer, _)| consumer).ok_or_else(|| {
+        CmdError::click(format!(
+            "delivery target {target_name} has no retained capacity publication, so its consumer \
+             identity is unknown; see stado host gates {target_name}"
+        ))
+    })
 }
 fn secret_refs(v: &BTreeMap<String, String>) -> BTreeMap<String, JobSecretRef> {
     v.iter()
@@ -809,6 +834,7 @@ async fn enqueue(
     source_uri: &str,
     manifest_sha: &str,
     manifest_uri: &str,
+    prior_terminal_job_id: Option<&str>,
 ) -> Result<PlatformRun, CmdError> {
     let queue_control = crate::queue::control::read(store)
         .await
@@ -892,11 +918,26 @@ async fn enqueue(
     let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
     queue_immutable(&request_path, &bytes).await?;
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
+    let submission_run_id = match prior_terminal_job_id {
+        Some(prior_job_id) => stable_run_id(
+            "release-platform",
+            &format!("{id}\0{platform}\0{prior_job_id}"),
+        ),
+        None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
+    };
+    let output_uri = match prior_terminal_job_id {
+        Some(_) => run_uri(
+            &m.product,
+            id,
+            &format!("platforms/{platform}/attempts/{submission_run_id}/output"),
+        ),
+        None => run_uri(&m.product, id, &format!("platforms/{platform}/output")),
+    };
     let options = SubmitOptions {
         pinned_host: consumer,
         priority: crate::constants::RELEASE_JOB_PRIORITY,
-        run_id: stable_run_id("release-platform", &format!("{id}\0{platform}")),
-        output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
+        run_id: submission_run_id,
+        output_uri,
         input_artifacts: resolved.clone(),
         resolved_input_artifacts: resolved,
         secret_env: secret_refs(&recipe.secret_env),
@@ -1334,6 +1375,11 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             }
         }
         if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
+            let prior_terminal_job_id = run
+                .platforms
+                .get(p)
+                .filter(|platform| platform.state == PlatformRunState::Failed)
+                .map(|platform| platform.job_id.as_str());
             let r = match enqueue(
                 &store,
                 &id,
@@ -1345,6 +1391,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 &source_input_uri,
                 &manifest_sha,
                 &manifest_uri,
+                prior_terminal_job_id,
             )
             .await
             {
@@ -1579,6 +1626,518 @@ async fn run_deliveries(
             )));
         }
     }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RedeliveryStage {
+    IntentCreated,
+    RunReopened,
+    Submitted,
+    Terminal,
+    RunRestored,
+    Completed,
+    Failed,
+}
+
+impl RedeliveryStage {
+    fn terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RedeliveryTransaction {
+    schema_version: u32,
+    retry_token_sha256: String,
+    delivery: String,
+    previous_run_state: ReleaseRunState,
+    pinned_consumer: String,
+    request_sha256: String,
+    stage: RedeliveryStage,
+    job_id: Option<String>,
+    receipt_sha256: Option<String>,
+    failure: Option<String>,
+}
+
+async fn load_redelivery_transaction(
+    store: &JobStorage,
+    path: &str,
+) -> Result<Option<(RedeliveryTransaction, String)>, CmdError> {
+    let Some(versioned) = store
+        .read_text_versioned(path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((
+        serde_json::from_str(&versioned.content)?,
+        versioned.version,
+    )))
+}
+
+async fn create_redelivery_transaction(
+    store: &JobStorage,
+    path: &str,
+    transaction: &RedeliveryTransaction,
+) -> Result<(), CmdError> {
+    let body = serde_json::to_string_pretty(transaction)?;
+    if store
+        .create_text_if_absent(path, &body)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Ok(());
+    }
+    Err(CmdError::click(
+        "another redelivery transaction won the creation race; retry the command",
+    ))
+}
+
+async fn replace_redelivery_transaction(
+    store: &JobStorage,
+    path: &str,
+    expected_version: &str,
+    transaction: &RedeliveryTransaction,
+) -> Result<(), CmdError> {
+    store
+        .compare_and_swap_text(
+            path,
+            expected_version,
+            &serde_json::to_string_pretty(transaction)?,
+        )
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "redelivery transaction changed concurrently; retry the command: {error}"
+            ))
+        })?;
+    Ok(())
+}
+async fn finish_redelivery(
+    args: &ReleaseRedeliverArgs,
+    store: &JobStorage,
+    transaction_path: &str,
+    mut run: ReleaseRun,
+    mut transaction: RedeliveryTransaction,
+    mut transaction_version: String,
+) -> Result<Option<()>, CmdError> {
+    if transaction.stage == RedeliveryStage::Terminal {
+        if transaction.failure.is_none() {
+            let updated = run
+                .deliveries
+                .get_mut(&transaction.delivery)
+                .ok_or_else(|| CmdError::click("release delivery disappeared"))?;
+            updated.job_id = transaction
+                .job_id
+                .clone()
+                .ok_or_else(|| CmdError::click("terminal redelivery has no job id"))?;
+            updated.output_prefix = format!("status/{}/output/", updated.job_id);
+            updated.state = DeliveryRunState::Passed;
+            updated.receipt_sha256 = transaction.receipt_sha256.clone();
+            updated.failure = None;
+        }
+        if run.state == ReleaseRunState::Delivering {
+            run.state = transaction.previous_run_state.clone();
+            save(&mut run).await?;
+        } else if run.state != transaction.previous_run_state {
+            return Err(CmdError::click(
+                "release run changed before redelivery restoration",
+            ));
+        }
+        transaction.stage = RedeliveryStage::RunRestored;
+        replace_redelivery_transaction(store, transaction_path, &transaction_version, &transaction)
+            .await?;
+        (transaction, transaction_version) = load_redelivery_transaction(store, transaction_path)
+            .await?
+            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+    }
+    if transaction.stage == RedeliveryStage::RunRestored {
+        transaction.stage = if transaction.failure.is_some() {
+            RedeliveryStage::Failed
+        } else {
+            RedeliveryStage::Completed
+        };
+        replace_redelivery_transaction(store, transaction_path, &transaction_version, &transaction)
+            .await?;
+    }
+    if !transaction.stage.terminal() {
+        return Ok(None);
+    }
+    if let Some(failure) = transaction.failure {
+        return Err(CmdError::click(format!(
+            "redelivery job {} failed: {failure}",
+            transaction.job_id.as_deref().unwrap_or("unknown")
+        )));
+    }
+    let job_id = transaction
+        .job_id
+        .ok_or_else(|| CmdError::click("completed redelivery has no job id"))?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "status": "passed",
+                "product": run.product,
+                "version": run.version,
+                "run_id": run.run_id,
+                "delivery": transaction.delivery,
+                "job_id": job_id,
+                "receipt_sha256": transaction.receipt_sha256,
+            }))?
+        );
+    } else {
+        println!(
+            "redelivered {} {} run {} delivery {} with job {}",
+            run.product, run.version, run.run_id, transaction.delivery, job_id
+        );
+    }
+    Ok(Some(()))
+}
+
+/// Re-run one named delivery from an exact completed release run.
+///
+/// A fixed, separately serialized transaction fences the temporary run-state
+/// transition without changing the backwards-compatible `ReleaseRun` schema.
+/// Every boundary is durable and the caller's retry token resumes the same job.
+pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
+    if args.retry_token.is_empty() || args.retry_token.len() > 128 {
+        return Err(CmdError::click(
+            "--retry-token must contain between 1 and 128 bytes",
+        ));
+    }
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let token_sha = release_control::sha256_bytes(args.retry_token.as_bytes());
+    let transaction_path = run_path(&args.product, &args.run_id, "redelivery.json");
+
+    let mut run = load(&args.run_id)
+        .await?
+        .ok_or_else(|| CmdError::click(format!("release run {} does not exist", args.run_id)))?;
+    if run.product != args.product {
+        return Err(CmdError::click("release run belongs to another product"));
+    }
+
+    let mut loaded = load_redelivery_transaction(&store, &transaction_path).await?;
+    if let Some((active, _)) = &loaded {
+        if active.retry_token_sha256 != token_sha || active.delivery != args.delivery {
+            if !active.stage.terminal() {
+                return Err(CmdError::click(format!(
+                    "release run has an active redelivery for {}",
+                    active.delivery
+                )));
+            }
+            if run.state != active.previous_run_state {
+                return Err(CmdError::click(
+                    "terminal redelivery transaction has not restored the release run",
+                ));
+            }
+        }
+    }
+    let matching_transaction = loaded.as_ref().is_some_and(|(active, _)| {
+        active.retry_token_sha256 == token_sha && active.delivery == args.delivery
+    });
+    if matching_transaction {
+        let (active, version) = loaded
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+        if finish_redelivery(
+            args,
+            &store,
+            &transaction_path,
+            run.clone(),
+            active,
+            version,
+        )
+        .await?
+        .is_some()
+        {
+            return Ok(());
+        }
+    }
+
+    let leaf = format!("deliveries/{}/redeliveries/{token_sha}", args.delivery);
+    let request_path = run_path(&run.product, &run.run_id, &format!("{leaf}/request.json"));
+    let request_uri = run_uri(&run.product, &run.run_id, &format!("{leaf}/request.json"));
+    let (request, request_sha, consumer) = if matching_transaction {
+        let active = &loaded
+            .as_ref()
+            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?
+            .0;
+        let request_bytes = store
+            .read_bytes(&request_path)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+            .ok_or_else(|| CmdError::click("redelivery request disappeared"))?;
+        if release_control::sha256_bytes(&request_bytes) != active.request_sha256 {
+            return Err(CmdError::click("redelivery request digest mismatch"));
+        }
+        let request: DeliveryRequest = serde_json::from_slice(&request_bytes)?;
+        if request.run_id != run.run_id
+            || request.product != run.product
+            || request.name != args.delivery
+        {
+            return Err(CmdError::click("redelivery request identity mismatch"));
+        }
+        (
+            request,
+            active.request_sha256.clone(),
+            active.pinned_consumer.clone(),
+        )
+    } else {
+        let latest = latest_submitted_run(&args.product)
+            .await?
+            .ok_or_else(|| CmdError::click("product has no submitted release run"))?;
+        if latest.run_id != run.run_id
+            || latest.source_sha256 != run.source_sha256
+            || latest.version != run.version
+        {
+            return Err(CmdError::click(
+                "only the newest exact submitted run may be redelivered",
+            ));
+        }
+        if run.channel != PipelineChannel::Candidate {
+            return Err(CmdError::click(
+                "redelivery is restricted to completed candidate runs",
+            ));
+        }
+        if run.state != ReleaseRunState::Completed {
+            return Err(CmdError::click(
+                "a new redelivery requires the latest release run to be completed",
+            ));
+        }
+        let manifest_bytes = store
+            .read_bytes(&run_path(&run.product, &run.run_id, "manifest.json"))
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+            .ok_or_else(|| CmdError::click("release run manifest is missing"))?;
+        if release_control::sha256_bytes(&manifest_bytes) != run.manifest_sha256 {
+            return Err(CmdError::click("release run manifest digest mismatch"));
+        }
+        let manifest = match release_pipeline::parse_product_manifest(&manifest_bytes)
+            .map_err(CmdError::click)?
+        {
+            ProductManifest::Release(manifest) => manifest,
+            ProductManifest::NonRelease(_) => {
+                return Err(CmdError::click("release run manifest disables releases"))
+            }
+        };
+        let delivery = manifest
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.name == args.delivery)
+            .ok_or_else(|| {
+                CmdError::click(format!("delivery {:?} is not declared", args.delivery))
+            })?;
+        let original = run
+            .deliveries
+            .get(&delivery.name)
+            .ok_or_else(|| CmdError::click("release run never completed that delivery"))?;
+        if original.state != DeliveryRunState::Passed {
+            return Err(CmdError::click(
+                "redelivery requires an originally passed delivery",
+            ));
+        }
+        let artifact = super::release_cmd::verified_artifact_for_submit(
+            &run.product,
+            &run.version,
+            &delivery.platform,
+        )
+        .await?;
+        let platform = run
+            .platforms
+            .get(&delivery.platform)
+            .ok_or_else(|| CmdError::click("delivery platform is absent from the release run"))?;
+        if platform.state != PlatformRunState::Published
+            || platform.artifact_sha256.as_deref() != Some(artifact.artifact_sha256.as_str())
+            || platform.release_manifest_sha256.as_deref()
+                != Some(artifact.manifest_sha256.as_str())
+        {
+            return Err(CmdError::click(
+                "published artifact no longer matches the release run",
+            ));
+        }
+        let request = DeliveryRequest {
+            schema_version: 1,
+            run_id: run.run_id.clone(),
+            name: delivery.name.clone(),
+            product: run.product.clone(),
+            version: run.version.clone(),
+            platform: delivery.platform.clone(),
+            argv: delivery.argv.clone(),
+            required: delivery.required,
+            secret_env: delivery.secret_env.clone(),
+            source_path: "source.tar.gz".into(),
+            source_uri: run.source_uri.clone(),
+            source_sha256: run.source_sha256.clone(),
+            archive_path: "release.tar.gz".into(),
+            archive_uri: artifact.archive_uri.clone(),
+            archive_sha256: artifact.artifact_sha256.clone(),
+            manifest_uri: artifact.manifest_uri.clone(),
+            manifest_sha256: artifact.manifest_sha256.clone(),
+        };
+        let request_bytes = serde_json::to_vec(&request)?;
+        let request_sha = release_control::sha256_bytes(&request_bytes);
+        queue_immutable(&request_path, &request_bytes).await?;
+        let consumer = if delivery.target.is_empty() {
+            builder(&manifest.platforms[&delivery.platform].runner_platform)
+                .await?
+                .1
+        } else {
+            target_consumer(&delivery.target).await?
+        };
+        let transaction = RedeliveryTransaction {
+            schema_version: 1,
+            retry_token_sha256: token_sha.clone(),
+            delivery: args.delivery.clone(),
+            previous_run_state: run.state.clone(),
+            pinned_consumer: consumer.clone(),
+            request_sha256: request_sha.clone(),
+            stage: RedeliveryStage::IntentCreated,
+            job_id: None,
+            receipt_sha256: None,
+            failure: None,
+        };
+        match loaded {
+            None => create_redelivery_transaction(&store, &transaction_path, &transaction).await?,
+            Some((_, version)) => {
+                replace_redelivery_transaction(&store, &transaction_path, &version, &transaction)
+                    .await?
+            }
+        }
+        loaded = load_redelivery_transaction(&store, &transaction_path).await?;
+        (request, request_sha, consumer)
+    };
+    let mut resolved = Map::new();
+    resolved.insert(
+        "request".into(),
+        input(&request_uri, "delivery-request.json", &request_sha),
+    );
+    resolved.insert(
+        "archive".into(),
+        input(
+            &request.archive_uri,
+            "release.tar.gz",
+            &request.archive_sha256,
+        ),
+    );
+    resolved.insert(
+        "source".into(),
+        input(
+            &run_uri(&run.product, &run.run_id, "inputs/source.tar.gz"),
+            "source.tar.gz",
+            &request.source_sha256,
+        ),
+    );
+    let (mut transaction, mut transaction_version) =
+        loaded.ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+    let options = SubmitOptions {
+        pinned_host: consumer,
+        priority: crate::constants::RELEASE_JOB_PRIORITY,
+        run_id: stable_run_id(
+            "release-redelivery",
+            &format!("{}\0{}\0{}", run.run_id, request.name, token_sha),
+        ),
+        output_uri: run_uri(&run.product, &run.run_id, &format!("{leaf}/output")),
+        input_artifacts: resolved.clone(),
+        resolved_input_artifacts: resolved,
+        secret_env: secret_refs(&request.secret_env),
+        ..Default::default()
+    };
+
+    if transaction.stage == RedeliveryStage::IntentCreated {
+        if run.state == transaction.previous_run_state {
+            run.state = ReleaseRunState::Delivering;
+            save(&mut run).await?;
+        } else if run.state != ReleaseRunState::Delivering {
+            return Err(CmdError::click(
+                "release run changed before the redelivery fence was installed",
+            ));
+        }
+        transaction.stage = RedeliveryStage::RunReopened;
+        replace_redelivery_transaction(
+            &store,
+            &transaction_path,
+            &transaction_version,
+            &transaction,
+        )
+        .await?;
+        (transaction, transaction_version) = load_redelivery_transaction(&store, &transaction_path)
+            .await?
+            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+    }
+
+    if transaction.stage == RedeliveryStage::RunReopened {
+        let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
+        let job = submit_batch(std::slice::from_ref(&command), &options)
+            .await?
+            .pop()
+            .ok_or_else(|| CmdError::click("durable redelivery submission returned no job"))?;
+        transaction.job_id = Some(job.job_id);
+        transaction.stage = RedeliveryStage::Submitted;
+        replace_redelivery_transaction(
+            &store,
+            &transaction_path,
+            &transaction_version,
+            &transaction,
+        )
+        .await?;
+        (transaction, transaction_version) = load_redelivery_transaction(&store, &transaction_path)
+            .await?
+            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+    }
+
+    if transaction.stage == RedeliveryStage::Submitted {
+        let job_id = transaction
+            .job_id
+            .as_deref()
+            .ok_or_else(|| CmdError::click("submitted redelivery has no job id"))?;
+        let job = terminal(&store, job_id).await?;
+        let ok = matches!(
+            job.state.as_str(),
+            job_state::COMPLETED | job_state::UPLOADED
+        );
+        if ok {
+            let receipt = store
+                .read_bytes(&format!("status/{job_id}/output/delivery-receipt.json"))
+                .await?
+                .ok_or_else(|| CmdError::click("redelivery produced no delivery receipt"))?;
+            transaction.receipt_sha256 = Some(release_control::sha256_bytes(&receipt));
+        } else {
+            transaction.failure = Some(format!(
+                "{}{}",
+                job.error.unwrap_or_else(|| job.state.clone()),
+                job_output_tail(&store, job_id).await
+            ));
+        }
+        transaction.stage = RedeliveryStage::Terminal;
+        replace_redelivery_transaction(
+            &store,
+            &transaction_path,
+            &transaction_version,
+            &transaction,
+        )
+        .await?;
+        (transaction, transaction_version) = load_redelivery_transaction(&store, &transaction_path)
+            .await?
+            .ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
+    }
+
+    finish_redelivery(
+        args,
+        &store,
+        &transaction_path,
+        run,
+        transaction,
+        transaction_version,
+    )
+    .await?
+    .ok_or_else(|| CmdError::click("redelivery stopped before a terminal transaction"))?;
     Ok(())
 }
 

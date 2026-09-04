@@ -929,7 +929,7 @@ fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
         return None;
     }
     let text = String::from_utf8(output.stdout).ok()?;
-    text.split_whitespace().last().map(str::to_string)
+    text.split_whitespace().nth(1).map(str::to_string)
 }
 
 /// A release handoff worth taking: the marker names a release this process is

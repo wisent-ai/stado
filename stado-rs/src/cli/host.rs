@@ -397,15 +397,27 @@ pub async fn recover(
     };
     let (report, object_api) = match release {
         Some(version) => {
-            let resolved = registry
-                .lookup(target)
-                .cloned()
-                .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+            if registry.lookup(target).is_none() {
+                return Err(CmdError::click(format!("target not in registry: {target}")));
+            }
             // A signed recovery release is fetched through the object API.
             // Repair that authority first without depending on the authority
-            // itself. An ordinary host recovery reads no release object and
-            // must not mutate an unrelated object-API service.
-            let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+            // itself. The service directory, not the host being recovered,
+            // names where that shared API runs.
+            let object_api_host = registry
+                .service(OBJECT_API_SERVICE)
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "service directory declares no {OBJECT_API_SERVICE}; refusing to guess \
+                         which host owns release-object recovery"
+                    ))
+                })?
+                .active_host
+                .clone();
+            let object_api_target =
+                crate::deploy::host_channel::resolve_target(&registry, &object_api_host)
+                    .map_err(|error| CmdError::click(error.to_string()))?;
+            let object_api = recover_object_api_on_target(object_api_target, &runner).await?;
             (
                 crate::deploy::host_recovery_release::recover(&registry, target, version, &runner)
                     .await,
@@ -5770,6 +5782,247 @@ async fn read_vault_phase(
         revision,
         tags,
     })
+}
+
+/// Per-field metadata of one decrypted item, computed on the host.
+///
+/// The value is what must not travel, and a length and a digest are not the
+/// value: they are what lets a workstation prove that the item a declaration
+/// references holds the bytes the operator has locally, without either side
+/// sending them. So the decryption and the hashing both happen on the host,
+/// and only this summary crosses the channel.
+#[derive(serde::Deserialize)]
+struct VaultFieldSummary {
+    name: String,
+    length: u64,
+    sha256: String,
+    text: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct VaultItemSummary {
+    kind: Option<String>,
+    schema: Option<String>,
+    fields: Vec<VaultFieldSummary>,
+}
+
+/// The reducer that runs on the host: `skarbiec get` writes the decrypted
+/// document to a pipe, and this reads it, replaces every value with its length
+/// and SHA-256, and prints the summary. Nothing else is printed, so a value
+/// cannot reach this process even by accident.
+/// No indented block anywhere in it, deliberately: a Rust string literal that
+/// continues with `\` drops the next line's leading whitespace, so an indented
+/// `for` body arrives at the host as an `IndentationError`. A comprehension
+/// needs no indentation and cannot lose it.
+const VAULT_FIELD_SUMMARY_PROGRAM: &str = concat!(
+    "import sys,json,hashlib\n",
+    "document=json.load(sys.stdin)\n",
+    "fields=document.get('fields') or {}\n",
+    "encode=lambda value: (value if isinstance(value,str)",
+    " else json.dumps(value,separators=(',',':'),sort_keys=True)).encode()\n",
+    "print(json.dumps({'kind':document.get('kind'),'schema':document.get('schema'),",
+    "'fields':[{'name':name,'text':isinstance(fields[name],str),",
+    "'length':len(encode(fields[name])),",
+    "'sha256':hashlib.sha256(encode(fields[name])).hexdigest()}",
+    " for name in sorted(fields)]}))\n",
+);
+
+/// `stado host vault-item-show` — what one item on TARGET holds, without its
+/// values.
+///
+/// `vault-item-put` had no counterpart, and the absence was not cosmetic: an
+/// operator who had just written an item through the host channel could not
+/// confirm from a workstation that the host held it, because
+/// `retag-vault-item`'s read reports state, revision and tags and nothing
+/// about the payload, `stado credentials get` reads the local store, and
+/// `skarbiec get` is not a host-exec command. A migration wrote seven bundles
+/// and twenty credential fields into a workstation vault that nothing on the
+/// fleet reads, and the only reason it surfaced was a 401 from Brama.
+///
+/// So this reports the field NAMES with, per field, the value's length and its
+/// SHA-256 — enough to compare against a local copy's digest and answer "does
+/// the host hold what this row references", and never enough to learn the
+/// value.
+pub async fn vault_item_show(
+    target: &str,
+    item: &str,
+    field: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("vault item", item)?;
+    if let Some(field) = field {
+        vault_word("field", field)?;
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let refused = |detail: String| {
+        CmdError::click(format!(
+            "{}: {item} could not be read: {detail}",
+            resolved.name
+        ))
+    };
+    if !environment.ok() {
+        return Err(refused(
+            crate::deploy::host_channel::last_error_line(
+                &environment,
+                "the host's vault environment could not be read",
+            )
+            .to_string(),
+        ));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables.next().unwrap_or_default().to_string();
+    let gnupg_home = variables.next().unwrap_or_default().to_string();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+
+    // The encrypted record first: an absent item is an answer, and it is the
+    // answer that costs nothing to give.
+    let record = read_vault_phase(&resolved, &vault, item, &runner)
+        .await
+        .map_err(refused)?;
+    let updated_at = read_vault_updated_at(&resolved, &vault, item, &runner)
+        .await
+        .unwrap_or_else(|_| "-".to_string());
+    if record.state == "absent" {
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "target": resolved.name,
+                    "item": item,
+                    "state": "absent",
+                }))?
+            );
+        } else {
+            println!("{}: {item} is absent", resolved.name);
+        }
+        return Ok(());
+    }
+
+    let summary_text = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | python3 -c {}",
+            crate::deploy::shlex_quote(&gnupg_home),
+            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(VAULT_FIELD_SUMMARY_PROGRAM),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !summary_text.ok() {
+        // The last line of a remote failure is often the least informative one
+        // - a decryption failure ends in a backtrace note - so the refusal
+        // carries the host's own words, trimmed to what fits a terminal.
+        let detail = summary_text
+            .stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .rev()
+            .take(4)
+            .collect::<Vec<&str>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<&str>>()
+            .join("; ");
+        return Err(refused(if detail.is_empty() {
+            "the host could not summarise the item's fields".to_string()
+        } else {
+            detail
+        }));
+    }
+    let summary: VaultItemSummary = serde_json::from_str(summary_text.stdout.trim())
+        .map_err(|error| refused(format!("the host's field summary did not parse: {error}")))?;
+    let mut fields = summary.fields;
+    if let Some(wanted) = field {
+        fields.retain(|entry| entry.name == wanted);
+        if fields.is_empty() {
+            return Err(refused(format!("the item holds no field {wanted}")));
+        }
+    }
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "item": item,
+                "state": record.state,
+                "revision": record.revision,
+                "tags": record.tags,
+                "updated_at": updated_at,
+                "kind": summary.kind,
+                "schema": summary.schema,
+                "fields": fields
+                    .iter()
+                    .map(|entry| json!({
+                        "name": entry.name,
+                        "length": entry.length,
+                        "sha256": entry.sha256,
+                        "text": entry.text,
+                    }))
+                    .collect::<Vec<Value>>(),
+            }))?
+        );
+        return Ok(());
+    }
+    println!("host:       {}", resolved.name);
+    println!("item:       {item}");
+    println!("kind:       {}", summary.kind.as_deref().unwrap_or("-"));
+    println!("schema:     {}", summary.schema.as_deref().unwrap_or("-"));
+    println!("state:      {}", record.state);
+    println!("revision:   {}", record.revision);
+    println!("tags:       {}", record.tags);
+    println!("updated_at: {updated_at}");
+    for entry in &fields {
+        println!(
+            "field:      {} {} bytes sha256={}{}",
+            entry.name,
+            entry.length,
+            entry.sha256,
+            if entry.text { "" } else { " (structured)" }
+        );
+    }
+    Ok(())
+}
+
+/// When the host last wrote this item. Read from the same encrypted record as
+/// the revision, so it costs no decryption.
+async fn read_vault_updated_at(
+    resolved: &ComputeTarget,
+    vault: &str,
+    item: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, String> {
+    let text = crate::deploy::host_channel::remote_read_file(resolved, vault, runner)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("the vault at {vault} could not be read"))?;
+    let document: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("the vault at {vault} did not parse as JSON: {error}"))?;
+    Ok(document
+        .get("items")
+        .and_then(|items| items.get(item))
+        .and_then(|record| record.get("updated_at"))
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+        .to_string())
 }
 
 /// Replace one Skarbiec item's tags on TARGET, and report what the host had
