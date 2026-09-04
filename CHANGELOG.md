@@ -1,11 +1,20 @@
 # Changelog
 
+## 0.15.23
+
+- **Run retention:** validation of an already-retained terminal outcome now uses the same legacy-linkage rule as the reaper that records it. A terminal job may omit all three submission-linkage fields only when its job id and remaining immutable projection exactly match the durable manifest entry; live and partially linked jobs still require exact submission identity.
+- **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
+- **Migration:** no configuration or persisted-state rewrite is required. The coordinator can validate and complete the normal reaper repair for affected v3 run manifests.
+- **Rollback boundary:** rolling back lets the reaper write a migrated outcome but makes the next manifest validation reject that outcome as different submission content, and it makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the run-retention journey drives the built coordinator through the migrated terminal state, and the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+
 ## 0.15.22
 
-- **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
-- **Migration:** no configuration or persisted-state migration is required.
-- **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
-- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+- **Desktop verification host:** managed GUI hosts now use the pinned and checksummed CuaDriver 0.23.2 bundle. `stado host gui-automation enable TARGET` replaces the previous managed driver and recreates its Aqua LaunchAgent when the installed version differs.
+- **Test bundle:** `desktop/StadoDesktop/scripts/build-app.sh --unsigned-bundle` builds a complete bundle for transfer to a dedicated Probierz host without reading signing identities, installing the app, registering it with LaunchServices, launching it, or changing the local running app.
+- **Migration:** no persisted-state rewrite is required. Reconcile each declared GUI host with `stado host gui-automation enable TARGET`; the existing Accessibility grant is re-established for the new signed bundle.
+- **Rollback boundary:** rolling back pins CuaDriver 0.22.0 again and removes the side-effect-free test-bundle staging mode.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the Desktop capacity journey runs on the Stado-selected macOS GUI host through Probierz.
 
 ## 0.15.21
 

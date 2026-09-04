@@ -169,7 +169,7 @@ fn terminal_job_projection(job: &crate::models::Job) -> Value {
     projection
 }
 
-fn terminal_job_matches_entry(
+pub(crate) fn terminal_job_matches_entry(
     job: &crate::models::Job,
     planned: &crate::models::Job,
     run_id: &str,
