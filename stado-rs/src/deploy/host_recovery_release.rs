@@ -14,7 +14,7 @@ use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::{host_recovery, shlex_quote, CommandSpec, DeployError, Runner};
+use super::{host_recovery, shlex_quote, DeployError, Runner};
 use crate::release_control::{
     self, QualificationStatus, ReleaseArtifactRef, ReleaseControl, ReleaseManifest,
 };
@@ -486,46 +486,19 @@ pub async fn recover_with_client(
         ),
     ));
 
-    let connection = match super::host_channel::select_ssh_connection(target, runner).await {
-        Ok(connection) => connection,
-        Err(error) => {
-            let detail = error.to_string();
-            steps.push(step("install", "failed", &detail));
-            return Ok(failed(target_name, version, steps, detail, 1));
-        }
-    };
-
-    let key = match super::ssh_key::materialize(&target.name).await {
-        Ok(key) => std::sync::Arc::new(key),
-        Err(error) => {
-            let detail = error.to_string();
-            steps.push(step("install", "failed", &detail));
-            return Ok(failed(target_name, version, steps, detail, 1));
-        }
-    };
-    let delegated = runner.clone();
-    let keyed_runner = super::runner_fn(move |mut spec| {
-        let key = key.clone();
-        let delegated = delegated.clone();
-        async move {
-            if matches!(spec.argv.first().map(String::as_str), Some("ssh" | "scp")) {
-                spec.argv = super::ssh_key::add_identity(spec.argv, &key)
-                    .map_err(|error| error.to_string())?;
-            }
-            delegated(spec).await
-        }
-    });
-    let installed = match keyed_runner(CommandSpec {
-        argv: host_recovery::ssh_argv(connection.destination),
-        stdin: Some(install_script(target, &binary, &binary_digest)),
-        timeout: Some(Duration::from_secs(host_recovery::TIMEOUT_SECONDS)),
-    })
+    let installed = match super::host_channel::run_script_with_timeout(
+        target,
+        &install_script(target, &binary, &binary_digest),
+        Duration::from_secs(host_recovery::TIMEOUT_SECONDS),
+        runner,
+    )
     .await
     {
         Ok(output) => output,
         Err(error) => {
-            steps.push(step("install", "failed", &error));
-            return Ok(failed(target_name, version, steps, error, 1));
+            let detail = error.to_string();
+            steps.push(step("install", "failed", &detail));
+            return Ok(failed(target_name, version, steps, detail, 1));
         }
     };
     append_remote_steps(&mut steps, &installed.stdout);
@@ -556,8 +529,7 @@ pub async fn recover_with_client(
     }
 
     let mut report =
-        match host_recovery::recover_host_with_registry(registry, target_name, &keyed_runner).await
-        {
+        match host_recovery::recover_host_with_registry(registry, target_name, runner).await {
             Ok(report) => report,
             Err(error) => {
                 let detail = error.to_string();

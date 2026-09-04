@@ -397,15 +397,27 @@ pub async fn recover(
     };
     let (report, object_api) = match release {
         Some(version) => {
-            let resolved = registry
-                .lookup(target)
-                .cloned()
-                .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+            if registry.lookup(target).is_none() {
+                return Err(CmdError::click(format!("target not in registry: {target}")));
+            }
             // A signed recovery release is fetched through the object API.
             // Repair that authority first without depending on the authority
-            // itself. An ordinary host recovery reads no release object and
-            // must not mutate an unrelated object-API service.
-            let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+            // itself. The service directory, not the host being recovered,
+            // names where that shared API runs.
+            let object_api_host = registry
+                .service(OBJECT_API_SERVICE)
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "service directory declares no {OBJECT_API_SERVICE}; refusing to guess \
+                         which host owns release-object recovery"
+                    ))
+                })?
+                .active_host
+                .clone();
+            let object_api_target =
+                crate::deploy::host_channel::resolve_target(&registry, &object_api_host)
+                    .map_err(|error| CmdError::click(error.to_string()))?;
+            let object_api = recover_object_api_on_target(object_api_target, &runner).await?;
             (
                 crate::deploy::host_recovery_release::recover(&registry, target, version, &runner)
                     .await,

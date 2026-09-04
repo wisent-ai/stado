@@ -14,7 +14,14 @@
 //! constant being right is not the contract: the contract is that the shipped
 //! executable prints it.
 
-use std::process::Command;
+use std::fs::{self, File};
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use serde_json::json;
 
 /// The executable cargo just built for this test run.
 const STADO: &str = env!("CARGO_BIN_EXE_stado");
@@ -119,5 +126,123 @@ fn a_git_checkout_names_a_real_revision() {
         !printed.contains("(rev unknown)"),
         "{printed:?} fell back to the sentinel inside a git checkout, so the build \
          script failed to read a revision it could have read"
+    );
+}
+
+/// The agent's release handoff reads the managed binary's `--version` line.
+/// The revision suffix must not be mistaken for the semantic version: doing so
+/// turns a stale marker into an endless supervised crash loop even though the
+/// running and installed binaries are already identical.
+#[test]
+fn agent_repairs_a_stale_release_marker_when_managed_binary_is_current() {
+    let operator_home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+    let scratch = operator_home.join(".stado/work");
+    fs::create_dir_all(&scratch).expect("Stado scratch root exists");
+    let fixture = tempfile::Builder::new()
+        .prefix("agent-release-marker-")
+        .tempdir_in(&scratch)
+        .expect("isolated agent fixture");
+    let home = fixture.path().join("home");
+    let bin = home.join(".stado/bin");
+    fs::create_dir_all(&bin).expect("managed binary directory exists");
+    let managed = bin.join("stado");
+    fs::copy(STADO, &managed).expect("the real Stado binary is installed");
+    fs::set_permissions(&managed, fs::Permissions::from_mode(0o755))
+        .expect("the managed Stado binary is executable");
+    let marker = bin.join("stado.release-version");
+    fs::write(&marker, "0.0.0\n").expect("stale release marker is seeded");
+
+    let hostname_output = Command::new("hostname")
+        .arg("-f")
+        .output()
+        .expect("hostname command starts");
+    assert!(
+        hostname_output.status.success(),
+        "hostname -f failed: {}",
+        String::from_utf8_lossy(&hostname_output.stderr)
+    );
+    let hostname = String::from_utf8(hostname_output.stdout)
+        .expect("hostname is utf-8")
+        .trim()
+        .to_ascii_lowercase();
+    let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("linux", "x86_64") => "linux-amd64",
+        (os, arch) => panic!("agent fixture has no platform mapping for {os}-{arch}"),
+    };
+    let storage = fixture.path().join("storage");
+    fs::create_dir_all(&storage).expect("isolated queue store exists");
+    fs::write(
+        storage.join("registry.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 2,
+            "targets": [{
+                "name": "build-identity-runner",
+                "kind": "local",
+                "ssh": "nobody@127.0.0.1",
+                "release_platform": platform,
+                "hostnames": [hostname],
+                "disk_cleanup": {
+                    "mode": "off",
+                    "check_interval_seconds": 300,
+                    "low_free_gb": 1,
+                    "target_free_gb": 2,
+                    "max_bytes_per_pass": 1048576,
+                    "max_items_per_pass": 1,
+                    "max_scan_items": 1,
+                    "cleaners": {}
+                },
+                "slots": 1
+            }]
+        }))
+        .expect("registry encodes"),
+    )
+    .expect("registry is written");
+
+    let stdout_path = fixture.path().join("agent.out");
+    let stderr_path = fixture.path().join("agent.err");
+    let stdout = File::create(&stdout_path).expect("agent stdout opens");
+    let stderr = File::create(&stderr_path).expect("agent stderr opens");
+    let mut agent = Command::new(&managed)
+        .args(["agent", "--auto"])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("STADO_CONFIG", home.join("nonexistent-config.json"))
+        .env("WC_STORAGE_BACKEND", "local")
+        .env("WC_LOCAL_STORAGE_PATH", &storage)
+        .env("WC_STADO_STORAGE_NAMESPACE", "build-identity")
+        .env("WC_VAST_AUTO_LIST", "false")
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("managed Stado agent starts");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut observed = String::new();
+    while Instant::now() < deadline {
+        observed = fs::read_to_string(&marker).unwrap_or_default();
+        if observed.trim() == VERSION {
+            break;
+        }
+        if agent
+            .try_wait()
+            .expect("agent status is readable")
+            .is_some()
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let _ = agent.kill();
+    let status = agent.wait().expect("agent can be reaped");
+    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    assert_eq!(
+        observed.trim(),
+        VERSION,
+        "the current managed binary must repair the stale marker instead of entering a handoff \
+         loop; agent status: {status:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
