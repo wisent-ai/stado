@@ -980,7 +980,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
 
     let hostname = crate::providers::vast::system_hostname();
     log_fn("init: legacy workdir reaping disabled; cleanup is policy-owned");
-
     let initial_gpu = gpu_type.clone();
 
     let store = JobStorage::new().await?;
@@ -1053,9 +1052,34 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             .await
         },
     );
+    // The broadcast keeps its declared cadence while the tick works. See
+    // [`agent_heartbeat`] for why this is not a liveness formality: it
+    // republishes only what the tick last measured, and only while the tick is
+    // still starting iterations.
+    let heartbeat = crate::providers::local::agent_heartbeat::CapacityHeartbeat::new();
+    let _heartbeat = heartbeat.spawn(
+        store.clone(),
+        consumer_id.clone(),
+        kind.to_string(),
+        agent_log,
+    );
     loop {
         // Phase breadcrumbs for the 40GB a2-highgpu-1g first-iter hang.
         log_fn("loop: iter-start");
+        heartbeat.record_tick_start();
+        // One place, not four: whatever branch of the previous iteration
+        // published, `last_cap` holds it, so the heartbeat repeats the tick's
+        // own most recent measurement and never a figure of its own.
+        if let Some(cap) = &last_cap {
+            heartbeat.record_published(
+                crate::providers::local::agent_heartbeat::CapacitySnapshot {
+                    free_slots: cap.free_slots.clone(),
+                    free_vram_gb: cap.free_vram_gb,
+                    total_vram_gb: cap.total_vram_gb,
+                    diag: cap.diag.clone(),
+                },
+            );
+        }
         // Every broadcast says which store wrote it. A reader holding a frozen
         // row could not tell a stopped agent from a running one publishing
         // somewhere else, and that is the question that took an afternoon.
@@ -1071,10 +1095,51 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                  host; the queue it reads is not the fleet queue"
             ));
         }
-        if let Err(exc) = crate::config::refresh_model_policy(&store).await {
-            log_fn(&format!(
+        // ONE budget for everything this tick reads out of the store, shared
+        // across the reads rather than handed out per read.
+        //
+        // Per-read budgets were the first shape of this and they were wrong in
+        // a way the host said out loud: with 20 s each, the claimable-job
+        // listing -- much the heaviest read, and the only one claiming depends
+        // on -- timed out on every tick against this store, so the host stayed
+        // fresh and still claimed nothing. Freshness bought by never claiming
+        // is not the fix. A shared deadline spends the budget where the tick
+        // actually needs it: the small documents normally answer in under a
+        // second and leave nearly the whole allowance to the listing.
+        //
+        // Two deadlines, because the two halves of a tick answer different
+        // questions. Everything the tick reads BEFORE its own publication
+        // shares [`constants::AGENT_TICK_STORE_BUDGET_S`]: those reads only
+        // refine what the broadcast says, and none of them is worth delaying
+        // it. Everything the ADMISSION half reads shares the larger
+        // [`constants::AGENT_CLAIM_STORE_BUDGET_S`], because asking a
+        // saturated store for work legitimately takes longer than a heartbeat
+        // interval and the heartbeat task keeps publishing while it does.
+        // Every read below degrades to "keep what we last knew" or "claim
+        // nothing this tick"; nothing mutating is inside either deadline.
+        let tick_store_deadline =
+            Instant::now() + Duration::from_secs(constants::AGENT_TICK_STORE_BUDGET_S);
+        let store_budget_left =
+            || tick_store_deadline.saturating_duration_since(Instant::now());
+        let claim_store_deadline =
+            Instant::now() + Duration::from_secs(constants::AGENT_CLAIM_STORE_BUDGET_S);
+        let claim_budget_left =
+            || claim_store_deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(
+            store_budget_left(),
+            crate::config::refresh_model_policy(&store),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(exc)) => log_fn(&format!(
                 "model policy refresh failed; retaining last good policy: {exc}"
-            ));
+            )),
+            Err(_) => log_fn(&format!(
+                "model policy refresh exhausted this tick's {}s store budget; retaining last good \
+                 policy so this tick still publishes capacity and claims",
+                constants::AGENT_TICK_STORE_BUDGET_S
+            )),
         }
         // DEVIATION: the wisent upload_worker sweep is not ported (the
         // wisent Python package owns it); the fleet-flush subprocess path
@@ -1139,7 +1204,32 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // janitor report. Cleanup deliberately uses a cross-process lock; a
         // busy lock or an older writer's invalid report must not erase a
         // perfectly readable low watermark and close the queue forever.
-        let registry_target = lookup_self_auto(&hostname).await?;
+        //
+        // Bounded on the same budget, and a lapsed budget is NOT an error: the
+        // registry states the watermark, the pinned-only flag and the VRAM
+        // override, and this tick keeps whatever it last knew of all three
+        // (`disk_low_bytes` from the janitor's state file, `pinned_only` from
+        // the previous tick) rather than spending the broadcast's freshness
+        // window waiting for a restatement. `?` still propagates a real
+        // refusal, which is a different fact from a slow route: the registry
+        // fetch already falls back to its last-known-good copy and to the
+        // bundled snapshot before it errors at all.
+        let registry_target = match tokio::time::timeout(
+            store_budget_left(),
+            lookup_self_auto(&hostname),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                log_fn(&format!(
+                    "loop: canonical registry target did not answer within {}s; keeping the last \
+                     known disk watermark and pinned-only state for this tick",
+                    constants::AGENT_TICK_STORE_BUDGET_S
+                ));
+                None
+            }
+        };
         if let Some(declared_low) = registry_target
             .as_ref()
             .and_then(|target| target.disk_cleanup.as_ref())
@@ -1741,7 +1831,25 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         //
         // Re-read every iteration, never cached: `stado queue resume` has
         // to reach a running agent without an operator restarting it.
-        let queue_control = control::read(&store).await?;
+        //
+        // Bounded like every other store read in this tick: the NEXT capacity
+        // publication is behind it, so an unbounded read here takes the host
+        // off the fleet just as surely as one ahead of the publication does.
+        // A lapsed budget claims nothing this tick, which is always the safe
+        // direction -- an agent that skips a claim loses a poll interval; an
+        // agent whose broadcast goes stale loses the fleet's belief that it
+        // exists.
+        let Ok(queue_control) = tokio::time::timeout(claim_budget_left(), control::read(&store)).await
+        else {
+            log_fn(&format!(
+                "loop: queue-control read exhausted this tick's {}s store budget; claiming nothing this tick and \
+                 publishing again",
+                constants::AGENT_CLAIM_STORE_BUDGET_S
+            ));
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
+        };
+        let queue_control = queue_control?;
         agent_diag.insert("queue_paused".into(), Value::from(queue_control.paused));
         // Which build is answering for this host. The broadcast carried a
         // capacity verdict, a claim-loop census and a disk report and never the
@@ -1846,37 +1954,60 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // every poll, forever, while its own assigned job sat past the window.
         // The re-read below re-applies the rule to the FRESH document, which
         // is a different fact from the listed snapshot.
-        let listed = store
-            .list_claimable_jobs(
-                "queue",
-                &crate::queue::listing::JobScan {
-                    want: CLAIM_CANDIDATE_WINDOW,
-                    scan_budget: QUEUE_SCAN_BUDGET,
-                    max_gpu_mem_gb: free_vram_gb,
-                    eligible: &|job| {
-                        helpers::job_eligible(
-                            job,
-                            &gpu_type,
-                            total_vram_gb,
-                            kind,
-                            &consumer_id,
-                            slots.len(),
-                            pinned_only,
-                        )
+        //
+        // The listing and the re-reads share ONE budget, because together they
+        // are this tick's single question -- "what may I claim right now" --
+        // and the answer stops being worth the fleet's belief that this host is
+        // alive well before a slow store finishes giving it. A lapsed budget
+        // claims nothing and publishes again.
+        let queued = match tokio::time::timeout(claim_budget_left(), async {
+            let listed = store
+                .list_claimable_jobs(
+                    "queue",
+                    &crate::queue::listing::JobScan {
+                        want: CLAIM_CANDIDATE_WINDOW,
+                        scan_budget: QUEUE_SCAN_BUDGET,
+                        max_gpu_mem_gb: free_vram_gb,
+                        eligible: &|job| {
+                            helpers::job_eligible(
+                                job,
+                                &gpu_type,
+                                total_vram_gb,
+                                kind,
+                                &consumer_id,
+                                slots.len(),
+                                pinned_only,
+                            )
+                        },
+                        // A claim loop wants reachability and so takes the
+                        // shared rotation: a job past this poll's window is
+                        // reached by a later poll rather than never.
+                        from_head: false,
                     },
-                    // A claim loop wants reachability and so takes the shared
-                    // rotation: a job past this poll's window is reached by a
-                    // later poll rather than never.
-                    from_head: false,
-                },
-            )
-            .await?;
-        let mut queued = Vec::with_capacity(listed.len());
-        for candidate in listed {
-            if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
-                queued.push(job);
+                )
+                .await?;
+            let mut queued = Vec::with_capacity(listed.len());
+            for candidate in listed {
+                if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
+                    queued.push(job);
+                }
             }
-        }
+            Ok::<_, StorageError>(queued)
+        })
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                log_fn(&format!(
+                    "loop: claimable-job read exhausted this tick's {}s store budget; claiming nothing this tick \
+                     and publishing again",
+                    constants::AGENT_CLAIM_STORE_BUDGET_S
+                ));
+                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+                continue;
+            }
+        };
+        let mut queued = queued;
         queued.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
@@ -1996,9 +2127,23 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             if cap_reached && !(share_now && is_raw_share) {
                 continue;
             }
-            let need = job
-                .gpu_mem_gb
-                .max(estimate_gpu_memory(&cmd, &sizing, &store).await?);
+            // Sizing comes out of the store too. A lapsed budget skips THIS
+            // candidate rather than falling back to the job's declared figure:
+            // the declared figure is the floor, and admitting a job on it when
+            // the measured estimate is unknown is how a host claims work that
+            // does not fit.
+            let Ok(estimated) =
+                tokio::time::timeout(claim_budget_left(), estimate_gpu_memory(&cmd, &sizing, &store))
+                    .await
+            else {
+                log_fn(&format!(
+                    "loop: VRAM estimate for {} exhausted this tick's {}s store budget; not claiming it this tick",
+                    job.job_id,
+                    constants::AGENT_CLAIM_STORE_BUDGET_S
+                ));
+                continue;
+            };
+            let need = job.gpu_mem_gb.max(estimated?);
             // Hard VRAM safety buffer: refuse if declared use after admission
             // would leave less than the dynamic VRAM safety buffer. Use live
             // free VRAM, not only slot-declared usage, so external users such
@@ -2026,10 +2171,27 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // child process. Only meaningful when the job actually needs
             // VRAM: on sub-buffer hosts total-buffer goes negative, which
             // would otherwise reject even need==0 (CPU-only) jobs.
-            let mut projected_used = need;
-            for s in &slots {
-                projected_used += helpers::slot_vram(&s.slot, &sizing, &store).await?;
-            }
+            // Same rule for the running slots' projection: one budget for the
+            // whole projection, and an unfinished projection refuses the
+            // candidate instead of admitting it against an incomplete total.
+            let projection = tokio::time::timeout(claim_budget_left(), async {
+                let mut projected_used = need;
+                for s in &slots {
+                    projected_used += helpers::slot_vram(&s.slot, &sizing, &store).await?;
+                }
+                Ok::<_, StorageError>(projected_used)
+            })
+            .await;
+            let Ok(projected_used) = projection else {
+                log_fn(&format!(
+                    "loop: running-slot VRAM projection exhausted this tick's {}s store budget; not claiming {} \
+                     this tick",
+                    constants::AGENT_CLAIM_STORE_BUDGET_S,
+                    job.job_id
+                ));
+                continue;
+            };
+            let projected_used = projected_used?;
             if need > 0 && projected_used > total_vram_gb - vram_safety_buffer_gb(total_vram_gb) {
                 diag_vram_rejected += 1;
                 agent_diag.insert(

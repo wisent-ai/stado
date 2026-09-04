@@ -2909,7 +2909,46 @@ impl RemoteObjectApi {
 /// loopback to a tailnet HTTPS origin they failed with "error sending
 /// request" -- which reads like the host is down rather than like this
 /// process was never told whom to trust.
+///
+/// Built once per process, per configuration. `reqwest::Client` owns the
+/// connection pool, and this was called per object operation --
+/// `RemoteObjectApi::configured()` runs on every get, stat, list, put,
+/// get_versioned, put_if_version and delete, and the beacon publisher, the
+/// doctor and the host-recovery release path each call it directly. A client
+/// per call is a pool of one connection thrown away, which is how a store
+/// ends up with 1,059 sockets in `TIME_WAIT` beside 41 established and an
+/// object API pinned at 99.8% of a core, and a read that queues behind those
+/// handshakes is the read that starves the agent loop. Same fix, and the same
+/// reasoning, as `queue::stado_object::StadoObjectBackend::shared_client`.
+///
+/// Keyed by the inputs the client is built from -- the CA file and the
+/// resolved origin hosts -- so a configuration change still produces a new
+/// client rather than reusing one that trusts the wrong authority.
 pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
+    static CLIENTS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, reqwest::Client>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let key = format!(
+        "{}|{}",
+        crate::config::wc_stado_storage_ca_file().trim(),
+        configured_origin_hosts().join(",")
+    );
+    if let Some(client) = CLIENTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+    {
+        return Ok(client.clone());
+    }
+    let client = build_fleet_https_client()?;
+    CLIENTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, client.clone());
+    Ok(client)
+}
+
+fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
     // Bound DNS/TCP establishment and an actually stalled body, not the total
     // lifetime of an active immutable transfer. The former total 60-second
     // timeout cut healthy 70 MB writer read-backs off at 42–56 MB; retries
@@ -2919,7 +2958,18 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(60));
+        .read_timeout(Duration::from_secs(60))
+        // The same pool contract as
+        // `queue::stado_object::StadoObjectBackend::client`, and for the same
+        // reason: the object API holds a reused connection for 120 s
+        // (`Dashboard::KEEP_ALIVE_IDLE`), so this side retires it first at
+        // 90 s and never writes into a socket the server is closing. Eight
+        // warm connections per host bound the idle set, and TCP keepalive
+        // turns a silently dropped connection into a re-dial rather than a
+        // failed object operation.
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(60));
     for host in configured_origin_hosts() {
         // The tailnet states where its own names live. Asking the system
         // resolver about a MagicDNS name is asking a witness that may not have

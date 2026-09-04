@@ -128,8 +128,42 @@ impl StadoObjectBackend {
             base_url,
             namespace: namespace.to_string(),
             token,
-            client: Self::client(ca_file)?,
+            client: Self::shared_client(ca_file)?,
         })
+    }
+
+    /// One pooled client per CA configuration, for the life of the process.
+    ///
+    /// `reqwest::Client` owns the connection pool, and this backend used to
+    /// build a fresh one in every constructor. Nothing here constructs once:
+    /// `JobStorage::new()` is called per janitor pass, per gates read, per CLI
+    /// invocation, and each of those was a pool with one connection in it that
+    /// was dropped at the end. The store's own socket table showed the result
+    /// on 2026-09-03 — 1,388 `TIME_WAIT` against `127.0.0.1:8765` beside 96
+    /// `ESTABLISHED`, with the object API pinned at 95.9% of a core — and a
+    /// read that has to queue behind a thousand fresh handshakes is a read
+    /// that takes 639 s, which is the latency that starves the agent loop.
+    ///
+    /// Cloning a `Client` shares its pool, so every backend built in this
+    /// process now reuses connections. Keyed by CA file because that is the
+    /// only input to [`Self::client`]; the token is a per-request header and
+    /// the base URL is per-request too, so neither belongs to the pool.
+    fn shared_client(ca_file: &str) -> Result<Client, StorageError> {
+        static CLIENTS: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashMap<String, Client>>,
+        > = std::sync::LazyLock::new(|| {
+            std::sync::Mutex::new(std::collections::HashMap::new())
+        });
+        let key = ca_file.trim().to_string();
+        let mut clients = CLIENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(client) = clients.get(&key) {
+            return Ok(client.clone());
+        }
+        let client = Self::client(&key)?;
+        clients.insert(key, client.clone());
+        Ok(client)
     }
 
     /// The HTTPS client, trusting the configured private authority in addition to
@@ -156,7 +190,26 @@ impl StadoObjectBackend {
         // handle storage failures.
         let builder = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
-            .timeout(std::time::Duration::from_secs(300));
+            .timeout(std::time::Duration::from_secs(300))
+            // Sharing the client is what makes a pool possible; these three
+            // state what the pool is for. The idle timeout is the contract
+            // with the object API, which holds a reused connection for 120 s
+            // (`Dashboard::KEEP_ALIVE_IDLE`): this side must retire the socket
+            // FIRST, because a connection retired by the server between the
+            // pool checkout and the write fails or re-dials -- the cost this
+            // sharing exists to remove. 90 s against the server's 120 s leaves
+            // a 30 s margin and is also reqwest's own default, so the value is
+            // unchanged and only its reason is now written down.
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            // A tick reads a handful of objects; eight warm connections per
+            // host serve that with room for the concurrent janitor read,
+            // instead of reqwest's unbounded idle set.
+            .pool_max_idle_per_host(8)
+            // A pooled connection dropped silently -- by the tailnet, by a
+            // NAT table, by a service restart -- is otherwise discovered only
+            // when a request is written into it, which surfaces as an
+            // occasional failed object operation rather than a clean re-dial.
+            .tcp_keepalive(std::time::Duration::from_secs(60));
         let ca_file = ca_file.trim();
         if ca_file.is_empty() {
             return builder.build().map_err(|error| {
@@ -325,12 +378,35 @@ impl StadoObjectBackend {
     /// A declared length is the only thing that can be checked, so it is the
     /// only thing that is: a chunked or otherwise unlengthed response has
     /// nothing to disagree with and passes through exactly as before.
-    async fn whole_body(response: Response, path: &str) -> Result<Vec<u8>, StorageError> {
+    ///
+    /// `limit` is the second thing a declared length is good for. An object
+    /// read is buffered whole, in this process, and `to_vec` holds a second
+    /// copy while it is built, so an unbounded read is unbounded MEMORY and
+    /// not merely unbounded time. A timeout cannot help with that: it fires
+    /// after the bytes are already resident. Callers that read a document
+    /// whose size is part of its contract pass a ceiling, and a response
+    /// declaring more than the ceiling is refused BEFORE the body is
+    /// requested, so the bytes never arrive. Callers that read software
+    /// artifacts pass `None`: those are legitimately large and are written
+    /// straight to a file.
+    async fn whole_body(
+        response: Response,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<u8>, StorageError> {
         let declared = response
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.trim().parse::<usize>().ok());
+        if let (Some(limit), Some(declared)) = (limit, declared) {
+            if declared > limit {
+                return Err(StorageError::Other(format!(
+                    "Stado object API declared {declared} bytes for {path}, over the {limit}-byte \
+                     document ceiling; refused without reading the body"
+                )));
+            }
+        }
         let bytes = response.bytes().await?.to_vec();
         if let Some(declared) = declared {
             if bytes.len() != declared {
@@ -340,7 +416,40 @@ impl StadoObjectBackend {
                 )));
             }
         }
+        // An unlengthed response had nothing to refuse in advance. Name what
+        // arrived rather than handing a document of unknown size to a parser:
+        // the memory is already spent, but the read stops being a silent way
+        // to grow this process without bound.
+        if let Some(limit) = limit {
+            if bytes.len() > limit {
+                return Err(StorageError::Other(format!(
+                    "Stado object API returned {} bytes for {path} with no declared length, over \
+                     the {limit}-byte document ceiling",
+                    bytes.len()
+                )));
+            }
+        }
         Ok(bytes)
+    }
+
+    /// One object read, optionally under a byte ceiling. See
+    /// [`Self::whole_body`] for what the ceiling buys and why a timeout does
+    /// not buy it.
+    async fn download_bytes_limited(
+        &self,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let response =
+            Self::send_through_boundary(self.request(Method::GET, self.object_url(path, &[])?))
+                .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::response_error(response).await);
+        }
+        Ok(Some(Self::whole_body(response, path, limit).await?))
     }
 
     async fn upload(
@@ -467,7 +576,15 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
-        let Some(bytes) = self.download_bytes(path).await? else {
+        // Every text object this store serves is a document: a registry, a
+        // policy, a job, a capacity row, a queue-control record. Their sizes
+        // are part of their contract, so they read under the document
+        // ceiling and a reply that declares more than that never lands in
+        // this process at all.
+        let Some(bytes) = self
+            .download_bytes_limited(path, Some(crate::constants::STORE_DOCUMENT_MAX_BYTES))
+            .await?
+        else {
             return Ok(None);
         };
         String::from_utf8(bytes)
@@ -476,16 +593,9 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let response =
-            Self::send_through_boundary(self.request(Method::GET, self.object_url(path, &[])?))
-                .await?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !response.status().is_success() {
-            return Err(Self::response_error(response).await);
-        }
-        Ok(Some(Self::whole_body(response, path).await?))
+        // Unlimited: this is also the route a software artifact takes on its
+        // way to `download_to_filename`.
+        self.download_bytes_limited(path, None).await
     }
 
     /// One `stado://releases/...` object off the fleet's public release
@@ -557,7 +667,14 @@ impl BlobBackend for StadoObjectBackend {
                 ))
             })?
             .to_string();
-        let bytes = Self::whole_body(response, path).await?;
+        // Same ceiling as the unversioned read: this is the route the
+        // canonical registry and every conditional-write document take.
+        let bytes = Self::whole_body(
+            response,
+            path,
+            Some(crate::constants::STORE_DOCUMENT_MAX_BYTES),
+        )
+        .await?;
         let content = String::from_utf8(bytes)
             .map_err(|error| StorageError::Other(format!("invalid UTF-8 in {path}: {error}")))?;
         Ok(Some(VersionedText { content, version }))
