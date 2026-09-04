@@ -468,11 +468,14 @@ fn wait_for_claimable_capacity(storage: &Path, home: &Path, agent: &mut Child) {
                 fs::read_to_string(home.join("agent.err")).unwrap_or_default()
             );
         }
-        assert!(
-            Instant::now() < deadline,
-            "agent accepted no work within 300 seconds\nstore:{}",
-            store_snapshot(storage)
-        );
+        if Instant::now() >= deadline {
+            let _ = agent.kill();
+            let _ = agent.wait();
+            panic!(
+                "agent accepted no work within 300 seconds\nstore:{}",
+                store_snapshot(storage)
+            );
+        }
         thread::sleep(Duration::from_millis(250));
     }
 }
@@ -1020,5 +1023,8 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
         "ci-release-probe 1.0.0"
+    );
+    println!(
+        "verified cancelled release retry platform={platform}; first_job={first_job_id}; retry_job={retry_job_id}; installed=ci-release-probe 1.0.0"
     );
 }
