@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::net::SocketAddr;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -181,6 +181,15 @@ struct PublishedStatus<'a> {
     previous_version: Option<&'a str>,
     detail: &'a str,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveBinary {
+    pub path: PathBuf,
+    pub version: String,
+    pub platform: String,
+    pub artifact_sha256: String,
+    pub manifest_sha256: String,
 }
 
 /// The rollout state document one product keeps on one host.
@@ -1041,6 +1050,116 @@ fn stage_release(
     }
     release_control::safe_extract_archive(archive, directory)?;
     atomic_json(&marker_path(directory), manifest)
+}
+
+/// Resolve the executable from the exact release the local agent has made
+/// active, refusing every fallback path.
+pub(crate) fn active_binary(
+    product: &str,
+    target_name: &str,
+    policy: &ProductReleasePolicy,
+    target: &ReleaseTargetPolicy,
+) -> Result<ActiveBinary, String> {
+    let desired = policy
+        .desired
+        .as_ref()
+        .ok_or_else(|| format!("{product} has no desired release"))?;
+    let artifact = desired.artifacts.get(&target.platform).ok_or_else(|| {
+        format!(
+            "{} {} has no {} artifact",
+            product, desired.version, target.platform
+        )
+    })?;
+    let state = load_state(target, product, target_name)?;
+    if state.rollout_generation != desired.rollout_generation {
+        return Err(format!(
+            "{product} local generation {} does not match desired generation {}",
+            state.rollout_generation, desired.rollout_generation
+        ));
+    }
+    if !matches!(
+        state.phase,
+        RolloutPhase::Routed | RolloutPhase::Monitoring | RolloutPhase::Committed
+    ) {
+        return Err(format!(
+            "{product} local release is not active: phase {:?}",
+            state.phase
+        ));
+    }
+    if state.quarantined.contains_key(&artifact.artifact_sha256) {
+        return Err(format!(
+            "{product} desired digest {} is quarantined",
+            artifact.artifact_sha256
+        ));
+    }
+    let active = state
+        .active
+        .ok_or_else(|| format!("{product} local release has no active process record"))?;
+    if active.version != desired.version || active.artifact_sha256 != artifact.artifact_sha256 {
+        return Err(format!(
+            "{product} active identity {} {} does not match desired identity {} {}",
+            active.version,
+            active.artifact_sha256,
+            desired.version,
+            artifact.artifact_sha256
+        ));
+    }
+
+    let directory = PathBuf::from(&active.release_dir);
+    let marker_path = marker_path(&directory);
+    let marker = std::fs::read(&marker_path).map_err(|error| {
+        format!(
+            "cannot read active release marker {}: {error}",
+            marker_path.display()
+        )
+    })?;
+    let manifest: ReleaseManifest = serde_json::from_slice(&marker)
+        .map_err(|error| format!("active release marker is invalid: {error}"))?;
+    release_control::validate_manifest(&manifest)?;
+    let manifest_sha =
+        release_control::sha256_bytes(&release_control::canonical_manifest(&manifest)?);
+    if manifest_sha != artifact.manifest_sha256
+        || manifest_sha != active.manifest_sha256
+        || manifest.product != product
+        || manifest.version != desired.version
+        || manifest.platform != target.platform
+        || manifest.artifact_sha256 != artifact.artifact_sha256
+        || manifest.source_revision != artifact.source_revision
+        || manifest.key_id != artifact.key_id
+        || manifest.binary != policy.binary
+        || manifest.qualification.status != QualificationStatus::Passed
+    {
+        return Err(format!(
+            "{product} active release marker does not match the desired signed artifact"
+        ));
+    }
+    let expected_directory = release_control::install_directory(policy, target, &manifest);
+    if directory != expected_directory {
+        return Err(format!(
+            "{product} active release directory {} is not the policy-derived directory {}",
+            directory.display(),
+            expected_directory.display()
+        ));
+    }
+    let path = directory.join(&policy.binary);
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("cannot inspect active binary {}: {error}", path.display()))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.permissions().mode() & 0o111 == 0
+    {
+        return Err(format!(
+            "active binary is not an executable regular file: {}",
+            path.display()
+        ));
+    }
+    Ok(ActiveBinary {
+        path,
+        version: manifest.version,
+        platform: manifest.platform,
+        artifact_sha256: manifest.artifact_sha256,
+        manifest_sha256: manifest_sha,
+    })
 }
 
 /// The port the proxy currently forwards to, read from its own target file.
