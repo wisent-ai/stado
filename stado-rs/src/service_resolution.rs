@@ -81,6 +81,26 @@ pub struct ServiceEndpoint {
     /// Host-relative base URL. Loopback means loopback on `active_host`, not
     /// on the workload host.
     pub url: String,
+    /// Which release is answering here, as `<product>@<version>`.
+    ///
+    /// Modelled in BOTH readers in this one change, exactly as the note on
+    /// [`ServiceRoute::verify`] requires: `targets::ServiceEndpoint` keeps
+    /// unmodelled keys in a flattened `extra` and this reader denies them, so
+    /// publishing a field only the tolerant side knew would take every
+    /// resolver in the fleet down over a key it merely did not recognize.
+    /// `registry validate` refused precisely that on 2026-09-03 -- "unknown
+    /// field `release_id`, expected `url`" -- which is the check doing its job.
+    ///
+    /// On the endpoint and not on the service because it is a fact about one
+    /// address: a service with a standby endpoint would otherwise carry one
+    /// release id for two different processes. Optional, because a directory
+    /// entry written before a release identity was published is still a valid
+    /// entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    /// The exact source revision that release was built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
