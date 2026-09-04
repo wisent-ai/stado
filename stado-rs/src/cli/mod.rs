@@ -1720,6 +1720,27 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Authorize one consumer to read one field of one item on TARGET.
+    ///
+    /// A Skarbiec grant is per item and per field. The consumer's bearer stays
+    /// on the target: this names its token file, never its bytes.
+    #[command(name = "grant-item-read")]
+    GrantItemRead {
+        target: String,
+        /// Exact Skarbiec consumer name.
+        consumer: String,
+        /// Credential item id.
+        item: String,
+        /// Item field the consumer may read.
+        #[arg(long)]
+        field: String,
+        /// Existing raw bearer file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        token_file: String,
+        /// Emit the nonsecret report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Mint one bounded Skarbiec bearer on TARGET's live vault.
     #[command(name = "vault-token-mint")]
     VaultTokenMint {
@@ -3118,6 +3139,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 item_type,
                 json,
             } => host::vault_item_put(&target, &item, &item_type, json).await,
+            HostCommands::GrantItemRead {
+                target,
+                consumer,
+                item,
+                field,
+                token_file,
+                json,
+            } => host::grant_item_read(&target, &consumer, &item, &field, &token_file, json).await,
             HostCommands::VaultTokenMint {
                 target,
                 consumer,

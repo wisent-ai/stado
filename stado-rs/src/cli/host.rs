@@ -5246,6 +5246,111 @@ pub async fn vault_item_put(
     Ok(())
 }
 
+/// Authorize one consumer to read one field of one item in TARGET's vault.
+///
+/// A Skarbiec grant is per item and per field, so widening what a unit or a
+/// release job may read is a write into the *host's* vault, not into this
+/// laptop's. The bearer never enters an argument vector: the consumer's
+/// existing token file on the target is named, and Skarbiec reads it there.
+pub async fn grant_item_read(
+    target: &str,
+    consumer: &str,
+    item: &str,
+    field: &str,
+    token_file: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("consumer", consumer)?;
+    vault_word("vault item", item)?;
+    vault_word("item field", field)?;
+    if token_file.trim().is_empty() {
+        return Err(CmdError::usage(
+            "--token-file must name the consumer's existing bearer file on the target",
+        ));
+    }
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the Skarbiec environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
+    let gnupg_home = variables
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let tool_path = skarbiec_tool_path(&home);
+    let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
+    let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    let bearer_path = if token_file.starts_with('/') {
+        token_file.to_string()
+    } else {
+        format!("{home}/{}", token_file.trim_start_matches("~/"))
+    };
+    let invocation = [
+        "/usr/bin/env",
+        tool_path.as_str(),
+        gnupg_environment.as_str(),
+        vault_environment.as_str(),
+        skarbiec.as_str(),
+        "token-ensure-read",
+        consumer,
+        item,
+        "--field",
+        field,
+        "--token-file",
+        bearer_path.as_str(),
+    ];
+    let granted = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !granted.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec refused to grant {consumer} a read of {item}#{field}: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&granted, "remote command failed")
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "consumer": consumer,
+                "item": item,
+                "field": field,
+                "token_file": bearer_path,
+                "granted": true,
+            }))?
+        );
+    } else {
+        println!("{}: {consumer} may read {item}#{field}", resolved.name);
+    }
+    Ok(())
+}
+
 fn skarbiec_tool_path(home: &str) -> String {
     format!(
         "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/local/MacGPG2/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
