@@ -808,7 +808,7 @@ async fn remote_seed_state(
         .next()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let skarbiec = release_managed_skarbiec(resolved, runner, home).await?;
     let tool_path = format!(
         "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/local/MacGPG2/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     );
@@ -838,4 +838,62 @@ async fn remote_seed_state(
             resolved.name
         ))
     })
+}
+
+/// The Skarbiec the fleet actually released, else the one that predates
+/// release control.
+///
+/// A release-controlled product keeps its delivered copies at
+/// `install_root/releases/<version>/<platform>/<binary>` — the layout
+/// [`crate::release_control::install_directory`] commits them into — and the
+/// desired release names the version whose bytes this fleet can attest.
+/// `$HOME/.stado/bin/skarbiec` is where Skarbiec lived before release control
+/// existed, and on a host installed by hand once it is still sitting there
+/// beside the delivery path: on 2026-09-04 charless-mac-mini had a committed
+/// 0.2.38 under `install_root` and an unattested 0.2.28 at the legacy path, so
+/// asking the legacy copy whether the vault supports `totp-seed-state`
+/// answered `vault_read_unsupported` for a release that carries it.
+///
+/// Candidates in order and never a search, the way `service converge` resolves
+/// an artefact root: a probe that hunts the filesystem for something named
+/// `skarbiec` finds a backup copy and reports its capabilities as the running
+/// one's.
+async fn release_managed_skarbiec(
+    resolved: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+    home: &str,
+) -> Result<String, CmdError> {
+    let legacy = format!("{home}/.stado/bin/skarbiec");
+    // A registry carrying no release control, no desired release or no policy
+    // for this target cannot name a managed copy, and the
+    // pre-release-control path is then the only answer there is.
+    let managed = super::release_quarantine::canonical_control()
+        .await
+        .ok()
+        .and_then(|control| {
+            let policy = control.products.get("skarbiec")?;
+            let target = policy.targets.get(resolved.name.as_str())?;
+            let desired = policy.desired.as_ref()?;
+            Some(format!(
+                "{}/releases/{}/{}/{}",
+                policy.install_root.trim_end_matches('/'),
+                desired.version,
+                target.platform,
+                policy.binary
+            ))
+        });
+    let Some(managed) = managed.filter(|path| *path != legacy) else {
+        return Ok(legacy);
+    };
+    let present = crate::deploy::host_channel::remote_test(
+        resolved,
+        &format!("-x {}", crate::deploy::shlex_quote(&managed)),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    // A desired release the rollout has not delivered here yet leaves the
+    // legacy copy as the only executable one; reporting what it answers beats
+    // reporting nothing at all.
+    Ok(if present { managed } else { legacy })
 }
