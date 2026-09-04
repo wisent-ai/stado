@@ -99,12 +99,20 @@ export STADO_BIN
 # 0.7.22, a version published in July. The coordinate that cannot drift is the
 # binary that was just installed, so it names itself here unless the caller
 # pinned one on purpose.
+#
+# The answer is the word after the program name, never the last word. `--version`
+# reads `stado 0.14.9 (rev 519ae967a13d-dirty)` since the build stamp joined the
+# banner, and taking the LAST word pulled `519ae967a13d-dirty)` out of it, which
+# the sanity check refused as a coordinate — and the 0.14.9 train died on
+# "did not name a usable release version" after every byte of it had already
+# been delivered and staged. One annotation added to a banner is not a reason a
+# deploy stops knowing what it installed.
 if [ -z "${STADO_RELEASE_VERSION:-}" ]; then
-    INSTALLED_VERSION="$("$STADO_BIN" --version)"
-    INSTALLED_VERSION="${INSTALLED_VERSION##* }"
+    VERSION_LINE="$("$STADO_BIN" --version)"
+    read -r _program INSTALLED_VERSION _rest <<<"$VERSION_LINE"
     case "$INSTALLED_VERSION" in
         *[![:alnum:]._-]*|"")
-            echo "FATAL: $STADO_BIN --version did not name a usable release version"
+            echo "FATAL: $STADO_BIN --version did not name a usable release version: $VERSION_LINE"
             false
             ;;
     esac
