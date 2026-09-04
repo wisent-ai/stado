@@ -59,6 +59,29 @@ pub enum SkarbiecError {
     GcpAuth(String),
 }
 
+impl SkarbiecError {
+    /// Whether this says the vault could not be REACHED or could not answer,
+    /// as opposed to answering that something is configured wrongly.
+    ///
+    /// The distinction is the difference between a verdict and silence, and
+    /// it is typed here rather than recovered from a message downstream: a
+    /// classifier that substring-matches an error sentence is the defect this
+    /// repository has already paid for twice.
+    ///
+    /// A 5xx is the vault's own statement that it is unavailable — Skarbiec
+    /// answers `503 {"error_code":"infra_down"}` while its GnuPG daemons are
+    /// wedged, for items whose keys are present and whose grants are intact.
+    /// A transport error never reached an opinion at all. Neither one says
+    /// anything about mapping, grants or tokens.
+    pub fn is_unavailable(&self) -> bool {
+        match self {
+            Self::Http(_) => true,
+            Self::Response { status, .. } => *status >= 500,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ItemInfo {
     pub id: String,
