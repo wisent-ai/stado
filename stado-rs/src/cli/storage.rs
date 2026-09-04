@@ -1864,27 +1864,11 @@ impl RemoteObjectApi {
                 "release_api.publishers declares no publisher for {policy_key}"
             ))
         })?;
-        // A newly declared product's publisher item is readable by nobody:
-        // writing an item grants nothing, because a Skarbiec grant is per item
-        // and per field. `stado host reconcile-release-verifier T` settles the
-        // release verifier's exact publisher grant, and this settles the
-        // consumer a store-routed read authenticates as, which is the other of
-        // the two identities this read can travel under. Both are needed and
-        // neither implies the other, which is why declaring a product used to
-        // take one command plus a hand-run `skarbiec token-mint`.
-        //
-        // Advisory, never fatal, and that distinction was earned. Widening a
-        // grant requires the consumer's own bearer file to still hash to what
-        // the vault recorded, and a caller running as a different identity —
-        // `WC_SKARBIEC_CONSUMER=stado-release-publisher` with its acquisition
-        // token file, which is how the release train authenticates — may hold
-        // a bearer this machine cannot reproduce. Refusing there turned a read
-        // that was already authorized into `refusing to re-mint it, because
-        // the holders of the recorded bearer could not be given it back`: a
-        // correct refusal about a repair nobody asked for, reported as though
-        // the read itself had failed. The read is the question; whether a
-        // grant could be widened first is a convenience, and a convenience
-        // that cannot run says so and steps aside.
+        // Read with the publisher command's configured consumer, whose grant
+        // is settled here. The server has a separate release verifier; using
+        // that identity in the client would ignore the grant just acquired.
+        // An existing authorized read must still work when this caller lacks
+        // the owner credentials required to extend its grant.
         if let Err(error) =
             crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"])
         {
@@ -1894,7 +1878,7 @@ impl RemoteObjectApi {
                 publisher.item()
             );
         }
-        let token = crate::skarbiec::read_release_token(publisher.item(), "token")
+        let token = crate::credential_store::read_string(publisher.item(), "token")
             .await
             .map_err(|error| {
                 CmdError::click(format!(

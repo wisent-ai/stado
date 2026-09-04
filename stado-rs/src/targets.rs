@@ -2789,6 +2789,26 @@ impl RegistryStore {
         })
     }
 
+    /// Bind a server-local reader to the canonical registry's direct backing
+    /// store when clients normally route through the Stado object API.
+    ///
+    /// This is intentionally narrower than [`Self::open`]: only an explicitly
+    /// configured `stado` primary switches to the server's declared backup.
+    /// Every other adapter retains the canonical routing above.
+    pub async fn open_for_server() -> Result<Self, StorageError> {
+        if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+            != Some(crate::capabilities::StorageAdapter::StadoObject)
+        {
+            return Self::open().await;
+        }
+        let store = JobStorage::for_server().await?;
+        Ok(Self {
+            backend: Arc::clone(store.backend()),
+            blob: REGISTRY_BLOB.to_string(),
+            location: registry_location(),
+        })
+    }
+
     /// Operator-facing location of the object this handle addresses, in
     /// the spelling [`RegistryFetchError`] reports.
     pub fn location(&self) -> &str {
