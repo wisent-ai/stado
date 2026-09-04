@@ -38,7 +38,8 @@ use serde_json::{json, Value};
 
 use stado::cli::release_submit::{claimability, Claimability};
 use stado::deploy::host_gates::{
-    DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
+    DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_ACTIVE,
+    DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
 };
 
 /// A publication shaped like the ones this fleet actually writes.
@@ -65,6 +66,35 @@ fn a_host_with_free_slots_is_claimable() {
     assert_eq!(verdict, Claimability::Claimable { free_slots: 1 });
     assert!(verdict.eligible());
     assert!(verdict.describe().contains("1 free slot"));
+}
+
+/// A live slot table is not permission to schedule when the same publication
+/// says the agent is in its release-delivery-only recovery mode.
+///
+/// This is the exact contradictory shape the mini published on 2026-09-04:
+/// one CPU slot, disk below its low watermark, and an agent loop that retained
+/// only signed Stado release deliveries. Pinning a platform build to that host
+/// left it queued until disk was reclaimed.
+#[test]
+fn active_disk_pressure_refuses_a_build_despite_an_advertised_slot() {
+    let verdict = claimability(&publication(
+        Some(json!({"cpu": 1})),
+        json!({
+            "disk_pressure_active": true,
+            "disk_pressure_unresolved": false,
+        }),
+    ));
+    let Claimability::Refusing { blockers } = &verdict else {
+        panic!("expected a refusal, got {verdict:?}");
+    };
+    assert!(!verdict.eligible());
+    assert!(
+        blockers
+            .iter()
+            .any(|blocker| blocker.starts_with(DISK_PRESSURE_ACTIVE)),
+        "{blockers:?}"
+    );
+    assert!(verdict.describe().contains("release deliveries only"));
 }
 
 /// The incident, as an invariant. charless-mac-mini published exactly this —

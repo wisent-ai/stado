@@ -627,6 +627,20 @@ impl Claimability {
 
 /// Judge one publication. Never reaches the host and never fails.
 pub fn claimability(publication: &Value) -> Claimability {
+    use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
+
+    // The agent deliberately keeps publishing its last slot table while disk
+    // pressure is active so the fleet can distinguish a live host from a dead
+    // one. It accepts only signed Stado release deliveries in that mode, not
+    // this platform build. On 2026-09-04 the mini therefore advertised one CPU
+    // slot while refusing a build pinned to it; the selector must honor the
+    // explicit admission mode before trusting the stale slot count.
+    if publication_flag(publication, DISK_PRESSURE_ACTIVE) == Some(true) {
+        return Claimability::Refusing {
+            blockers: publication_blockers(publication),
+        };
+    }
+
     let Some(slots) = publication.get("free_slots").and_then(Value::as_object) else {
         return Claimability::Unstated;
     };
@@ -638,22 +652,26 @@ pub fn claimability(publication: &Value) -> Claimability {
         blockers: publication_blockers(publication),
     }
 }
+fn publication_flag(publication: &Value, name: &str) -> Option<bool> {
+    publication
+        .get("diag")
+        .and_then(|diag| diag.get(name))
+        .and_then(Value::as_bool)
+}
 
-/// The blockers a publication itself declares, named exactly as
-/// `deploy::host_gates` names them so one host reads the same way in both
-/// commands. Those constants are imported, not redefined, and nothing in
-/// `host_gates` is modified.
+/// The blockers a publication itself declares, named from the shared host-gate
+/// vocabulary so the selector and diagnostics cannot drift apart.
 fn publication_blockers(publication: &Value) -> Vec<String> {
     use crate::deploy::host_gates::{
-        DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
+        DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_ACTIVE,
+        DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
     };
-    let diag = publication.get("diag");
-    let flag = |name: &str| {
-        diag.and_then(|diag| diag.get(name))
-            .and_then(Value::as_bool)
-    };
+    let flag = |name: &str| publication_flag(publication, name);
     let mut blockers = Vec::new();
-    if flag("disk_pressure_unresolved") == Some(true) {
+    if flag(DISK_PRESSURE_ACTIVE) == Some(true) {
+        blockers.push(format!("{DISK_PRESSURE_ACTIVE} (release deliveries only)"));
+    }
+    if flag(DISK_PRESSURE_UNRESOLVED) == Some(true) {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
     }
     if flag("disk_cleanup_policy_known") == Some(false) {
@@ -667,7 +685,8 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
     // publication cannot compute the gate's staleness arithmetic -- that reads
     // the janitor state file on the host -- but it does carry the outcome, and
     // `lock_busy` is the outcome that never advances `last_success_at`.
-    if diag
+    if publication
+        .get("diag")
         .and_then(|diag| diag.get("disk_cleanup"))
         .and_then(|cleanup| cleanup.get("outcome"))
         .and_then(Value::as_str)
