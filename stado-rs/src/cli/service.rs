@@ -5608,6 +5608,16 @@ async fn handoff_release_control(
         .into_iter()
         .find(|profile| profile.name == profile_name)
         .ok_or_else(|| CmdError::click(format!("placement profile {profile_name:?} is absent")))?;
+    if let Some(transaction) = crate::placement::transactions(&document)
+        .map_err(CmdError::click)?
+        .into_iter()
+        .find(|transaction| transaction.profile == profile_name)
+    {
+        return Err(CmdError::click(format!(
+            "placement profile {profile_name:?} is owned by active transaction {:?}",
+            transaction.id
+        )));
+    }
     for (template_host, template) in &profile.hosts {
         let unit = template.units.get(service_name).ok_or_else(|| {
             CmdError::click(format!(
@@ -5684,6 +5694,7 @@ async fn handoff_release_control(
         )));
     }
 
+    with_service_mutation_lease(&legacy, || async {
     let runner = production_runner();
     let state_path = crate::release_agent::host_state_path(&target_policy.state_dir, product);
     let state_text = host_channel::remote_read_file(&target, &state_path, &runner)
@@ -5855,6 +5866,8 @@ async fn handoff_release_control(
         );
         Ok(())
     }
+    })
+    .await
 }
 
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
