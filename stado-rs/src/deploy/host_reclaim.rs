@@ -88,6 +88,8 @@
 //! spelling a program this size through escaped quotes is how a marker gets
 //! silently mistyped.
 
+use std::time::Duration;
+
 use serde_json::{json, Map, Value};
 
 use super::host_channel;
@@ -118,6 +120,12 @@ pub const MIN_AGE_DAYS: &str = "1";
 /// Weles host. Process ownership and newest-clone guards make one hour enough
 /// to survive launch races without allowing the clone root to fill the disk.
 pub const CLONE_MIN_AGE_MINUTES: &str = "60";
+/// A reclaim includes the registry janitor (whose declared pass may take up
+/// to ten minutes) and removal of large, already-enumerated trees. The generic
+/// two-minute host-read bound killed the transport mid-pass and left the
+/// remote janitor running without a caller. This explicit operator command is
+/// bounded independently at one hour.
+const RECLAIM_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// `mode` for a run that measured and removed nothing.
 pub const DRY_RUN_MODE: &str = "dry_run";
@@ -932,7 +940,7 @@ pub async fn reclaim_host(
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.target_free_gb);
-    let output = host_channel::run_script(
+    let output = host_channel::run_script_with_timeout(
         &target,
         &remote_script(
             apply,
@@ -940,6 +948,7 @@ pub async fn reclaim_host(
             DEFAULT_WORK_ROOTS,
             target_free_gb,
         ),
+        RECLAIM_TIMEOUT,
         runner,
     )
     .await?;
