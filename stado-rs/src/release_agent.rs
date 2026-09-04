@@ -1322,7 +1322,7 @@ async fn reconcile_stable_proxy(
     let upstream_is_owned = upstream.is_some_and(|upstream_port| {
         release_processes(install_root)
             .iter()
-            .any(|(_, _, port)| *port == Some(upstream_port))
+            .any(|process| process.port == Some(upstream_port))
     });
     if upstream_is_owned && stable_bind_ready(&serving).await {
         state.proxy_pid = Some(proxy_pid);
