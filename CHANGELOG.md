@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.15.20
+## 0.15.21
 
 - **Run retention:** the coordinator can retain an exact terminal job named by a validated durable run even when that historical job predates submission-linkage fields. Missing linkage is accepted only when all three linkage fields are absent and the remaining immutable job projection matches the manifest; partial or conflicting linkage still fails closed.
 - **Migration:** no persisted-state rewrite is required. Existing affected manifests are repaired by the normal run reaper on its next successful coordinator tick.
