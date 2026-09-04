@@ -189,7 +189,7 @@ impl From<DeployError> for ExecRefusal {
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
 /// no word splitting, no redirection, no globbing.
-const SAFE_PUNCTUATION: &str = "-_./:";
+const SAFE_PUNCTUATION: &str = "-_./:%";
 
 /// One approved remote program.
 #[derive(Debug)]
@@ -554,6 +554,22 @@ const WELES_ADMISSION_RELEASE_TREE: &[&str] = &[
     "-l",
     ".stado/services/weles-admission/current/darwin-arm",
 ];
+/// Size and modification epoch of the log the long-running manual Figma
+/// export redirects away from Stado's canonical job log.
+const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
+    "/usr/bin/stat",
+    "-f",
+    "%z:%m",
+    ".stado/work/figma-export/export.log",
+];
+
+/// Total allocated KiB below the manual Figma export's fixed work tree.
+const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &[
+    "/usr/bin/du",
+    "-sk",
+    ".stado/work/figma-export",
+];
+
 
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
@@ -575,6 +591,8 @@ const HOME_ROOTED_READS: &[&[&str]] = &[
     WELES_ADMISSION_VERSIONS,
     WELES_ADMISSION_RELEASE_TREE,
     WELES_ADMISSION_WORKER_MODULES,
+    FIGMA_EXPORT_LOG_STAT,
+    FIGMA_EXPORT_WORK_TREE_SIZE,
 ];
 
 /// Is this entry's fixed argv one of the home-rooted reads?
@@ -766,6 +784,14 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               arguments or environment values; it is read-only and cannot expose secret argv",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/top", "-l", "4", "-s", "10", "-o", "cpu"],
+        why: "samples every process four times at ten-second intervals and orders the fixed \
+              read-only report by CPU use. A single `ps` sample can legitimately catch an \
+              I/O-bound worker at zero; this bounded thirty-second observation distinguishes \
+              that moment from a process consuming no CPU throughout the interval. It takes \
+              no pid, command text, file, or operator-supplied selector and writes nothing",
+    },
+    ApprovedCommand {
         argv: &[
             "/bin/ps", "ax", "-o", "pid", "-o", "rss", "-o", "pcpu", "-o", "comm",
         ],
@@ -782,6 +808,24 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               this table and cannot be reached through it. The selector is fixed to `ax` \
               and takes no pid, user, or file argument, so it cannot be pointed at \
               anything narrower or anywhere else",
+    },
+    ApprovedCommand {
+        argv: FIGMA_EXPORT_LOG_STAT,
+        why: "reads only byte size and modification epoch for the fixed manual Figma export \
+              log inside the managed account's Stado work tree. Added 2026-09-04 because a \
+              job can renew its lease for hours while redirecting every progress byte away \
+              from the canonical zero-byte job log; without two measurements of this file \
+              the fleet cannot distinguish useful work from a hang. The path and format are \
+              compile-time constants, no operator word is appended, and stat writes nothing",
+    },
+    ApprovedCommand {
+        argv: FIGMA_EXPORT_WORK_TREE_SIZE,
+        why: "reads allocated KiB below only the fixed manual Figma export work tree. The \
+              export writes its result below that tree while its redirected log can grow \
+              independently, so measuring both at two times distinguishes output progress \
+              from logging alone. The path, unit and recursion root are compile-time \
+              constants, no operator word is appended, du stays within the managed account's \
+              work tree, and the command writes nothing",
     },
     ApprovedCommand {
         argv: &[
