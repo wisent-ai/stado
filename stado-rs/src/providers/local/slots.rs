@@ -8,6 +8,10 @@
 //! destinations after the canonical write succeeds.
 
 use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -38,6 +42,73 @@ const DEFAULT_YIELD_GRACE_S: i64 = 120;
 /// Python `Job.max_yields_before_protected` fallback (`getattr(...) or 5`).
 pub const DEFAULT_MAX_YIELDS: i64 = 5;
 
+fn job_work_dir(job_id: &str) -> std::io::Result<PathBuf> {
+    super::disk_cleanup::queue_workdirs::work_dir(job_id)
+}
+
+fn open_agent_reserved_file(path: &Path) -> io::Result<File> {
+    match std::fs::symlink_metadata(path) {
+        Ok(info)
+            if !info.file_type().is_file()
+                || info.file_type().is_symlink()
+                || info.uid() != super::disk_cleanup::euid() =>
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("unsafe agent-reserved file {}", path.display()),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .mode(0o600)
+        .open(path)?;
+    let info = file.metadata()?;
+    if !info.is_file() || info.uid() != super::disk_cleanup::euid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("unsafe agent-reserved file {}", path.display()),
+        ));
+    }
+    // O_NONBLOCK makes a FIFO/device replacement fail admission instead of
+    // hanging this agent before fstat. A verified regular file does not need
+    // the flag, so clear it before the descriptor is inherited by the child.
+    let fd = file.as_raw_fd();
+    // SAFETY: fd belongs to the live `file`; F_GETFL/F_SETFL do not dereference
+    // userspace pointers, and failure is returned before the file is used.
+    let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & nix::libc::O_NONBLOCK != 0 {
+        let result =
+            unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFL, flags & !nix::libc::O_NONBLOCK) };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
+fn work_dir_is_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|info| info.is_dir() && !info.file_type().is_symlink())
+}
+
+fn workdir_missing_diagnostic(job_id: &str, phase: &str, path: &Path) -> String {
+    format!(
+        "workdir_missing job_id={job_id} phase={phase} expected_path={}",
+        path.display()
+    )
+}
+
 /// A running local-agent slot (Python's slot dict). Owns the child process
 /// handle; dropping it without reaping leaves the OS process running (the
 /// child is in its own process group and re-parents to init), matching the
@@ -51,6 +122,10 @@ pub struct ActiveSlot {
     log_file: Option<std::fs::File>,
     /// Last heartbeat stamp (monotonic). Python `last_hb` (time.time()).
     pub last_hb: Instant,
+    /// Whether a heartbeat or finalization observed the canonical tree absent
+    /// or replaced by a non-directory. Retained so a later recreation cannot
+    /// erase the terminal evidence.
+    workdir_missing: bool,
     /// Currently SIGSTOPed because a Vast renter appeared.
     pub paused: bool,
     /// Spawn time (monotonic), for the MIN_RUNTIME_BEFORE_YIELD_S guard.
@@ -736,7 +811,16 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
             return;
         }
     };
-    let output_dir = PathBuf::from(format!("/tmp/wc-{}/output", job.job_id));
+    let output_dir = match job_work_dir(&job.job_id) {
+        Ok(work_dir) => work_dir.join("output"),
+        Err(error) => {
+            log_fn(&format!(
+                "output_uri mirror refused for {}: {error}",
+                job.job_id
+            ));
+            return;
+        }
+    };
     if !output_dir.exists() {
         return;
     }
@@ -944,13 +1028,14 @@ pub async fn start_slot(
         log_fn(&format!("refuse {}: {raw_refusal}", job.job_id));
         return Ok(None);
     }
-    let work_dir = format!("/tmp/wc-{}", job.job_id);
-    std::fs::create_dir_all(format!("{work_dir}/output"))?;
+    let work_dir = super::disk_cleanup::queue_workdirs::create_work_dir(&job.job_id)?;
     let artifact_inputs_json = canonical_json(&Value::Object(job.resolved_input_artifacts.clone()));
-    let artifact_inputs_file = format!("{work_dir}/artifacts.json");
-    std::fs::write(&artifact_inputs_file, &artifact_inputs_json)?;
+    let artifact_inputs_file = work_dir.join("artifacts.json");
+    let mut artifact_inputs = open_agent_reserved_file(&artifact_inputs_file)?;
+    artifact_inputs.write_all(artifact_inputs_json.as_bytes())?;
+    drop(artifact_inputs);
     if let Err(error) =
-        materialize_stado_inputs(store, &job.resolved_input_artifacts, Path::new(&work_dir)).await
+        materialize_stado_inputs(store, &job.resolved_input_artifacts, &work_dir).await
     {
         job.state = job_state::FAILED.to_string();
         job.failed_at = Some(isoformat_utc(Utc::now()));
@@ -970,7 +1055,7 @@ pub async fn start_slot(
             return Ok(None);
         }
     };
-    let log_file = std::fs::File::create(format!("{work_dir}/output/command_output.log"))?;
+    let log_file = open_agent_reserved_file(&work_dir.join("output/command_output.log"))?;
     let stdout_file = log_file.try_clone()?;
     let stderr_file = log_file.try_clone()?;
     job.state = job_state::RUNNING.to_string();
@@ -1052,6 +1137,7 @@ pub async fn start_slot(
         child,
         log_file: Some(log_file),
         last_hb: Instant::now(),
+        workdir_missing: false,
         paused: false,
         started_mono: Instant::now(),
         _hb_task: hb_task,
@@ -1096,7 +1182,7 @@ pub async fn request_yield(
         DEFAULT_YIELD_GRACE_S
     };
     let hook = job.yield_command.trim().to_string();
-    let work_dir = format!("/tmp/wc-{}", job.job_id);
+    let work_dir = job_work_dir(&job.job_id)?;
     let deadline = Instant::now() + Duration::from_secs(grace.max(0) as u64);
     log_fn(&format!(
         "yield: requesting yield of {} (grace={grace}s, pgid={pgid})",
@@ -1128,7 +1214,7 @@ pub async fn request_yield(
             // A timed-out hook is killed (Python subprocess.run timeout
             // semantics: kill the direct child, reap, raise).
             .kill_on_drop(true);
-        if Path::new(&work_dir).exists() {
+        if work_dir.exists() {
             cmd.current_dir(&work_dir);
         }
         match tokio::time::timeout(Duration::from_secs(remaining), cmd.output()).await {
@@ -1184,9 +1270,9 @@ pub async fn request_yield(
         &format!("YIELDED {}", isoformat_utc(Utc::now())),
     )
     .await?;
-    let output_dir = format!("/tmp/wc-{}/output", job.job_id);
-    if Path::new(&output_dir).exists() {
-        if let Err(exc) = upload_output(store, &job, Path::new(&output_dir)).await {
+    let output_dir = work_dir.join("output");
+    if output_dir.exists() {
+        if let Err(exc) = upload_output(store, &job, &output_dir).await {
             log_fn(&format!(
                 "yield: output upload {} failed (non-fatal): {exc}",
                 job.job_id
@@ -1248,11 +1334,9 @@ pub async fn advance_slot(
         if store.read_job(terminal_prefix, &job_id).await?.is_some() {
             terminate_cancelled_slot(&mut slot, log_fn).await?;
             slot.close_log();
-            let output_dir = format!("/tmp/wc-{job_id}/output");
-            if Path::new(&output_dir).exists() {
-                if let Err(error) =
-                    upload_output(store, &slot.slot.job, Path::new(&output_dir)).await
-                {
+            let output_dir = job_work_dir(&job_id)?.join("output");
+            if output_dir.exists() {
+                if let Err(error) = upload_output(store, &slot.slot.job, &output_dir).await {
                     log_fn(&format!(
                         "cancelled job artifact upload failed for {job_id}: {error}"
                     ));
@@ -1287,35 +1371,45 @@ pub async fn advance_slot(
         }
         if !slot.paused && slot.last_hb.elapsed() > Duration::from_secs(HEARTBEAT_INTERVAL_S) {
             write_heartbeat(store, &job_id).await?;
-            // Stream the in-progress command_output.log to storage on each
-            // heartbeat. Without this, a job killed mid-run leaves its log
-            // on the workstation /tmp dir and the operator has zero crash
-            // evidence.
-            let log_path = format!("/tmp/wc-{job_id}/output/command_output.log");
-            if Path::new(&log_path).exists() {
-                let upload = async {
-                    let mut bytes = tokio::fs::read(&log_path).await?;
-                    let secrets = output_redactions(&slot.slot.job).await?;
-                    redact_secret_bytes(&mut bytes, &secrets);
-                    store
-                        .upload_bytes(
-                            &format!("status/{job_id}/output/command_output.log"),
-                            &bytes,
-                        )
-                        .await
-                };
-                match tokio::time::timeout(Duration::from_secs(10), upload).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(exc)) => {
-                        log_fn(&format!(
-                            "heartbeat log upload failed for {job_id}: {}",
-                            head_chars(&exc.to_string(), 160)
-                        ));
-                    }
-                    Err(_) => {
-                        log_fn(&format!(
-                            "heartbeat log upload failed for {job_id}: timed out after 10s"
-                        ));
+            let expected_work_dir = job_work_dir(&job_id)?;
+            if !work_dir_is_directory(&expected_work_dir) {
+                slot.workdir_missing = true;
+                log_fn(&workdir_missing_diagnostic(
+                    &job_id,
+                    "heartbeat",
+                    &expected_work_dir,
+                ));
+            } else {
+                // Stream the in-progress command_output.log from the
+                // queue-owned persistent job tree on each heartbeat. An
+                // existing but empty log is intentionally different from the
+                // missing-tree diagnostic above.
+                let log_path = expected_work_dir.join("output/command_output.log");
+                if log_path.exists() {
+                    let upload = async {
+                        let mut bytes = tokio::fs::read(&log_path).await?;
+                        let secrets = output_redactions(&slot.slot.job).await?;
+                        redact_secret_bytes(&mut bytes, &secrets);
+                        store
+                            .upload_bytes(
+                                &format!("status/{job_id}/output/command_output.log"),
+                                &bytes,
+                            )
+                            .await
+                    };
+                    match tokio::time::timeout(Duration::from_secs(10), upload).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(exc)) => {
+                            log_fn(&format!(
+                                "heartbeat log upload failed for {job_id}: {}",
+                                head_chars(&exc.to_string(), 160)
+                            ));
+                        }
+                        Err(_) => {
+                            log_fn(&format!(
+                                "heartbeat log upload failed for {job_id}: timed out after 10s"
+                            ));
+                        }
                     }
                 }
             }
@@ -1324,10 +1418,22 @@ pub async fn advance_slot(
         return Ok(SlotOutcome::Running(slot));
     };
 
-    let mut ret = python_returncode(exit_status);
+    let workload_exit_code = python_returncode(exit_status);
+    let mut ret = workload_exit_code;
+    let expected_work_dir = job_work_dir(&job_id)?;
+    if !work_dir_is_directory(&expected_work_dir) {
+        slot.workdir_missing = true;
+    }
+    if slot.workdir_missing {
+        log_fn(&workdir_missing_diagnostic(
+            &job_id,
+            "finalization",
+            &expected_work_dir,
+        ));
+    }
     let mut verification_failed = false;
     let verify_cmd = verify_command(&slot.slot.job);
-    if ret == 0 && !verify_cmd.is_empty() {
+    if ret == 0 && !slot.workdir_missing && !verify_cmd.is_empty() {
         // Verification hook — see Job.verify_command docstring. Runs in
         // the same workdir as the original command. Non-zero exit
         // reverses the COMPLETED→FAILED. The verify command must define
@@ -1349,7 +1455,7 @@ pub async fn advance_slot(
         match command
             .arg("-c")
             .arg(&verify_cmd)
-            .current_dir(format!("/tmp/wc-{job_id}"))
+            .current_dir(&expected_work_dir)
             .envs(secret_environment)
             .output()
             .await
@@ -1377,18 +1483,19 @@ pub async fn advance_slot(
     // gpt-oss-20b "completions" had zero-byte logs despite the
     // subprocess running.
     slot.close_log();
-    let status = if ret == 0 {
-        "COMPLETED".to_string()
-    } else {
+    let terminal_failed = ret != 0 || slot.workdir_missing;
+    let status = if terminal_failed {
         format!("FAILED exit={ret}")
+    } else {
+        "COMPLETED".to_string()
     };
     let mut job = slot.slot.job.clone();
-    job.state = if ret == 0 {
-        job_state::COMPLETED.to_string()
-    } else {
+    job.state = if terminal_failed {
         job_state::FAILED.to_string()
+    } else {
+        job_state::COMPLETED.to_string()
     };
-    let output_dir = format!("/tmp/wc-{job_id}/output");
+    let output_dir = expected_work_dir.join("output");
     let ts = isoformat_utc(Utc::now());
     // The workload's own last words, read before the failure record is
     // written rather than after it, because they ARE the failure record. This
@@ -1403,25 +1510,18 @@ pub async fn advance_slot(
     // read as a missing Accessibility grant — which `stado host gui-automation
     // status` reports as `granted` on that host — and an hour went into a
     // permission that was never the problem.
-    let classification_error = if job.state == job_state::FAILED {
+    let classification_error = if job.state == job_state::FAILED && !slot.workdir_missing {
         redacted_tail(
             &job,
-            &Path::new(&output_dir).join("command_output.log"),
+            &output_dir.join("command_output.log"),
             "4096".parse().expect("static error-tail size"),
         )
         .await?
     } else {
         String::new()
     };
-    if ret == 0 {
-        job.completed_at = Some(ts);
-    } else {
+    if terminal_failed {
         job.failed_at = Some(ts);
-        let what = if verification_failed {
-            "verification command failed"
-        } else {
-            "workload exited unsuccessfully"
-        };
         // Collapsed to one line and bounded: this field is read in tables and
         // in one-line log records, and a multi-line JSON blob there is as
         // unreadable as no detail at all.
@@ -1429,10 +1529,28 @@ pub async fn advance_slot(
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        job.error = Some(match tail_chars(&said, 400) {
-            said if said.trim().is_empty() => format!("{what} and wrote no output"),
-            said => format!("{what}: {said}"),
+        job.error = Some(if slot.workdir_missing {
+            let missing = format!(
+                "workdir_missing expected_path={} workload_exit_code={workload_exit_code}",
+                expected_work_dir.display()
+            );
+            match tail_chars(&said, 400) {
+                said if said.trim().is_empty() => missing,
+                said => format!("{missing}; captured_output: {said}"),
+            }
+        } else {
+            let what = if verification_failed {
+                "verification command failed"
+            } else {
+                "workload exited unsuccessfully"
+            };
+            match tail_chars(&said, 400) {
+                said if said.trim().is_empty() => format!("{what} and wrote no output"),
+                said => format!("{what}: {said}"),
+            }
         });
+    } else {
+        job.completed_at = Some(ts);
     }
     // Artifacts become durable before the terminal transition. A storage
     // failure retains the running record so finalization can be retried;
@@ -1455,8 +1573,8 @@ pub async fn advance_slot(
         ));
         return Ok(SlotOutcome::Done);
     }
-    if Path::new(&output_dir).exists() {
-        if let Err(error) = upload_output(store, &job, Path::new(&output_dir)).await {
+    if output_dir.exists() {
+        if let Err(error) = upload_output(store, &job, &output_dir).await {
             log_fn(&format!(
                 "terminal artifact upload failed for {job_id}; retaining running state for retry: {error}"
             ));

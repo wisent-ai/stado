@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.26
+
+- **Release-store retention:** the host janitor now reclaims immutable product versions only after preserving every host-owned, active-pipeline, recently completed, quarantined, and newest rollback coordinate. It walks the canonical product/run layout without following links, enforces the declared byte and item limits, and reports every reason a version stayed.
+- **Object API recovery:** the checked recovery path now accepts a healthy Skarbiec proxy that release-control still owns instead of mistaking recorded ownership for an orphan and refusing before it checks readiness.
+- **GPU admission:** inference deployment now distinguishes GPU processes owned by registry-declared units from unknown processes. Declared streaming and service workloads may coexist with inference; an unaccounted process still refuses the deployment with its PID.
+- **Migration:** enable `release_store` in the object-store host's disk-cleanup policy; the default rollback ladder keeps three newest versions per product. No persisted state rewrite is required.
+- **Rollback boundary:** rolling back disables release-store reclamation, restores the false Skarbiec recovery refusal, and treats every non-inference GPU process as unmanaged.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation and the live janitor report cover the new retention path, while the release pipeline supplies signed platform manifests and delivery receipts.
+
 ## 0.15.24
 
 - **Release-controlled placement:** a placement service may now declare the exact external lifecycle `{"name":"<service>","controller":"release-control","product":"<product>"}` on every host template. Managed units retain their exact `name`/`unit`/`path`/`kind` record, routing units remain Stado-managed, and mixed or partial lifecycle records are rejected.
@@ -55,6 +64,10 @@
 
 - **Release identity:** `release active-binary` now binds the exact serving executable to the process group Stado recorded at spawn. This accepts the payload child supervised by macOS `sudo` without accepting an unrelated process that merely shares its version or port.
 - **Release cleanup:** the leak sweep recognizes every process in a recorded release group as owned, so it no longer labels a healthy supervised payload as an untracked candidate.
+- **Queue durability:** local job trees now live under the agent owner's `~/.stado/work/jobs` instead of `/tmp`, so external temporary-file cleanup cannot unlink a running workload's cwd and diagnostics. Release submissions carry a deterministic compatibility bridge that relocates an old agent's already-materialized job before work begins and leaves only the upload symlink that old agent needs.
+- **Cleanup fencing:** `host reclaim` delegates queue-workdir removal to the canonical janitor instead of independently sweeping a stale queue snapshot; the janitor's exclusive lock remains the only path that can remove a terminal job tree, and a bounded slice of each scan is reserved for terminal old-agent links so a full live-job root cannot starve them.
+- **Queue failure evidence:** an absent or non-directory persistent job tree now emits stable `workdir_missing` heartbeat and finalization diagnostics with the exact expected path, and the terminal error retains both that marker and the real workload exit code instead of misreporting a missing path as empty output.
+- **Release retry durability:** every release worker uploads and read-backs its canonical and attempt log before exit; an owned failure receipt is also persisted, while successful workers require archive plus receipt and publish the attempt receipt last. Every response must report the local file's exact digest and byte count. Failure-evidence errors retain the worker's original nonzero exit, while a success-evidence error becomes failure. Random owner-only proof files live under validated work tmp and are removed after their proof line reaches the safe command log. Agent-reserved files open owner-only with `O_NONBLOCK|O_NOFOLLOW` before fstat, and admission plus janitor traversal opens every owned work-root component descriptor-relatively without following symlinks.
 - **Skarbiec cutover:** the canonical policy declares `com.wisent.always-on.skarbiec` as the legacy owner of port 8895; every release reconciliation boots it out before the stable proxy binds.
 - **Migration:** no persisted-state migration is required. Existing records already store the process-group leader pid.
 - **Rollback boundary:** rolling back restores pid-only executable matching, which rejects every macOS release whose `sudo` supervisor and serving payload use separate pids, and it removes the declared legacy-port cutover.
