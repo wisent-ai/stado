@@ -26,10 +26,11 @@ least-privilege identities and owner-only token files on that same Skarbiec:
 `release_api.publishers`. `STADO_API_TOKEN` remains a generic object API
 credential and is never substituted for a product's release publisher.
 
-Exact `GET /api/release/object?uri=stado://releases/...` reads are public so a
-damaged credential plane cannot make signed recovery artifacts unreachable.
-Release writes and listings remain authenticated by the product publisher
-contract above.
+Exact `GET /api/release/object?uri=stado://releases/...` reads and byte ranges
+are public so a damaged credential plane cannot make signed recovery artifacts
+unreachable. The public route rejects the generic object API's `versioned`
+query mode rather than bypassing release-backend resolution. Release writes
+and listings remain authenticated by the product publisher contract above.
 
 ## Resolve the executable that is actually active
 

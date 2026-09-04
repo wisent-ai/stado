@@ -1601,6 +1601,17 @@ impl Dashboard {
         };
         let path = object.storage_path();
         let versioned = query_value(&parse_qs(query), "versioned").as_deref() == Some("true");
+        let public_release_route = request
+            .path
+            .split_once('?')
+            .map_or(request.path.as_str(), |(path, _)| path)
+            == "/api/release/object";
+        if versioned && public_release_route {
+            return Ok(send_json(
+                http_status("400"),
+                &json!({"error": "versioned reads are not supported by the public release route"}),
+            ));
+        }
         let (bytes, version) = if versioned {
             let Some(value) = self.store.read_text_versioned(&path).await? else {
                 return Ok(send_json(
@@ -1610,11 +1621,6 @@ impl Dashboard {
             };
             (value.content.into_bytes(), Some(value.version))
         } else {
-            let public_release_route = request
-                .path
-                .split_once('?')
-                .map_or(request.path.as_str(), |(path, _)| path)
-                == "/api/release/object";
             let bytes = if object.namespace() == "releases" && public_release_route {
                 // Public delivery may traverse a namespaced Stado-object backend,
                 // so it uses that backend's cross-namespace release route.
