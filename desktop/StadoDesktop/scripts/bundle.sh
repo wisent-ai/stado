@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Build, sign, and install the Stado menu-bar app.
+# Build the Stado menu-bar app, with an unsigned staging mode for remote tests.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -15,6 +15,23 @@ BUNDLE="$BUILD_DIR/Stado.app"
 INSTALLED_BUNDLE="${STADO_INSTALL_APP_PATH:-$HOME/Applications/Stado.app}"
 EXECUTABLE="$BUILD_DIR/release/$PRODUCT"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+UNSIGNED_BUNDLE=0
+OPEN_APP=0
+for arg in "$@"; do
+    case "$arg" in
+        --unsigned-bundle) UNSIGNED_BUNDLE=1 ;;
+        --open) OPEN_APP=1 ;;
+        *)
+            print -u2 "unknown option: $arg"
+            exit 2
+            ;;
+    esac
+done
+if (( UNSIGNED_BUNDLE && OPEN_APP )); then
+    print -u2 "--unsigned-bundle cannot be opened or installed"
+    exit 2
+fi
 
 unregister_bundle() {
     if output=$("$LSREGISTER" -u "$1" 2>&1); then
@@ -43,6 +60,17 @@ cp "$EXECUTABLE" "$BUNDLE/Contents/MacOS/Stado"
 chmod +x "$BUNDLE/Contents/MacOS/Stado"
 
 sh "$ROOT/scripts/import-brand-icon.sh" stado-desktop "$BUNDLE/Contents/Resources/AppIcon.icns"
+
+IDENTITY_HELPER="$BUNDLE/Contents/Helpers/WisentIdentityKeychainHelper"
+# The checkouts live in the scratch path, which STADO_BUILD_DIR moves; a
+# hardcoded $ROOT/.build worked only in checkouts that had once been built
+# in place, and failed in every fresh worktree.
+"$BUILD_DIR/checkouts/wisent-desktop-auth/scripts/build-keychain-helper.sh" "$IDENTITY_HELPER"
+
+if (( UNSIGNED_BUNDLE )); then
+    print "✓ staged unsigned test bundle at $BUNDLE"
+    exit 0
+fi
 IDENTITY="${STADO_SIGN_IDENTITY:-${WISENT_CODESIGN_IDENTITY:-}}"
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY=$(security find-identity -v -p codesigning \
@@ -65,12 +93,6 @@ else
     SIGN_ARGS+=(--timestamp=none)
 fi
 
-IDENTITY_HELPER="$BUNDLE/Contents/Helpers/WisentIdentityKeychainHelper"
-# The checkouts live in the scratch path, which STADO_BUILD_DIR moves; a
-# hardcoded $ROOT/.build worked only in checkouts that had once been built
-# in place, and failed in every fresh worktree.
-"$BUILD_DIR/checkouts/wisent-desktop-auth/scripts/build-keychain-helper.sh" "$IDENTITY_HELPER"
-
 print "→ signing with $IDENTITY"
 codesign "${SIGN_ARGS[@]}" --identifier ai.wisent.identity.keychain-helper "$IDENTITY_HELPER"
 codesign "${SIGN_ARGS[@]}" "$BUNDLE/Contents/MacOS/Stado"
@@ -91,6 +113,6 @@ if [[ "${WISENT_RESTART_AFTER_BUILD:-1}" != 0 && -x "$RESTART_APP" ]]; then
     "$RESTART_APP" --if-running "$INSTALLED_BUNDLE"
 fi
 
-if [[ "${1:-}" == "--open" ]]; then
+if (( OPEN_APP )); then
     open "$INSTALLED_BUNDLE"
 fi
