@@ -35,9 +35,9 @@
 //!
 //! One limitation, stated rather than hidden: the rerun triggers below fire on
 //! a commit, a checkout and a branch switch, but cargo cannot watch "the whole
-//! working tree", so editing a tracked file without committing does not by
-//! itself re-stamp an already-built binary. Any edit that recompiles this
-//! crate re-runs the script and re-stamps it.
+//! working tree", so editing a file without touching a watched path does not by
+//! itself re-stamp an already-built binary. Any edit that recompiles this crate
+//! re-runs the script and re-stamps it.
 
 use std::path::Path;
 use std::process::Command;
@@ -79,11 +79,12 @@ fn git(arguments: &[&str]) -> Option<String> {
 fn source_revision() -> String {
     println!("cargo:rerun-if-env-changed={REVISION_OVERRIDE}");
     println!("cargo:rerun-if-env-changed={PIPELINE_REVISION}");
-    let stated = |name: &str| {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+    let stated = |name: &str| match std::env::var(name) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("{name} must be valid Unicode")
+        }
     };
     let pipeline = stated(PIPELINE_REVISION);
     let explicit = stated(REVISION_OVERRIDE);
@@ -122,7 +123,7 @@ fn source_revision() -> String {
     };
     // A tree with uncommitted changes did not come from `revision` alone, and
     // saying so is the whole reason this exists.
-    match git(&["status", "--porcelain", "--untracked-files=no"]) {
+    match git(&["status", "--porcelain"]) {
         Some(status) if !status.is_empty() => format!("{revision}-dirty"),
         Some(_) => revision,
         None => UNKNOWN_REVISION.to_string(),

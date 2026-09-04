@@ -48,6 +48,8 @@ and label as an optional pair. A healthy handoff or a host with no exact orphan
 does not need that pair. Recovery validates and bootstraps it only when stopping
 an exact dead release-proxy orphan; without a declared pair, that branch refuses
 before sending `TERM` because it has no known service to restore.
+Only the pair on the release target authorizes that restore; a similarly named
+entry under `targets[].services` is never inferred as a fallback.
 
 ## Resolve the executable that is actually active
 

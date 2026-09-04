@@ -1249,7 +1249,10 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     // believed that answer twice tonight -- once far enough to publish a source
     // snapshot and repoint a recipe around a file that was never missing.
     let object_api = match (&parsed, &release) {
-        (Ok(object), None) if object.namespace() != crate::config::wc_stado_storage_namespace() => {
+        (Ok(object), None)
+            if RemoteObjectApi::release_authorized(object.namespace(), object.key())
+                || object.namespace() != crate::config::wc_stado_storage_namespace() =>
+        {
             RemoteObjectApi::configured_for_object(object)?.map(|remote| (remote, object.clone()))
         }
         _ => None,
@@ -1907,6 +1910,12 @@ impl RemoteObjectApi {
         // in a credential and not in the network was that one product differed
         // from the others. A bearer is header material; whether one is usable
         // is knowable before the request, and the answer names the item.
+        if token.is_empty() {
+            return Err(CmdError::click(format!(
+                "release publisher item {} carries an empty token field",
+                publisher.item()
+            )));
+        }
         if reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
             return Err(CmdError::click(format!(
                 "release publisher item {}'s token field cannot form an Authorization header: it \
@@ -3684,6 +3693,20 @@ pub(crate) async fn published_release_coordinates(
             continue;
         }
         let parts: Vec<&str> = key.split('/').collect();
+        if parts.len() == 2 && parts[0] == product {
+            let entry = seen
+                .entry((parts[1].to_string(), String::new()))
+                .or_insert_with(|| PublishedCoordinate {
+                    version: parts[1].to_string(),
+                    platform: String::new(),
+                    version_scope: true,
+                    has_version_claim: false,
+                    names: BTreeSet::new(),
+                    claim_written_at: None,
+                });
+            entry.names.insert("<version-root-object>".to_string());
+            continue;
+        }
         if parts.len() == 3 && parts[0] == product {
             if parts[2] == crate::release_control::RELEASE_VERSION_REVISION_NAME {
                 version_claims.insert(parts[1].to_string(), updated);
