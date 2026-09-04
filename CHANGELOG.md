@@ -10,6 +10,7 @@
 - **Configuration reload:** `host config-set --reload-service` and `host config-unset --reload-service` restart the existing managed unit in place. Adopted units no longer need a separate service build recipe just to read their changed configuration.
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+- **Platform regression evidence:** the existing fleet journey now uses current durable job identities, retains its complete remote job reports, and exercises the cancelled-build retry on both native platforms.
 
 ## 0.16.4
 

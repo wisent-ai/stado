@@ -11407,16 +11407,37 @@ root="$HOME/.stado/work"
 /bin/mkdir -p "$root"
 work=$(/usr/bin/mktemp -d "$root/release-platform.XXXXXX")
 trap '/bin/rm -rf "$work"' EXIT HUP INT TERM
+export TMPDIR="$work/tmp"
+/bin/mkdir -p "$TMPDIR"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
 /usr/bin/git -C "$work" init -q source
 /usr/bin/git -C "$work/source" remote add origin {repo}
 /usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
 /usr/bin/git -C "$work/source" checkout -q --detach FETCH_HEAD
-/usr/bin/git clone -q --depth 1 https://github.com/wisent-ai/skarbiec.git "$work/skarbiec"
-cargo build --release --manifest-path "$work/skarbiec/Cargo.toml"
-export SKARBIEC_TEST_BIN="$work/skarbiec/target/release/skarbiec"
+case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
+  Darwin:arm64)
+    platform=darwin-arm64
+    digest=70c925dfe22be3f3c1879f94901977c583fa03b6f367583b4c93815e4ec8bde4
+    ;;
+  Linux:x86_64)
+    platform=linux-amd64
+    digest=4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68
+    ;;
+  *) printf 'unsupported native verification platform\n' >&2; exit 1 ;;
+esac
+/usr/bin/curl -fsSLo "$work/skarbiec.tar.gz" "https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-$platform.tar.gz"
+if [ "$platform" = darwin-arm64 ]; then
+  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/shasum -a 256 -c -
+else
+  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/sha256sum -c -
+fi
+/bin/mkdir "$work/skarbiec"
+/usr/bin/tar -xzf "$work/skarbiec.tar.gz" -C "$work/skarbiec"
+export SKARBIEC_TEST_BIN="$work/skarbiec/skarbiec"
 cd "$work/source/stado-rs"
-cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1
-cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1
+cargo test --locked --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1
 "#
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
@@ -11428,11 +11449,10 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
-        let detail = format!("{}\n{}", output.stdout, output.stderr);
-        let tail = detail.lines().rev().take(80).collect::<Vec<_>>();
+        eprint!("{}", output.stderr);
         return Err(CmdError::click(format!(
             "{target}: platform verification failed:\n{}",
-            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            output.stdout
         )));
     }
     if json_output {
@@ -11443,6 +11463,7 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
                 "revision": revision.trim_matches('\''),
                 "verified": true,
                 "output": output.stdout,
+                "stderr": output.stderr,
             }))?
         );
     } else {

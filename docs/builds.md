@@ -224,6 +224,12 @@ stado host verify-release-platform charless-mac-mini \
 The command accepts only a public HTTPS repository and a full 40-character lowercase commit. Source is cloned into the host's managed `~/.stado/work` area and removed when the run ends. A platform passes only when the build artifact is downloaded and verified and the signed release is published, installed, and executed on that same platform.
 
 Probierz owns the combined `platform-matrix` journey in `stado-rs/tests/platform-matrix/`. It runs macOS through the managed host channel and submits Linux to the pinned `local-ubuntu-server` worker through the normal Stado queue, so an inbound SSH port is not a requirement. The Linux worker verifies the digest of the published Skarbiec binary before using it and keeps Cargo output inside that job's `.wisent-output` tree, covered by terminal-job cleanup. The journey runs the platforms one after another because both release checks use the same canonical test product and version.
+The matrix also cancels a release build and proves that its replacement uses a
+different job, then publishes, installs, and executes the product on each
+platform. Linux submissions use a stable Probierz-derived run ID, and Probierz
+retains the submission identity and complete terminal job report with its logs.
+Both paths use the published, digest-pinned Skarbiec 0.1.3 binary rather than
+rebuilding a moving dependency branch, and keep temporary files in managed work.
 
 For disk pressure, `stado host disk TARGET --json` includes Linux inventory
 under the managed home, `/home`, `/mnt`, `/var`, and `/opt`.
