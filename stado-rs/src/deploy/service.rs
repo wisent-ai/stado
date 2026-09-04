@@ -86,7 +86,7 @@ pub const SOURCE_PRODUCT: &str = "product";
 
 /// macOS launchd.
 pub const KIND_LAUNCHD: &str = "launchd";
-/// Linux `systemd --user`.
+/// Linux systemd, in the system or per-user scope.
 pub const KIND_SYSTEMD: &str = "systemd";
 
 /// The beacon says the unit is loaded and has not failed.
@@ -404,7 +404,7 @@ pub fn launchd_service(
     }
 }
 
-/// A `systemd --user` managed service.
+/// A systemd-managed service, in either the system or per-user scope.
 pub fn systemd_service(
     host: &str,
     unit: &str,
@@ -2118,8 +2118,33 @@ say() {
 @NO_DOMAIN@
   fi
 elif [ \"$os\" = \"Linux\" ]; then
+  # The same search the Darwin branch above makes, for the same reason it was
+  # widened: adoption looked only at this login's user units and reported a
+  # running system unit as absent. On 2026-09-03 that unit was
+  # `wisent-compute-agent.service` on the fleet's only linux-amd64 builder --
+  # loaded, running a stado image that refuses today's registry document, and
+  # so unmanaged that nothing could cycle it while every linux release build
+  # queued behind it.
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
-  if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/.config/systemd/user/$unit\"; fi
+  if [ -z \"$unit_path\" ]; then
+    if [ -f \"$HOME/.config/systemd/user/$unit\" ]; then
+      unit_path=\"$HOME/.config/systemd/user/$unit\"
+    elif [ -f \"/etc/systemd/system/$unit\" ]; then
+      unit_path=\"/etc/systemd/system/$unit\"
+    else
+      unit_path=\"$HOME/.config/systemd/user/$unit\"
+    fi
+  fi
+  case \"$unit_path\" in
+    /etc/systemd/system/*) scope=system ;;
+    *) scope=user ;;
+  esac
+  domain=\"$scope\"
+  if [ \"$scope\" = \"system\" ]; then
+    systemd_detail='systemd system scope'
+  else
+    systemd_detail='systemd --user'
+  fi
   case \"$unit_path\" in
     */.config/systemd/user/*) owner_path=\"${unit_path%%/.config/systemd/user/*}\" ;;
     *) owner_path=\"$unit_path\" ;;
@@ -2129,7 +2154,22 @@ elif [ \"$os\" = \"Linux\" ]; then
   done
   service_user=$(/usr/bin/stat -c %U \"$owner_path\")
   service_uid=$(/usr/bin/id -u \"$service_user\")
-  systemctl_user() {
+  if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
+  stado_root() {
+    if [ \"$uid\" = \"0\" ]; then
+      \"$@\"
+      return
+    fi
+    \"$sudo_bin\" -n \"$@\"
+  }
+  stado_systemctl() {
+    # A system unit is root's job and has no per-user bus: addressing it with
+    # `--user` is what made every verb in this module answer \"not present\"
+    # for a unit the host was plainly running.
+    if [ \"$scope\" = \"system\" ]; then
+      stado_root /usr/bin/systemctl \"$@\"
+      return
+    fi
     runtime=\"/run/user/$service_uid\"
     if [ \"$service_uid\" = \"$uid\" ]; then
       /usr/bin/env \
@@ -2138,8 +2178,7 @@ elif [ \"$os\" = \"Linux\" ]; then
         /usr/bin/systemctl --user \"$@\"
       return
     fi
-    if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
-    \"$sudo_bin\" -u \"$service_user\" /usr/bin/env \
+    \"$sudo_bin\" -n -u \"$service_user\" /usr/bin/env \
       XDG_RUNTIME_DIR=\"$runtime\" \
       DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
       /usr/bin/systemctl --user \"$@\"
@@ -2525,8 +2564,8 @@ const RUNNING_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
     else
       stado_post 'unmet' \"$domain/$unit is loaded with no pid\"
     fi
-  elif systemctl_user is-active --quiet \"$unit\"; then
-    pc_pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  elif stado_systemctl is-active --quiet \"$unit\"; then
+    pc_pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)
     if [ -n \"$pc_pid\" ] && [ \"$pc_pid\" != 0 ]; then
       stado_post 'met' \"$unit pid $pc_pid\"
     else
@@ -2565,7 +2604,7 @@ const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
     else
       stado_post 'met' \"$domain/$unit is loaded but not running\"
     fi
-  elif systemctl_user is-active --quiet \"$unit\"; then
+  elif stado_systemctl is-active --quiet \"$unit\"; then
     stado_post 'unmet' \"$unit is still active\"
   else
     stado_post 'met' \"$unit is not active\"
@@ -2816,15 +2855,17 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   say 'restarted' \"$domain\"
   exit 0
 else
-  # Same linger guarantee as DEPLOY_BODY: a restarted user unit must outlive
-  # the login session that restarted it.
-  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
-    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
-    || true
-  systemctl_user daemon-reload >/dev/null 2>&1 || true
-  detail=$(systemctl_user restart \"$unit\" 2>&1)
+  # A user unit must outlive the login session that restarted it. A system
+  # unit belongs to the machine manager and needs no per-user linger state.
+  if [ \"$scope\" = \"user\" ]; then
+    /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+      || \"$sudo_bin\" -n /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+      || true
+  fi
+  stado_systemctl daemon-reload >/dev/null 2>&1 || true
+  detail=$(stado_systemctl restart \"$unit\" 2>&1)
   rc=$?
-  if [ \"$rc\" -eq 0 ]; then say 'restarted' 'systemd --user'; else say 'restart_failed' \"$rc $detail\"; fi
+  if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$systemd_detail\"; else say 'restart_failed' \"$rc $detail\"; fi
 fi
 ";
 
@@ -2949,7 +2990,7 @@ const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     exit 0
   fi
 else
-  systemctl_user stop \"$unit\" >/dev/null 2>&1 || true
+  stado_systemctl stop \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'stopped' \"$unit_path\"
 ";
@@ -2964,7 +3005,7 @@ unit_state='unloaded'
 if [ \"$os\" = \"Darwin\" ]; then
   if /bin/launchctl print \"$domain/$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 else
-  if systemctl_user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
+  if stado_systemctl cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 fi
 printf 'STADO_ADOPT\\t%s\\t%s\\n' \"$file_state\" \"$unit_state\"
 say 'probed' \"$unit_path\"
@@ -2991,7 +3032,7 @@ const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl disable \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
-  systemctl_user disable --now \"$unit\" >/dev/null 2>&1 || true
+  stado_systemctl disable --now \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'retired' \"$unit_path\"
 ";
@@ -3047,13 +3088,15 @@ else
   # A user unit lives inside the user's systemd instance, and without linger
   # that instance ends with the login session that created it — on rtx every
   # user-scoped service (beacon, agent, router) died seconds after the deploy
-  # channel closed, and the host read as down. Lingering is the systemd
-  # mechanism for exactly this, so enabling the unit enables it too.
-  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
-    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
-    || true
-  systemctl_user daemon-reload >/dev/null 2>&1 || true
-  detail=$(systemctl_user enable --now \"$unit\" 2>&1)
+  # channel closed, and the host read as down. A system unit belongs to the
+  # machine manager and needs no per-user linger state.
+  if [ \"$scope\" = \"user\" ]; then
+    /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+      || \"$sudo_bin\" -n /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+      || true
+  fi
+  stado_systemctl daemon-reload >/dev/null 2>&1 || true
+  detail=$(stado_systemctl enable --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'deployed' \"$unit_path\"; else say 'enable_failed' \"$rc $detail\"; fi
 fi
@@ -3134,7 +3177,7 @@ else
     had_unit=yes
     declared_argv=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/head -n 1)
   fi
-  pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)
   if [ \"$pid\" = 0 ]; then pid=''; fi
 fi
 declared_argv=$(printf '%s' \"$declared_argv\" | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//')
@@ -3271,19 +3314,20 @@ if [ \"$os\" = \"Darwin\" ]; then
     rc=$?
   fi
 else
-  # Same linger guarantee as DEPLOY_BODY: an ensured user unit must outlive
-  # the login session that ensured it.
-  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \\
-    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \\
-    || true
-  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  # Same linger guarantee as DEPLOY_BODY, only for per-user units.
+  if [ \"$scope\" = \"user\" ]; then
+    /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+      || \"$sudo_bin\" -n /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+      || true
+  fi
+  stado_systemctl daemon-reload >/dev/null 2>&1 || true
   if [ \"$had_unit\" = yes ]; then
     action=restarted
-    detail=$(systemctl_user restart \"$unit\" 2>&1)
+    detail=$(stado_systemctl restart \"$unit\" 2>&1)
     rc=$?
   else
     action=created
-    detail=$(systemctl_user enable --now \"$unit\" 2>&1)
+    detail=$(stado_systemctl enable --now \"$unit\" 2>&1)
     rc=$?
   fi
 fi
@@ -3303,7 +3347,7 @@ if [ \"$os\" = \"Darwin\" ]; then
   fi
   pid=\"$pc_pid\"
 else
-  pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)
   if [ \"$pid\" = 0 ]; then pid=''; fi
 fi
 printf 'STADO_ENSURE\t%s\t%s\t%s\n' \"$domain\" \"$pid\" \"$unit_path\"
@@ -3341,7 +3385,7 @@ else
     declared=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/head -n 1)
     declared=\"${declared%% *}\"
   fi
-  pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)
   if [ \"$pid\" = 0 ]; then pid=''; fi
 fi
 # A unit that runs .../current/... names a link, and the link is what every
@@ -3702,7 +3746,7 @@ say 'listener_stopped' \"$listener_detail\"
 
 /// The shared prelude with this unit spliced in: the vocabulary (`$unit`,
 /// `$domain`, `$domain_status`, `$domain_reason`, `$launch`,
-/// `systemctl_user`, `say`, and the three `stado_unit_*` reads) every body and
+/// `stado_systemctl`, `say`, and the three `stado_unit_*` reads) every body and
 /// every postcondition probe reads the host through.
 ///
 /// [`DOMAIN_RESOLVER`] and [`UNIT_STATE`] are spliced here and nowhere else,

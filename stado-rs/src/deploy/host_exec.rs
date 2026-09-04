@@ -1359,6 +1359,41 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               configuration, binds no port and starts no server, unlike `run`, `start` and \
               `reload`, none of which is in this table",
     },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "list-units",
+            "--type",
+            "service",
+            "--all",
+            "--no-pager",
+            "--no-legend",
+        ],
+        why: "lists this host's systemd services, the Linux counterpart of the `launchctl \
+              list` entry above. Added 2026-09-03: the fleet's one linux-amd64 builder had \
+              been running a two-day-old stado image that refuses today's registry document \
+              (`policy:ValueError`), so its own janitor never learned a low watermark and it \
+              claimed nothing -- every release build for that platform queued behind it. \
+              Naming the unit that holds that process is the first step of the repair, and \
+              this table could not name a systemd unit at all: `launchctl list` answers only \
+              on macOS. `list-units` is systemd's read-only verb with every selector fixed \
+              here; the mutating verbs (start, stop, restart, enable, daemon-reload) are \
+              absent from this table and cannot be reached through it",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "list-unit-files",
+            "--type",
+            "service",
+            "--no-pager",
+            "--no-legend",
+        ],
+        why: "lists the systemd service unit FILES installed on this host, which is a \
+              different question from `list-units` above: a unit whose file exists but was \
+              never loaded appears only here, and that is exactly the shape an undeclared \
+              queue agent takes. Read-only, every selector fixed, and it takes no unit name",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
