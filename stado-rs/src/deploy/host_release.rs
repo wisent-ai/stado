@@ -543,7 +543,18 @@ read_version() {
     esac
   else
     read_version_line=${read_version_output%%"$newline"*}
-    read_version_value=${read_version_line##* }
+    # The version is the word after the program name, not the last word. The
+    # banner reads `stado 0.14.9 (rev 519ae967a13d-dirty)` since the build stamp
+    # joined it, and reading the last word pulled `519ae967a13d-dirty)` out of
+    # it, which failed the coordinate comparison as `layout version_mismatch` —
+    # after the archive had been verified and staged. The 0.14.9 delivery to
+    # charless-mac-mini died there on 2026-09-04. An annotation appended to a
+    # banner is not a reason a verified delivery refuses itself.
+    set -- $read_version_line
+    case "$#" in
+      0|1) read_version_value="" ;;
+      *) read_version_value="$2" ;;
+    esac
   fi
   if [ -z "$read_version_value" ]; then
     read_version_state=version_unparsable
