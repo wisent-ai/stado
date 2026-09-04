@@ -3,6 +3,7 @@
 ## 0.15.24
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
+- **Host disk diagnostics:** `stado host disk` now attributes Linux pressure inside the managed home, `/home`, `/mnt`, `/var`, and `/opt` instead of returning an empty inventory after a depth-two root report only named its parent directories.
 - **Migration:** no configuration or persisted-state migration is required.
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
