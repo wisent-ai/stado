@@ -396,7 +396,9 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
             // subtract — the replica that took charless-mac-mini from 51.8 to
             // 34.5 GiB free was written in the seven minutes before it was
             // measured.
-            "queue_workdirs" | "backup_twins" => 0,
+            // `release_store` keeps a version by who still names it, not by
+            // its age; the age gate only spares runs younger than it.
+            "queue_workdirs" | "backup_twins" | "release_store" => 0,
             _ => 86400,
         };
         require_int(

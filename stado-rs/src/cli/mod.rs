@@ -1498,6 +1498,10 @@ enum HostCommands {
         /// One cleaner's age gate, as `NAME=SECONDS`; repeatable.
         #[arg(long, value_name = "NAME=SECONDS")]
         cleaner_min_age_seconds: Vec<String>,
+        /// How many newest versions of each product `release_store` keeps with
+        /// no other reason to, as `release_store=N`; repeatable.
+        #[arg(long, value_name = "NAME=COUNT")]
+        cleaner_keep_newest: Vec<String>,
         /// Emit the policy and registry generation as JSON.
         #[arg(long)]
         json: bool,
@@ -3065,6 +3069,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 cleaner_root,
                 clear_cleaner_root,
                 cleaner_min_age_seconds,
+                cleaner_keep_newest,
                 json,
             } => {
                 host::disk_cleanup_policy(
@@ -3084,6 +3089,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                         cleaner_root,
                         clear_cleaner_root,
                         cleaner_min_age_seconds,
+                        cleaner_keep_newest,
                     },
                     json,
                 )

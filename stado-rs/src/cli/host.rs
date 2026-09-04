@@ -932,6 +932,7 @@ pub struct DiskCleanupPolicyEdit {
     pub cleaner_root: Vec<String>,
     pub clear_cleaner_root: Vec<String>,
     pub cleaner_min_age_seconds: Vec<String>,
+    pub cleaner_keep_newest: Vec<String>,
 }
 
 impl DiskCleanupPolicyEdit {
@@ -951,6 +952,7 @@ impl DiskCleanupPolicyEdit {
             && self.cleaner_root.is_empty()
             && self.clear_cleaner_root.is_empty()
             && self.cleaner_min_age_seconds.is_empty()
+            && self.cleaner_keep_newest.is_empty()
     }
 }
 
@@ -977,7 +979,7 @@ fn cleaner_pair(raw: &str, flag: &str) -> Result<(String, String), CmdError> {
 fn cleaner_age_floor(name: &str) -> i64 {
     match name {
         "huggingface_cache" => 3600,
-        "queue_workdirs" | "backup_twins" => 0,
+        "queue_workdirs" | "backup_twins" | "release_store" => 0,
         _ => 86400,
     }
 }
@@ -1148,6 +1150,22 @@ pub async fn disk_cleanup_policy(
                 CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
             })?
             .insert("min_age_seconds".to_string(), Value::from(seconds));
+    }
+    for raw in &edit.cleaner_keep_newest {
+        let (name, raw_count) = cleaner_pair(raw, "cleaner-keep-newest")?;
+        let count: i64 = raw_count.parse().map_err(|_| {
+            CmdError::usage(format!(
+                "--cleaner-keep-newest takes NAME=COUNT, got {raw:?}"
+            ))
+        })?;
+        enable(&name, cleaners);
+        cleaners
+            .get_mut(&name)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
+            })?
+            .insert("keep_newest".to_string(), Value::from(count));
     }
 
     entry.insert("disk_cleanup".to_string(), policy.clone());
