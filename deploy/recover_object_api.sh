@@ -2,16 +2,19 @@
 # Restore the Stado object API when its own client route is unavailable.
 #
 # The listener is the authority for stado:// objects, so both of its storage
-# backends must be direct. If either inherits the operator profile's
-# `storage.backend=stado`, startup calls its own unopened port and launchd loops
-# forever. This helper gives the system daemon explicit local primary and backup
-# stores, preserves the prior plist, and only unloads a drifted job after proving
-# that an authenticated protected object read is unavailable.
+# backends must be direct. It runs the host's canonical delivered Stado binary,
+# whose version is governed by the target's `managed_versions.stado`, rather
+# than an independently retained service image. If either backend inherits the
+# operator profile's `storage.backend=stado`, startup calls its own unopened
+# port and launchd loops forever. This helper gives the system daemon explicit
+# local primary and backup stores, preserves the prior plist, and only unloads
+# a drifted job after proving that an authenticated protected object read is
+# unavailable.
 set -euo pipefail
 
 label="com.wisent.always-on.stado-object-api"
 plist="/Library/LaunchDaemons/$label.plist"
-program="$HOME/.stado/services/$label/current/darwin-arm/stado"
+program="$HOME/.stado/bin/stado"
 config="${STADO_CONFIG:-$HOME/.config/stado/config.json}"
 work="$HOME/.stado/work/object-api-recovery"
 log="$HOME/.stado/logs/$label.log"
@@ -24,7 +27,6 @@ if [ ! -x "$program" ]; then
   printf 'program_missing %s\n' "$program" >&2
   exit 66
 fi
-
 store="$HOME/.stado/local-storage"
 backup_store="$HOME/.stado/local-backup"
 if [ -r "$config" ]; then
