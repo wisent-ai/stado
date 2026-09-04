@@ -407,6 +407,10 @@ pub struct CleanupReport {
     /// Empty when every declared cleaner had its turn, so a reader can tell
     /// "nothing was eligible" from "nobody looked".
     pub unscanned_cleaners: Vec<String>,
+    /// Cleaners the policy names that this binary does not implement: the
+    /// registry is read by every release at once, and a name a newer release
+    /// knows is not a reason to run none of the ones this release knows.
+    pub unknown_cleaners: Vec<String>,
     /// Where the build-cache walk stopped, relative to its scan root, or
     /// `None` when it crossed the whole tree. Carried across passes through
     /// the state file: see [`build_caches::scan_build_caches`].
@@ -447,6 +451,7 @@ impl CleanupReport {
             last_success_at: None,
             scanned: false,
             unscanned_cleaners: Vec::new(),
+            unknown_cleaners: Vec::new(),
             builds_resume_from: None,
             errors: Vec::new(),
         }
@@ -558,6 +563,7 @@ impl CleanupReport {
             "pressure_active": self.pressure_active,
             "cleaners": cleaners,
             "unscanned_cleaners": self.unscanned_cleaners,
+            "unknown_cleaners": self.unknown_cleaners,
             "caps": {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
@@ -2313,14 +2319,7 @@ fn run_with_lock(
     // share and only after every cleaner that reclaims scratch has had its
     // turn — a release is the one class here that costs a rebuild to get
     // back.
-    release_store::scan_release_store(
-        home,
-        &policy,
-        crate::config::wc_stado_storage_namespace(),
-        remaining_after_twins,
-        deadline,
-        &mut report,
-    );
+    release_store::scan_release_store(home, &policy, remaining_after_twins, deadline, &mut report);
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
@@ -2360,6 +2359,21 @@ fn run_with_lock(
     .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
     .map(|(name, _)| name.to_string())
     .collect();
+    const IMPLEMENTED: [&str; 7] = [
+        "huggingface_cache",
+        "weles_recordings",
+        "build_caches",
+        chromium_clones::CLEANER,
+        queue_workdirs::CLEANER,
+        backup_twins::CLEANER,
+        release_store::CLEANER,
+    ];
+    report.unknown_cleaners = policy
+        .cleaners
+        .keys()
+        .filter(|name| !IMPLEMENTED.contains(&name.as_str()))
+        .cloned()
+        .collect();
 
     let after = match free_bytes(home) {
         Ok(free) => free,

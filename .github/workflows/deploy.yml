@@ -168,6 +168,14 @@ jobs:
       # was published. The fix for that listing is in this tree; the installed
       # binary cannot have it, and a release that cannot start until the fix
       # is installed cannot install the fix.
+      # This job used to reclaim capacity only after compiling the binary
+      # that performs the reclaim. On a self-hosted runner, a failed build's
+      # target directory survives into the next attempt; 0.15.24 exhausted
+      # the disk twice at this exact boundary before any coordinate was
+      # claimed. Clear only Cargo's declared output before asking the runner
+      # to compile the capacity binary.
+      - name: Reclaim prior capacity Rust cache
+        run: cargo clean --manifest-path stado-rs/Cargo.toml
       - name: Build the capacity binary from this revision
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Reclaim declared release capacity
@@ -201,6 +209,14 @@ jobs:
             "$stado" release claim-coordinate stado "$STADO_VERSION" "$platform" \
               --source-commit "$GITHUB_SHA"
           done
+      # The two publisher jobs already clean their Rust output under
+      # `always()`. The prerequisite job must have the same retention rule:
+      # otherwise its private target tree survives both success and failure
+      # and eventually prevents the next release from reaching its reclaim
+      # step.
+      - name: Reclaim capacity Rust cache
+        if: always()
+        run: cargo clean --manifest-path stado-rs/Cargo.toml
 
   # One platform, judged on its own. A failure here no longer decides whether
   # darwin ever publishes.

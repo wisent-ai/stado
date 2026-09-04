@@ -166,13 +166,33 @@ fn host_pinned_versions(state_dir: &Path) -> BTreeMap<String, BTreeSet<String>> 
 ///
 /// Release runs are stored as `<product>/<run-id>/run.json`. The bounded walk
 /// also accepts the older `<run-id>/run.json` layout, but never follows links.
+///
+/// `ecosystem` is the store's namespace root. The runs live under the store's
+/// product namespace, and that namespace is a storage binding this host may
+/// not carry — a host bound to a local backend resolves it to the empty
+/// string, which turned the runs path into `ecosystem//runs/…` and made every
+/// run invisible; a `publishing` run's version was then deleted in the probe
+/// that caught it. So every namespace directory is walked. A run this cleaner
+/// cannot see is a version it would delete, and seeing all of them is the
+/// safe direction.
 fn run_pinned_versions(
-    runs_dir: &Path,
+    ecosystem: &Path,
     min_age_seconds: i64,
     now_epoch: i64,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut pinned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut directories = vec![(runs_dir.to_path_buf(), 0usize)];
+    let mut directories = Vec::new();
+    if let Ok(namespaces) = std::fs::read_dir(ecosystem) {
+        for namespace in namespaces.flatten() {
+            if namespace
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or(false)
+            {
+                directories.push((namespace.path().join(RUNS_PREFIX), 0usize));
+            }
+        }
+    }
     while let Some((directory, depth)) = directories.pop() {
         let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
@@ -224,7 +244,6 @@ fn run_pinned_versions(
 pub fn scan_release_store(
     home: &Path,
     policy: &DiskCleanupPolicy,
-    namespace: &str,
     remaining_scan: i64,
     deadline: Instant,
     report: &mut CleanupReport,
@@ -253,16 +272,16 @@ pub fn scan_release_store(
             return Ok(());
         }
         let state_dir = home.join(STATE_DIR);
-        let runs_dir = home
-            .join(".stado/local-storage/ecosystem")
-            .join(namespace)
-            .join(RUNS_PREFIX);
+        let ecosystem = releases
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home.join(".stado/local-storage/ecosystem"));
         let now_epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or_default();
         let host_pins = host_pinned_versions(&state_dir);
-        let run_pins = run_pinned_versions(&runs_dir, configured.min_age_seconds, now_epoch);
+        let run_pins = run_pinned_versions(&ecosystem, configured.min_age_seconds, now_epoch);
         let home_device = std::fs::metadata(home)?.dev();
 
         // Inventory: every product directory, every version directory under it.
