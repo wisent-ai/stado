@@ -2007,6 +2007,38 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Archive one unmanaged executable from TARGET without deleting its bytes.
+    ///
+    /// The source must be a direct child of `$HOME/.stado/bin`,
+    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`, and a regular non-symlink
+    /// file owned by the approved account. Stado moves it atomically into the
+    /// product backup tree and verifies its size, mode, and SHA-256 there.
+    #[command(name = "retire-file")]
+    RetireFile {
+        target: String,
+        /// Absolute path to one file in an approved user bin directory.
+        path: String,
+        /// Canonical product name owning the backup tree.
+        #[arg(long)]
+        product: String,
+        /// Inspect and report the exact source without moving it.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit the retirement report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Device-local endpoint for the target-resolving retire-file command.
+    #[command(name = "retire-file-local", hide = true)]
+    RetireFileLocal {
+        path: String,
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's crontab, and optionally prune one entry from it.
     ///
     /// The periodic table is the one place a fleet host can declare a
@@ -3109,6 +3141,19 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveFile { target, path, json } => {
                 host::remove_file(&target, &path, json).await
             }
+            HostCommands::RetireFile {
+                target,
+                path,
+                product,
+                dry_run,
+                json,
+            } => host::retire_file(&target, &path, &product, dry_run, json).await,
+            HostCommands::RetireFileLocal {
+                path,
+                product,
+                dry_run,
+                json,
+            } => host::retire_file_local(&path, &product, dry_run, json),
             HostCommands::Cron {
                 target,
                 prune,

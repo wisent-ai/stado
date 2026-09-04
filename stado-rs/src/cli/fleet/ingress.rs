@@ -290,11 +290,9 @@ pub fn cloudflared_binary() -> Result<PathBuf, String> {
 
 /// Resolve the `stado` binary that will serve the enrollment routes.
 ///
-/// This process is usually it, but not always: `stado_fleet` parses the same
-/// fleet commands and does not have a `dashboard` subcommand, so running
-/// `current_exe()` there would start a program that immediately refuses. The
-/// sibling of whatever is running comes first (a build tree and an install tree
-/// both keep the binaries together), then the installed path.
+/// The main CLI is normally the current process. The sibling and installed
+/// fallbacks also make this resolver usable from development harnesses that
+/// execute the fleet implementation from another program.
 fn stado_binary() -> Result<PathBuf, String> {
     let current = std::env::current_exe().map_err(|exc| exc.to_string())?;
     if current.file_name().and_then(|name| name.to_str()) == Some("stado") {

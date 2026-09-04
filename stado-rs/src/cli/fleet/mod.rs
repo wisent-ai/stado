@@ -1,14 +1,11 @@
 //! `stado fleet` — enrollment, fleet membership, SSH-key custody and worker
 //! diagnosis for the registered Stado hosts.
 //!
-//! This is the whole implementation, not a wrapper: the `stado_fleet` binary
-//! parses the same [`FleetCommands`] and calls the same [`run`]. Adding a
-//! machine used to live only in that separate binary, which meant the one
-//! command an operator needs first was invisible to `stado --help` and to
-//! anything built on the main CLI. One implementation behind two
-//! entry points is the fix; a second copy of the enrollment logic would
-//! reintroduce exactly the drift that made the `stado_fleet` binary two minor
-//! versions stale while nobody noticed.
+//! This is the whole implementation behind the main CLI. Adding a machine
+//! used to live outside that CLI, which meant the command an operator needs
+//! first was invisible to `stado --help` and to anything built on its public
+//! surface. Keeping the parser and dispatch here makes the advertised command
+//! and its implementation one path.
 //!
 //! The fleet's blind spot before `doctor` existed: a worker could sit in a
 //! crash loop with no command able to say why. `doctor` closes that — it

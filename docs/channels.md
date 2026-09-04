@@ -19,6 +19,8 @@ The host channel resolves the target from the canonical registry, checks its pin
 
 Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. Mutating workflows use their owning commands, such as `stado service file-sync`, `stado service secret-sync`, `stado release apply`, or `stado host reconcile-object-verifier`. Secret values are read and written on the target; they never appear in the remote argument list or command result.
 
+An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports the planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. The mutating form accepts only an owner-owned regular non-symlink that is a direct child of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; it opens `$HOME` and every source and destination ancestor without following symlinks, refuses group/world-writable ancestors and destination collisions, and uses the platform's atomic no-replace rename into `$HOME/.stado/products/<product>/backups/<transaction>/<basename>`. The destination must be on the same filesystem and resolve to the same inode, bytes, mode, and owner or Stado rolls the move back and fails. Both forms use the target's declared host channel and accept `--json`; a remote target must already run the Stado release that provides the hidden device-local primitive. Archived bytes are preservation evidence—this command has no restore operation.
+
 ### Ordered connection paths
 
 `ssh` remains the preferred host-control destination. A target may also declare up to 16 ordered `ssh_fallbacks`; each fallback has a stable lowercase name and an SSH destination:

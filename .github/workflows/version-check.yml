@@ -81,13 +81,9 @@ jobs:
         # six-day-old copy, deleting nine `pub mod` declarations while all nine
         # files stayed on disk. main stopped compiling, but 27 errors away in
         # unrelated callers, and no diagnostic named a missing declaration.
-        # Fourteen seconds later another commit added a 279-line
-        # src/bin/stado_fleet/key/mod.rs that nothing declares, so the fix it
-        # carries has never been compiled and the command it corrects still runs
-        # the old path. This step names the cause instead of the symptom.
         #
         # It is not a version question and needs no binary, tags or channel, so
-        # it runs first and cheaply. The .known file is a ratchet: the four files
+        # it runs first and cheaply. The .known file is a ratchet: the three files
         # already unreachable are listed with reasons, anything new fails, and a
         # listed path that no longer exists fails too.
         run: scripts/unreachable_modules.py --known scripts/unreachable_modules.known

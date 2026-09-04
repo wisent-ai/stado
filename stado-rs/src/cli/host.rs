@@ -5,7 +5,13 @@
 //! which have no Python original and live in `crate::deploy::host_*`.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use std::io::Read;
+use std::ffi::{CString, OsStr};
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{Read, Seek, SeekFrom};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -4573,6 +4579,703 @@ printf '%s\n' "$dir/$name"
         format!("{}/.stado/{name}", home.unwrap_or("$HOME")),
         bytes.len(),
     ))
+}
+
+/// One exact unmanaged executable, either inspected in place or moved into its
+/// product-owned backup tree.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct RetireFileOutcome {
+    pub target: String,
+    pub source: String,
+    pub destination: Option<String>,
+    pub status: String,
+    pub size: Option<u64>,
+    pub sha256: Option<String>,
+    pub mode: Option<String>,
+    pub detail: Option<String>,
+}
+
+impl RetireFileOutcome {
+    fn succeeded(&self) -> bool {
+        matches!(self.status.as_str(), "ready" | "retired" | "absent")
+    }
+
+    fn failure_sentence(&self) -> String {
+        format!(
+            "{}: {} {}{}",
+            self.target,
+            self.source,
+            self.status,
+            self.detail
+                .as_ref()
+                .map(|detail| format!(" — {detail}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
+fn retire_refused(message: impl Into<String>) -> CmdError {
+    CmdError::click(format!("retire-file refused: {}", message.into()))
+}
+
+fn safe_backup_product(product: &str) -> bool {
+    let bytes = product.as_bytes();
+    bytes.len() > 0
+        && bytes.len() <= 128
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn c_path_component(component: &OsStr, label: &str) -> Result<CString, CmdError> {
+    CString::new(component.as_bytes())
+        .map_err(|_| retire_refused(format!("{label} contains a NUL byte")))
+}
+
+fn same_file(left: &Metadata, right: &Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+fn require_owned_directory(metadata: &Metadata, uid: u32, label: &str) -> Result<(), CmdError> {
+    if !metadata.is_dir() {
+        return Err(retire_refused(format!("{label} is not a directory")));
+    }
+    if metadata.uid() != uid {
+        return Err(retire_refused(format!(
+            "{label} is not owned by the approved account"
+        )));
+    }
+    if (metadata.mode() & 0o022).ne(&0) {
+        return Err(retire_refused(format!(
+            "{label} is group- or world-writable"
+        )));
+    }
+    Ok(())
+}
+
+fn open_home_directory(home: &Path, uid: u32) -> Result<File, CmdError> {
+    let path_metadata = std::fs::symlink_metadata(home)
+        .map_err(|error| retire_refused(format!("cannot inspect HOME: {error}")))?;
+    if path_metadata.file_type().is_symlink() {
+        return Err(retire_refused("HOME is a symlink"));
+    }
+    require_owned_directory(&path_metadata, uid, "HOME")?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
+        .open(home)
+        .map_err(|error| retire_refused(format!("cannot open HOME: {error}")))?;
+    let opened = directory
+        .metadata()
+        .map_err(|error| retire_refused(format!("cannot inspect opened HOME: {error}")))?;
+    require_owned_directory(&opened, uid, "opened HOME")?;
+    if !same_file(&path_metadata, &opened) {
+        return Err(retire_refused("HOME changed while it was opened"));
+    }
+    Ok(directory)
+}
+
+fn open_directory_at(parent: RawFd, name: &OsStr, uid: u32) -> Result<Option<File>, CmdError> {
+    let name = c_path_component(name, "directory name")?;
+    let fd = unsafe {
+        nix::libc::openat(
+            parent,
+            name.as_ptr(),
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(nix::libc::ENOENT) {
+            return Ok(None);
+        }
+        return Err(retire_refused(format!(
+            "cannot open directory component {:?}: {error}",
+            name
+        )));
+    }
+    let directory = unsafe { File::from_raw_fd(fd) };
+    let metadata = directory
+        .metadata()
+        .map_err(|error| retire_refused(format!("cannot inspect directory: {error}")))?;
+    require_owned_directory(&metadata, uid, "directory ancestor")?;
+    Ok(Some(directory))
+}
+
+fn mkdir_at(parent: RawFd, name: &OsStr) -> Result<(), CmdError> {
+    let name = c_path_component(name, "directory name")?;
+    let result = unsafe { nix::libc::mkdirat(parent, name.as_ptr(), 0o700) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(retire_refused(format!(
+            "cannot create owner-only backup directory: {}",
+            std::io::Error::last_os_error()
+        )))
+    }
+}
+
+fn open_or_create_directory_at(
+    parent: RawFd,
+    name: &OsStr,
+    uid: u32,
+    create: bool,
+) -> Result<Option<File>, CmdError> {
+    if let Some(directory) = open_directory_at(parent, name, uid)? {
+        return Ok(Some(directory));
+    }
+    if !create {
+        return Ok(None);
+    }
+    mkdir_at(parent, name)?;
+    open_directory_at(parent, name, uid)?
+        .map(Some)
+        .ok_or_else(|| {
+            retire_refused("backup directory disappeared immediately after it was created")
+        })
+}
+
+fn open_source_at(parent: RawFd, name: &OsStr) -> Result<Option<File>, CmdError> {
+    let name = c_path_component(name, "source basename")?;
+    let fd = unsafe {
+        nix::libc::openat(
+            parent,
+            name.as_ptr(),
+            nix::libc::O_RDONLY | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(nix::libc::ENOENT) {
+            return Ok(None);
+        }
+        if error.raw_os_error() == Some(nix::libc::ELOOP) {
+            return Err(retire_refused("source is a symlink"));
+        }
+        return Err(retire_refused(format!("cannot open source: {error}")));
+    }
+    Ok(Some(unsafe { File::from_raw_fd(fd) }))
+}
+
+fn entry_exists_at(parent: RawFd, name: &OsStr) -> Result<bool, CmdError> {
+    let name = c_path_component(name, "path basename")?;
+    let mut metadata = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+    let result = unsafe {
+        nix::libc::fstatat(
+            parent,
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            nix::libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(nix::libc::ENOENT) {
+        Ok(false)
+    } else {
+        Err(retire_refused(format!(
+            "cannot inspect directory entry: {error}"
+        )))
+    }
+}
+
+fn remove_empty_directory_at(parent: RawFd, name: &OsStr) {
+    if let Ok(name) = c_path_component(name, "transaction name") {
+        unsafe {
+            nix::libc::unlinkat(parent, name.as_ptr(), nix::libc::AT_REMOVEDIR);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace(
+    source_parent: RawFd,
+    source_name: &OsStr,
+    destination_parent: RawFd,
+    destination_name: &OsStr,
+) -> std::io::Result<()> {
+    let source_name = CString::new(source_name.as_bytes())?;
+    let destination_name = CString::new(destination_name.as_bytes())?;
+    let result = unsafe {
+        nix::libc::renameatx_np(
+            source_parent,
+            source_name.as_ptr(),
+            destination_parent,
+            destination_name.as_ptr(),
+            nix::libc::RENAME_EXCL,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace(
+    source_parent: RawFd,
+    source_name: &OsStr,
+    destination_parent: RawFd,
+    destination_name: &OsStr,
+) -> std::io::Result<()> {
+    let source_name = CString::new(source_name.as_bytes())?;
+    let destination_name = CString::new(destination_name.as_bytes())?;
+    let result = unsafe {
+        nix::libc::renameat2(
+            source_parent,
+            source_name.as_ptr(),
+            destination_parent,
+            destination_name.as_ptr(),
+            nix::libc::RENAME_NOREPLACE as _,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn rename_noreplace(
+    _source_parent: RawFd,
+    _source_name: &OsStr,
+    _destination_parent: RawFd,
+    _destination_name: &OsStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace rename is unavailable on this platform",
+    ))
+}
+
+fn hash_open_file(file: &mut File) -> Result<String, CmdError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| retire_refused(format!("cannot seek file for hashing: {error}")))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| retire_refused(format!("cannot hash file: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn source_unchanged(expected: &Metadata, observed: &Metadata) -> bool {
+    same_file(expected, observed)
+        && expected.uid() == observed.uid()
+        && expected.mode() == observed.mode()
+        && expected.len() == observed.len()
+}
+
+fn rollback_retirement(
+    source_parent: RawFd,
+    source_name: &OsStr,
+    destination_parent: RawFd,
+    destination_name: &OsStr,
+) -> String {
+    match entry_exists_at(source_parent, source_name) {
+        Ok(true) => {
+            "source path is still present; archived entry was retained for inspection".to_string()
+        }
+        Ok(false) => match rename_noreplace(
+            destination_parent,
+            destination_name,
+            source_parent,
+            source_name,
+        ) {
+            Ok(()) => "source was restored by atomic no-replace rename".to_string(),
+            Err(error) => {
+                format!("source restoration failed after the postcondition mismatch: {error}")
+            }
+        },
+        Err(error) => format!("source restoration could not inspect the source path: {error}"),
+    }
+}
+
+/// Run the device-local filesystem half of `host retire-file`.
+///
+/// Every path component is opened with `O_NOFOLLOW`, held by descriptor through
+/// the mutation, and checked against the approved account uid. The source is
+/// hashed through an open descriptor; the kernel rename is no-replace and
+/// therefore cannot copy on `EXDEV` or overwrite a collision. The destination
+/// must resolve to the same inode, size, mode, and digest. Any mismatch triggers
+/// an atomic no-replace rollback before the command returns an error.
+fn retire_file_local_document(
+    path: &str,
+    product: &str,
+    dry_run: bool,
+) -> Result<RetireFileOutcome, CmdError> {
+    if !path.starts_with('/')
+        || path.split('/').any(|component| component == "..")
+        || path.chars().any(char::is_control)
+    {
+        return Err(CmdError::usage(
+            "path must be absolute, contain no '..' component, and carry no control character",
+        ));
+    }
+    if !safe_backup_product(product) {
+        return Err(CmdError::usage(
+            "product must be 1-128 ASCII letters, digits, dots, underscores, or dashes and start with a letter or digit",
+        ));
+    }
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| retire_refused("HOME is not an absolute path"))?;
+    let source = PathBuf::from(path);
+    let approved = [
+        (OsStr::new(".stado"), home.join(".stado/bin")),
+        (OsStr::new(".local"), home.join(".local/bin")),
+        (OsStr::new(".cargo"), home.join(".cargo/bin")),
+    ];
+    let (source_scope, _) = approved
+        .iter()
+        .find(|(_, root)| source.parent() == Some(root.as_path()))
+        .ok_or_else(|| {
+            retire_refused("source is not a direct child of an approved user bin root")
+        })?;
+    let source_name = source
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| retire_refused("source has no basename"))?;
+    let uid = unsafe { nix::libc::geteuid() };
+    let home_directory = open_home_directory(&home, uid)?;
+    let Some(scope_directory) = open_directory_at(home_directory.as_raw_fd(), source_scope, uid)?
+    else {
+        return Ok(RetireFileOutcome {
+            target: String::new(),
+            source: path.to_string(),
+            destination: None,
+            status: "absent".to_string(),
+            size: None,
+            sha256: None,
+            mode: None,
+            detail: Some("approved source root does not exist".to_string()),
+        });
+    };
+    let Some(source_directory) =
+        open_directory_at(scope_directory.as_raw_fd(), OsStr::new("bin"), uid)?
+    else {
+        return Ok(RetireFileOutcome {
+            target: String::new(),
+            source: path.to_string(),
+            destination: None,
+            status: "absent".to_string(),
+            size: None,
+            sha256: None,
+            mode: None,
+            detail: Some("approved source root does not exist".to_string()),
+        });
+    };
+    let Some(mut source_file) = open_source_at(source_directory.as_raw_fd(), source_name)? else {
+        return Ok(RetireFileOutcome {
+            target: String::new(),
+            source: path.to_string(),
+            destination: None,
+            status: "absent".to_string(),
+            size: None,
+            sha256: None,
+            mode: None,
+            detail: Some("source does not exist".to_string()),
+        });
+    };
+    let source_metadata = source_file
+        .metadata()
+        .map_err(|error| retire_refused(format!("cannot inspect source: {error}")))?;
+    if !source_metadata.is_file() {
+        return Err(retire_refused("source is not a regular file"));
+    }
+    if source_metadata.uid() != uid {
+        return Err(retire_refused(
+            "source is not owned by the approved account",
+        ));
+    }
+    let size = source_metadata.len();
+    let mode = format!("{:04o}", source_metadata.mode() & 0o7777);
+    let sha256 = hash_open_file(&mut source_file)?;
+
+    let destination_parts = [
+        OsStr::new(".stado"),
+        OsStr::new("products"),
+        OsStr::new(product),
+        OsStr::new("backups"),
+    ];
+    let mut destination_directories = Vec::<File>::with_capacity(destination_parts.len());
+    let mut destination_parent_fd = home_directory.as_raw_fd();
+    let mut destination_device = home_directory
+        .metadata()
+        .map_err(|error| retire_refused(format!("cannot inspect HOME: {error}")))?
+        .dev();
+    let mut missing_ancestor = false;
+    for component in destination_parts {
+        if missing_ancestor {
+            continue;
+        }
+        match open_or_create_directory_at(destination_parent_fd, component, uid, !dry_run)? {
+            Some(directory) => {
+                destination_device = directory
+                    .metadata()
+                    .map_err(|error| {
+                        retire_refused(format!("cannot inspect backup ancestor: {error}"))
+                    })?
+                    .dev();
+                destination_directories.push(directory);
+                destination_parent_fd = destination_directories
+                    .last()
+                    .expect("just pushed destination directory")
+                    .as_raw_fd();
+            }
+            None => missing_ancestor = true,
+        }
+    }
+    if source_metadata.dev() != destination_device {
+        return Err(retire_refused(
+            "source and backup tree are not on one filesystem, so an atomic move is impossible",
+        ));
+    }
+
+    let transaction = format!(
+        "{}-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        uuid::Uuid::new_v4().simple()
+    );
+    let destination = home
+        .join(".stado/products")
+        .join(product)
+        .join("backups")
+        .join(&transaction)
+        .join(source_name);
+    if dry_run {
+        return Ok(RetireFileOutcome {
+            target: String::new(),
+            source: path.to_string(),
+            destination: Some(destination.to_string_lossy().into_owned()),
+            status: "ready".to_string(),
+            size: Some(size),
+            sha256: Some(sha256),
+            mode: Some(mode),
+            detail: None,
+        });
+    }
+
+    let backups_directory = destination_directories
+        .last()
+        .ok_or_else(|| retire_refused("backup tree was not created"))?;
+    if source_metadata.dev().ne(&backups_directory
+        .metadata()
+        .map_err(|error| retire_refused(format!("cannot inspect backup root: {error}")))?
+        .dev())
+    {
+        return Err(retire_refused(
+            "source and backup tree are not on one filesystem, so an atomic move is impossible",
+        ));
+    }
+    if entry_exists_at(backups_directory.as_raw_fd(), OsStr::new(&transaction))? {
+        return Err(retire_refused("destination transaction collision"));
+    }
+    mkdir_at(backups_directory.as_raw_fd(), OsStr::new(&transaction))?;
+    let transaction_directory =
+        open_directory_at(backups_directory.as_raw_fd(), OsStr::new(&transaction), uid)?
+            .ok_or_else(|| retire_refused("transaction directory disappeared after creation"))?;
+    let transaction_metadata = transaction_directory.metadata().map_err(|error| {
+        retire_refused(format!("cannot inspect transaction directory: {error}"))
+    })?;
+    if transaction_metadata.mode() & 0o077 != 0 {
+        remove_empty_directory_at(backups_directory.as_raw_fd(), OsStr::new(&transaction));
+        return Err(retire_refused("transaction directory is not owner-only"));
+    }
+    if entry_exists_at(transaction_directory.as_raw_fd(), source_name)? {
+        remove_empty_directory_at(backups_directory.as_raw_fd(), OsStr::new(&transaction));
+        return Err(retire_refused("destination collision"));
+    }
+
+    let current_source = open_source_at(source_directory.as_raw_fd(), source_name)?
+        .ok_or_else(|| retire_refused("source disappeared before the move"))?;
+    let current_metadata = current_source
+        .metadata()
+        .map_err(|error| retire_refused(format!("cannot re-inspect source: {error}")))?;
+    if !source_unchanged(&source_metadata, &current_metadata) {
+        remove_empty_directory_at(backups_directory.as_raw_fd(), OsStr::new(&transaction));
+        return Err(retire_refused("source changed after it was observed"));
+    }
+
+    if let Err(error) = rename_noreplace(
+        source_directory.as_raw_fd(),
+        source_name,
+        transaction_directory.as_raw_fd(),
+        source_name,
+    ) {
+        remove_empty_directory_at(backups_directory.as_raw_fd(), OsStr::new(&transaction));
+        return Err(retire_refused(format!(
+            "atomic no-replace rename failed: {error}"
+        )));
+    }
+
+    let postcondition = (|| -> Result<(), CmdError> {
+        if entry_exists_at(source_directory.as_raw_fd(), source_name)? {
+            return Err(retire_refused("source path was recreated during the move"));
+        }
+        let mut destination_file = open_source_at(transaction_directory.as_raw_fd(), source_name)?
+            .ok_or_else(|| retire_refused("destination is absent after rename"))?;
+        let destination_metadata = destination_file
+            .metadata()
+            .map_err(|error| retire_refused(format!("cannot inspect destination: {error}")))?;
+        if !source_unchanged(&source_metadata, &destination_metadata) {
+            return Err(retire_refused(
+                "destination inode, owner, size, or mode differs from the opened source",
+            ));
+        }
+        if hash_open_file(&mut destination_file)? != sha256 {
+            return Err(retire_refused(
+                "destination SHA-256 differs from the opened source",
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = postcondition {
+        let rollback = rollback_retirement(
+            source_directory.as_raw_fd(),
+            source_name,
+            transaction_directory.as_raw_fd(),
+            source_name,
+        );
+        return Err(CmdError::click(format!("{error}; {rollback}")));
+    }
+
+    Ok(RetireFileOutcome {
+        target: String::new(),
+        source: path.to_string(),
+        destination: Some(destination.to_string_lossy().into_owned()),
+        status: "retired".to_string(),
+        size: Some(size),
+        sha256: Some(sha256),
+        mode: Some(mode),
+        detail: None,
+    })
+}
+
+/// Hidden device-local endpoint used by the public target-resolving command.
+pub fn retire_file_local(
+    path: &str,
+    product: &str,
+    dry_run: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let outcome = retire_file_local_document(path, product, dry_run)?;
+    if json_output {
+        println!("{}", serde_json::to_string(&outcome)?);
+    } else {
+        print_retire_file_outcome(&outcome);
+    }
+    Ok(())
+}
+
+/// Resolve TARGET and invoke the same installed Rust primitive locally or over
+/// its declared host channel. Remote cleanup therefore requires the 0.15.0
+/// Stado delivery to be installed before any residue is touched.
+pub async fn retire_file_document(
+    target: &str,
+    path: &str,
+    product: &str,
+    dry_run: bool,
+) -> Result<RetireFileOutcome, CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut outcome = if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        retire_file_local_document(path, product, dry_run)?
+    } else {
+        let runner = crate::deploy::production_runner();
+        let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let binary = format!("{home}/.stado/bin/stado");
+        let mut words = vec![
+            binary.as_str(),
+            "host",
+            "retire-file-local",
+            path,
+            "--product",
+            product,
+            "--json",
+        ];
+        if dry_run {
+            words.push("--dry-run");
+        }
+        let output = crate::deploy::host_channel::run_program(&resolved, &words, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !output.ok() {
+            return Err(CmdError::click(format!(
+                "{}: installed Stado retire-file primitive failed: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(
+                    &output,
+                    "remote command returned no detail"
+                )
+            )));
+        }
+        serde_json::from_str::<RetireFileOutcome>(output.stdout.trim()).map_err(|error| {
+            CmdError::click(format!(
+                "{}: installed Stado returned an invalid retirement report: {error}",
+                resolved.name
+            ))
+        })?
+    };
+    outcome.target = resolved.name.clone();
+    if outcome.succeeded() {
+        Ok(outcome)
+    } else {
+        Err(CmdError::click(outcome.failure_sentence()))
+    }
+}
+
+fn print_retire_file_outcome(outcome: &RetireFileOutcome) {
+    if outcome.status == "absent" {
+        println!("{}: {} absent", outcome.target, outcome.source);
+    } else {
+        println!(
+            "{}: {} {} -> {} ({} bytes, sha256 {}, mode {})",
+            outcome.target,
+            outcome.source,
+            outcome.status,
+            outcome.destination.as_deref().unwrap_or("-"),
+            outcome.size.unwrap_or(0),
+            outcome.sha256.as_deref().unwrap_or("-"),
+            outcome.mode.as_deref().unwrap_or("-"),
+        );
+    }
+}
+
+/// `stado host retire-file TARGET PATH --product PRODUCT [--dry-run]`.
+pub async fn retire_file(
+    target: &str,
+    path: &str,
+    product: &str,
+    dry_run: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let outcome = retire_file_document(target, path, product, dry_run).await?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    } else {
+        print_retire_file_outcome(&outcome);
+    }
+    Ok(())
 }
 
 /// Remove one file from TARGET's home: the path Stado never had a way to
