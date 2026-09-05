@@ -57,6 +57,8 @@ const NAMESPACE_MARK: &str = "@NAMESPACE@";
 const BACKUP_ROOT_MARK: &str = "@BACKUP_ROOT@";
 /// Marker for the primary store root, relative to the remote home.
 const PRIMARY_ROOT_MARK: &str = "@PRIMARY_ROOT@";
+/// Marker for exact qualified object paths, encoded as comma-separated hex.
+const OBJECTS_HEX_MARK: &str = "@OBJECTS_HEX@";
 
 /// Proven present in the primary with identical bytes. Only these are safe to
 /// drop.
@@ -133,6 +135,7 @@ STADO_NAMESPACE='@NAMESPACE@' \
 STADO_HASH_DEADLINE='@HASH_DEADLINE@' \
 STADO_RECLAIM='@RECLAIM@' \
 STADO_APPLY='@APPLY@' \
+STADO_OBJECTS_HEX='@OBJECTS_HEX@' \
 /usr/bin/python3 - <<'STADO_AUDIT_EOF'
 import hashlib, os, stat, sys, time
 backup = os.environ["STADO_BACKUP_ROOT"]
@@ -141,15 +144,57 @@ namespace = os.environ["STADO_NAMESPACE"]
 deadline = time.monotonic() + float(os.environ["STADO_HASH_DEADLINE"])
 reclaim = os.environ["STADO_RECLAIM"] == "yes"
 apply = os.environ["STADO_APPLY"] == "yes"
+selected = [
+    bytes.fromhex(value).decode("utf-8")
+    for value in os.environ["STADO_OBJECTS_HEX"].split(",")
+    if value
+]
 
-def digest(path):
+
+
+def digest(path, stop_at=None):
     h = hashlib.sha256()
     with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        while True:
+            if stop_at is not None and time.monotonic() >= stop_at:
+                return None
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                return h.hexdigest()
             h.update(chunk)
-    return h.hexdigest()
 
 out = sys.stdout
+def identity(path):
+    try:
+        entry = os.lstat(path)
+    except FileNotFoundError:
+        return ("absent", "", "")
+    except OSError:
+        return ("unreadable", "", "")
+    if not stat.S_ISREG(entry.st_mode):
+        return ("not_regular", str(entry.st_size), "")
+    try:
+        value = digest(path, deadline)
+        if value is None:
+            return ("deadline_unproven", str(entry.st_size), "")
+        return ("present", str(entry.st_size), value)
+    except OSError:
+        return ("unreadable", str(entry.st_size), "")
+
+if selected:
+    for relative in selected:
+        normalized = os.path.normpath(relative)
+        if os.path.isabs(relative) or normalized != relative or normalized.startswith("../"):
+            out.write("STADO_BACKUP_AUDIT_UNAVAILABLE\tinvalid exact object path\n")
+            continue
+        p_state, p_size, p_digest = identity(os.path.join(primary, relative))
+        b_state, b_size, b_digest = identity(os.path.join(backup, relative))
+        out.write(
+            "STADO_BACKUP_OBJECT\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
+            % (relative, p_state, p_size, p_digest, b_state, b_size, b_digest)
+        )
+    out.write("STADO_BACKUP_AUDIT_END\texact\n")
+    sys.exit(0)
 deleted = 0
 deleted_bytes = 0
 refused = 0
@@ -237,6 +282,9 @@ pub struct AuditPlan {
     pub backup_root: String,
     /// Primary store root, relative to the same `$HOME`.
     pub primary_root: String,
+    /// Exact namespace-qualified object paths to compare. Empty scans the
+    /// replica as before.
+    pub objects: Vec<String>,
     /// Also delete the twins this pass proves.
     pub reclaim: bool,
     /// Actually delete. Without it a reclaim names what it would drop and
@@ -263,6 +311,15 @@ pub fn remote_script(plan: &AuditPlan) -> String {
         .replace(NAMESPACE_MARK, &plan.namespace)
         .replace(BACKUP_ROOT_MARK, &plan.backup_root)
         .replace(PRIMARY_ROOT_MARK, &plan.primary_root)
+        .replace(
+            OBJECTS_HEX_MARK,
+            &plan
+                .objects
+                .iter()
+                .map(hex::encode)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
         .replace("@HASH_DEADLINE@", &plan.hash_deadline_seconds().to_string())
         .replace("@RECLAIM@", if plan.reclaim { "yes" } else { "no" })
         // A pass that was not asked to reclaim cannot apply anything, whatever
@@ -283,6 +340,19 @@ pub struct ClassTotals {
     pub objects: u64,
     pub bytes: u64,
 }
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectIdentity {
+    pub state: String,
+    pub bytes: Option<u64>,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectComparison {
+    pub path: String,
+    pub primary: ObjectIdentity,
+    pub backup: ObjectIdentity,
+}
 
 /// The whole reading.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -293,6 +363,8 @@ pub struct BackupAudit {
     /// The largest few of each class, for a report that names things rather
     /// than only counting them.
     pub examples: BTreeMap<String, Vec<(u64, String)>>,
+    /// Exact primary/backup identities requested by the operator.
+    pub objects: Vec<ObjectComparison>,
     /// Set when the host could not be classified at all.
     pub unavailable: Option<String>,
     /// True once the remote program printed its end marker, so a truncated
@@ -358,6 +430,38 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 examples.push((bytes, path.to_string()));
                 examples.sort_by_key(|(bytes, _)| std::cmp::Reverse(*bytes));
                 examples.truncate(5);
+            }
+            Some("STADO_BACKUP_OBJECT") => {
+                let (
+                    Some(path),
+                    Some(primary_state),
+                    Some(primary_bytes),
+                    Some(primary_sha256),
+                    Some(backup_state),
+                    Some(backup_bytes),
+                    Some(backup_sha256),
+                ) = (
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                )
+                else {
+                    continue;
+                };
+                let identity = |state: &str, bytes: &str, sha256: &str| ObjectIdentity {
+                    state: state.to_string(),
+                    bytes: bytes.parse().ok(),
+                    sha256: (!sha256.is_empty()).then(|| sha256.to_string()),
+                };
+                audit.objects.push(ObjectComparison {
+                    path: path.to_string(),
+                    primary: identity(primary_state, primary_bytes, primary_sha256),
+                    backup: identity(backup_state, backup_bytes, backup_sha256),
+                });
             }
             Some("STADO_BACKUP_AUDIT_UNAVAILABLE") => {
                 audit.unavailable = fields.next().map(str::to_string);

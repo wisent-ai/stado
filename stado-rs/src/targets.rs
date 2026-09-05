@@ -2767,6 +2767,16 @@ pub struct RegistryStore {
 impl RegistryStore {
     /// Bind to the store that holds the canonical registry.
     pub async fn open() -> Result<Self, StorageError> {
+        Self::open_with_read_authority(false).await
+    }
+
+    /// Bind destructive readers to the configured primary without disabling
+    /// the store's write mirror.
+    pub(crate) async fn open_primary_reads() -> Result<Self, StorageError> {
+        Self::open_with_read_authority(true).await
+    }
+
+    async fn open_with_read_authority(primary_reads: bool) -> Result<Self, StorageError> {
         let gcs_backend = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
             == Some(crate::capabilities::StorageAdapter::Gcs);
         if gcs_backend {
@@ -2781,27 +2791,11 @@ impl RegistryStore {
                 location: GCS_REGISTRY_URI.to_string(),
             });
         }
-        let store = JobStorage::new().await?;
-        Ok(Self {
-            backend: Arc::clone(store.backend()),
-            blob: REGISTRY_BLOB.to_string(),
-            location: registry_location(),
-        })
-    }
-
-    /// Bind a server-local reader to the canonical registry's direct backing
-    /// store when clients normally route through the Stado object API.
-    ///
-    /// This is intentionally narrower than [`Self::open`]: only an explicitly
-    /// configured `stado` primary switches to the server's declared backup.
-    /// Every other adapter retains the canonical routing above.
-    pub async fn open_for_server() -> Result<Self, StorageError> {
-        if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
-            != Some(crate::capabilities::StorageAdapter::StadoObject)
-        {
-            return Self::open().await;
-        }
-        let store = JobStorage::for_server().await?;
+        let store = if primary_reads {
+            JobStorage::for_primary_reads().await?
+        } else {
+            JobStorage::new().await?
+        };
         Ok(Self {
             backend: Arc::clone(store.backend()),
             blob: REGISTRY_BLOB.to_string(),
