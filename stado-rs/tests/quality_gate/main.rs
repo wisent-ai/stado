@@ -203,6 +203,35 @@ fn an_uncommitted_break_at_the_base_commit_is_still_attributed() {
 }
 
 #[test]
+fn a_green_run_still_names_the_revision_it_compared_against() {
+    // A check whose comparison basis is invisible while it passes cannot be
+    // audited, and the push path reads its base from a different field than
+    // the pull-request path does.
+    let repo = repository("OK", "OK");
+    let out = run_gate(repo.path(), None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let base = Command::new("git")
+        .args(["rev-parse", "refs/remotes/origin/main"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git rev-parse");
+    let sha = String::from_utf8_lossy(&base.stdout).trim().to_string();
+    assert!(
+        stdout.contains(&format!("base: {sha} (origin/main)")),
+        "expected the resolved base in: {stdout}"
+    );
+
+    // And when there is none, the line says which reason.
+    let out = run_gate(repo.path(), Some("HEAD"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("base: none -- HEAD is this revision"),
+        "expected the stated absence in: {stdout}"
+    );
+}
+
+#[test]
 fn an_empty_quality_declaration_is_refused_rather_than_passed() {
     let repo = repository("OK", "OK");
     std::fs::write(
