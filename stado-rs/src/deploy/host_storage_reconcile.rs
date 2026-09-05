@@ -2768,24 +2768,7 @@ async fn remote_phase(
         runner,
     )
     .await?;
-    let mut payload = None;
-    for line in output.stdout.lines() {
-        if let Some(message) = line.strip_prefix("STADO_STORAGE_RECONCILE_ERROR\t") {
-            return Err(DeployError(message.to_string()));
-        }
-        if let Some(encoded) = line.strip_prefix("STADO_STORAGE_RECONCILE\t") {
-            payload = serde_json::from_str::<Value>(encoded).ok();
-        }
-    }
-    if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "storage-root reconciliation phase failed",
-        )));
-    }
-    payload.ok_or_else(|| {
-        DeployError("storage-root reconciliation phase returned no durable receipt".to_string())
-    })
+    parse_remote_payload(&output)
 }
 
 fn read_transaction_receipt(transaction: &str) -> Result<Value, DeployError> {
