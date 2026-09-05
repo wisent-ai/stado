@@ -25,6 +25,15 @@ job: queued, running, completed, and uploaded jobs keep that identity and their
 existing output. A publication or storage-read failure does not start another
 build.
 
+The stored platform request fixes its builder and input archives. Resumption
+checks that request against the release's source and manifest, preserves its
+exact bytes, and uses the already-staged inputs instead of fetching them again.
+An existing queue plan retains its recorded consumer and does not require a
+new live-builder selection. If no queue plan exists yet, the saved builder
+must still pass normal admission; another machine is not silently selected.
+An altered request returns `immutable queue object differs: PATH` without
+overwriting the saved request or creating a replacement build.
+
 Only a job recorded as failed or cancelled receives a retry identity derived
 from the release run, platform, and prior terminal job ID, with its own output
 URI. A crash before or after the replacement platform record is saved therefore

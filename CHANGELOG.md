@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.28
+
+- **Interrupted release requests:** resumption retains the saved platform builder, exact request bytes, staged input archives, and recorded queue consumer. An existing queue plan can be recovered without selecting a live builder or creating a replacement attempt. A request whose source, manifest, or inputs differ is refused rather than overwritten.
+
 ## 0.16.27
 
 - **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.
