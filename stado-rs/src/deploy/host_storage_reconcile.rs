@@ -3163,9 +3163,8 @@ fn verify_resident_lock(transaction: &str) -> Result<(), DeployError> {
                 "resident reconciliation lock descriptor {fd} is invalid: {error}"
             ))
         })?;
-    let descriptor_device = u64::try_from(descriptor_metadata.st_dev)
-        .map_err(|_| DeployError("resident reconciliation lock has invalid device".to_string()))?;
-    if path_metadata.dev() != descriptor_device || path_metadata.ino() != descriptor_metadata.st_ino
+    if path_metadata.dev() as nix::libc::dev_t != descriptor_metadata.st_dev
+        || path_metadata.ino() != descriptor_metadata.st_ino
     {
         return Err(DeployError(
             "resident reconciliation lock no longer maps the canonical transaction lock"
