@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.12
+
+- **Release staging:** both native platform recipes name the Stado executable relative to the worker's output directory, without duplicating `.wisent-output`.
+- **Software inventory:** unsupported executables are not launched to discover their version. Catalogued version commands have a five-second deadline, helper classification overlaps bounded reads, and an unknown version no longer prevents other programs from being reported.
+- **Version declarations:** `host declare-version --unset` removes one obsolete product requirement with a generation-checked registry write; repeating it reports that the declaration is already absent.
+- **Cache cleanup failures:** a failed tagged-cache removal returns a nonzero exit status and retains the filesystem's stderr instead of reporting a successful command.
+- **Migration and rollback:** no stored-state migration is required. Rolling back restores the duplicated staging path, unbounded version discovery, and the inability to remove one version declaration through the CLI.
+- **Platforms:** the existing `darwin-arm64` and `linux-amd64` release and delivery paths are unchanged.
+
 ## 0.16.11
 
 - **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.

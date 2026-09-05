@@ -3071,7 +3071,7 @@ pub async fn declare_version(
         Some(versions) => versions
             .as_object_mut()
             .ok_or_else(|| CmdError::click("managed_versions is not an object"))?
-            .remove(binary.name)
+            .remove(&binary.name)
             .is_some(),
     };
     let generation = if removed {
