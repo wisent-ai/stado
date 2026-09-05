@@ -1938,12 +1938,17 @@ pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 /// Actions a registry-API client may be granted.
 ///
 /// `policy-read` and `cleanup-read` answer questions; `policy-write` rewrites
-/// one target's whitelisted policy fields and `cleanup-run` asks the local
-/// janitor for a pass. They are separate because reading a fleet's policy and
-/// rewriting it are not the same authority, and the desktop app asks for them
-/// with separate requests.
-pub const REGISTRY_API_ACTIONS: &[&str] =
-    &["cleanup-read", "cleanup-run", "policy-read", "policy-write"];
+/// one target's whitelisted policy fields, `cleanup-run` asks the local
+/// janitor for a pass, and `registry-import` additively adopts a complete
+/// registry-v2 document. They are separate because reading policy, rewriting
+/// policy, running cleanup, and importing declarations are distinct authority.
+pub const REGISTRY_API_ACTIONS: &[&str] = &[
+    "cleanup-read",
+    "cleanup-run",
+    "policy-read",
+    "policy-write",
+    "registry-import",
+];
 
 /// One client authorized against the registry-policy boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -45,6 +45,7 @@ pub mod release;
 pub mod release_agent;
 pub mod release_cause;
 pub mod release_control;
+pub mod registry_import;
 pub mod release_pipeline;
 // Crate-private: the revisit pass has exactly two callers, the release agent's
 // tick and `registry doctor`'s annotation, both inside this crate. Nothing
