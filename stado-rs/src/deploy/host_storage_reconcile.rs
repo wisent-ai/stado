@@ -112,6 +112,7 @@ const REMOTE_PYTHON: &str = include_str!("host_storage_reconcile.py");
 
 const FENCE_SCHEMA: &str = "stado.storage-root-fence.v4";
 const READ_FENCE: &str = "read-fence";
+const READ_OWNER: &str = "read-owner";
 const PREFLIGHT_EVIDENCE_FILE: &str = "preflight.json";
 const CHECKPOINT_EVIDENCE_FILE: &str = "checkpoint-evidence.json";
 const LIFECYCLE_DECISIONS_FILE: &str = "lifecycle-decisions.json";
@@ -269,6 +270,17 @@ fn bind_remote_script(phase: &str, transaction: &str) -> String {
     script
 }
 
+fn remote_failure_detail(output: &super::CommandOutput, fallback: &str) -> String {
+    let stdout = output.stdout.trim();
+    let stderr = output.stderr.trim();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => fallback.to_string(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("{stdout}\n{stderr}"),
+    }
+}
+
 fn parse_remote_payload(output: &super::CommandOutput) -> Result<Value, DeployError> {
     let mut payload = None;
     for line in output.stdout.lines() {
@@ -280,15 +292,10 @@ fn parse_remote_payload(output: &super::CommandOutput) -> Result<Value, DeployEr
         }
     }
     if !output.ok() {
-        let stdout = output.stdout.trim();
-        let stderr = output.stderr.trim();
-        let detail = match (stdout.is_empty(), stderr.is_empty()) {
-            (true, true) => "storage reconciliation host program failed".to_string(),
-            (false, true) => stdout.to_string(),
-            (true, false) => stderr.to_string(),
-            (false, false) => format!("{stdout}\n{stderr}"),
-        };
-        return Err(DeployError(detail));
+        return Err(DeployError(remote_failure_detail(
+            output,
+            "storage reconciliation host program failed",
+        )));
     }
     payload.ok_or_else(|| DeployError("storage reconciliation returned no payload".to_string()))
 }
@@ -3976,35 +3983,19 @@ async fn read_operation_owner(
     transaction: &str,
     runner: &Runner,
 ) -> Result<Option<Value>, DeployError> {
-    let script = format!(
-        "STADO_TRANSACTION={} /usr/bin/python3 - <<'PY'\n\
-import json, os, stat\n\
-tx = os.environ['STADO_TRANSACTION']\n\
-path = os.path.expanduser('~/.stado/recovery/storage-root-reconcile/' + tx + '/operation-owner.json')\n\
-try:\n\
-    info = os.lstat(path)\n\
-    if not stat.S_ISREG(info.st_mode):\n\
-        raise SystemExit('operation owner is not a regular file')\n\
-    with open(path, encoding='utf-8') as handle:\n\
-        owner = json.load(handle)\n\
-except FileNotFoundError:\n\
-    print('STADO_RECONCILE_OWNER\\tabsent')\n\
-    raise SystemExit(0)\n\
-if owner.get('schema') != 'stado.storage-root-owner.v1' or owner.get('transaction') != tx:\n\
-    raise SystemExit('operation owner identity is invalid')\n\
-owner.pop('token', None)\n\
-print('STADO_RECONCILE_OWNER\\t' + json.dumps(owner, sort_keys=True, separators=(',', ':')))\n\
-PY",
-        shlex_quote(transaction)
-    );
-    let output = host_channel::run_script(target, &script, runner).await?;
+    let output =
+        host_channel::run_script(target, &bind_remote_script(READ_OWNER, transaction), runner)
+            .await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
+        return Err(DeployError(remote_failure_detail(
             &output,
             "operation owner could not be read",
         )));
     }
     for line in output.stdout.lines() {
+        if let Some(message) = line.strip_prefix("STADO_STORAGE_RECONCILE_ERROR\t") {
+            return Err(DeployError(message.to_string()));
+        }
         let Some(encoded) = line.strip_prefix("STADO_RECONCILE_OWNER\t") else {
             continue;
         };

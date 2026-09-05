@@ -299,7 +299,7 @@ def load_receipt():
 
 
 os.makedirs(os.path.dirname(lock_path), mode=0o700, exist_ok=True)
-if phase not in ("read-fence", "status"):
+if phase not in ("read-fence", "read-owner", "status"):
     try:
         lock_fd = int(os.environ.get("STADO_RECONCILE_LOCK_FD", "-1"))
         descriptor = os.fstat(lock_fd)
@@ -327,6 +327,24 @@ if phase == "read-fence":
                  "status": "absent", "writers": []}
     print("STADO_STORAGE_RECONCILE\t" +
           json.dumps(fence, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
+
+if phase == "read-owner":
+    try:
+        info = os.lstat(owner_path)
+        if not stat.S_ISREG(info.st_mode):
+            fail("operation owner is not a regular file")
+        with open(owner_path, encoding="utf-8") as handle:
+            owner = json.load(handle)
+    except FileNotFoundError:
+        print("STADO_RECONCILE_OWNER\tabsent")
+        raise SystemExit(0)
+    if (owner.get("schema") != "stado.storage-root-owner.v1"
+            or owner.get("transaction") != tx):
+        fail("operation owner identity is invalid")
+    owner.pop("token", None)
+    print("STADO_RECONCILE_OWNER\t" +
+          json.dumps(owner, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
 
 
