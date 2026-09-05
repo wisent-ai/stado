@@ -57,7 +57,7 @@ actual="$(openssl dgst -sha256 "$work_dir/$archive_name" | sed 's/^.*= //')"
 members=""
 while IFS= read -r name; do
     case "$name" in
-        stado|wc|stado-coverage|stado-fix|stado-watchdog|stado-mcp|LICENSE) ;;
+        stado|wc|stado-coverage|stado-fix|stado-watchdog|stado-mcp|SHA256SUMS) ;;
         *) die "release archive contains an unexpected member: $name" ;;
     esac
     case " $members " in
@@ -67,10 +67,10 @@ while IFS= read -r name; do
 done <<EOF
 $(tar -tzf "$work_dir/$archive_name")
 EOF
-for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp SHA256SUMS; do
     case " $members " in
         *" $name "*) ;;
-        *) die "release archive is missing binary: $name" ;;
+        *) die "release archive is missing member: $name" ;;
     esac
 done
 
@@ -88,7 +88,7 @@ for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
     mv "$install_dir/$name" "$BIN_DIR/$name"
 done
 mv "$work_dir/$manifest_name" "$BIN_DIR/release-manifest.json"
-rm -f "$install_dir/LICENSE"
+rm -f "$install_dir/SHA256SUMS"
 rmdir "$install_dir"
 
 printf 'installed Stado %s for %s in %s\n' "$VERSION" "$PLATFORM" "$BIN_DIR"
