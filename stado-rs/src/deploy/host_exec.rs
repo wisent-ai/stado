@@ -189,7 +189,7 @@ impl From<DeployError> for ExecRefusal {
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
 /// no word splitting, no redirection, no globbing.
-const SAFE_PUNCTUATION: &str = "-_./:%";
+const SAFE_PUNCTUATION: &str = "-_./:%+";
 
 /// One approved remote program.
 #[derive(Debug)]

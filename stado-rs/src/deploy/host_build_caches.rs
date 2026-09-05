@@ -15,7 +15,8 @@
 //!
 //! `report` lists candidates with sizes; `prune` deletes them. Age and root
 //! arrive as explicit arguments, so the command carries no threshold of its
-//! own.
+//! own. A process snapshot plus `lsof +D` protects every candidate immediately
+//! before deletion, including when an operator explicitly overrides age.
 
 use std::time::Duration;
 
@@ -46,6 +47,25 @@ days="${STADO_CACHE_MIN_AGE_DAYS:-}"
 apply="${STADO_CACHE_APPLY:-}"
 force="${STADO_CACHE_FORCE:-}"
 signature='Signature: 8a477f597d28d172789f06886806bc55'
+snapshot=$(/bin/ps -Ao args= 2>/dev/null || true)
+lsof_bin=""
+for candidate in /usr/sbin/lsof /usr/bin/lsof; do
+  if [ -x "$candidate" ]; then lsof_bin="$candidate"; break; fi
+done
+
+process_absent() {
+  case "$snapshot" in
+    *"$1"*) return 1 ;;
+  esac
+  [ -n "$lsof_bin" ] || return 2
+  "$lsof_bin" -n +D "$1" >/dev/null 2>&1
+  status=$?
+  case "$status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return 2 ;;
+  esac
+}
 
 if [ -z "$root" ] || [ ! -d "$root" ]; then
   printf 'STADO_BUILD_CACHE\troot-absent\t%s\t%s\n' "$root" -
@@ -87,6 +107,16 @@ while IFS= read -r tag; do
     continue
   fi
   size=$(/usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
+  process_absent "$dir"
+  process_status=$?
+  if [ "$process_status" -eq 1 ]; then
+    printf 'STADO_BUILD_CACHE\tin-use\t%s\t%s\n' "$dir" "${size:--}"
+    continue
+  fi
+  if [ "$process_status" -ne 0 ]; then
+    printf 'STADO_BUILD_CACHE\tliveness-unavailable\t%s\t%s\n' "$dir" "${size:--}"
+    continue
+  fi
   if [ -n "$apply" ]; then
     if /bin/rm -rf "$dir"; then
       printf 'STADO_BUILD_CACHE\tremoved\t%s\t%s\n' "$dir" "${size:--}"
