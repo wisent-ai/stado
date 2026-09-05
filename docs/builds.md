@@ -34,6 +34,11 @@ must still pass normal admission; another machine is not silently selected.
 An altered request returns `immutable queue object differs: PATH` without
 overwriting the saved request or creating a replacement build.
 
+`stado release status stado --json` shows the recorded release runs, including
+each platform's builder, job ID, state, and failure. A recorded platform failure
+can describe a publisher read error rather than a failed worker; resumption
+checks the job itself before deciding whether another attempt is needed.
+
 Only a job recorded as failed or cancelled receives a retry identity derived
 from the release run, platform, and prior terminal job ID, with its own output
 URI. A crash before or after the replacement platform record is saved therefore
