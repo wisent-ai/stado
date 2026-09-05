@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.11
+
+- **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.
+- **Terminal cleanup:** the Linux matrix removes its own Cargo output on both success and failure, and keeps the downloaded signing tool in its ignored work directory instead of making the source checkout dirty.
+- **Migration and rollback:** no configuration or persisted-state migration is required. Rolling back restores the larger temporary build footprint and leaves Linux qualification caches until normal retention removes them.
+- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`.
+
 ## 0.16.10
 
 - **Release-capacity correction:** local `host reclaim` now runs disk cleanup exclusively through the exact Stado binary that owns the invocation. A tagged release can therefore use its corrected bounded janitor during pre-publication capacity recovery instead of re-entering the older installed janitor that is holding the retired lock; remote targets retain their installed authoritative executable.
