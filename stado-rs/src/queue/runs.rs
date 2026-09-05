@@ -198,6 +198,18 @@ pub(crate) fn terminal_job_matches_entry(
 /// legacy terminal transition can retain their exact outcome. Such a terminal
 /// job may omit all three submission-linkage fields, but a partial or
 /// conflicting linkage is still rejected.
+///
+/// The manifest is retained evidence of a submission, never a precondition
+/// for terminality. A run whose history is gone still has to let its jobs
+/// reach `cancelled/` or `failed/`, because a job that cannot go terminal is
+/// not finished: the reaper requeues it at lease expiry and the next agent
+/// claims it again. Ten documentation records did exactly that on
+/// charless-mac-mini for a day, each claim rebuilding Spis into 2.5 GiB of a
+/// disk with 15 GiB to spare, and `stado cancel` could not stop them because
+/// it moves the job through this same retention. Absence therefore retains
+/// nothing and succeeds; every contradiction below - wrong schema, wrong
+/// entry, a different recorded outcome - is still an error, because those say
+/// the manifest disagrees rather than that it is missing.
 pub(crate) async fn record_terminal_outcome_for_entry(
     store: &JobStorage,
     run_id: &str,
@@ -213,15 +225,17 @@ pub(crate) async fn record_terminal_outcome_for_entry(
     crate::queue::submit::validate_run_id(run_id)
         .map_err(|error| StorageError::Other(error.to_string()))?;
     let path = format!("{RUN_PREFIX}/{run_id}.json");
-    crate::queue::submit::migrate_v2_run_manifest(store, run_id)
-        .await
-        .map_err(|error| StorageError::Other(error.to_string()))?;
+    match crate::queue::submit::migrate_v2_run_manifest(store, run_id).await {
+        Ok(_) => {}
+        Err(crate::queue::submit::SubmitError::Storage(StorageError::NotFound(_))) => {
+            return Ok(())
+        }
+        Err(error) => return Err(StorageError::Other(error.to_string())),
+    }
     for _ in 0..16 {
-        let versioned = store.read_text_versioned(&path).await?.ok_or_else(|| {
-            StorageError::Other(format!(
-                "durable run manifest {run_id} disappeared before terminal transition"
-            ))
-        })?;
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            return Ok(());
+        };
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
         crate::queue::submit::validate_stored_run_manifest(&manifest, run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
