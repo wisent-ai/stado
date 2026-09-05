@@ -14,6 +14,13 @@ program="$HOME/.stado/services/$label/current/darwin-arm/stado"
 config="${STADO_CONFIG:-$HOME/.config/stado/config.json}"
 work="$HOME/.stado/work/object-api-recovery"
 log="$HOME/.stado/logs/$label.log"
+copy_program="${STADO_RECOVERY_COPIER:-$HOME/.stado/bin/stado}"
+case "$copy_program" in
+  \$HOME/*) copy_program="$HOME/${copy_program#\$HOME/}" ;;
+esac
+copier_ready=0
+copier_digest=-
+copier_version=-
 
 if [ "$(/usr/bin/uname -s)" != "Darwin" ]; then
   printf 'unsupported_os %s\n' "$(/usr/bin/uname -s)" >&2
@@ -580,10 +587,11 @@ PY
 inspect_route() {
   mode=$1
   source=$2
-  /usr/bin/python3 - "$mode" "$source" "$config" "$HOME" "$staged" <<'PY'
+  /usr/bin/python3 - "$mode" "$source" "$config" "$HOME" "$staged" \
+    "$work/$label.runtime-state.json" <<'PY'
 import json, os, plistlib, re, sys
 
-mode, source, default_config, default_home, expected_path = sys.argv[1:]
+mode, source, default_config, default_home, expected_path, runtime_path = sys.argv[1:]
 with open(expected_path, "rb") as handle:
     expected = plistlib.load(handle).get("EnvironmentVariables") or {}
 
@@ -685,6 +693,22 @@ else:
     served_backend = primary_backend
     served_root = ""
 
+if mode == "launchctl":
+    try:
+        with open(runtime_path, encoding="utf-8") as handle:
+            runtime = json.load(handle)
+    except (OSError, ValueError):
+        runtime = None
+    identity = runtime.get("storage") if isinstance(runtime, dict) else None
+    if isinstance(identity, dict):
+        if str(identity.get("pid")) != pid:
+            raise SystemExit("object API recovery refused: runtime identity changed during inspection")
+        served_backend = identity.get("backend") or ""
+        served_root = expand_path(identity.get("local_path") or "")
+        legacy_implicit_backup = False
+    elif legacy_implicit_backup and runtime is None:
+        raise SystemExit("object API recovery refused: legacy storage route is unavailable")
+
 expected_matches = all(environment.get(key) == value for key, value in expected.items())
 explicit_backend = environment.get("WC_STORAGE_BACKEND") or ""
 explicit_root = expand_path(environment.get("WC_LOCAL_STORAGE_PATH") or "")
@@ -729,6 +753,13 @@ capture_loaded_route() {
     > "$loaded_print.tmp" 2>/dev/null; then
     /bin/mv "$loaded_print.tmp" "$loaded_print"
     /bin/chmod 600 "$loaded_print"
+    runtime_state="$work/$label.runtime-state.json"
+    if /usr/bin/curl --silent --show-error --fail --max-time 5 \
+      "${object_url%/}/api/state.json" > "$runtime_state.tmp" 2>/dev/null; then
+      /bin/mv "$runtime_state.tmp" "$runtime_state"
+    else
+      /bin/rm -f "$runtime_state.tmp" "$runtime_state"
+    fi
     route=$(inspect_route launchctl "$loaded_print")
     IFS=$'\t' read -r loaded_backend loaded_primary_root \
       loaded_backup_backend loaded_backup_root loaded_served_backend \
@@ -820,12 +851,13 @@ persist_record() {
   /usr/bin/python3 - "$active_record" "$transition_id" "$transition_started" \
     "$transition_phase" "$transition_kind" "$source_root" "$destination_root" \
     "$destination_snapshot" "$rollback_plist" "$definition_backup" "$copy_log" \
-    "$destination_exposed" "$snapshot_ready" "$transition_detail" <<'PY'
+    "$destination_exposed" "$snapshot_ready" "$transition_detail" \
+    "$copy_program" "$copier_digest" "$copier_version" <<'PY'
 import datetime, json, os, sys
 
 (path, transition_id, started_at, phase, kind, source_root, destination_root,
  destination_snapshot, rollback_plist, definition_backup, copy_log,
- destination_exposed, snapshot_ready, detail) = sys.argv[1:]
+ destination_exposed, snapshot_ready, detail, copier, copier_digest, copier_version) = sys.argv[1:]
 document = {
     "schema": "stado.object-api-storage-transition.v1",
     "transition_id": transition_id,
@@ -842,6 +874,11 @@ document = {
     "destination_exposed": destination_exposed == "1",
     "snapshot_ready": snapshot_ready == "1",
     "detail": detail,
+    "copier": {
+        "path": copier,
+        "sha256": None if copier_digest == "-" else copier_digest,
+        "version": None if copier_version == "-" else copier_version,
+    },
 }
 temporary = f"{path}.tmp-{os.getpid()}"
 with open(temporary, "w", encoding="utf-8") as handle:
@@ -1026,6 +1063,58 @@ PY
     "durable pre-transition destination snapshot mode=$snapshot_mode"
 }
 
+prepare_copy_program() {
+  [ "$copier_ready" -eq 0 ] || return 0
+  copier_identity=$(/usr/bin/python3 - "$copy_program" \
+    "${STADO_RECOVERY_COPIER_SHA256:-}" <<'PY'
+import hashlib, os, re, stat, struct, subprocess, sys
+path, expected = sys.argv[1:]
+metadata = os.stat(path)
+if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK):
+    raise SystemExit("recovery copier is not an executable file")
+if expected and (
+    metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700
+):
+    raise SystemExit("staged recovery copier must be owned by this account with mode 0700")
+with open(path, "rb") as handle:
+    header = handle.read(8)
+    if len(header) != 8:
+        raise SystemExit("recovery copier has no native executable header")
+    magic, cpu = struct.unpack("<II", header)
+    if magic == 0xFEEDFACF:
+        architectures = [cpu]
+    else:
+        magic, count = struct.unpack(">II", header)
+        if magic not in (0xCAFEBABE, 0xCAFEBABF) or count > 64:
+            raise SystemExit("recovery copier is not a Mach-O executable")
+        entry_size = 20 if magic == 0xCAFEBABE else 32
+        architectures = []
+        for _ in range(count):
+            entry = handle.read(entry_size)
+            if len(entry) != entry_size:
+                raise SystemExit("recovery copier has an incomplete architecture table")
+            architectures.append(struct.unpack(">I", entry[:4])[0])
+    wanted = {"arm64": 0x0100000C, "x86_64": 0x01000007}.get(os.uname().machine)
+    if wanted not in architectures:
+        raise SystemExit("recovery copier does not carry this host's native architecture")
+    handle.seek(0)
+    digest = hashlib.sha256()
+    for block in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(block)
+actual = digest.hexdigest()
+if expected and actual != expected:
+    raise SystemExit("recovery copier digest differs from the invoking Stado binary")
+result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10, check=True)
+match = re.search(r"(\d+)\.(\d+)\.(\d+)", result.stdout)
+if not match or tuple(map(int, match.groups())) < (0, 16, 5):
+    raise SystemExit("storage recovery requires Stado 0.16.5 or newer for byte-exact copying")
+print(f"{match.group(0)}\t{actual}")
+PY
+  ) || return 1
+  IFS=$'\t' read -r copier_version copier_digest <<< "$copier_identity"
+  copier_ready=1
+}
+
 copy_store() {
   from_root=$1
   to_root=$2
@@ -1033,10 +1122,10 @@ copy_store() {
   # A prior interrupted run may resume after its last clean prefix. Finish that
   # suffix, then run once more from the exhausted cursor so writes accepted by
   # a restored source before this fence cannot hide in an earlier prefix.
-  "$program" storage copy \
+  "$copy_program" storage copy --source-offline \
     --from local --from-path "$from_root" \
     --to local --to-path "$to_root" > "$output" 2>&1 &&
-    "$program" storage copy \
+    "$copy_program" storage copy --source-offline \
       --from local --from-path "$from_root" \
       --to local --to-path "$to_root" >> "$output" 2>&1
 }
@@ -1100,6 +1189,9 @@ has_active_record=0
 if [ -f "$active_record" ]; then
   load_record
   has_active_record=1
+  if [ "$transition_kind" = backing-root ]; then
+    prepare_copy_program || exit 73
+  fi
   if [ "$destination_root" != "$store" ]; then
     printf 'active_transition_destination_mismatch recorded=%s declared=%s\n' \
       "$destination_root" "$store" >&2
@@ -1228,6 +1320,7 @@ PY
 fi
 
 if [ "$transition_kind" = backing-root ]; then
+  prepare_copy_program || exit 73
   if [ ! -d "$source_root" ] || [ ! -r "$source_root/registry.json" ]; then
     persist_record preparation_failed "source root or registry is unreadable"
     rollback_to_source "source root or registry is unreadable" || true

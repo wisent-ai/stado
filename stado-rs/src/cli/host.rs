@@ -8073,17 +8073,98 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The fixed-script channel transports the checked-in helper verbatim. Its
-/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation. Object recovery also repairs a responsive listener
-/// whose loaded environment resolves to the wrong physical backing root.
+/// A same-platform caller supplies its exact copier without replacing a running
+/// service binary. Other callers use the host's installed copier; the helper
+/// checks its version before a root transition. One host-local lock serializes
+/// recovery while the checked-in helper preserves the serving root's writes.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let platform = crate::deploy::host_channel::run_script(
+        resolved,
+        "/usr/bin/uname -s; /usr/bin/uname -m",
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut platform_lines = platform.stdout.lines();
+    let os = platform_lines.next().unwrap_or_default();
+    let architecture = platform_lines.next().unwrap_or_default();
+    if !platform.ok() || os != "Darwin" {
+        return Err(CmdError::click("object API recovery requires a macOS host"));
+    }
+    let caller_architecture = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        architecture => architecture,
+    };
+    let mut copier = "$HOME/.stado/bin/stado".to_string();
+    let mut copier_sha256 = String::new();
+    if std::env::consts::OS == "macos" && architecture == caller_architecture {
+        let content = std::fs::read(std::env::current_exe()?)?;
+        copier_sha256 = crate::release_control::sha256_bytes(&content);
+        copier = format!("$HOME/.stado/work/object-api-recovery/stado-{copier_sha256}");
+        let cached = crate::deploy::host_channel::run_script(
+            resolved,
+            &format!(
+                "set -eu\npath=\"{copier}\"\n\
+                 if [ -f \"$path\" ] && [ ! -L \"$path\" ] && [ -x \"$path\" ]; then\n\
+                 /usr/bin/shasum -a 256 \"$path\"\nfi"
+            ),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !cached.ok() {
+            return Err(CmdError::click(format!(
+                "cannot inspect the host's recovery copier: {}",
+                cached.detail()
+            )));
+        }
+        if cached.stdout.split_whitespace().next() != Some(copier_sha256.as_str()) {
+            let transferred = crate::deploy::service::sync_service_file(
+                resolved, &copier, &content, 0o700, runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if !transferred.succeeded("file_synced") {
+                return Err(CmdError::click(format!(
+                    "cannot stage the native recovery copier: {}",
+                    transferred.failure()
+                )));
+            }
+        }
+    }
+    let script = format!(
+        r#"set -eu
+export STADO_RECOVERY_COPIER={}
+export STADO_RECOVERY_COPIER_SHA256={}
+/usr/bin/python3 - <<'PY'
+import base64, fcntl, os, subprocess, sys
+work = os.path.join(os.path.expanduser("~"), ".stado", "work", "object-api-recovery")
+os.makedirs(work, mode=0o700, exist_ok=True)
+with open(os.path.join(work, "recovery.lock"), "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("object API recovery is already running on this host")
+    result = subprocess.run(
+        ["/bin/bash"],
+        input=base64.b64decode("{}"),
+        pass_fds=(lock.fileno(),),
+        check=False,
+    )
+    sys.exit(result.returncode)
+PY"#,
+        crate::deploy::shlex_quote(&copier),
+        crate::deploy::shlex_quote(&copier_sha256),
+        STANDARD.encode(include_str!("../../../deploy/recover_object_api.sh")),
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
-        include_str!("../../../deploy/recover_object_api.sh"),
+        &script,
         std::time::Duration::from_secs(7_200),
         runner,
     )

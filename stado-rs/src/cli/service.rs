@@ -2608,7 +2608,9 @@ async fn update(
             let required = if let Some((_, rest)) = program.split_once(&marker) {
                 rest.split_once('/')
                     .map(|(_, tail)| tail.to_string())
-                    .ok_or_else(|| CmdError::click("managed service program has no archive member"))?
+                    .ok_or_else(|| {
+                        CmdError::click("managed service program has no archive member")
+                    })?
             } else {
                 let executable = std::path::Path::new(program)
                     .file_name()
@@ -2620,7 +2622,9 @@ async fn update(
                 .components()
                 .all(|part| matches!(part, std::path::Component::Normal(_)))
             {
-                return Err(CmdError::click("managed service archive member is not relative"));
+                return Err(CmdError::click(
+                    "managed service archive member is not relative",
+                ));
             }
             install_from_archive(&target, &directory, path, &required, &runner).await?
         }

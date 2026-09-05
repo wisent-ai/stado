@@ -1388,6 +1388,12 @@ impl Dashboard {
                 &json!({
                     "degraded": degraded,
                     "boundaries": boundaries,
+                    "storage": {
+                        "pid": std::process::id(),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "backend": self.store.backend_name(),
+                        "local_path": self.store.local_storage_path(),
+                    },
                 }),
             );
         }

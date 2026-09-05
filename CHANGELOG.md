@@ -2,12 +2,14 @@
 
 ## 0.16.5
 
-- **Object API authority:** a server whose client profile selects Stado opens the explicitly configured host-local store, never the backup replica. Registry readers and disk cleanup use the same authority.
+- **Object API authority:** a server whose client profile selects Stado opens the explicitly configured host-local store, never the backup replica. Registry readers and disk cleanup use the same authority; `/api/state.json` reports the serving process, version, backend, and local root.
 - **Catalog bootstrap:** release submission resolves the object API through the catalog's exact `stado` entry, preserving its primary and backup environment instead of rendering only the base process environment.
 - **Service archives:** local archives are extracted beside the installed version and must contain the service's declared executable before `current` changes. Existing immutable versions are not deleted during extraction, and symlink replacement is atomic.
-- **Migration:** no new configuration field is required; `storage.local.path` remains the server's local authority.
+- **Storage recovery:** recovery checks the loaded job rather than only its plist, preserves a destination snapshot, stops the source before copying, and retains a resumable transition record with a serving-source rollback. A host-local lock prevents concurrent recoveries; same-platform callers supply their exact native copier without replacing a running service.
+- **Storage copying:** equal-sized objects are skipped only when their bytes match. `storage copy --source-offline` refuses a fenced transfer when a source object disappears.
+- **Migration:** `stado host recover-object-api TARGET` preserves writes accepted by a wrongly selected local backup before restoring `storage.local.path`. The copier must be Stado 0.16.5 or newer; cross-platform callers use the host's installed native copier.
 - **Rollback boundary:** rolling back restores implicit backup promotion and allows an archive update to remove files from the version a service is still executing.
-- **Platforms and evidence:** native platforms remain `darwin-arm64` and `linux-amd64`; the object API recovery command targets macOS. Source compilation and retained release records describe what was built and delivered; no device-level test is included.
+- **Platforms and evidence:** native platforms remain `darwin-arm64` and `linux-amd64`; object API recovery targets macOS. Recovery retains its source and destination roots, copier digest, copy output, destination snapshot, and final transition state.
 
 ## 0.16.4
 
