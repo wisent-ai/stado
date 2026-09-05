@@ -694,9 +694,14 @@ pub async fn build_caches(
 }
 fn print_report(
     report: &crate::deploy::host_gui_automation::GuiAutomationReport,
+    json: bool,
 ) -> Result<(), CmdError> {
-    for (item, state) in &report.items {
-        println!("{}\t{item}\t{state}", report.target);
+    if json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+    } else {
+        for (item, state) in &report.items {
+            println!("{}\t{item}\t{state}", report.target);
+        }
     }
     match &report.error {
         Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())),
@@ -711,7 +716,7 @@ pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
 /// `stado host gui-automation enable TARGET` — configure persistent GUI login,
@@ -728,7 +733,7 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
         })?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
 /// `stado host gui-automation grant-accessibility TARGET [--apple-only]` —
@@ -736,12 +741,14 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
 pub async fn gui_automation_grant_accessibility(
     target: &str,
     apple_only: bool,
+    json: bool,
 ) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let report =
-        crate::deploy::host_gui_automation::grant_accessibility(&resolved, apple_only, &runner).await;
-    print_report(&report)
+        crate::deploy::host_gui_automation::grant_accessibility(&resolved, apple_only, &runner)
+            .await;
+    print_report(&report, json)
 }
 
 /// `stado host gui-automation disable TARGET [--bundle ID]` — revert the
@@ -750,7 +757,7 @@ pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), Cm
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
 /// Read one line with terminal echo disabled (Python

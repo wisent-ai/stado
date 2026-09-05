@@ -41,7 +41,7 @@ const CUA_DRIVER_RUNTIME_LABEL: &str = "com.wisent.probierz-cua-driver";
 const LEGACY_CUA_DRIVER_RUNTIME_LABEL: &str =
     "com.wisent.compute.service.com.wisent.probierz-cua-driver";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct GuiAutomationReport {
     pub target: String,
     pub ssh_target: String,
@@ -1462,6 +1462,10 @@ async fn grant_accessibility_inner(
     if let Some(identity) = identity {
         items.push(("accessibility".to_string(), "granted".to_string()));
         items.push(("accessibility-client".to_string(), identity.bundle));
+    }
+    if apple_only {
+        preflight_apple_challenge(target, &user, runner).await?;
+        items.push(("apple-challenge-ready".to_string(), "yes".to_string()));
     }
     items.push((
         "apple-challenge-accessibility".to_string(),

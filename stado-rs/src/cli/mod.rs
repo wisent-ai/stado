@@ -2696,6 +2696,9 @@ enum HostGuiAutomationCommands {
         /// Accessibility grants, and its runtime unchanged.
         #[arg(long)]
         apple_only: bool,
+        /// Return the complete preparation report, including partial work on failure.
+        #[arg(long)]
+        json: bool,
     },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
@@ -3229,7 +3232,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
                 target,
                 apple_only,
-            }) => host::gui_automation_grant_accessibility(&target, apple_only).await,
+                json,
+            }) => host::gui_automation_grant_accessibility(&target, apple_only, json).await,
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }

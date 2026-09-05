@@ -43,6 +43,7 @@ struct HostsView: View {
     /// Read on demand for the selected host: what that machine dials for each
     /// service, and whether the fleet declares that address.
     @StateObject private var forwardStore = HostForwardStore()
+    @StateObject private var appleChallengeStore = AppleChallengePreparationStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -458,6 +459,7 @@ struct HostsView: View {
             ) {
                 gateSection(for: host)
                 linkSection(for: host)
+                appleChallengeSection(for: host)
                 cargoInventorySection(for: host)
                 if host.status != .live {
                     WisentAlertPanel(
@@ -531,6 +533,50 @@ struct HostsView: View {
                 .foregroundStyle(WisentDesign.secondary)
         } else {
             WisentField(label: "Canonical registry", value: "Not configured")
+        }
+    }
+
+    @ViewBuilder
+    private func appleChallengeSection(for host: WorkerNode) -> some View {
+        let target = host.targetName ?? host.displayName
+        WisentSectionBox(
+            title: "Apple code capture",
+            detail: "Prepares the signed Apple helper in the registry-bound macOS session. It leaves CuaDriver unchanged and does not sign in to Apple."
+        ) {
+            WisentField(
+                label: "Command",
+                value: StadoCLI.commandLine(AppleChallengePreparationStore.arguments(host: target))
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Prepare Apple code capture",
+                    symbol: "key",
+                    isEnabled: !appleChallengeStore.mutation.isWorking
+                ) {
+                    Task { await appleChallengeStore.prepare(host: target) }
+                }
+            )
+            if appleChallengeStore.host == target {
+                WisentMutationBar(outcome: appleChallengeStore.mutation) {
+                    appleChallengeStore.clearMutation()
+                }
+                if let receipt = appleChallengeStore.receipt {
+                    WisentField(label: "Reported host", value: receipt.target)
+                    WisentField(label: "Host-control destination", value: receipt.sshTarget)
+                    ForEach(receipt.items.indices, id: \.self) { index in
+                        Text(receipt.items[index].joined(separator: ": "))
+                            .font(WisentTypeScale.body())
+                            .textSelection(.enabled)
+                    }
+                    if let error = receipt.error {
+                        WisentAlertPanel(
+                            tone: .warning,
+                            title: "Apple code capture was not prepared",
+                            detail: error
+                        )
+                    }
+                }
+            }
         }
     }
 

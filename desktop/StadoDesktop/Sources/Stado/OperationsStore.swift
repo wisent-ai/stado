@@ -1830,3 +1830,57 @@ final class ReleaseEvidenceStore: ObservableObject {
         return error.localizedDescription
     }
 }
+
+struct AppleChallengePreparationReceipt: Decodable, Sendable {
+    let target: String
+    let sshTarget: String
+    let items: [[String]]
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case target, items, error
+        case sshTarget = "ssh_target"
+    }
+}
+
+@MainActor
+final class AppleChallengePreparationStore: ObservableObject {
+    @Published private(set) var host: String?
+    @Published private(set) var receipt: AppleChallengePreparationReceipt?
+    @Published private(set) var mutation: WisentMutationOutcome = .idle
+
+    private let cli: StadoCLI
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    nonisolated static func arguments(host: String) -> [String] {
+        ["host", "gui-automation", "grant-accessibility", host, "--apple-only", "--json"]
+    }
+
+    func prepare(host: String) async {
+        guard !mutation.isWorking else { return }
+        self.host = host
+        receipt = nil
+        mutation = .working("Preparing Apple code capture on \(host)")
+        do {
+            let result = try await cli.jsonResult(
+                AppleChallengePreparationReceipt.self,
+                arguments: Self.arguments(host: host),
+                timeoutSeconds: nil
+            )
+            receipt = result.value
+            mutation = result.exitCode == 0
+                ? .succeeded("Apple code capture is ready on \(result.value.target)")
+                : .failed(result.value.error ?? "stado exited \(result.exitCode).")
+        } catch {
+            mutation = .failed(error.localizedDescription)
+        }
+    }
+
+    func clearMutation() {
+        guard !mutation.isWorking else { return }
+        mutation = .idle
+    }
+}
