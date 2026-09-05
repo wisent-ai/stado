@@ -3061,8 +3061,9 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 }
 
 /// `stado host inventory TARGET [--json]` — the stado-managed binaries,
-/// forward markers and loopback listeners of TARGET, and the verdict on
-/// whether each marker still matches a live listener.
+/// fixed Cargo-home metadata and bin membership, forward markers and loopback
+/// listeners of TARGET, and the verdict on whether each marker still matches
+/// a live listener.
 ///
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
@@ -3665,6 +3666,91 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect::<Vec<Vec<String>>>(),
+    );
+
+    // The fixed Cargo paths and their children are part of the same typed
+    // report in JSON and text. Keeping the table here avoids a second
+    // filesystem reader that could drift from the JSON document.
+    let cargo = report.get("cargo").and_then(Value::as_object);
+    let cargo_roots = [("$HOME/.cargo", "home"), ("$HOME/.cargo/bin", "bin")]
+        .iter()
+        .filter_map(|(path, key)| {
+            cargo.and_then(|value| value.get(*key)).map(|metadata| {
+                vec![
+                    (*path).to_string(),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+        })
+        .collect::<Vec<Vec<String>>>();
+    super::table::print(
+        &[
+            "CARGO PATH",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_roots,
+    );
+    let cargo_entries = cargo
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    super::table::print(
+        &[
+            "CARGO BIN ENTRY",
+            "NAME STATE",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_entries
+            .iter()
+            .map(|metadata| {
+                vec![
+                    cell(metadata.get("name")),
+                    cell(metadata.get("name_state")),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+    println!(
+        "Cargo bin membership: state={} listed={} seen={} entries_complete={} complete={}",
+        cell(cargo.and_then(|value| value.get("entries_state"))),
+        cargo_entries.len(),
+        cell(cargo.and_then(|value| value.get("entries_seen"))),
+        cell(cargo.and_then(|value| value.get("entries_complete"))),
+        cell(cargo.and_then(|value| value.get("complete"))),
     );
 
     let markers = section("forwards");
@@ -8303,18 +8389,44 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The fixed-script channel transports the checked-in helper verbatim. Its
-/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation; object recovery itself mutates only a listener whose
-/// authenticated protected read is unavailable.
+/// Storage authority changes belong to the resident storage-root transaction.
+/// This narrower repair shares its lock and never copies a backing store.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let script = format!(
+        r#"set -eu
+/usr/bin/python3 - <<'PY'
+import base64, fcntl, os, subprocess, sys
+work = os.path.join(os.path.expanduser("~"), ".stado", "recovery")
+os.makedirs(work, mode=0o700, exist_ok=True)
+descriptor = os.open(
+    os.path.join(work, "storage-root-reconcile.lock"),
+    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+    0o600,
+)
+with os.fdopen(descriptor, "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("storage authority recovery is already running on this host")
+    result = subprocess.run(
+        ["/bin/bash"],
+        input=base64.b64decode("{}"),
+        pass_fds=(lock.fileno(),),
+        check=False,
+    )
+    sys.exit(result.returncode)
+PY"#,
+        STANDARD.encode(include_str!("../../../deploy/recover_object_api.sh")),
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
-        include_str!("../../../deploy/recover_object_api.sh"),
-        std::time::Duration::from_secs(240),
+        &script,
+        std::time::Duration::from_secs(300),
         runner,
     )
     .await
@@ -8516,7 +8628,7 @@ pub async fn unit_log(
     // The unit id becomes a fixed word in the shared launchd/systemd reader,
     // so reject anything that is not a single safe unit name first.
     vault_word("unit label", unit)?;
-    let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
+    let lines = lines.unwrap_or(40).clamp(u32::from(true), 200_000);
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

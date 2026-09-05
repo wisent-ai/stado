@@ -59,6 +59,7 @@ enum OperationsClientError: LocalizedError, Sendable {
     case server(Int)
     case responseTooLarge
     case malformedState
+    case malformedInventory
 
     var errorDescription: String? {
         switch self {
@@ -69,9 +70,11 @@ enum OperationsClientError: LocalizedError, Sendable {
         case let .server(status):
             "The Stado dashboard returned HTTP \(status)."
         case .responseTooLarge:
-            "The Stado state response exceeded the safe display limit."
+            "The Stado dashboard response exceeded the safe display limit."
         case .malformedState:
             "The Stado dashboard state does not match the supported interface."
+        case .malformedInventory:
+            "The Stado host inventory does not match the supported interface."
         }
     }
 }
@@ -94,14 +97,62 @@ actor OperationsClient {
         from address: OperationsDashboardAddress,
         authorizationToken: String? = nil
     ) async throws -> DashboardSnapshot {
-        var request = URLRequest(url: address.stateURL)
+        let data = try await payload(
+            from: address.stateURL,
+            authorizationToken: authorizationToken
+        )
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        do {
+            return try decoder.decode(DashboardSnapshot.self, from: data)
+        } catch {
+            throw OperationsClientError.malformedState
+        }
+    }
+
+    func fetchHostInventory(
+        target: String,
+        from address: OperationsDashboardAddress,
+        authorizationToken: String? = nil
+    ) async throws -> HostInventoryReport {
+        guard var components = URLComponents(
+            url: address.endpoint("api/host/inventory"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw OperationsClientError.invalidResponse
+        }
+        components.queryItems = [URLQueryItem(name: "target", value: target)]
+        guard let url = components.url else {
+            throw OperationsClientError.invalidResponse
+        }
+        let data = try await payload(
+            from: url,
+            authorizationToken: authorizationToken,
+            timeoutInterval: 120
+        )
+        do {
+            return try JSONDecoder().decode(HostInventoryReport.self, from: data)
+        } catch {
+            throw OperationsClientError.malformedInventory
+        }
+    }
+
+    private func payload(
+        from url: URL,
+        authorizationToken: String?,
+        timeoutInterval: TimeInterval? = nil
+    ) async throws -> Data {
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let timeoutInterval {
+            request.timeoutInterval = timeoutInterval
+        }
         if let authorizationToken, !authorizationToken.isEmpty {
             request.setValue("Bearer \(authorizationToken)", forHTTPHeaderField: "Authorization")
         }
-
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw OperationsClientError.invalidResponse
@@ -112,13 +163,6 @@ actor OperationsClient {
         guard data.count <= maximumResponseBytes else {
             throw OperationsClientError.responseTooLarge
         }
-
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        do {
-            return try decoder.decode(DashboardSnapshot.self, from: data)
-        } catch {
-            throw OperationsClientError.malformedState
-        }
+        return data
     }
 }

@@ -10,6 +10,7 @@
 //! GET /api/object/stat?uri=stado://... - product object metadata
 //! POST /api/object/compose - atomically publish verified object chunks
 //! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
+//! GET /api/host/inventory?target=... - authenticated fresh inventory of one declared host
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
 //! GET /api/machine/status?job_id=... - read canonical machine status
@@ -1287,17 +1288,7 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "put",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(None) => {}
@@ -1388,6 +1379,12 @@ impl Dashboard {
                 &json!({
                     "degraded": degraded,
                     "boundaries": boundaries,
+                    "storage": {
+                        "pid": std::process::id(),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "backend": self.store.backend_name(),
+                        "local_path": self.store.local_storage_path(),
+                    },
                 }),
             );
         }
@@ -1449,9 +1446,7 @@ impl Dashboard {
                 let listing = list && namespace != "system";
                 authorize_release(self, request, &policy_key, listing).await
             } else {
-                object_decision(
-                    authorize_object(self, request, &namespace, &key_or_prefix, list, action).await,
-                )
+                authorize_object(self, request, &namespace, &key_or_prefix, list, action).await
             };
             match authorized {
                 Ok(None) => {}
@@ -1469,8 +1464,8 @@ impl Dashboard {
                 }
             }
         } else {
-            // At most one of these two paths matches, so at most one boundary
-            // is ever revalidated here.
+            // At most one of these paths matches, so at most one boundary is
+            // ever consulted here.
             if path_no_query == "/api/service/status"
                 && !self.boundaries_available(&[Boundary::Service]).await
             {
@@ -1486,6 +1481,17 @@ impl Dashboard {
                     "AUTH_UNAVAILABLE",
                     "machine authorization unavailable",
                 )));
+            }
+            if path_no_query == "/api/host/inventory" {
+                if !self.boundaries_available(&[Boundary::Registry]).await {
+                    return send_json(
+                        http_status("503"),
+                        &json!({"error": "registry authorization unavailable"}),
+                    );
+                }
+                if let Err(response) = registry_policy::authorized(request, "policy-read").await {
+                    return response;
+                }
             }
             if path_no_query == "/api/service/status" {
                 let query = request
@@ -1526,6 +1532,26 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
+        if path == "/api/host/inventory" {
+            let target = match host_inventory_target(query) {
+                Ok(target) => target,
+                Err(response) => return Ok(response),
+            };
+            let runner = crate::deploy::production_runner();
+            return Ok(
+                match crate::deploy::host_inventory::inventory_host(&target, &runner).await {
+                    Ok(report) => send_json(http_status("200"), &report),
+                    Err(error) => send_json(
+                        http_status("503"),
+                        &json!({
+                            "target": target,
+                            "status": crate::deploy::host_channel::FAILED_STATUS,
+                            "error": error.to_string(),
+                        }),
+                    ),
+                },
+            );
+        }
         if path == "/api/release/object" {
             // Public read-only release channel. This dashboard route is the
             // store's delivery endpoint; an operator-owned TLS reverse proxy
@@ -2298,17 +2324,7 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "put",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(None) => {}
@@ -2661,17 +2677,7 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "put",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(None) => {}
@@ -2730,17 +2736,7 @@ impl Dashboard {
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "delete",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "delete").await
         };
         match authorized {
             Ok(None) => {}
@@ -3352,6 +3348,21 @@ fn query_value(values: &[(String, String)], name: &str) -> Option<String> {
         .map(|(_, value)| value.clone())
 }
 
+/// One canonical registry target and no other query authority.
+///
+/// The handler resolves this name through [`crate::deploy::host_inventory::inventory_host`];
+/// it never becomes an SSH address supplied directly by the client.
+fn host_inventory_target(query: &str) -> Result<String, Response> {
+    let values = parse_qs(query);
+    if values.len() != 1 || values[0].0 != "target" || values[0].1.is_empty() {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "exactly one non-empty target is required"}),
+        ));
+    }
+    Ok(values[0].1.clone())
+}
+
 fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Response> {
     let values = parse_qs(query);
     let uri = query_value(&values, "uri").unwrap_or_default();
@@ -3645,6 +3656,17 @@ async fn authorize_host_health(dashboard: &Dashboard, request: &Request) -> Resu
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
 }
 
+/// Authorize one object request against the namespace that declares it, and
+/// say which of the four faults refused it.
+///
+/// [`ReleaseRefusal`] already learned this lesson on the release route: one
+/// code for every refusal cost a day, because "no declaration", "key outside
+/// the declared prefixes", "no bearer at all" and "the wrong bearer" need
+/// opposite repairs and read identically. The object route kept collapsing
+/// them, and on 2026-09-05 it answered `object_grant_does_not_cover_key` for
+/// `stado://spis-crawls/runs/…` on a host whose configuration declares
+/// `runs/` with `get` — so the message named the one cause that was not
+/// true, and the real one had to be found by excluding hypotheses again.
 async fn authorize_object(
     dashboard: &Dashboard,
     request: &Request,
@@ -3652,10 +3674,10 @@ async fn authorize_object(
     key_or_prefix: &str,
     list: bool,
     action: &str,
-) -> Result<bool, ()> {
+) -> ObjectDecision {
     let namespaces = config::object_api_namespaces().map_err(|_| ())?;
     let Some(policy) = namespaces.get(namespace) else {
-        return Ok(false);
+        return Ok(Some("no_namespace_declared"));
     };
     let in_scope = if list {
         policy
@@ -3665,12 +3687,18 @@ async fn authorize_object(
         policy.allows_object_action(key_or_prefix, action)
     };
     if !in_scope {
-        return Ok(false);
+        return Ok(Some("object_grant_does_not_cover_key"));
     }
     let expected = dashboard.object_token(namespace, policy.item()).await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
-    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-    Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
+    let Some(supplied) = authorization.strip_prefix("Bearer ") else {
+        return Ok(Some("no_bearer_presented"));
+    };
+    if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
+        Ok(None)
+    } else {
+        Ok(Some("bearer_does_not_match_namespace_item"))
+    }
 }
 
 /// Why one release request was refused, as a stable code an operator can act
@@ -3712,17 +3740,6 @@ impl ReleaseRefusal {
 /// The decision one object request reached: `None` authorized, `Some(code)`
 /// refused with a reason, `Err(())` the authority could not be consulted.
 type ObjectDecision = Result<Option<&'static str>, ()>;
-
-/// A plain boolean authorization, given the shape [`ObjectDecision`] wants.
-fn object_decision(authorized: Result<bool, ()>) -> ObjectDecision {
-    authorized.map(|allowed| {
-        if allowed {
-            None
-        } else {
-            Some("object_grant_does_not_cover_key")
-        }
-    })
-}
 
 /// Authenticate one immutable release publisher after resolving the exact
 /// product prefix, and say why when it refuses.

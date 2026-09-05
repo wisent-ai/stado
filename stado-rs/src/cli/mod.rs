@@ -2239,8 +2239,9 @@ enum HostCommands {
         /// Local renderer to deliver and run.
         source: String,
     },
-    /// Report TARGET's stado-managed binaries, forward markers and loopback
-    /// listeners, and whether each marker still matches a live listener.
+    /// Report TARGET's stado-managed binaries, fixed Cargo-home metadata and
+    /// bin membership, forward markers and loopback listeners, and whether
+    /// each marker still matches a live listener.
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.

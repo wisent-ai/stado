@@ -3619,7 +3619,7 @@ const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
     printf 'STADO_LOG\\t%s\\n' \"$log\"
-    /usr/bin/tail -n @OUT_LINES@ \"$log\"
+    /usr/bin/tail -c @MAX_BYTES@ \"$log\" | /usr/bin/tail -n @OUT_LINES@
   else
     say 'missing_log' \"$log\"
   fi
@@ -3627,7 +3627,7 @@ const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     printf 'STADO_ERR\\t%s\\n' 'absent in plist'
   elif [ -s \"$err_log\" ]; then
     printf 'STADO_ERR\\t%s\\n' \"$err_log\"
-    /usr/bin/tail -n @ERR_LINES@ \"$err_log\"
+    /usr/bin/tail -c @MAX_BYTES@ \"$err_log\" | /usr/bin/tail -n @ERR_LINES@
   else
     printf 'STADO_ERR\\t%s\\n' \"$err_log (empty)\"
   fi
@@ -8522,6 +8522,14 @@ pub async fn tail_logs(
     tail_unit_logs(target, service.unit_id(), &service.path, lines, runner).await
 }
 
+/// The most log bytes one read may pull across the host channel.
+///
+/// A cap in lines cannot bound a transfer and cannot bound a diagnosis: on
+/// 2026-09-05 `stado host unit-log … --lines 40000` returned 500 lines of the
+/// object API's request log, which covered a few minutes, and an event at
+/// 13:17 was already unreadable at 14:10. Bytes bound the transfer honestly.
+pub const LOG_WINDOW_BYTES: usize = 4 * 1024 * 1024;
+
 /// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
 /// whose caller names a unit the registry may never have declared, so the
 /// plist search falls to the remote prelude's LaunchAgents/LaunchDaemons
@@ -8541,7 +8549,13 @@ pub async fn tail_unit_logs(
     let body = LOGS_BODY
         .replace("@LINES@", &shlex_quote(&lines.to_string()))
         .replace("@OUT_LINES@", &shlex_quote(&out_lines.to_string()))
-        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()));
+        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()))
+        // Bounded by bytes, not by trust in the line count: a unit that
+        // writes a request per line fills any line budget in minutes, and a
+        // reader who asks for more lines than the host hands back cannot tell
+        // a quiet unit from a truncated window. 4 MiB is the ceiling on what
+        // crosses the channel; the line count still selects within it.
+        .replace("@MAX_BYTES@", &shlex_quote(&LOG_WINDOW_BYTES.to_string()));
     let script = remote_script(unit_id, "", path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {

@@ -3976,8 +3976,18 @@ async fn objects(args: &StorageObjectsArgs) -> Result<(), CmdError> {
 async fn abort_upload(args: &StorageAbortUploadArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
     let prefix = format!("{}.__stado_upload/", object.key());
+    // Which reader answered, reported beside the count. An empty answer and
+    // "there are no parts" are not the same fact: the object API's list route
+    // is publisher-scoped for release-governed prefixes, so a caller without
+    // that publisher's credential is told nothing and would read it as
+    // nothing to do. On 2026-09-05 that is exactly what happened - this
+    // command reported `parts: 0` from one workstation while nineteen parts,
+    // 59,768,832 bytes, were still on the store, and the same command run
+    // with the publisher's credential listed every one of them.
+    let mut listed_via = "local backend";
     let parts =
         if let Some(remote) = RemoteObjectApi::configured_for_list(object.namespace(), &prefix)? {
+            listed_via = "object API list route, publisher-scoped for release prefixes";
             remote.list(object.namespace(), &prefix).await?
         } else {
             let storage_prefix =
@@ -4025,13 +4035,27 @@ async fn abort_upload(args: &StorageAbortUploadArgs) -> Result<(), CmdError> {
             "uri": object.to_string(),
             "parts": discarded.len(),
             "bytes": bytes,
+            "listed_via": listed_via,
             "part_uris": discarded,
         }))?;
     } else {
         for uri in &discarded {
             println!("{uri}");
         }
-        println!("{state} {} part(s), {bytes} byte(s)", discarded.len());
+        println!(
+            "{state} {} part(s), {bytes} byte(s), listed via {listed_via}",
+            discarded.len()
+        );
+        if discarded.is_empty() {
+            // Said out loud, because the alternative reading of an empty
+            // answer is expensive: parts nobody can see are still bytes on
+            // the store, and only the publisher's own credential can prove
+            // there are none.
+            println!(
+                "no parts were listed; on a release prefix this reader answers only what the \
+                 configured publisher credential may see"
+            );
+        }
     }
     Ok(())
 }
