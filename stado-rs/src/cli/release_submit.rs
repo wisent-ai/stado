@@ -244,6 +244,47 @@ async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
     }
 }
 
+/// Keep the first complete request for an attempt, including its builder.
+/// Capacity can change between publication and submission, or two coordinators
+/// can race. Only placement may differ; the source and recipe must still agree.
+async fn persist_worker_request(
+    store: &JobStorage,
+    path: &str,
+    mut expected: WorkerRequest,
+    saved: Option<(WorkerRequest, Vec<u8>)>,
+) -> Result<(WorkerRequest, Vec<u8>), CmdError> {
+    let (request, bytes) = match saved {
+        Some(saved) => saved,
+        None => {
+            let content = serde_json::to_string(&expected)?;
+            if store
+                .create_text_if_absent(path, &content)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?
+            {
+                return Ok((expected, content.into_bytes()));
+            }
+            let bytes = store
+                .read_bytes(path)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "worker request disappeared after concurrent publication: {path}"
+                    ))
+                })?;
+            (serde_json::from_slice::<WorkerRequest>(&bytes)?, bytes)
+        }
+    };
+    expected.builder.clone_from(&request.builder);
+    if request != expected {
+        return Err(CmdError::click(format!(
+            "saved worker request differs from release source or recipe: {path}"
+        )));
+    }
+    Ok((request, bytes))
+}
+
 fn deployment_receipt_identity(bytes: &[u8]) -> Result<Value, CmdError> {
     let mut receipt: Value = serde_json::from_slice(bytes)?;
     let object = receipt
@@ -784,13 +825,11 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
 
 /// Resolve the consumer id last published by one exact registry target.
 ///
-/// Delivery jobs are the recovery lane that installs a Stado version able to
-/// clear a target's current gate. Requiring the target's general capacity row
-/// to be fresh here deadlocks that lane: a long-running job or disk-pressure
-/// gate can age the row past the scheduler horizon while the agent still has
-/// enough identity to claim the exact pinned delivery. Builders still use
-/// [`builder`] and require fresh capacity without a policy or disk refusal;
-/// a busy builder leaves its build queued until the normal claim gate opens.
+/// Delivery jobs and previously saved worker requests already name their
+/// target. Requiring fresh general capacity here would discard that recorded
+/// placement when a long-running job or disk-pressure gate ages its publication.
+/// New builders still use [`builder`] and require fresh capacity without a
+/// policy or disk refusal; the normal claim gate controls queued execution.
 async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -820,7 +859,7 @@ async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     }
     newest.map(|(consumer, _)| consumer).ok_or_else(|| {
         CmdError::click(format!(
-            "delivery target {target_name} has no retained capacity publication, so its consumer \
+            "recorded target {target_name} has no retained capacity publication, so its consumer \
              identity is unknown; see stado host gates {target_name}"
         ))
     })
@@ -1198,7 +1237,34 @@ async fn enqueue(
         )));
     }
     let recipe = &m.platforms[platform];
-    let (host, consumer) = builder(&recipe.runner_platform).await?;
+    let submission_run_id = match prior_terminal_job_id {
+        Some(prior_job_id) => stable_run_id(
+            "release-platform",
+            &format!("{id}\0{platform}\0{prior_job_id}"),
+        ),
+        None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
+    };
+    let request_leaf = match prior_terminal_job_id {
+        Some(_) => format!("requests/{platform}/attempts/{submission_run_id}.json"),
+        None => format!("requests/{platform}.json"),
+    };
+    let request_path = run_path(&m.product, id, &request_leaf);
+    let uri = run_uri(&m.product, id, &request_leaf);
+    let saved_request = match store
+        .read_bytes(&request_path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        Some(bytes) => Some((serde_json::from_slice::<WorkerRequest>(&bytes)?, bytes)),
+        None => None,
+    };
+    let (builder_name, selected_consumer) = match &saved_request {
+        Some((request, _)) => (request.builder.clone(), None),
+        None => {
+            let (host, consumer) = builder(&recipe.runner_platform).await?;
+            (host.name, Some(consumer))
+        }
+    };
     let mut resolved = Map::new();
     resolved.insert(
         "source".into(),
@@ -1255,7 +1321,7 @@ async fn enqueue(
         product: m.product.clone(),
         version: version.into(),
         platform: platform.into(),
-        builder: host.name.clone(),
+        builder: builder_name.clone(),
         source_commit: commit.into(),
         source_sha256: source_sha.into(),
         manifest_sha256: manifest_sha.into(),
@@ -1264,19 +1330,14 @@ async fn enqueue(
         inputs,
         secret_env: recipe.secret_env.clone(),
     };
-    let bytes = serde_json::to_vec(&request)?;
-    let sha = release_control::sha256_bytes(&bytes);
-    let request_path = run_path(&m.product, id, &format!("requests/{platform}.json"));
-    let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
-    queue_immutable(&request_path, &bytes).await?;
-    resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
-    let submission_run_id = match prior_terminal_job_id {
-        Some(prior_job_id) => stable_run_id(
-            "release-platform",
-            &format!("{id}\0{platform}\0{prior_job_id}"),
-        ),
-        None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
+    let (request, bytes) =
+        persist_worker_request(store, &request_path, request, saved_request).await?;
+    let consumer = match selected_consumer {
+        Some(consumer) if request.builder == builder_name => consumer,
+        _ => target_consumer(&request.builder).await?,
     };
+    let sha = release_control::sha256_bytes(&bytes);
+    resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let output_uri = match prior_terminal_job_id {
         Some(_) => run_uri(
             &m.product,
@@ -1305,7 +1366,7 @@ async fn enqueue(
         .ok_or_else(|| CmdError::click("durable release submission returned no job"))?;
     Ok(PlatformRun {
         platform: platform.into(),
-        builder: host.name,
+        builder: request.builder,
         job_id: job.job_id.clone(),
         output_prefix: format!("status/{}/output/", job.job_id),
         state: PlatformRunState::Submitted,

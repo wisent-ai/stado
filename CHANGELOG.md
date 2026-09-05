@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.28
+
+- **Release request recovery:** resuming an attempt reuses its recorded builder and immutable request bytes rather than selecting a different host from current capacity. Concurrent submissions retain the first request after checking its source and recipe. A retry after a recorded terminal job failure has its own request URI, so it may select a new builder without overwriting an earlier attempt.
+
 ## 0.16.27
 
 - **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.

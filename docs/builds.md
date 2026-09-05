@@ -24,10 +24,14 @@ Before replacing a failed platform attempt, the coordinator reads the original
 job: queued, running, completed, and uploaded jobs keep that identity and their
 existing output. A publication or storage-read failure does not start another
 build.
+The saved worker request also keeps its original builder. A resume does not
+choose another host because available capacity changed. Concurrent coordinators
+use the first published request only after its source and recipe fields agree.
+
 
 Only a job recorded as failed or cancelled receives a retry identity derived
 from the release run, platform, and prior terminal job ID, with its own output
-URI. A crash before or after the replacement platform record is saved therefore
+and worker-request URIs. A crash before or after the replacement platform record is saved therefore
 reuses the same attempt; only another recorded terminal job failure can chain
 to another retry. An unreadable job returns the storage error. A missing job
 returns `release job JOB_ID was not found in recorded states; refusing a replacement without terminal failure`;
