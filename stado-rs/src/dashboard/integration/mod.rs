@@ -5,23 +5,22 @@
 //! actions; this module never accepts a URL, method, provider item, or
 //! credential field from an HTTP request.
 //!
-//! Only the `enterprise` domain is served here. Its four actions are a
-//! read-only projection of the fleet Stado already owns — jobs, capacity
-//! broadcasts, host-health beacons, install beacons — so they stay next to
-//! `JobStorage` instead of contracting on Stado's private blob layout from
-//! another repository. Every other domain proxied a product's provider
-//! credentials (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha) and
-//! now lives in the private `wisent-integrations` service; the route prefix is
-//! unchanged there, so no client had to move.
+//! Stado owns the `enterprise` fleet projection and the `oko` selected-host
+//! dispatch. Oko's two actions run its own fixed transcript source commands on
+//! one canonical host; parsing, adoption, and catalog refresh stay owned by
+//! Oko and Transcript Lake. Every domain that proxies provider credentials
+//! (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha) lives in the private
+//! `wisent-integrations` service.
 
 mod enterprise;
+mod oko;
 
 use serde_json::{json, Value};
 
 use super::{constant_time_eq, http_status, Request, Response};
 
-/// Request body cap. The four `enterprise` actions each take an empty `{}`
-/// body, so the router's default cap is the only one this boundary needs.
+/// Request body cap. Enterprise takes `{}` and Oko takes one host, runtime,
+/// and already-discovered absolute root.
 const REQUEST_BODY_LIMIT: &str = "32768";
 
 /// Response body cap for `("enterprise", _)`. The fleet projections carry
@@ -54,6 +53,7 @@ pub(super) type HandlerResult = Result<Value, HandlerError>;
 fn supports(domain: &str, action: &str) -> bool {
     match domain {
         "enterprise" => enterprise::supports(action),
+        "oko" => oko::supports(action),
 
         _ => false,
     }
@@ -92,6 +92,7 @@ async fn dispatch(
 ) -> HandlerResult {
     match domain {
         "enterprise" => enterprise::handle(action, body, store).await,
+        "oko" => oko::handle(action, body).await,
 
         _ => Err(HandlerError::BadRequest),
     }

@@ -1068,6 +1068,16 @@ static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .to_string_lossy()
     .into_owned()
 });
+/// The vault this machine's owner writes go through, declared rather than
+/// discovered. Empty means "discover", which is correct on a host holding one
+/// vault and refused on a host holding two under one owner.
+static SKARBIEC_VAULT_FILE: LazyLock<String> = LazyLock::new(|| {
+    let declared = cfg("SKARBIEC_VAULT_FILE", "secrets.skarbiec.vault_file", "");
+    if declared.trim().is_empty() {
+        return String::new();
+    }
+    expand_tilde(declared.trim()).to_string_lossy().into_owned()
+});
 static AGENT_SKARBIEC_URL: LazyLock<String> =
     LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
 static AGENT_SKARBIEC_CONSUMER: LazyLock<String> =
@@ -1928,12 +1938,17 @@ pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 /// Actions a registry-API client may be granted.
 ///
 /// `policy-read` and `cleanup-read` answer questions; `policy-write` rewrites
-/// one target's whitelisted policy fields and `cleanup-run` asks the local
-/// janitor for a pass. They are separate because reading a fleet's policy and
-/// rewriting it are not the same authority, and the desktop app asks for them
-/// with separate requests.
-pub const REGISTRY_API_ACTIONS: &[&str] =
-    &["cleanup-read", "cleanup-run", "policy-read", "policy-write"];
+/// one target's whitelisted policy fields, `cleanup-run` asks the local
+/// janitor for a pass, and `registry-import` additively adopts a complete
+/// registry-v2 document. They are separate because reading policy, rewriting
+/// policy, running cleanup, and importing declarations are distinct authority.
+pub const REGISTRY_API_ACTIONS: &[&str] = &[
+    "cleanup-read",
+    "cleanup-run",
+    "policy-read",
+    "policy-write",
+    "registry-import",
+];
 
 /// One client authorized against the registry-policy boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3927,6 +3942,11 @@ pub fn skarbiec_consumer() -> &'static str {
 /// Owner-only file containing the scoped Skarbiec grant.
 pub fn skarbiec_token_file() -> &'static str {
     SKARBIEC_TOKEN_FILE.as_str()
+}
+
+/// The declared owner vault on this machine, empty when nothing declares one.
+pub fn skarbiec_vault_file() -> &'static str {
+    SKARBIEC_VAULT_FILE.as_str()
 }
 
 /// Exact private product namespace policies accepted by the object gateway.

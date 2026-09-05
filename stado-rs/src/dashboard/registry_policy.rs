@@ -1,5 +1,5 @@
-//! The four routes Stado Desktop calls to read and edit a fleet's cleanup
-//! policy, and to read or run the local janitor.
+//! The registry and cleanup routes Stado Desktop calls to read and edit a
+//! fleet's cleanup policy, run the local janitor, and import registry data.
 //!
 //! They existed only on the client side until 2026-09-02. `CleanupClient` and
 //! `FleetControl` in the desktop app had been written against
@@ -171,6 +171,39 @@ pub(super) async fn get_policy() -> Response {
         http_status("200"),
         &json!({"generation": current.version, "targets": targets}),
     )
+}
+/// `POST /api/registry/import`
+///
+/// The body is the existing registry-v2 document itself, not an envelope, so
+/// every caller feeds the exact same bytes to the product-owned import
+/// operation. The route reports semantic rejection and conflicts as typed
+/// receipts; operational storage failures remain service failures.
+pub(super) async fn import_registry(request: &Request) -> Response {
+    let content_type = request
+        .header("content-type")
+        .and_then(|value| value.split(';').next())
+        .map(str::trim);
+    if !matches!(content_type, Some(value) if value.eq_ignore_ascii_case("application/json")) {
+        return send_json(
+            http_status("415"),
+            &json!({"error": "registry import requires Content-Type: application/json"}),
+        );
+    }
+    match crate::registry_import::import_bytes(&request.body).await {
+        Ok(receipt) => {
+            let status = match receipt.state.as_str() {
+                "imported" | "unchanged" => "200",
+                "conflict" => "409",
+                "rejected" => "400",
+                _ => "500",
+            };
+            send_json(http_status(status), &json!(receipt))
+        }
+        Err(error) => send_json(
+            http_status("503"),
+            &json!({"error": format!("registry import unavailable: {error}")}),
+        ),
+    }
 }
 
 /// `POST /api/registry/policy`

@@ -18,7 +18,9 @@
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
-//! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
+//! POST /api/registry/import - additive canonical registry adoption
+//! POST /api/integration/enterprise/<action> - authenticated fleet projection
+//! POST /api/integration/oko/<action> - authenticated finite Oko selected-host dispatch
 //! POST /api/operator/run - bounded native Desktop operator actions
 //! GET /api/fleet/invite/key - invite-token-authenticated public channel key
 //! POST /api/fleet/join - invite-token-authenticated pending enrollment request
@@ -161,7 +163,7 @@ impl Boundary {
             Boundary::RateLimitVerifier | Boundary::RateLimitState => "/api/rate-limit/consume",
             Boundary::Integration => "the integration routes",
             Boundary::Registry => {
-                "/api/registry.json, /api/registry/policy, /api/cleanup.json, /api/cleanup/run"
+                "/api/registry.json, /api/registry/policy, /api/registry/import, /api/cleanup.json, /api/cleanup/run"
             }
         }
     }
@@ -1319,6 +1321,15 @@ impl Dashboard {
         None
     }
 
+    fn storage_write_guard(&self) -> Result<Option<std::fs::File>, StorageError> {
+        match self.store.local_storage_path() {
+            Some(root) => {
+                crate::queue::LocalBackend::write_guard_for_root(std::path::Path::new(root))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
         // The immutable release channel is the recovery root for every other
@@ -1328,11 +1339,7 @@ impl Dashboard {
         if path_no_query == "/api/release/object" {
             return match self.get_routes(request).await {
                 Ok(response) => response,
-                Err(_) => Response::text(
-                    http_status("500"),
-                    "Internal Server Error",
-                    "dashboard error",
-                ),
+                Err(error) => dashboard_error_response(error),
             };
         }
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
@@ -1385,6 +1392,14 @@ impl Dashboard {
                     .expect("dashboard boundary state lock");
                 (!boundaries.all_ready(), boundaries.state_json())
             };
+            let write_fence = self
+                .store
+                .local_storage_path()
+                .filter(|_| self.store.backend_name() == "local")
+                .map(|root| {
+                    crate::queue::LocalBackend::write_fence_state(std::path::Path::new(root))
+                        .unwrap_or_else(|error| json!({"error": error.to_string()}))
+                });
             return send_json(
                 http_status("200"),
                 &json!({
@@ -1395,6 +1410,13 @@ impl Dashboard {
                         "version": env!("CARGO_PKG_VERSION"),
                         "backend": self.store.backend_name(),
                         "local_path": self.store.local_storage_path(),
+                        "write_fence": write_fence,
+                        "backup": self.store.backup_endpoint().map(|endpoint| json!({
+                            "backend": endpoint.kind,
+                            "local_path": (endpoint.adapter()
+                                == Some(crate::capabilities::StorageAdapter::Local))
+                                .then_some(endpoint.path.as_str()),
+                        })),
                     },
                 }),
             );
@@ -1530,11 +1552,7 @@ impl Dashboard {
         }
         match self.get_routes(request).await {
             Ok(response) => response,
-            Err(_) => Response::text(
-                http_status("500"),
-                "Internal Server Error",
-                "dashboard error",
-            ),
+            Err(error) => dashboard_error_response(error),
         }
     }
 
@@ -2353,6 +2371,12 @@ impl Dashboard {
             }
         }
 
+        // Hold across publication, metadata, mirror writes and chunk cleanup:
+        // a handoff must not capture half of an accepted composition.
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         let mut staged = match tempfile::NamedTempFile::new() {
             Ok(staged) => staged,
             Err(error) => return object_compose_error(http_status("500"), error.to_string()),
@@ -2608,28 +2632,31 @@ impl Dashboard {
         if path == "/api/rate-limit/consume" {
             return self.post_rate_limit_consume(request).await;
         }
-        // Registry-policy writes and janitor runs. Gated on their own
-        // boundary, so a deployment that has declared no client refuses them
-        // with 401 while every other route on this listener is unaffected.
-        if matches!(path, "/api/registry/policy" | "/api/cleanup/run") {
+        // Registry imports, policy writes, and janitor runs are gated on their
+        // own actions. A deployment that grants policy editing does not thereby
+        // grant adoption of an arbitrary registry document.
+        if matches!(
+            path,
+            "/api/registry/import" | "/api/registry/policy" | "/api/cleanup/run"
+        ) {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
                     http_status("503"),
                     &json!({"error": "registry authorization unavailable"}),
                 );
             }
-            let action = if path == "/api/registry/policy" {
-                "policy-write"
-            } else {
-                "cleanup-run"
+            let action = match path {
+                "/api/registry/import" => "registry-import",
+                "/api/registry/policy" => "policy-write",
+                _ => "cleanup-run",
             };
             if let Err(response) = registry_policy::authorized(request, action).await {
                 return response;
             }
-            return if path == "/api/registry/policy" {
-                registry_policy::set_policy(request).await
-            } else {
-                registry_policy::run_cleanup().await
+            return match path {
+                "/api/registry/import" => registry_policy::import_registry(request).await,
+                "/api/registry/policy" => registry_policy::set_policy(request).await,
+                _ => registry_policy::run_cleanup().await,
             };
         }
         if control_route {
@@ -2724,9 +2751,13 @@ impl Dashboard {
                 )
             }
         }
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         match self.put_object(request, &object, query).await {
             Ok(response) => response,
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => dashboard_error_response(error),
         }
     }
 
@@ -2791,13 +2822,17 @@ impl Dashboard {
                 )
             }
         }
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         let result = self.store.delete_blob(&object.storage_path()).await;
         match result {
             Ok(()) => send_json(
                 http_status("200"),
                 &json!({"state": "absent", "uri": object.to_string()}),
             ),
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => storage_error_response(error),
         }
     }
 
@@ -2885,7 +2920,7 @@ impl Dashboard {
                 http_status("200"),
                 &json!({"state": "stored", "host": host, "path": path}),
             ),
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => storage_error_response(error),
         }
     }
 
@@ -2930,6 +2965,9 @@ pub async fn serve(
 
 /// Request head cap (Python's http.server parses a similar 64 KiB budget).
 const MAX_HEAD_BYTES: usize = 65536;
+/// Desktop and API imports are bounded independently from ordinary JSON
+/// controls; the CLI reads local files directly and has no transport envelope.
+const MAX_REGISTRY_IMPORT_BYTES: usize = 2 * 1024 * 1024;
 
 static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -3067,14 +3105,19 @@ async fn read_request(
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
     let object_put = method == "PUT" && path.starts_with("/api/object?");
+    let registry_import = method == "POST"
+        && path
+            .split_once('?')
+            .map_or(path.as_str(), |(route, _)| route)
+            == "/api/registry/import";
     let content_length = match content_length_header {
         Some(value) => value.parse::<usize>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
         })?,
-        None if object_put => {
+        None if object_put || registry_import => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "object PUT requires Content-Length",
+                "mutating object and registry import requests require Content-Length",
             ));
         }
         None => usize::default(),
@@ -3083,6 +3126,8 @@ async fn read_request(
         crate::object_store::max_object_bytes()
     } else if method == "POST" && path == "/api/operator/run" {
         operator_console::MAX_REQUEST_BYTES
+    } else if registry_import {
+        MAX_REGISTRY_IMPORT_BYTES
     } else {
         MAX_HEAD_BYTES
     };
@@ -3171,13 +3216,11 @@ impl Response {
             200 => "OK",
             401 => "Unauthorized",
             409 => "Conflict",
+            500 => "Internal Server Error",
+            503 => "Service Unavailable",
             _ => "OK",
         };
         Self::new(status, reason, "application/json", body.as_bytes())
-    }
-
-    fn text(status: u16, reason: &str, body: &str) -> Self {
-        Self::new(status, reason, "text/plain; charset=utf-8", body.as_bytes())
     }
 }
 
@@ -3205,6 +3248,28 @@ fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usize)> {
 
 fn http_status(value: &str) -> u16 {
     value.parse().expect("static HTTP status is valid")
+}
+
+fn storage_error_status(error: &StorageError) -> u16 {
+    if matches!(error, StorageError::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock) {
+        http_status("503")
+    } else {
+        http_status("500")
+    }
+}
+
+fn storage_error_response(error: StorageError) -> Response {
+    send_json(
+        storage_error_status(&error),
+        &json!({"error": error.to_string()}),
+    )
+}
+
+fn dashboard_error_response(error: DashboardError) -> Response {
+    match error {
+        DashboardError::Storage(error) => storage_error_response(error),
+        other => send_json(http_status("500"), &json!({"error": other.to_string()})),
+    }
 }
 
 fn empty_response(status: u16, reason: &str) -> Response {
