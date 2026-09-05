@@ -43,7 +43,7 @@
 //! straight through; a bare path is what a cross-addressed pass wrote, and its
 //! primary address is that path inside the configured namespace.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::targets::ComputeTarget;
@@ -59,6 +59,8 @@ const BACKUP_ROOT_MARK: &str = "@BACKUP_ROOT@";
 const PRIMARY_ROOT_MARK: &str = "@PRIMARY_ROOT@";
 /// Marker for exact qualified object paths, encoded as comma-separated hex.
 const OBJECTS_HEX_MARK: &str = "@OBJECTS_HEX@";
+/// Marker for namespace names whose backup-visible object metadata is listed.
+const INVENTORY_NAMESPACES_HEX_MARK: &str = "@INVENTORY_NAMESPACES_HEX@";
 
 /// Proven present in the primary with identical bytes. Only these are safe to
 /// drop.
@@ -136,6 +138,7 @@ STADO_HASH_DEADLINE='@HASH_DEADLINE@' \
 STADO_RECLAIM='@RECLAIM@' \
 STADO_APPLY='@APPLY@' \
 STADO_OBJECTS_HEX='@OBJECTS_HEX@' \
+STADO_INVENTORY_NAMESPACES_HEX='@INVENTORY_NAMESPACES_HEX@' \
 /usr/bin/python3 - <<'STADO_AUDIT_EOF'
 import hashlib, os, stat, sys, time
 backup = os.environ["STADO_BACKUP_ROOT"]
@@ -147,6 +150,11 @@ apply = os.environ["STADO_APPLY"] == "yes"
 selected = [
     bytes.fromhex(value).decode("utf-8")
     for value in os.environ["STADO_OBJECTS_HEX"].split(",")
+    if value
+]
+inventory_namespaces = [
+    bytes.fromhex(value).decode("utf-8")
+    for value in os.environ["STADO_INVENTORY_NAMESPACES_HEX"].split(",")
     if value
 ]
 
@@ -181,6 +189,144 @@ def identity(path):
     except OSError:
         return ("unreadable", str(entry.st_size), "")
 
+def emit_namespaces(label, root):
+    ecosystem = os.path.join(root, "ecosystem")
+    names = []
+    if time.monotonic() >= deadline:
+        out.write("STADO_BACKUP_NAMESPACES_ERROR\t%s\tdeadline exhausted\n" % label)
+        return
+    try:
+        with os.scandir(ecosystem) as entries:
+            names = sorted(
+                entry.name
+                for entry in entries
+                if entry.is_dir(follow_symlinks=False)
+            )
+    except OSError as error:
+        out.write(
+            "STADO_BACKUP_NAMESPACES_ERROR\t%s\t%s\n"
+            % (label, str(error).replace("\t", " ").replace("\n", " "))
+        )
+        return
+    if time.monotonic() >= deadline:
+        out.write("STADO_BACKUP_NAMESPACES_ERROR\t%s\tdeadline exhausted\n" % label)
+        return
+    for name in names:
+        out.write(
+            "STADO_BACKUP_NAMESPACE\t%s\t%s\n"
+            % (label, name.encode("utf-8").hex())
+        )
+    out.write("STADO_BACKUP_NAMESPACES_END\t%s\t%d\n" % (label, len(names)))
+
+emit_namespaces("local_storage", primary)
+emit_namespaces("local_backup", backup)
+
+def metadata_path(root, relative):
+    name = relative if relative.endswith(".json") else relative + ".json"
+    return os.path.join(root, ".metadata", name)
+
+def stat_identity(path):
+    try:
+        entry = os.lstat(path)
+    except FileNotFoundError:
+        return ("absent", "", "")
+    except OSError:
+        return ("unreadable", "", "")
+    if not stat.S_ISREG(entry.st_mode):
+        return ("not_regular", str(entry.st_size), "")
+    return ("present", str(entry.st_size), "")
+
+inventory_complete = True
+def inventory_error(scope, detail):
+    global inventory_complete
+    inventory_complete = False
+    out.write(
+        "STADO_BACKUP_AUDIT_UNAVAILABLE\t%s inventory: %s\n"
+        % (scope, str(detail).replace("\t", " ").replace("\n", " "))
+    )
+
+inventory_timed_out = False
+for scope in inventory_namespaces:
+    if time.monotonic() >= deadline:
+        inventory_error(scope, "deadline exhausted before namespace enumeration")
+        inventory_timed_out = True
+        break
+    backup_scope = os.path.join(backup, "ecosystem", scope)
+    try:
+        scope_entry = os.lstat(backup_scope)
+    except OSError as error:
+        inventory_error(scope, error)
+        continue
+    if not stat.S_ISDIR(scope_entry.st_mode):
+        inventory_error(scope, "backup namespace root is not a directory")
+        continue
+    walk_errors = []
+    def walk_error(error):
+        walk_errors.append(error)
+    for root, dirs, files in os.walk(
+        backup_scope,
+        followlinks=False,
+        onerror=walk_error,
+    ):
+        if time.monotonic() >= deadline:
+            inventory_error(scope, "deadline exhausted during namespace enumeration")
+            inventory_timed_out = True
+            break
+        retained_dirs = []
+        for name in sorted(dirs):
+            directory = os.path.join(root, name)
+            if os.path.islink(directory):
+                inventory_error(scope, "non-directory entry omitted: " + directory)
+            else:
+                retained_dirs.append(name)
+        dirs[:] = retained_dirs
+        for name in sorted(files):
+            if time.monotonic() >= deadline:
+                inventory_error(scope, "deadline exhausted during namespace enumeration")
+                inventory_timed_out = True
+                break
+            path = os.path.join(root, name)
+            relative = os.path.relpath(path, backup)
+            b_state, b_size, _ = stat_identity(path)
+            p_state, p_size, _ = stat_identity(os.path.join(primary, relative))
+            p_meta_state, p_meta_size, _ = stat_identity(metadata_path(primary, relative))
+            b_meta_state, b_meta_size, _ = stat_identity(metadata_path(backup, relative))
+            out.write(
+                "STADO_BACKUP_INVENTORY_OBJECT\t%s\t%s\t%s\t\t%s\t%s\t\t%s\t%s\t\t%s\t%s\t\n"
+                % (
+                    relative.encode("utf-8").hex(),
+                    p_state,
+                    p_size,
+                    b_state,
+                    b_size,
+                    p_meta_state,
+                    p_meta_size,
+                    b_meta_state,
+                    b_meta_size,
+                )
+            )
+            if b_state != "present":
+                inventory_error(scope, "backup object is " + b_state + ": " + relative)
+            for label, state in (
+                ("local-storage object", p_state),
+                ("local-storage metadata", p_meta_state),
+                ("local-backup metadata", b_meta_state),
+            ):
+                if state == "unreadable":
+                    inventory_error(scope, label + " is unreadable: " + relative)
+        if inventory_timed_out:
+            break
+    for error in walk_errors:
+        inventory_error(scope, error)
+    if inventory_timed_out:
+        break
+
+if inventory_namespaces and not selected:
+    if inventory_complete:
+        out.write("STADO_BACKUP_AUDIT_END\tinventory\n")
+    sys.exit(0)
+
+
 if selected:
     for relative in selected:
         normalized = os.path.normpath(relative)
@@ -189,11 +335,28 @@ if selected:
             continue
         p_state, p_size, p_digest = identity(os.path.join(primary, relative))
         b_state, b_size, b_digest = identity(os.path.join(backup, relative))
+        p_meta_state, p_meta_size, p_meta_digest = identity(metadata_path(primary, relative))
+        b_meta_state, b_meta_size, b_meta_digest = identity(metadata_path(backup, relative))
         out.write(
-            "STADO_BACKUP_OBJECT\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
-            % (relative, p_state, p_size, p_digest, b_state, b_size, b_digest)
+            "STADO_BACKUP_OBJECT\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
+            % (
+                relative,
+                p_state,
+                p_size,
+                p_digest,
+                b_state,
+                b_size,
+                b_digest,
+                p_meta_state,
+                p_meta_size,
+                p_meta_digest,
+                b_meta_state,
+                b_meta_size,
+                b_meta_digest,
+            )
         )
-    out.write("STADO_BACKUP_AUDIT_END\texact\n")
+    if inventory_complete:
+        out.write("STADO_BACKUP_AUDIT_END\texact\n")
     sys.exit(0)
 deleted = 0
 deleted_bytes = 0
@@ -285,6 +448,9 @@ pub struct AuditPlan {
     /// Exact namespace-qualified object paths to compare. Empty scans the
     /// replica as before.
     pub objects: Vec<String>,
+    /// Namespaces whose backup-visible object paths and size metadata should be
+    /// listed without reading object bodies.
+    pub inventory_namespaces: Vec<String>,
     /// Also delete the twins this pass proves.
     pub reclaim: bool,
     /// Actually delete. Without it a reclaim names what it would drop and
@@ -315,6 +481,15 @@ pub fn remote_script(plan: &AuditPlan) -> String {
             OBJECTS_HEX_MARK,
             &plan
                 .objects
+                .iter()
+                .map(hex::encode)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .replace(
+            INVENTORY_NAMESPACES_HEX_MARK,
+            &plan
+                .inventory_namespaces
                 .iter()
                 .map(hex::encode)
                 .collect::<Vec<_>>()
@@ -352,6 +527,8 @@ pub struct ObjectComparison {
     pub path: String,
     pub primary: ObjectIdentity,
     pub backup: ObjectIdentity,
+    pub primary_metadata: ObjectIdentity,
+    pub backup_metadata: ObjectIdentity,
 }
 
 /// The whole reading.
@@ -365,6 +542,16 @@ pub struct BackupAudit {
     pub examples: BTreeMap<String, Vec<(u64, String)>>,
     /// Exact primary/backup identities requested by the operator.
     pub objects: Vec<ObjectComparison>,
+    /// Backup-visible paths and size metadata from explicitly selected
+    /// namespaces. SHA-256 is intentionally absent because this inventory does
+    /// not read object bodies.
+    pub inventory_objects: Vec<ObjectComparison>,
+    /// Immediate directory children under each physical root's `ecosystem/`.
+    /// This is metadata-only and proves which API namespaces were considered
+    /// without walking or reading their object bodies.
+    pub namespaces: BTreeMap<String, Vec<String>>,
+    /// True only when both fixed physical roots completed that directory read.
+    pub namespace_inventory_complete: bool,
     /// Set when the host could not be classified at all.
     pub unavailable: Option<String>,
     /// True once the remote program printed its end marker, so a truncated
@@ -410,6 +597,7 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
         host: host.to_string(),
         ..BackupAudit::default()
     };
+    let mut namespace_roots_complete = BTreeSet::new();
     for line in stdout.lines() {
         let mut fields = line.split('\t');
         match fields.next() {
@@ -440,7 +628,19 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                     Some(backup_state),
                     Some(backup_bytes),
                     Some(backup_sha256),
+                    Some(primary_metadata_state),
+                    Some(primary_metadata_bytes),
+                    Some(primary_metadata_sha256),
+                    Some(backup_metadata_state),
+                    Some(backup_metadata_bytes),
+                    Some(backup_metadata_sha256),
                 ) = (
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
                     fields.next(),
                     fields.next(),
                     fields.next(),
@@ -461,7 +661,103 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                     path: path.to_string(),
                     primary: identity(primary_state, primary_bytes, primary_sha256),
                     backup: identity(backup_state, backup_bytes, backup_sha256),
+                    primary_metadata: identity(
+                        primary_metadata_state,
+                        primary_metadata_bytes,
+                        primary_metadata_sha256,
+                    ),
+                    backup_metadata: identity(
+                        backup_metadata_state,
+                        backup_metadata_bytes,
+                        backup_metadata_sha256,
+                    ),
                 });
+            }
+            Some("STADO_BACKUP_INVENTORY_OBJECT") => {
+                let (
+                    Some(encoded_path),
+                    Some(primary_state),
+                    Some(primary_bytes),
+                    Some(primary_sha256),
+                    Some(backup_state),
+                    Some(backup_bytes),
+                    Some(backup_sha256),
+                    Some(primary_metadata_state),
+                    Some(primary_metadata_bytes),
+                    Some(primary_metadata_sha256),
+                    Some(backup_metadata_state),
+                    Some(backup_metadata_bytes),
+                    Some(backup_metadata_sha256),
+                ) = (
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                    fields.next(),
+                )
+                else {
+                    continue;
+                };
+                let Ok(path_bytes) = hex::decode(encoded_path) else {
+                    continue;
+                };
+                let Ok(path) = String::from_utf8(path_bytes) else {
+                    continue;
+                };
+                let identity = |state: &str, bytes: &str, sha256: &str| ObjectIdentity {
+                    state: state.to_string(),
+                    bytes: bytes.parse().ok(),
+                    sha256: (!sha256.is_empty()).then(|| sha256.to_string()),
+                };
+                audit.inventory_objects.push(ObjectComparison {
+                    path,
+                    primary: identity(primary_state, primary_bytes, primary_sha256),
+                    backup: identity(backup_state, backup_bytes, backup_sha256),
+                    primary_metadata: identity(
+                        primary_metadata_state,
+                        primary_metadata_bytes,
+                        primary_metadata_sha256,
+                    ),
+                    backup_metadata: identity(
+                        backup_metadata_state,
+                        backup_metadata_bytes,
+                        backup_metadata_sha256,
+                    ),
+                });
+            }
+            Some("STADO_BACKUP_NAMESPACE") => {
+                let (Some(root), Some(encoded)) = (fields.next(), fields.next()) else {
+                    continue;
+                };
+                let Ok(bytes) = hex::decode(encoded) else {
+                    continue;
+                };
+                let Ok(namespace) = String::from_utf8(bytes) else {
+                    continue;
+                };
+                audit
+                    .namespaces
+                    .entry(root.to_string())
+                    .or_default()
+                    .push(namespace);
+            }
+            Some("STADO_BACKUP_NAMESPACES_END") => {
+                if let Some(root) = fields.next() {
+                    namespace_roots_complete.insert(root.to_string());
+                }
+            }
+            Some("STADO_BACKUP_NAMESPACES_ERROR") => {
+                let root = fields.next().unwrap_or("unknown");
+                let detail = fields.next().unwrap_or("namespace inventory failed");
+                audit.unavailable = Some(format!("{root}: {detail}"));
             }
             Some("STADO_BACKUP_AUDIT_UNAVAILABLE") => {
                 audit.unavailable = fields.next().map(str::to_string);
@@ -504,6 +800,13 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
             _ => {}
         }
     }
+    for namespaces in audit.namespaces.values_mut() {
+        namespaces.sort();
+        namespaces.dedup();
+    }
+    audit.namespace_inventory_complete = ["local_storage", "local_backup"]
+        .iter()
+        .all(|root| namespace_roots_complete.contains(*root));
     audit
 }
 

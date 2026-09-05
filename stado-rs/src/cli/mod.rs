@@ -1934,14 +1934,22 @@ enum HostCommands {
     #[command(name = "backup-audit")]
     BackupAudit {
         target: String,
-        /// Compare only this exact object in the fixed primary and backup roots;
-        /// repeatable. Reports size and SHA-256, never object content.
+        /// Compare only this exact object in the fixed local-storage and
+        /// local-backup roots; repeatable. Reports size and SHA-256, never content.
         #[arg(
             long = "object",
             value_name = "STADO_URI",
             conflicts_with = "reclaim_twins"
         )]
         objects: Vec<String>,
+        /// List backup-visible object paths and size metadata in this exact API
+        /// namespace without reading object bodies; repeatable.
+        #[arg(
+            long = "inventory-namespace",
+            value_name = "NAMESPACE",
+            conflicts_with = "reclaim_twins"
+        )]
+        inventory_namespaces: Vec<String>,
         /// Delete the twins this pass proves. Names them and deletes nothing
         /// without --apply.
         #[arg(long = "reclaim-twins")]
@@ -3442,10 +3450,21 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::BackupAudit {
                 target,
                 objects,
+                inventory_namespaces,
                 reclaim_twins,
                 apply,
                 json,
-            } => host::backup_audit(&target, &objects, reclaim_twins, apply, json).await,
+            } => {
+                host::backup_audit(
+                    &target,
+                    &objects,
+                    &inventory_namespaces,
+                    reclaim_twins,
+                    apply,
+                    json,
+                )
+                .await
+            }
             HostCommands::ForwardLocal {
                 target,
                 name,

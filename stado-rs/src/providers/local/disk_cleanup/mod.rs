@@ -2178,9 +2178,20 @@ async fn run_with_lock(
     // more for the rest, and the last declared cleaner is handed whatever
     // remains. No cleaner is ever handed zero while it is declared, which is
     // the property that was missing.
-    let declared_after = |names: &[&str]| -> i64 {
-        names
+    const CLEANER_ORDER: [&str; 7] = [
+        "huggingface_cache",
+        "weles_recordings",
+        "build_caches",
+        chromium_clones::CLEANER,
+        queue_workdirs::CLEANER,
+        backup_twins::CLEANER,
+        release_store::CLEANER,
+    ];
+    let declared_after = |current: &str| -> i64 {
+        CLEANER_ORDER
             .iter()
+            .skip_while(|name| **name != current)
+            .skip(1)
             .filter(|name| policy.cleaners.contains_key(**name))
             .count() as i64
     };
@@ -2190,6 +2201,17 @@ async fn run_with_lock(
         } else {
             (remaining / (behind + 1)).max(1).min(remaining)
         }
+    };
+    // Item shares alone do not make the fixed order fair: a cleaner can spend
+    // the whole wall-clock allowance while staying inside its item share. Give
+    // each declared cleaner an equal slice of the time that remains at the
+    // instant it starts. Any unused slice stays inside the single global
+    // deadline and is therefore rolled into the next cleaner's calculation.
+    let time_share = |current: &str| -> Instant {
+        let now = Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        let slots = declared_after(current).saturating_add(1) as u32;
+        now + remaining / slots
     };
     // Past every early return: from here the cleaner table is a measurement
     // this pass actually made, so the report may carry one.
@@ -2204,15 +2226,9 @@ async fn run_with_lock(
         attempted_at,
         share(
             policy.max_scan_items,
-            declared_after(&[
-                "weles_recordings",
-                "build_caches",
-                chromium_clones::CLEANER,
-                queue_workdirs::CLEANER,
-                backup_twins::CLEANER,
-            ]),
+            declared_after("huggingface_cache"),
         ),
-        deadline,
+        time_share("huggingface_cache"),
         &mut report,
     ) {
         report.add_error("runtime", &exc);
@@ -2230,13 +2246,9 @@ async fn run_with_lock(
         attempted_at,
         share(
             remaining_scan,
-            declared_after(&[
-                "build_caches",
-                chromium_clones::CLEANER,
-                queue_workdirs::CLEANER,
-                backup_twins::CLEANER,
-            ]),
+            declared_after("weles_recordings"),
         ),
+        time_share("weles_recordings"),
         &mut report,
     );
     let remaining_after_weles =
@@ -2245,23 +2257,19 @@ async fn run_with_lock(
         report.caps.scan = true;
     }
     // The build-cache scan is the only one whose root can be the whole of
-    // `$HOME`: it walks with its share of whatever the fixed-layout cleaners
-    // left, and with the same pass deadline the HF scan honours. It is also
-    // the only one that cannot finish in one pass on a large tree, so it
-    // resumes from where the last pass stopped instead of restarting.
+    // `$HOME`: it walks with its item and time shares of what the fixed-layout
+    // cleaners left. It is also the only one that cannot finish in one pass on
+    // a large tree, so it resumes from where the last pass stopped instead of
+    // restarting.
     build_caches::scan_build_caches(
         home,
         &policy,
         attempted_at,
         share(
             remaining_after_weles,
-            declared_after(&[
-                chromium_clones::CLEANER,
-                queue_workdirs::CLEANER,
-                backup_twins::CLEANER,
-            ]),
+            declared_after("build_caches"),
         ),
-        deadline,
+        time_share("build_caches"),
         report.builds_resume_from.clone(),
         &mut report,
     );
@@ -2273,19 +2281,18 @@ async fn run_with_lock(
     if remaining_after_builds == 0 && policy.cleaners.contains_key(chromium_clones::CLEANER) {
         report.caps.scan = true;
     }
-    // Last, and the only cleaner whose root is outside this account's home:
-    // macOS puts the clones in the per-user temporary container, and what it
-    // keeps there is nobody's working set — so it is scanned after every root
-    // the fleet's own software writes to, on the budget those leave.
+    // The only cleaner whose root is outside this account's home: macOS puts
+    // the clones in the per-user temporary container. Its unused item and time
+    // shares roll forward to the lifecycle cleaners behind it.
     chromium_clones::scan_chromium_clones(
         home,
         &policy,
         attempted_at,
         share(
             remaining_after_builds,
-            declared_after(&[queue_workdirs::CLEANER, backup_twins::CLEANER]),
+            declared_after(chromium_clones::CLEANER),
         ),
-        deadline,
+        time_share(chromium_clones::CLEANER),
         &mut report,
     );
     let remaining_after_clones = (policy.max_scan_items
@@ -2297,19 +2304,20 @@ async fn run_with_lock(
     if remaining_after_clones == 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
         report.caps.scan = true;
     }
-    // The queue's own per-job trees, scanned last on the budget the rest leave.
+    // The queue's own per-job trees, after rebuildable caches.
     // Candidate names are captured under this same janitor lock. The queue
     // authority then downloads bodies only for candidates whose names overlap
     // live and terminal prefixes; everything unreadable remains on the keep
     // set, and any store failure disables this cleaner for the whole pass.
     let workdir_budget = share(
         remaining_after_clones,
-        declared_after(&[backup_twins::CLEANER]),
+        declared_after(queue_workdirs::CLEANER),
     );
+    let workdir_deadline = time_share(queue_workdirs::CLEANER);
     let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
-        match queue_workdirs::candidate_job_ids(home, workdir_budget, deadline) {
+        match queue_workdirs::candidate_job_ids(home, workdir_budget, workdir_deadline) {
             Ok(candidates) => {
-                let budget = deadline
+                let budget = workdir_deadline
                     .saturating_duration_since(Instant::now())
                     .min(KEEP_LIST_BUDGET);
                 let wait = Instant::now();
@@ -2332,7 +2340,7 @@ async fn run_with_lock(
         &policy,
         attempted_at,
         workdir_budget,
-        deadline,
+        workdir_deadline,
         live_jobs.as_deref(),
         &mut report,
     );
@@ -2346,17 +2354,20 @@ async fn run_with_lock(
     if remaining_after_workdirs == 0 && policy.cleaners.contains_key(backup_twins::CLEANER) {
         report.caps.scan = true;
     }
-    // The disaster-recovery replica's proven duplicates, scanned last because
-    // it is the only cleaner here that has to READ the bytes it deletes: every
-    // object it removes is hashed against the primary in this same pass, so it
-    // spends the budget the fixed-layout cleaners leave and stops on the shared
-    // deadline with whatever it has proven.
+    // The disaster-recovery replica's proven duplicates. It is the only
+    // cleaner here that has to READ the bytes it deletes: every object it
+    // removes is hashed against the primary in this same pass. Release-store
+    // cleanup remains behind it and receives its own item/time share.
+    let twins_budget = share(
+        remaining_after_workdirs,
+        declared_after(backup_twins::CLEANER),
+    );
     backup_twins::scan_backup_twins(
         home,
         &policy,
         crate::config::wc_stado_storage_namespace(),
-        remaining_after_workdirs,
-        deadline,
+        twins_budget,
+        time_share(backup_twins::CLEANER),
         &mut report,
     );
     let remaining_after_twins = (policy.max_scan_items
@@ -2415,19 +2426,10 @@ async fn run_with_lock(
     .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
     .map(|(name, _)| name.to_string())
     .collect();
-    const IMPLEMENTED: [&str; 7] = [
-        "huggingface_cache",
-        "weles_recordings",
-        "build_caches",
-        chromium_clones::CLEANER,
-        queue_workdirs::CLEANER,
-        backup_twins::CLEANER,
-        release_store::CLEANER,
-    ];
     report.unknown_cleaners = policy
         .cleaners
         .keys()
-        .filter(|name| !IMPLEMENTED.contains(&name.as_str()))
+        .filter(|name| !CLEANER_ORDER.contains(&name.as_str()))
         .cloned()
         .collect();
 

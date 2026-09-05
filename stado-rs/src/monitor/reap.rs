@@ -24,12 +24,20 @@ use crate::queue::runs::{
 };
 use crate::queue::{JobStorage, StorageError};
 
+/// A run retained because its durable schema cannot support destructive reap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReapRefusal {
+    pub run_id: String,
+    pub reason: &'static str,
+}
+
 /// Python summary dict {"reaped_runs", "deleted_jobs", "examined_runs"}.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReapSummary {
     pub reaped_runs: i64,
     pub deleted_jobs: i64,
     pub examined_runs: i64,
+    pub refused_runs: Vec<ReapRefusal>,
 }
 
 /// Python truthiness for the `manifest.get("reaped_at")` skip check.
@@ -168,6 +176,14 @@ pub async fn reap_terminal_runs(
             continue;
         };
         let initial_manifest: Value = serde_json::from_str(&initial.content)?;
+        if initial_manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v3")
+        {
+            summary.refused_runs.push(ReapRefusal {
+                run_id,
+                reason: "unsupported legacy manifest schema; retained without cleanup",
+            });
+            continue;
+        }
         crate::queue::submit::validate_stored_run_manifest(&initial_manifest, &run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
         if initial_manifest
@@ -188,12 +204,6 @@ pub async fn reap_terminal_runs(
                 break;
             }
             continue;
-        }
-        if initial_manifest.get("schema").and_then(Value::as_str) != Some("stado.run-submission.v3")
-        {
-            return Err(StorageError::Other(format!(
-                "run manifest {run_id} requires explicit durable-entry migration before reaping"
-            )));
         }
         summary.examined_runs += 1;
         let Some(status) = run_status(store, &run_id).await? else {
