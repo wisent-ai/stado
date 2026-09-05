@@ -1875,12 +1875,10 @@ async fn release_target_inner(
     }
     report.insert(
         "unit_processes_before".to_string(),
-        json!(
-            prior_unit_state
-                .values()
-                .map(|state| state.to_json())
-                .collect::<Vec<_>>()
-        ),
+        json!(prior_unit_state
+            .values()
+            .map(|state| state.to_json())
+            .collect::<Vec<_>>()),
     );
 
     // Phase three: activate. Reached only because phase two verified.
