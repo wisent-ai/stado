@@ -3709,6 +3709,53 @@ captured_target = json.loads(base64.b64decode(argument("--target-config")))
 requested_action = argument("--phase")
 requested_revision = argument("--source-revision")
 
+def exact_option(values, name):
+    found = [
+        values[index + 1]
+        for index, value in enumerate(values[:-1])
+        if value == name
+    ]
+    if len(found) != 1 or not isinstance(found[0], str):
+        raise SystemExit("captured object API command must declare exactly one " + name)
+    return found[0]
+
+
+def captured_release_api(target):
+    services = target.get("services")
+    if not isinstance(services, list):
+        raise SystemExit("captured target declares no service inventory")
+    object_apis = [
+        service for service in services
+        if isinstance(service, dict)
+        and service.get("label") == "com.wisent.always-on.stado-object-api"
+    ]
+    if len(object_apis) != 1:
+        raise SystemExit("captured target must declare exactly one canonical object API")
+    values = object_apis[0].get("args")
+    if (not isinstance(values, list)
+            or not all(isinstance(value, str) for value in values)
+            or not values
+            or values[0] != "dashboard"):
+        raise SystemExit("captured object API command is not the dashboard")
+    bind = exact_option(values, "--bind")
+    port_text = exact_option(values, "--port")
+    try:
+        port = int(port_text)
+    except ValueError:
+        raise SystemExit("captured object API port is not numeric")
+    if port < 1 or port > 65535:
+        raise SystemExit("captured object API port is outside 1..65535")
+    if bind == "::1":
+        host = "[::1]"
+    elif bind in ("127.0.0.1", "localhost"):
+        host = bind
+    else:
+        raise SystemExit("captured object API release origin is not loopback")
+    return "http://" + host + ":" + str(port)
+
+
+release_api = captured_release_api(captured_target)
+
 
 def checked(argv, accepted=(0,)):
     result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -3873,6 +3920,7 @@ intent = {
     "status": "launch_intent",
     "source_revision": requested_revision,
     "tool_sha256": expected,
+    "release_api": release_api,
     "native_manager": state,
     "lock_device": lock_info.st_dev,
     "lock_inode": lock_info.st_ino,
@@ -3898,6 +3946,7 @@ if system == "Darwin":
         "EnvironmentVariables": {
             "HOME": home,
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "STADO_API_URL": release_api,
         },
         "WorkingDirectory": home,
         "RunAtLoad": True,
@@ -3941,6 +3990,7 @@ else:
         "Type=simple",
         "User=" + checked(["/usr/bin/id", "-un"]).stdout.strip(),
         "Environment=HOME=" + home,
+        "Environment=STADO_API_URL=" + release_api,
         "WorkingDirectory=" + home,
         "ExecStart=" + wrapper,
         "Restart=no",
