@@ -1545,6 +1545,25 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               absent from this table and cannot be reached through it",
     },
     ApprovedCommand {
+        argv: &["/bin/cat", "/etc/ssh/sshd_config"],
+        why: "reads the Ubuntu OpenSSH server's fixed primary configuration file so a \
+              server-side command or session override can be attributed; the path is fixed, \
+              no included file or operator-supplied path is followed, and cat writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/journalctl",
+            "--unit",
+            "ssh.service",
+            "--lines",
+            "200",
+            "--no-pager",
+        ],
+        why: "reads the last 200 records owned by Ubuntu's active OpenSSH systemd unit, with \
+              a fixed unit and bound output; journalctl's read-only form neither changes the \
+              service nor follows future records",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/bin/systemctl",
             "list-unit-files",
