@@ -68,7 +68,11 @@ fn platform() -> &'static str {
 }
 
 /// A repository whose base commit holds `base_marker` and whose checked-out
-/// head holds `head_marker`.
+/// head commit holds `head_marker`.
+///
+/// Head is always a commit of its own, even when it carries the same marker:
+/// a base that IS the head is a comparison against itself, which the script
+/// refuses as evidence and which `a_base_that_is_this_revision_*` covers.
 fn repository(base_marker: &str, head_marker: &str) -> tempfile::TempDir {
     let repo = tempfile::tempdir().expect("temp repo");
     let root = repo.path();
@@ -82,10 +86,10 @@ fn repository(base_marker: &str, head_marker: &str) -> tempfile::TempDir {
     git(root, &["remote", "add", "origin", "."]);
     git(root, &["fetch", "--quiet", "origin", "main"]);
     git(root, &["update-ref", "refs/remotes/origin/main", "main"]);
-    if head_marker != base_marker {
-        std::fs::write(root.join("marker"), format!("{head_marker}\n")).unwrap();
-        git(root, &["commit", "--quiet", "-am", "head"]);
-    }
+    std::fs::write(root.join("marker"), format!("{head_marker}\n")).unwrap();
+    std::fs::write(root.join("head-note"), "a change of its own\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "--quiet", "-m", "head"]);
     repo
 }
 
@@ -145,12 +149,12 @@ fn a_failure_the_base_already_carries_is_not_the_authors() {
         "the sentence has to say so in words: {stderr}"
     );
     // The base sha is in the message, so the operator can read who to ask.
-    let head = Command::new("git")
-        .args(["rev-parse", "main"])
+    let base = Command::new("git")
+        .args(["rev-parse", "refs/remotes/origin/main"])
         .current_dir(repo.path())
         .output()
         .expect("git rev-parse");
-    let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    let sha = String::from_utf8_lossy(&base.stdout).trim().to_string();
     assert!(stderr.contains(&sha), "expected base {sha} in: {stderr}");
 }
 
@@ -163,6 +167,38 @@ fn a_base_that_cannot_be_resolved_is_unattributed_not_guessed() {
     assert!(
         stderr.contains("verdict=unattributed") && stderr.contains("could not be checked out"),
         "an unresolvable base is stated, never inferred: {stderr}"
+    );
+}
+
+#[test]
+fn a_base_that_is_this_revision_measures_nothing() {
+    // What a push to `main` looks like when the base is read as `origin/main`:
+    // the revision under judgement compared against itself, which would answer
+    // `inherited` for every failure and never name the push that caused it.
+    let repo = repository("OK", "BAD");
+    let out = run_gate(repo.path(), Some("HEAD"));
+    assert!(!out.status.success());
+    let stderr = stderr(&out);
+    assert!(
+        stderr.contains("verdict=unattributed") && stderr.contains("IS this revision"),
+        "a self-comparison is refused as evidence, not read as inherited: {stderr}"
+    );
+}
+
+#[test]
+fn an_uncommitted_break_at_the_base_commit_is_still_attributed() {
+    // How this runs by hand: a checkout of `main` with the break not yet
+    // committed. The base sha equals `HEAD`, but the base's own worktree does
+    // not carry the break, so the comparison is real and the answer is the
+    // developer's own change.
+    let repo = repository("OK", "OK");
+    std::fs::write(repo.path().join("marker"), "BAD\n").unwrap();
+    let out = run_gate(repo.path(), Some("HEAD"));
+    assert!(!out.status.success());
+    let stderr = stderr(&out);
+    assert!(
+        stderr.contains("verdict=introduced"),
+        "a dirty tree at the base commit is attributable: {stderr}"
     );
 }
 

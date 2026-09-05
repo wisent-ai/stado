@@ -250,7 +250,17 @@ one step against the base revision in its own `git worktree` and reports:
 |---|---|---|
 | `verdict=introduced` | the step passes on the base and refuses this revision | this change |
 | `verdict=inherited` | the step already refuses the base, at the printed sha | the base, in its own change |
-| `verdict=unattributed` | the base could not be checked out, so ownership is unknown | read the printed step and decide |
+| `verdict=unattributed` | the base could not be checked out, or a clean tree is being compared against its own commit, so ownership is unknown | read the printed step and decide |
+
+The base is the pull request's base sha, and on a push to `main` the commit
+before that push. Comparing `main` against `origin/main` compares the revision
+under judgement against itself, which would answer `inherited` for every
+failure and never name the push that caused it; the script refuses that as
+evidence and says so.
+
+Running it by hand on a checkout with an uncommitted break still attributes:
+the base sha equals `HEAD`, but the base's own worktree does not carry the
+break, so the comparison is real and the answer is `introduced`.
 
 Every verdict still fails the gate: an inherited failure is a failure, and the
 release would hit it with a version already spent. What changes is that the
