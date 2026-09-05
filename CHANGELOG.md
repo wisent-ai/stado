@@ -4,6 +4,12 @@
 
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
 
+## 0.16.19
+
+- **Linux service creation:** `service deploy` and the first-install path of `service ensure` expand the same host-home and account placeholders as existing-unit reconciliation. A newly installed resolver no longer receives literal template values as `HOME` and `STADO_CONFIG`.
+- **Migration and rollback:** existing units remain eligible for the normal definition comparison and convergence; no registry schema changes are required. Rolling back restores unexpanded placeholders on new Linux units.
+- **Platforms:** Linux uses its native systemd owner and the existing installation path; Darwin service rendering is unchanged.
+
 ## 0.16.18
 
 - **Measured CPU admission:** available cores use operating-system processor-time deltas instead of runnable-process load averages, so a high load average cannot falsely close a host whose CPU is idle. Unavailable measurements remain explicit, and already-owned jobs still reserve their requested cores.

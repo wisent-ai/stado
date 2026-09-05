@@ -2981,9 +2981,15 @@ if [ \"$os\" = \"Darwin\" ]; then
   say 'deployed' \"$unit_path\"
 else
   /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || true
-  /bin/cat > \"$unit_path\" <<'@HEREDOC@'
+  template=\"$unit_path.template.$$\"
+  /bin/cat > \"$template\" <<'@HEREDOC@'
 @LINUX_UNIT@
 @HEREDOC@
+  escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
+  account=$(/usr/bin/id -un)
+  /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$template\" > \"$unit_path\" || exit 1
+  /bin/rm -f \"$template\"
+  /bin/chmod u=rw,go= \"$unit_path\" || exit 1
   # A user unit lives inside the user's systemd instance, and without linger
   # that instance ends with the login session that created it — on rtx every
   # user-scoped service (beacon, agent, router) died seconds after the deploy
@@ -3233,9 +3239,15 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
   else
     /bin/rm -f \"$staged\" \"$rendered\"
     /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || bail 'cannot create the systemd user directory'
-    /bin/cat > \"$unit_path\" <<'@HEREDOC@'
+    staged=\"$HOME/.stado/$unit.ensure.$$\"
+    /bin/cat > \"$staged\" <<'@HEREDOC@'
 @LINUX_UNIT@
 @HEREDOC@
+    escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
+    account=$(/usr/bin/id -un)
+    /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
+    stado_install_unit \"$staged.rendered\" || bail \"cannot write $unit_path\"
+    /bin/rm -f \"$staged\" \"$staged.rendered\"
   fi
 fi
 if [ \"$os\" = \"Darwin\" ]; then
