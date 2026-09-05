@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.13
+
+- **Registry observations:** `registry doctor` derives its typed and raw views from one authoritative registry generation. Canonical reads no longer silently use a disaster-recovery replica or a product namespace, and live beacon/capacity reads stay on the primary.
+- **Linux service environment:** the systemd environment writer executes its Python input as a script rather than treating the service UID as a filename. A refused write retains the writer's actual error; a corrected unit definition is reloaded without restarting its service.
+- **Migration and rollback:** no stored-state migration is required. Rolling back can restore stale registry observations and the broken systemd environment-writer invocation.
+- **Platforms:** `darwin-arm64` and `linux-amd64` remain supported through the existing signed release and delivery paths.
+
 ## 0.16.12
 
 - **Release staging:** both native platform recipes name the Stado executable relative to the worker's output directory, without duplicating `.wisent-output`.

@@ -8259,7 +8259,7 @@ pub async fn set_unit_env_key_on_host(
     "$sudo_bin" -n -u "$service_user" "$@"
   fi
 }
-if ! changed=$(stado_unit_env_writer /usr/bin/python3 "$service_uid" <<'STADO_UNIT_ENV'
+if ! changed=$(stado_unit_env_writer /usr/bin/python3 - "$service_uid" 2>&1 <<'STADO_UNIT_ENV'
 import base64, os, pathlib, re, shlex, stat, sys, tempfile
 
 def decode(value):
@@ -8334,7 +8334,7 @@ else:
     print("changed")
 STADO_UNIT_ENV
 ); then
-  say 'env_set_failed' 'unit environment update failed'
+  say 'env_set_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
   exit 1
 fi
 if [ "$changed" = changed ] || [ "$(stado_systemctl show -p NeedDaemonReload --value "$unit")" = yes ]; then
