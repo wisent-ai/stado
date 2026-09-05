@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Reconciliation script transport:** native unit capture, listener closure, served-store comparison, and exact unit restoration preserve Python indentation. Their failures retain the operation, host, and complete remote output. Full inventory input travels in the streamed program instead of the process environment.
+- **Native unit restoration:** saved permission bits are rendered as octal for `install`; the restored file must match the captured mode, owner, group, and byte digest before restoration succeeds.
 - **Cargo inventory:** `stado host inventory` reports fixed Cargo-root metadata and complete direct bin membership, including cache symlinks and hidden entries, with explicit partial-read states. Stado Desktop reads the same typed report through the authenticated host inventory API.
 - **Service convergence:** catalog lookup resolves both product names and native unit identities, so label-addressed repairs retain the full required environment. Object API recovery preserves unrelated installed unit fields rather than competing with the shared renderer.
 - **Completion recording:** after a unit changes, `service ensure` waits up to 30 seconds for an authoritative registry read before recording completion. Only retryable reads are repeated; host actions and conditional writes are not. A later failure names the completed action, running PID, and original recording error.

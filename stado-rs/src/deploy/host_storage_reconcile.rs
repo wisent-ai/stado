@@ -2348,6 +2348,9 @@ body = base64.b64decode(os.environ['STADO_UNIT_BODY'])
 expected = os.environ['STADO_UNIT_SHA']
 if hashlib.sha256(body).hexdigest() != expected:
     raise SystemExit('captured unit bytes fail their digest')
+expected_metadata = (int(os.environ['STADO_UNIT_MODE']),
+                     int(os.environ['STADO_UNIT_UID']),
+                     int(os.environ['STADO_UNIT_GID']))
 work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')
 os.makedirs(work, mode=0o700, exist_ok=True)
 fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)
@@ -2357,7 +2360,7 @@ try:
         handle.flush()
         os.fsync(handle.fileno())
     command = ['/usr/bin/sudo', '-n', '/usr/bin/install',
-               '-m', os.environ['STADO_UNIT_MODE'],
+               '-m', format(expected_metadata[0], 'o'),
                '-o', os.environ['STADO_UNIT_UID'],
                '-g', os.environ['STADO_UNIT_GID'], temporary, path]
     result = subprocess.run(command, stdin=subprocess.DEVNULL,
@@ -2373,6 +2376,10 @@ finally:
 info = os.lstat(path)
 if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
     raise SystemExit('restored unit is not a regular file')
+observed_metadata = (stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
+if observed_metadata != expected_metadata:
+    raise SystemExit('restored unit mode/uid/gid mismatch: expected ' +
+                     str(expected_metadata) + ', observed ' + str(observed_metadata))
 with open(path, 'rb') as handle:
     if hashlib.sha256(handle.read()).hexdigest() != expected:
         raise SystemExit('restored unit digest mismatch')
