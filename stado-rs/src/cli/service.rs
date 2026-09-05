@@ -510,10 +510,12 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Replace one key in a managed service's owner-controlled env file.
+    /// Replace one key in a managed runtime env file or systemd definition.
     ///
     /// The value is read from an owner-only local file and travels only inside
     /// the approved encrypted channel's request body.
+    /// A systemd unit or its own .conf drop-in is updated in place; the manager
+    /// reloads changed definitions without restarting the running service.
     EnvSet {
         /// Service whose host-local process reads the environment.
         name: String,
@@ -523,7 +525,7 @@ pub enum ServiceCommands {
         /// Exact environment variable name.
         #[arg(long)]
         key: String,
-        /// Environment file on the target, absolute or rooted at $HOME.
+        /// Runtime env file, or this service's exact systemd unit/drop-in path.
         #[arg(long)]
         env_file: String,
         /// Absolute owner-only local file containing the value.
@@ -3928,6 +3930,39 @@ async fn verify_env_write(
     })
 }
 
+async fn verify_unit_env_write(
+    target: &targets::ComputeTarget,
+    declared: &service::ManagedService,
+    key: &str,
+    value: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<ReadBack, CmdError> {
+    let unit = service::fetch_unit_file(target, declared, runner)
+        .await
+        .map_err(click)?;
+    let observed = service::parse_systemd_unit(&unit.content)
+        .env
+        .into_iter()
+        .rev()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.replace("%%", "%"));
+    let state = match observed.as_deref() {
+        Some(found) if found == value => service_env_file::EXPECT_MATCHED,
+        Some(_) => service_env_file::EXPECT_DIFFERS,
+        None => service_env_file::EXPECT_ABSENT,
+    };
+    Ok(ReadBack {
+        state,
+        chars: observed
+            .as_ref()
+            .map_or(0, |value| value.chars().count() as u32),
+        effective: observed.and_then(|value| {
+            (service::redact_secret_value(key, &value) != service::REDACTED).then_some(value)
+        }),
+        marker: None,
+    })
+}
+
 async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
     let EnvSetOptions {
         name,
@@ -3976,9 +4011,16 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let updated = service::set_env_key_on_host(&target, env_file, key, value, &runner)
-            .await
-            .map_err(click)?;
+        let unit_env = service::is_systemd_env_file(declared, env_file);
+        let updated = if unit_env {
+            service::set_unit_env_key_on_host(&target, declared, env_file, key, value, &runner)
+                .await
+                .map_err(click)?
+        } else {
+            service::set_env_key_on_host(&target, env_file, key, value, &runner)
+                .await
+                .map_err(click)?
+        };
         let wrote = updated.succeeded("env_set");
         if !wrote {
             failures.push(format!("{}: {}", declared.host, updated.failure()));
@@ -3988,7 +4030,11 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         // command reported `env_set` twice for a value a host-side reconciler
         // restored within seconds, and nothing said so.
         let verdict = if wrote {
-            let readback = verify_env_write(&target, env_file, key, value, &runner).await?;
+            let readback = if unit_env {
+                verify_unit_env_write(&target, declared, key, value, &runner).await?
+            } else {
+                verify_env_write(&target, env_file, key, value, &runner).await?
+            };
             if let Some(failure) = readback.failure(&declared.host, key) {
                 failures.push(failure);
             }
