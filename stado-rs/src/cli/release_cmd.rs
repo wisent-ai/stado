@@ -1769,6 +1769,10 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     // running every minute the whole way down.
     //
     // In place, and never the agent: see `self_update::recycle_replaced_units`.
+    // Run this image check even when the pathname already matches the delivered
+    // bytes. A prior attempt can replace the root and fail after recycling only
+    // some global readers; matching processes are skipped, while any remaining
+    // process on the replaced inode still has to converge before resume succeeds.
     let mut recycle_log = |message: &str| println!("{message}");
     crate::self_update::recycle_replaced_units(
         "release install-local",
