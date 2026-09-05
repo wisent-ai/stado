@@ -4,6 +4,12 @@
 
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
 
+## 0.16.19
+
+- **Release capacity contract:** stable deployment reads `free_gb`, `low_watermark_gb`, and `target_free_gb` from the `disk` object emitted by `host gates --json`. Candidate admission and post-cleanup retention therefore judge the authoritative report instead of treating nested fields as absent.
+- **Migration and rollback:** no stored data changes. Rolling back restores the stale top-level field lookup and prevents release publication before any platform object mutation.
+- **Platforms:** the corrected release admission applies before both `darwin-arm64` and `linux-amd64` publication.
+
 ## 0.16.18
 
 - **Measured CPU admission:** available cores use operating-system processor-time deltas instead of runnable-process load averages, so a high load average cannot falsely close a host whose CPU is idle. Unavailable measurements remain explicit, and already-owned jobs still reserve their requested cores.

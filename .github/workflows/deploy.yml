@@ -187,8 +187,9 @@ jobs:
           GATES_JSON="$gates" python3 -c '
           import json, os
           report = json.loads(os.environ["GATES_JSON"])
-          free = report.get("free_gb")
-          low = report.get("low_watermark_gb")
+          disk = report.get("disk") or {}
+          free = disk.get("free_gb")
+          low = disk.get("low_watermark_gb")
           if free is None or low is None:
               raise SystemExit("host gates did not report free_gb and low_watermark_gb")
           if free < low:
@@ -213,8 +214,9 @@ jobs:
           GATES_JSON="$gates" python3 -c '
           import json, os
           report = json.loads(os.environ["GATES_JSON"])
-          free = report.get("free_gb")
-          target = report.get("target_free_gb")
+          disk = report.get("disk") or {}
+          free = disk.get("free_gb")
+          target = disk.get("target_free_gb")
           if free is None or target is None:
               raise SystemExit("host gates did not report free_gb and target_free_gb")
           if free < target:
@@ -253,8 +255,9 @@ jobs:
           GATES_JSON="$gates" python3 -c '
           import json, os
           report = json.loads(os.environ["GATES_JSON"])
-          free = report.get("free_gb")
-          target = report.get("target_free_gb")
+          disk = report.get("disk") or {}
+          free = disk.get("free_gb")
+          target = disk.get("target_free_gb")
           if free is None or target is None or free < target:
               raise SystemExit(f"runner capacity below target after scratch reset: {free} < {target}")
           print(f"runner capacity retained: {free:.2f} >= {target} GiB")
