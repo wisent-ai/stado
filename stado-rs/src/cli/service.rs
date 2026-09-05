@@ -6985,6 +6985,8 @@ pub(crate) struct UnitProgram {
     pub(crate) unit: Option<String>,
     /// Non-secret environment declared by this unit, with target placeholders intact.
     pub(crate) env: std::collections::BTreeMap<String, String>,
+    /// Exact authored systemd definition retained by registry lifecycle repairs.
+    pub(crate) systemd_unit: String,
 }
 pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
     let unit_id = service.unit_id();
@@ -7048,6 +7050,7 @@ pub(crate) fn unit_program(
             env: declared
                 .map(|service| service.env.clone())
                 .unwrap_or_default(),
+            systemd_unit: String::new(),
         });
     }
     if !args.is_empty() {
@@ -7063,6 +7066,7 @@ pub(crate) fn unit_program(
             source: "registry",
             unit: Some(declared.unit_id().to_string()),
             env: declared.env.clone(),
+            systemd_unit: declared.systemd_unit.clone(),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -7080,6 +7084,7 @@ pub(crate) fn unit_program(
             source: "catalog",
             unit: entry.unit,
             env: entry.env,
+            systemd_unit: String::new(),
         });
     }
     let bundled =
@@ -7098,6 +7103,7 @@ pub(crate) fn unit_program(
             source: "shipped",
             unit: Some(unit),
             env: shipped.env,
+            systemd_unit: shipped.systemd_unit,
         });
     }
     Err(CmdError::usage(format!(
@@ -7332,6 +7338,17 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     }
     .map_err(click)?;
     let mut plan = plan;
+    if !unit.systemd_unit.is_empty() {
+        if !target.release_platform.starts_with("linux") {
+            return Err(CmdError::click(format!(
+                "{} declares a systemd unit definition on non-Linux platform {}",
+                options.name, target.release_platform
+            )));
+        }
+        let definition = std::mem::take(&mut unit.systemd_unit);
+        unit.systemd_unit =
+            service::retain_systemd_unit(&mut plan, &definition, &unit_env).map_err(click)?;
+    }
     // A declared path is the service's durable domain choice. In particular,
     // a LaunchAgent intentionally placed on an always-on Mac must not become
     // a daemon again when ensure or the autonomy reconciler runs later.
@@ -7382,6 +7399,7 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     record.program = unit.program;
     record.args = unit.args;
     record.env = unit_env.into_iter().collect();
+    record.systemd_unit = unit.systemd_unit;
     let generation = match &already {
         // Declared, at the same file and running the same program, by the
         // registry: the document already says what this pass just confirmed,
@@ -7392,7 +7410,8 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
                 && existing.kind == record.kind
                 && existing.program == record.program
                 && existing.args == record.args
-                && existing.env == record.env =>
+                && existing.env == record.env
+                && existing.systemd_unit == record.systemd_unit =>
         {
             None
         }

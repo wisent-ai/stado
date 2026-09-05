@@ -235,6 +235,12 @@ pub struct ManagedService {
     pub args: Vec<String>,
     /// Non-secret environment rendered into the unit and preserved by repairs.
     pub env: BTreeMap<String, String>,
+    /// Exact systemd unit body for a service whose native definition carries
+    /// lifecycle semantics the generic renderer cannot express. Empty for the
+    /// ordinary generated unit. When present, reconciliation validates that
+    /// its `ExecStart` is exactly [`ManagedService::program`] plus
+    /// [`ManagedService::args`] before retaining these authored semantics.
+    pub systemd_unit: String,
     /// [`SOURCE_REGISTRY`] or [`SOURCE_RECOVERY`].
     pub source: String,
     /// When the unit entered management; empty for a recovery-sourced one,
@@ -295,6 +301,9 @@ impl ManagedService {
         if !self.env.is_empty() {
             record["env"] = json!(self.env);
         }
+        if !self.systemd_unit.is_empty() {
+            record["systemd_unit"] = Value::String(self.systemd_unit.clone());
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
                 serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
@@ -319,6 +328,7 @@ impl ManagedService {
             "program": self.program,
             "args": self.args,
             "env": self.env,
+            "systemd_unit": self.systemd_unit,
         });
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
@@ -389,6 +399,7 @@ impl ManagedService {
                         .collect()
                 })
                 .unwrap_or_default(),
+            systemd_unit: text("systemd_unit"),
             onboarding: record
                 .get("onboarding")
                 .and_then(|value| serde_json::from_value(value.clone()).ok()),
@@ -418,6 +429,7 @@ pub fn launchd_service(
         program: String::new(),
         args: Vec::new(),
         env: BTreeMap::new(),
+        systemd_unit: String::new(),
         onboarding: None,
     }
 }
@@ -443,6 +455,7 @@ pub fn systemd_service(
         program: String::new(),
         args: Vec::new(),
         env: BTreeMap::new(),
+        systemd_unit: String::new(),
         onboarding: None,
     }
 }
@@ -4945,6 +4958,89 @@ pub fn plan_deploy_labelled(
     guard_heredoc(&plan.darwin_daemon_unit)?;
     guard_heredoc(&plan.linux_unit)?;
     Ok(plan)
+}
+
+/// Retain an authored systemd definition whose lifecycle semantics cannot be
+/// represented by the generic program/args/environment renderer.
+///
+/// The run declaration remains the authority for process ownership. Requiring
+/// the definition's one `ExecStart` to match that declaration prevents an
+/// opaque unit body from making lifecycle commands install a different
+/// program than the registry says they manage. Declared environment is
+/// materialized into the authored body in place, so `ensure --env` and a later
+/// declaration-driven convergence have the same semantics as generated units.
+pub fn retain_systemd_unit(
+    plan: &mut DeployPlan,
+    definition: &str,
+    environment: &[(String, String)],
+) -> Result<String, DeployError> {
+    let mut starts = definition
+        .lines()
+        .filter_map(|line| line.strip_prefix("ExecStart="));
+    let Some(exec_start) = starts.next() else {
+        return Err(DeployError(
+            "authored systemd unit carries no ExecStart".to_string(),
+        ));
+    };
+    if starts.next().is_some() {
+        return Err(DeployError(
+            "authored systemd unit carries more than one ExecStart".to_string(),
+        ));
+    }
+    if exec_start != plan.argv {
+        return Err(DeployError(format!(
+            "authored systemd unit starts {}, but the declaration says {}",
+            py_str_repr(exec_start),
+            py_str_repr(&plan.argv),
+        )));
+    }
+
+    let mut remaining: BTreeMap<&str, &str> = environment
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let mut rendered = String::with_capacity(definition.len());
+    let mut inserted = false;
+    for line in definition.lines() {
+        if let Some(assignment) = line.strip_prefix("Environment=") {
+            let Some((name, _)) = assignment.split_once('=') else {
+                return Err(DeployError(format!(
+                    "authored systemd unit has malformed environment line {}",
+                    py_str_repr(line),
+                )));
+            };
+            if let Some(value) = remaining.remove(name) {
+                rendered.push_str("Environment=");
+                rendered.push_str(name);
+                rendered.push('=');
+                rendered.push_str(value);
+                rendered.push('\n');
+            }
+            continue;
+        }
+        if !inserted && line.starts_with("ExecStart") {
+            for (name, value) in &remaining {
+                rendered.push_str("Environment=");
+                rendered.push_str(name);
+                rendered.push('=');
+                rendered.push_str(value);
+                rendered.push('\n');
+            }
+            remaining.clear();
+            inserted = true;
+        }
+        rendered.push_str(line);
+        rendered.push('\n');
+    }
+    if !remaining.is_empty() {
+        return Err(DeployError(
+            "authored systemd unit carries no ExecStart position for its declared environment"
+                .to_string(),
+        ));
+    }
+    guard_heredoc(&rendered)?;
+    plan.linux_unit = rendered.clone();
+    Ok(rendered)
 }
 
 /// `service deploy` on one host: push the rendered unit and bootstrap it.
@@ -9525,5 +9621,54 @@ mod tests {
         // The real payload: 35_331_163 bytes.
         let real = sync_timeout(35_331_163);
         assert!(real > Duration::from_secs(240), "{real:?}");
+    }
+
+    #[test]
+    fn authored_systemd_unit_retains_lifecycle_and_converges_declared_environment() {
+        let mut plan = DeployPlan {
+            label: "stado-stream-sunshine".to_string(),
+            unit: "stado-stream-sunshine.service".to_string(),
+            program: "/usr/bin/sunshine".to_string(),
+            argv: "/usr/bin/sunshine /root/.config/sunshine/sunshine.conf".to_string(),
+            darwin_unit: String::new(),
+            darwin_daemon_unit: String::new(),
+            linux_unit: String::new(),
+            force_daemon: false,
+        };
+        let definition = "[Unit]\nAfter=stado-stream-xorg.service\nRequires=stado-stream-xorg.service\n\n[Service]\nEnvironment=DISPLAY=:0\nEnvironment=OLD=remove\nExecStartPre=/usr/bin/xdpyinfo -display :0\nExecStart=/usr/bin/sunshine /root/.config/sunshine/sunshine.conf\n";
+        let environment = vec![
+            ("DISPLAY".to_string(), ":1".to_string()),
+            ("CUDA_VISIBLE_DEVICES".to_string(), "GPU-1".to_string()),
+        ];
+
+        let retained = retain_systemd_unit(&mut plan, definition, &environment).unwrap();
+
+        assert!(retained.contains("After=stado-stream-xorg.service\n"));
+        assert!(retained.contains("Requires=stado-stream-xorg.service\n"));
+        assert!(retained.contains("Environment=DISPLAY=:1\n"));
+        assert!(retained.contains("Environment=CUDA_VISIBLE_DEVICES=GPU-1\nExecStartPre="));
+        assert!(!retained.contains("OLD="));
+        assert_eq!(plan.linux_unit, retained);
+    }
+
+    #[test]
+    fn authored_systemd_unit_cannot_hide_a_different_program() {
+        let mut plan = DeployPlan {
+            label: "stream".to_string(),
+            unit: "stream.service".to_string(),
+            program: "/usr/bin/sunshine".to_string(),
+            argv: "/usr/bin/sunshine config".to_string(),
+            darwin_unit: String::new(),
+            darwin_daemon_unit: String::new(),
+            linux_unit: String::new(),
+            force_daemon: false,
+        };
+        let error = retain_systemd_unit(
+            &mut plan,
+            "[Service]\nExecStart=/usr/bin/other config\n",
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.0.contains("but the declaration says"));
     }
 }

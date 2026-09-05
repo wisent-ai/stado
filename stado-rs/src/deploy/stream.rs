@@ -21,13 +21,16 @@
 
 use serde_json::{json, Map, Value};
 
-use super::{host_channel, DeployError, Runner};
+use super::{host_channel, service, DeployError, Runner};
 use crate::stream::schema::{DisplayStream, DISPLAY, SUNSHINE_HTTPS_PORT};
 use crate::targets::ComputeTarget;
 
 const XORG_UNIT: &str = "stado-stream-xorg.service";
 const SUNSHINE_UNIT: &str = "stado-stream-sunshine.service";
+const XORG_PROGRAM: &str = "/usr/bin/Xorg";
+const SUNSHINE_PROGRAM: &str = "/usr/bin/sunshine";
 const XORG_CONFIG: &str = "/etc/X11/xorg.conf.d/10-stado-stream.conf";
+const SUNSHINE_CONFIG: &str = "/root/.config/sunshine/sunshine.conf";
 const CREDENTIAL_FILE: &str = "/root/.stado/stream-webui-credentials";
 
 fn report(target: &ComputeTarget, output: &super::CommandOutput, ok: &str) -> Value {
@@ -155,6 +158,104 @@ fn library_dir(target: &ComputeTarget) -> String {
         .as_ref()
         .map(|declaration| declaration.library_dir.clone())
         .unwrap_or_else(|| crate::stream::schema::DEFAULT_LIBRARY_DIR.to_string())
+}
+
+fn xorg_systemd_unit() -> String {
+    format!(
+        "[Unit]\n\
+         Description=Stado stream: X server on the declared board\n\
+         After=network-online.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={XORG_PROGRAM} {DISPLAY} -config {XORG_CONFIG} -noreset -novtswitch -sharevts\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    )
+}
+
+fn sunshine_systemd_unit(declaration: &DisplayStream) -> String {
+    let cuda_device = declaration.gpu_uuid.as_deref().unwrap_or("0");
+    format!(
+        "[Unit]\n\
+         Description=Stado stream: Sunshine encoding the session\n\
+         After={XORG_UNIT}\n\
+         Requires={XORG_UNIT}\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         Environment=DISPLAY={DISPLAY}\n\
+         Environment=HOME=/root\n\
+         # The screen lives on the declared board, but Sunshine's NVENC path opens the\n\
+         # driver's default device, so the first live session rendered on card 1 and\n\
+         # encoded on card 0. Binding the encoder keeps the whole session on one board,\n\
+         # which is the point of declaring one on a two-card host.\n\
+         Environment=CUDA_VISIBLE_DEVICES={cuda_device}\n\
+         ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display {DISPLAY} >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'\n\
+         # openbox does not daemonise, so it belongs in the background: as an\n\
+         # ExecStartPre it never returned and the unit sat in `activating` until the\n\
+         # start timeout, which reads exactly like a crash that never happened.\n\
+         ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable >/tmp/stado-stream-openbox.log 2>&1 &'\n\
+         ExecStart={SUNSHINE_PROGRAM} {SUNSHINE_CONFIG}\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    )
+}
+
+/// Canonical managed-service declarations for the two native units installed
+/// by [`install`]. The exact systemd bodies are retained because the generic
+/// service renderer cannot express Sunshine's dependency and session prelude.
+pub fn managed_services(
+    target: &ComputeTarget,
+    declaration: &DisplayStream,
+    managed_since: &str,
+) -> [service::ManagedService; 2] {
+    let mut xorg = service::systemd_service(
+        &target.name,
+        XORG_UNIT,
+        &format!("/etc/systemd/system/{XORG_UNIT}"),
+        service::SOURCE_REGISTRY,
+        managed_since,
+    );
+    xorg.program = XORG_PROGRAM.to_string();
+    xorg.args = vec![
+        DISPLAY.to_string(),
+        "-config".to_string(),
+        XORG_CONFIG.to_string(),
+        "-noreset".to_string(),
+        "-novtswitch".to_string(),
+        "-sharevts".to_string(),
+    ];
+    xorg.systemd_unit = xorg_systemd_unit();
+
+    let mut sunshine = service::systemd_service(
+        &target.name,
+        SUNSHINE_UNIT,
+        &format!("/etc/systemd/system/{SUNSHINE_UNIT}"),
+        service::SOURCE_REGISTRY,
+        managed_since,
+    );
+    sunshine.program = SUNSHINE_PROGRAM.to_string();
+    sunshine.args = vec![SUNSHINE_CONFIG.to_string()];
+    sunshine.env = [
+        ("DISPLAY".to_string(), DISPLAY.to_string()),
+        ("HOME".to_string(), "/root".to_string()),
+        (
+            "CUDA_VISIBLE_DEVICES".to_string(),
+            declaration.gpu_uuid.clone().unwrap_or_else(|| "0".to_string()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    sunshine.systemd_unit = sunshine_systemd_unit(declaration);
+
+    [xorg, sunshine]
 }
 
 /// Reconcile the host to its declaration: packages, screen, session, Sunshine,
@@ -350,7 +451,7 @@ timeout 20 sunshine --creds "$user" "$secret" >/dev/null 2>&1 || printf 'CREDS\t
 printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 
 install -d -m 0755 /root/.config/sunshine
-cat >/root/.config/sunshine/sunshine.conf <<'EOF'
+cat >SUNSHINE_CONFIG <<'EOF'
 # Written by `stado stream apply`.
 origin_web_ui_allowed = lan
 address_family = both
@@ -359,46 +460,11 @@ encoder = nvenc
 EOF
 
 cat >/etc/systemd/system/XORG_UNIT <<'EOF'
-[Unit]
-Description=Stado stream: X server on the declared board
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/Xorg DISPLAY_NUMBER -config XORG_CONFIG -noreset -novtswitch -sharevts
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+XORG_UNIT_BODY
 EOF
 
 cat >/etc/systemd/system/SUNSHINE_UNIT <<'EOF'
-[Unit]
-Description=Stado stream: Sunshine encoding the session
-After=XORG_UNIT
-Requires=XORG_UNIT
-
-[Service]
-Type=simple
-Environment=DISPLAY=DISPLAY_NUMBER
-Environment=HOME=/root
-# The screen lives on the declared board, but Sunshine's NVENC path opens the
-# driver's default device, so the first live session rendered on card 1 and
-# encoded on card 0. Binding the encoder keeps the whole session on one board,
-# which is the point of declaring one on a two-card host.
-Environment=CUDA_VISIBLE_DEVICES=CUDA_DEVICE
-ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display DISPLAY_NUMBER >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-# openbox does not daemonise, so it belongs in the background: as an
-# ExecStartPre it never returned and the unit sat in `activating` until the
-# start timeout, which reads exactly like a crash that never happened.
-ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable >/tmp/stado-stream-openbox.log 2>&1 &'
-ExecStart=/usr/bin/sunshine /root/.config/sunshine/sunshine.conf
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+SUNSHINE_UNIT_BODY
 EOF
 
 systemctl daemon-reload
@@ -425,6 +491,11 @@ printf 'PORTS\t'
 ss -ltn 2>/dev/null | awk '$4 ~ /:479[89][0-9]$/ { printf "%s ", $4 }' || true
 printf '\n'
 "#
+    .replace("XORG_UNIT_BODY", xorg_systemd_unit().trim_end())
+    .replace(
+        "SUNSHINE_UNIT_BODY",
+        sunshine_systemd_unit(declaration).trim_end(),
+    )
     .replace("LIBRARY_BLOCK", library_block)
     .replace("LIBRARY_DIR", &declaration.library_dir)
     .replace("STEAM_PACKAGES", steam_packages)
@@ -440,13 +511,10 @@ printf '\n'
     .replace("SUNSHINE_VERSION", &declaration.sunshine.version)
     .replace("SUNSHINE_URL", &declaration.sunshine.deb_url)
     .replace("SUNSHINE_SHA256", &declaration.sunshine.deb_sha256)
+    .replace("SUNSHINE_CONFIG", SUNSHINE_CONFIG)
     .replace("CREDENTIAL_FILE", CREDENTIAL_FILE)
     .replace("XORG_UNIT", XORG_UNIT)
     .replace("SUNSHINE_UNIT", SUNSHINE_UNIT)
-    .replace(
-        "CUDA_DEVICE",
-        declaration.gpu_uuid.as_deref().unwrap_or("0"),
-    )
     .replace("DISPLAY_NUMBER", DISPLAY);
     let output =
         host_channel::run_script_with_timeout(target, &script, install_timeout(), runner).await?;
