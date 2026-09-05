@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.16.26
+
+- **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
+- **Desktop services:** the service inspector exposes the same runner repair and shows its result or refusal without replacing the CLI's diagnosis.
+- **Signing diagnostics:** approved host reads expose the Brama runner's apphost entitlements, CoreCLR signing identity, and macOS protection status without modifying signatures, boot settings, or permissions.
+- **Migration and rollback:** no stored schema changes. Repair retains the registered runner's own version, including an upstream auto-update; rollback restores the earlier installer's signature stripping.
+- **Platforms:** apphost repair applies to `darwin-arm64`; Linux runner installation is unchanged.
+- **Native image diagnostics:** macOS shell dispatch is resolved from an observed process rather than comparing its selected shell with the `/bin/sh` dispatcher inode; aliases use the same identity check.
+- **Environment diagnostics:** service-owned pins retain the required native-unit comparison. Unread remote definitions and observed mismatches have separate findings, and another product's target entry no longer hides a missing delivery declaration.
 
 - **Reconciliation script transport:** native unit capture, listener closure, served-store comparison, and exact unit restoration preserve Python indentation. Their failures retain the operation, host, and complete remote output. Full inventory input travels in the streamed program instead of the process environment.
 - **Native unit restoration:** saved permission bits are rendered as octal for `install`; the restored file must match the captured mode, owner, group, and byte digest before restoration succeeds.
