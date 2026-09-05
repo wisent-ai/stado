@@ -943,6 +943,7 @@ jobs:
             "$stado_bin" storage get \
               "stado://releases/stado/$STADO_VERSION/$platform/stado-v$STADO_VERSION-$platform.tar.gz" \
               "$archive"
+            while IFS= read -r reader; do
               "$stado_bin" service update "$reader" \
                 --host "$target" \
                 --from-archive "$archive" \

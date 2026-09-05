@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Stable fleet workflow:** the private-reader update loop consumes every discovered service name before closing its here-string loop. The shell can execute the existing archive delivery and image refresh for each declared reader.
+
 ## 0.16.16
 
 - **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.
