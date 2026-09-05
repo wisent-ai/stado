@@ -3039,8 +3039,9 @@ fi
 ///   Operation not permitted`, having installed nothing.
 /// - It compares the plist, launchd's retained Program and argument vector,
 ///   and the running executable. A differing retained definition is reloaded
-///   only after executable and rendered-unit preflight, with the prior unit
-///   restored if activation fails and launchd's readback verified on success.
+///   only after executable and rendered-unit preflight, with a genuinely
+///   distinct prior unit restored if activation fails and launchd's readback
+///   verified on success.
 ///
 /// There is deliberately no fallback to `launchctl submit` or to a bare
 /// background process. Those two are how a host comes to run a program no
@@ -3260,26 +3261,35 @@ fi
 if [ \"$reload_needed\" = yes ]; then
   [ -n \"$rendered\" ] || bail 'cannot reload a definition without rendered configuration'
   previous=''
+  rollback_unavailable='no prior unit file existed'
   if [ -f \"$unit_path\" ]; then
-    previous=\"$staged.previous\"
-    /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
-    /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
+    if [ \"$unit_drift\" = no ]; then
+      rollback_unavailable='existing unit already matched the desired definition; no distinct prior definition exists'
+    else
+      previous=\"$staged.previous\"
+      /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
+      /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
+      rollback_unavailable=''
+    fi
   fi
-  if ! stado_install_unit \"$rendered\"; then
+  if [ \"$unit_drift\" = yes ] && ! stado_install_unit \"$rendered\"; then
     if [ -n \"$previous\" ]; then
       stado_install_unit \"$previous\" || bail \"unit write failed; rollback failed; prior unit is $previous\"
       /bin/rm -f \"$previous\"
       bail 'unit write failed; prior unit restored'
     fi
-    bail 'unit write failed; no prior unit file existed'
+    bail \"unit write failed; rollback not attempted: $rollback_unavailable\"
   fi
   if ! stado_activate_definition; then
     replacement_failure=\"$activation_failure\"
-    if [ -n \"$previous\" ] && stado_install_unit \"$previous\" && stado_activate_definition; then
-      /bin/rm -f \"$previous\"
-      bail \"replacement activation failed ($replacement_failure); prior unit restored and running\"
+    if [ -n \"$previous\" ]; then
+      if stado_install_unit \"$previous\" && stado_activate_definition; then
+        /bin/rm -f \"$previous\"
+        bail \"replacement activation failed ($replacement_failure); prior unit restored and running\"
+      fi
+      bail \"replacement activation failed ($replacement_failure); rollback failed; prior unit is $previous\"
     fi
-    bail \"replacement activation failed ($replacement_failure); rollback failed; prior unit is ${previous:-absent}\"
+    bail \"replacement activation failed ($replacement_failure); rollback not attempted: $rollback_unavailable\"
   fi
   verification_failure=''
   if [ \"$os\" = Darwin ]; then
@@ -3296,11 +3306,14 @@ if [ \"$reload_needed\" = yes ]; then
     fi
   fi
   if [ -n \"$verification_failure\" ]; then
-    if [ -n \"$previous\" ] && stado_install_unit \"$previous\" && stado_activate_definition; then
-      /bin/rm -f \"$previous\"
-      bail \"replacement verification failed ($verification_failure); prior unit restored and running\"
+    if [ -n \"$previous\" ]; then
+      if stado_install_unit \"$previous\" && stado_activate_definition; then
+        /bin/rm -f \"$previous\"
+        bail \"replacement verification failed ($verification_failure); prior unit restored and running\"
+      fi
+      bail \"replacement verification failed ($verification_failure); rollback failed; prior unit is $previous\"
     fi
-    bail \"replacement verification failed ($verification_failure); rollback failed; prior unit is ${previous:-absent}\"
+    bail \"replacement verification failed ($verification_failure); rollback not attempted: $rollback_unavailable\"
   fi
   /bin/rm -f \"$previous\" \"$staged\" \"$rendered\"
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
@@ -5265,12 +5278,12 @@ pub const ACTION_CREATED: &str = "created";
 pub const ACTION_RESTARTED: &str = "restarted";
 /// The unit was there, running the declared program, and nothing was touched.
 pub const ACTION_ALREADY_CORRECT: &str = "already_correct";
-/// The unit was there, running the declared program with matching argv, but the
-/// rendered unit file had drifted; the unit was rewritten and kicked in place to
-/// converge. See the incident in ensure_service: changing base_unit_environment
-/// to render HOME or STADO_CONFIG leaves installed units with stale environments
-/// until they are deleted by hand. This action reports convergence without the
-/// window that bootout then bootstrap leaves.
+/// The unit was there with the declared Program and argv, but its rendered file
+/// had drifted; this pass installed and activated the desired definition through
+/// the guarded init-system lifecycle. See the incident in [`ensure_service`]:
+/// changing `base_unit_environment` to render `HOME` or `STADO_CONFIG` leaves
+/// installed units with stale environments until this definition is reloaded.
+/// On launchd that requires `bootout` then `bootstrap`, not an in-place kick.
 pub const ACTION_CONVERGED: &str = "converged";
 /// launchd held a stale program or argument vector and this pass reloaded the
 /// already-preflighted definition, then verified launchd's own readback.
@@ -5305,9 +5318,9 @@ impl EnsureOutcome {
     /// observed with the unit loaded and running afterwards.
     ///
     /// [`ACTION_CONVERGED`] belongs here. It was added as a success action —
-    /// a drifted unit file rewritten and kicked in place, deliberately
-    /// avoiding the window `bootout` then `bootstrap` leaves — but this set
-    /// was never widened to admit it, so every converged pass was reported as
+    /// a drifted unit file rewritten and activated through the guarded
+    /// init-system lifecycle — but this set was never widened to admit it, so
+    /// every converged pass was reported as
     /// a failure naming the unit path it had just settled on. That is what
     /// stopped the stado 0.13.11 release submission: its "Ensure the declared
     /// object service" step converged
@@ -5366,7 +5379,8 @@ pub fn ensure_unit_path(plan: &DeployPlan) -> String {
 
 /// `service ensure` on one host: leave a matching loaded definition untouched,
 /// kick a matching definition when needed, and perform one preflighted
-/// definition reload when launchd retains a different Program or argv.
+/// definition reload when the on-disk unit or launchd's retained Program or
+/// argv differs.
 pub async fn ensure_service(
     target: &ComputeTarget,
     plan: &DeployPlan,
