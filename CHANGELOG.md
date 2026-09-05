@@ -1,26 +1,31 @@
 # Changelog
 
-## 0.16.12
+## 0.16.13
 
 - **Canonical queue reachability:** the queue's HTTP client now uses the same Tailscale name-to-address map as artifact delivery. A broken system MagicDNS resolver no longer prevents submission, status, or cleanup from reaching the configured queue.
 - **Connection reuse:** pooled clients are keyed by origin host and CA configuration, so a connection pool cannot carry another origin's address pin. Bearers remain per-request headers; TLS hostname and certificate verification are unchanged.
+- **Migration and rollback:** no configuration or stored data changes. Rolling back restores dependence on the system resolver for queue operations.
+- **Platforms and evidence:** the native Probierz qualification covers `darwin-arm64` and `linux-amd64` and records the exact source revision.
+
+## 0.16.12
+
 - **Release staging:** both native platform recipes name the Stado executable relative to the worker's output directory, without duplicating `.wisent-output`.
 - **Software inventory:** unsupported executables are not launched to discover their version. Catalogued version commands have a five-second deadline, helper classification overlaps bounded reads, and an unknown version no longer prevents other programs from being reported.
 - **Version declarations:** `host declare-version --unset` removes one obsolete product requirement with a generation-checked registry write; repeating it reports that the declaration is already absent.
 - **Cache cleanup failures:** a failed tagged-cache removal returns a nonzero exit status and retains the filesystem's stderr instead of reporting a successful command.
-- **Migration and rollback:** no configuration or stored-state migration is required. Rolling back restores dependence on the system resolver for queue operations, the duplicated staging path, unbounded version discovery, and the inability to remove one version declaration through the CLI.
-- **Platforms and evidence:** the existing native Probierz qualification covers `darwin-arm64` and `linux-amd64`; release evidence must name this exact source revision.
+- **Coordinator archive delivery:** `service update --from-archive` validates members against the fixed `darwin-arm/` directory the installer actually supplies, so canonical root `stado` satisfies a unit running `current/darwin-arm/stado`.
+- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target and retains ordinary `host release` convergence for each target's host-global Stado image. Native install identifies long-running direct or launcher-owned readers by kernel device and inode, restarts each replaced image, and fails unless its replacement process maps the installed inode. The fleet job also discovers every registry-declared service-local Stado reader, installs the target platform's canonical archive into each private version tree, and uses that same kernel identity to restart only readers not already on the delivered inode.
+- **Convergence verdict:** unread image identity, a failed restart, a replacement process that does not map the installed inode, or a failed release receipt remains a failed delivery even if a later installed-version read says the path is in sync.
+- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
+- **Migration and rollback:** no stored-state migration is required. Rolling back restores the duplicated staging path, unbounded version discovery, and the inability to remove one version declaration through the CLI.
+- **Platforms:** the existing `darwin-arm64` and `linux-amd64` release and delivery paths are unchanged.
 
 ## 0.16.11
 
 - **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.
 - **Terminal cleanup:** the Linux matrix removes its own Cargo output on both success and failure, and keeps the downloaded signing tool in its ignored work directory instead of making the source checkout dirty.
-- **Coordinator archive delivery:** `service update --from-archive` now validates members against the layout it actually installs. Because the installer supplies the fixed `darwin-arm/` directory, a unit running `current/darwin-arm/stado` correctly accepts a root `stado` member instead of requiring an archive that would install as `darwin-arm/darwin-arm/stado`.
-- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target, retains ordinary `host release` convergence for each target's host-global Stado image, and discovers every registry-declared service-local Stado reader. It installs the target platform's canonical archive into each private version tree and restarts only readers that were not already running from that digest; a failed update or restart fails the release job.
-- **Convergence verdict:** `service converge --apply` now remains failed when one of its delivery receipts failed, even if the final installed-version read is in sync because another actor converged the path concurrently.
-- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
-- **Migration and rollback:** no stored data changes. Rolling back restores the larger temporary build footprint, leaves Linux qualification caches until normal retention removes them, and again permits native delivery to omit service-local Stado readers.
-- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`; immutable Stado publication, service-update, restart, and resumed-handoff receipts bind the coordinator repair's exact source and bytes.
+- **Migration and rollback:** no stored data changes. Rolling back restores the larger temporary build footprint and leaves Linux qualification caches until normal retention removes them.
+- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`.
 
 ## 0.16.10
 

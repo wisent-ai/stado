@@ -943,20 +943,10 @@ jobs:
             "$stado_bin" storage get \
               "stado://releases/stado/$STADO_VERSION/$platform/stado-v$STADO_VERSION-$platform.tar.gz" \
               "$archive"
-            while IFS= read -r reader; do
-              test -n "$reader"
-              update="$(
-                "$stado_bin" service update "$reader" \
-                  --host "$target" \
-                  --from-archive "$archive" \
-                  --json
-              )"
-              printf '%s\n' "$update"
-              if jq -e '.status == "already_active"' <<<"$update" >/dev/null; then
-                continue
-              fi
-              "$stado_bin" service restart "$reader" \
+              "$stado_bin" service update "$reader" \
                 --host "$target" \
+                --from-archive "$archive" \
+                --refresh-image \
                 --json
             done <<<"$readers"
           done <<<"$targets"
