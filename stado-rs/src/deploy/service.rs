@@ -748,6 +748,16 @@ fn delivery_tree_product(program: &str) -> Option<&str> {
     }
     Some(product)
 }
+/// Whether one registry unit executes Stado from its independently installed
+/// service tree rather than from the host-global `$HOME/.stado/bin/stado`.
+///
+/// The path shape is the same declaration [`delivery_tree_product`] already
+/// uses for release inventory. Reusing it keeps release selection and reader
+/// convergence from inventing two meanings of "service-local".
+pub fn is_service_local_stado_reader(service: &ManagedService) -> bool {
+    delivery_tree_product(&service.program).is_some()
+        && service.program.rsplit('/').next() == Some("stado")
+}
 
 /// Resolve a delivery-tree unit to the exact product name the compiled
 /// `host release` catalog accepts.

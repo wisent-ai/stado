@@ -586,15 +586,21 @@ struct HostReclaimStage: Decodable, Identifiable, Sendable {
     }
 }
 
-/// `stado service converge <host> --json`, read-only: what each declared unit
-/// runs, and what the process on the host is actually executing.
+/// One report from `stado service converge <host> [binary] --json`.
+///
+/// Report mode leaves the apply arrays empty. Apply mode carries every
+/// delivery, refusal and binary that could not be delivered, even when the
+/// process exits non-zero; `StadoCLI` deliberately decodes that stdout first.
 struct ServiceConvergeReport: Decodable, Sendable {
     let target: String
     let applied: Bool
+    let releases: [ServiceConvergeRelease]
+    let undeliverable: [ServiceConvergeUndeliverable]
+    let refused: [ServiceConvergeRefusal]
     let units: [ServiceUnit]
 
     enum CodingKeys: String, CodingKey {
-        case target, applied
+        case target, applied, releases, undeliverable, refused
         case units = "binaries"
     }
 
@@ -602,8 +608,46 @@ struct ServiceConvergeReport: Decodable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
         applied = try values.decodeIfPresent(Bool.self, forKey: .applied) ?? false
+        releases = try values.decodeIfPresent([ServiceConvergeRelease].self, forKey: .releases) ?? []
+        undeliverable =
+            try values.decodeIfPresent([ServiceConvergeUndeliverable].self, forKey: .undeliverable) ?? []
+        refused = try values.decodeIfPresent([ServiceConvergeRefusal].self, forKey: .refused) ?? []
         units = try values.decodeIfPresent([ServiceUnit].self, forKey: .units) ?? []
     }
+
+}
+
+struct ServiceConvergeRelease: Decodable, Sendable {
+    let binary: String
+    let version: String
+    let status: String
+    let detail: String
+}
+
+struct ServiceConvergeUndeliverable: Decodable, Sendable {
+    let binary: String
+    let detail: String
+}
+
+struct ServiceConvergeRefusal: Decodable, Sendable {
+    let binary: String
+    let declaredVersion: String
+    let installedVersion: String
+    let remediation: String
+
+    enum CodingKeys: String, CodingKey {
+        case binary, remediation
+        case declaredVersion = "declared_version"
+        case installedVersion = "installed_version"
+    }
+}
+
+/// The exact invocation and its complete decoded answer. Kept apart from
+/// refreshed service state so a refresh cannot erase mutation evidence.
+struct ServiceConvergeReceipt: Sendable {
+    let arguments: [String]
+    let exitCode: Int32
+    let report: ServiceConvergeReport
 }
 
 struct ServiceUnit: Decodable, Sendable {

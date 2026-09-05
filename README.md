@@ -713,6 +713,41 @@ is the break-glass bootstrap for restoring Stado itself when the resolver or
 remote binary that normal delivery depends on is unavailable. Leaving
 `--release` out preserves the original recovery behavior.
 
+For Stado's native delivery, `release install-local` and
+`service converge --apply` share the verified archive retained under
+`$HOME/.stado/releases/stado/<version>/<platform>/`. Root delivery moves its
+already-downloaded archive there before activation; it does not restart
+registry units whose executable lives in an independently installed
+`$HOME/.stado/services/...` tree. Reader convergence then uses the existing
+idempotent `service update --from-archive --refresh-image` path for every such
+registry declaration. A resumed pass with an already-attested root fetches the
+exact archive only when the retained copy is absent or corrupt, leaves
+already-current root and reader images running, and fails unless every stale
+private image is installed and proved. The queue agent continues to defer its
+own recycle through the installed-release handshake.
+
+On a required-delivery retry, `install-local` compares the already-verified
+payload with the installed root. Byte-identical root bytes are not renamed or
+recycled; the endpoint repairs their attestation and release-version handshake,
+then starts private updates through the explicit installed
+`$HOME/.stado/bin/stado` path. Failed child JSON, stdout, and stderr remain in
+the `stado-readers.detail` receipt. The Desktop Services action runs the same
+host-wide or selected-binary CLI apply, preserves its decoded report plus
+actual exit status, and never re-derives the gate.
+
+Partial-state reader resume requires the target's global receiver to come from
+a release containing the retained-archive arguments. A version banner alone
+does not establish that source identity. A receiver built without the hidden
+contract rejects the apply and leaves convergence failed; first deliver a
+release that contains this fix through the normal root path. There is no
+compatibility shim and no success inferred from an older source.
+
+The repository's `.github/workflows/deploy.yml` invokes that CLI convergence
+for the existing stable deployment workflow; it does not define a second
+private-reader loop and is not the canonical source, qualification,
+publication, or promotion contract. Those remain owned by
+`stado release submit`; GitHub is an optional adapter.
+
 ### Observability and recovery
 
 `stado overview`, `stado doctor`, queue state, heartbeats, leases, provider

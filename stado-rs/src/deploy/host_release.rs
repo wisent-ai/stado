@@ -13,7 +13,9 @@
 //! through `/api/release/object`, verify the archive SHA-256, check the
 //! required layout, stage the selected member under a versioned directory,
 //! and only after every artifact is verified repoint the active release and
-//! restart every declared unit that runs it.
+//! restart each declared unit that executes that install root. Independently
+//! installed Stado reader trees consume the retained verified archive through
+//! the enclosing `service converge` contract.
 //! A missing or mismatched release archive leaves the currently active
 //! release untouched and aborts the deployment. That
 //! sentence is the whole design; everything below is it, applied to whatever
@@ -87,9 +89,9 @@
 //!   unit: a label alone has to be FOUND in the registry's own declared
 //!   service set ([`service::declared_services`]) before it is touched, while
 //!   a label together with the unit file locates a unit the product itself
-//!   declares. Every resolved owner is restarted through the shipped
-//!   `service restart` program. A product with no declared units is activated
-//!   and reported as having no units, not silently "restarted".
+//!   declares. Every resolved owner of this install root is restarted through
+//!   the shipped `service restart` program. A product with no such units is
+//!   activated and reported as having no units, not silently "restarted".
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
@@ -115,6 +117,9 @@ pub const PLANNED_STATUS: &str = "planned";
 /// timeout for probes and activation, but bound download, hashing and extract
 /// with enough time for the declared public release channel.
 const STAGE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Verified Stado archive retained beside its attestation image until every
+/// service-local reader has installed the same delivered bytes.
+pub const READER_ARCHIVE_NAME: &str = "stado-reader-convergence.tar.gz";
 
 /// The remote marker prefix, in the tab-delimited `STADO_*` protocol
 /// [`crate::deploy::host_recovery::parse_output`] established.
@@ -755,6 +760,7 @@ stado_home="$HOME/.stado"
 staged_dir="$stado_home/releases/$binary/$version/$platform"
 staged_path="$staged_dir/$binary"
 archive_path="$staged_dir/.$archive_name.incoming"
+reader_archive="$staged_dir/$reader_archive_name"
 incoming="$staged_dir/.$binary.incoming"
 
 # The plan enforced the scheme contract before this script existed: HTTPS
@@ -808,25 +814,30 @@ if ! /usr/bin/tar -xOzf "$archive_path" "$member" > "$incoming"; then
   say layout archive_extract_failed
   exit 1
 fi
-/bin/rm -f "$archive_path"
 if [ ! -s "$incoming" ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say layout empty
   exit 1
 fi
 /bin/chmod 755 "$incoming"
 read_version "$incoming"
 if [ "$read_version_state" != reported ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say layout "$read_version_state"
   exit 1
 fi
 if [ "$read_version_value" != "$version" ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say layout version_mismatch
   exit 1
 fi
 say layout ok
+if [ "$binary" = stado ]; then
+  /bin/mv -f "$archive_path" "$reader_archive"
+else
+  /bin/rm -f "$archive_path"
+fi
+
 
 /bin/mv -f "$incoming" "$staged_path"
 staged_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$staged_path")
@@ -834,6 +845,43 @@ staged_sha256=${staged_digest_line%% *}
 say staged_sha256 "$staged_sha256"
 say staged "$version"
 say step stage
+"##;
+/// Fetch only the immutable Stado archive needed to resume service-local
+/// reader convergence. This deliberately does not extract or activate the
+/// root program: a byte-attested root may already be complete while a private
+/// reader remains old.
+const REMOTE_RETAIN_READER_ARCHIVE_BODY: &str = r##"
+stado_release_step=retain_reader_archive
+staged_dir="$HOME/.stado/releases/$binary/$version/$platform"
+archive_path="$staged_dir/.$archive_name.reader-incoming"
+reader_archive="$staged_dir/$reader_archive_name"
+for required in /usr/bin/curl /usr/bin/openssl /usr/bin/awk /usr/bin/tr /usr/bin/wc; do
+  if [ ! -x "$required" ]; then
+    say fetch "missing_${required##*/}"
+    exit 1
+  fi
+done
+
+
+/bin/mkdir -p "$staged_dir"
+/bin/rm -f "$archive_path"
+if ! fetch_release_object \
+  "stado://releases/$product/$version/$platform/$archive_name" \
+  "$archive_path"; then
+  /bin/rm -f "$archive_path"
+  exit 1
+fi
+digest_line=$(/usr/bin/openssl dgst -sha256 -r "$archive_path")
+actual_sha256=${digest_line%% *}
+say sha256 "$actual_sha256"
+if [ "$actual_sha256" != "$expected_sha256" ]; then
+  /bin/rm -f "$archive_path"
+  say verify mismatch
+  exit 1
+fi
+/bin/mv -f "$archive_path" "$reader_archive"
+say verify ok
+say step retain_reader_archive
 "##;
 
 /// Phase three, program shape: atomically activate the version-checked file
@@ -1321,13 +1369,14 @@ fn release_resolve(release_api: &str) -> String {
 /// closed alphabet of path characters and refuses everything else.
 fn bindings(plan: &ReleasePlan) -> String {
     let mut bound = format!(
-        "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nexpected_sha256={}\n\
-         release_api={}\nmember={}\nsource_commit={}\ndelivered_by={}\ninstall_root=\"{}\"\n",
+        "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nreader_archive_name={}\n\
+         expected_sha256={}\nrelease_api={}\nmember={}\nsource_commit={}\ndelivered_by={}\ninstall_root=\"{}\"\n",
         shlex_quote(&plan.product.name),
         shlex_quote(&plan.product.source.product),
         shlex_quote(&plan.version),
         shlex_quote(&plan.platform),
         shlex_quote(plan.archive_name()),
+        shlex_quote(READER_ARCHIVE_NAME),
         shlex_quote(&plan.sha256),
         shlex_quote(&plan.release_api),
         shlex_quote(&plan.member),
@@ -1373,6 +1422,7 @@ fn bindings(plan: &ReleasePlan) -> String {
             shlex_quote(&plan.product.install.preserve().join("\n")),
         )),
     }
+
     bound
 }
 
@@ -1401,6 +1451,61 @@ pub fn stage_script(plan: &ReleasePlan) -> String {
             bindings(plan)
         ),
     }
+}
+/// Ensure the canonical Stado archive is retained for private reader
+/// convergence without activating or restarting the already-attested root.
+///
+/// Ordinary root staging moves its already-downloaded archive into this
+/// namespace. A resumed partial state first reuses that exact file when its
+/// digest still matches; only an absent or corrupt retained file is fetched,
+/// and that fallback neither extracts the root member nor touches a unit.
+pub async fn ensure_stado_reader_archive(
+    target: &ComputeTarget,
+    request: &ReleaseRequest,
+    self_store: bool,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    let plan = plan(target, request, self_store)?;
+    if plan.product.name != "stado" || plan.product.install.is_tree() {
+        return Err(DeployError(
+            "reader archive convergence is defined only for the Stado program product".to_string(),
+        ));
+    }
+    let cached_script = format!(
+        "{}set -euo pipefail\n\
+         reader_archive=\"$HOME/.stado/releases/$binary/$version/$platform/$reader_archive_name\"\n\
+         [ -f \"$reader_archive\" ] && [ ! -L \"$reader_archive\" ]\n\
+         digest_line=$(/usr/bin/openssl dgst -sha256 -r \"$reader_archive\")\n\
+         actual_sha256=${{digest_line%% *}}\n\
+         [ \"$actual_sha256\" = \"$expected_sha256\" ]\n",
+        bindings(&plan),
+    );
+    if host_channel::run_script(target, &cached_script, runner)
+        .await?
+        .ok()
+    {
+        return Ok(());
+    }
+
+    let script = format!(
+        "{}{SANITIZE_PRELUDE}{FETCH_PRELUDE}{REMOTE_RETAIN_READER_ARCHIVE_BODY}",
+        bindings(&plan),
+    );
+    let output =
+        host_channel::run_script_with_timeout(target, &script, STAGE_TIMEOUT, runner).await?;
+    let output_markers = markers(&output.stdout);
+    if !output.ok() || marker(&output_markers, "step") != "retain_reader_archive" {
+        return Err(DeployError(format!(
+            "cannot retain the verified Stado reader archive: {}",
+            step_failure(&output_markers, &output)
+        )));
+    }
+    if marker(&output_markers, "sha256") != plan.sha256 {
+        return Err(DeployError(
+            "retained Stado reader archive did not report the canonical digest".to_string(),
+        ));
+    }
+    Ok(())
 }
 /// Re-verify one already-staged program without consulting the release
 /// authority. Its version and digest are checked again before activation.
@@ -1509,16 +1614,16 @@ fn fail(report: &mut Map<String, Value>, exit_code: i32, error: String) -> Value
     Value::Object(std::mem::take(report))
 }
 
-/// The units that run this product on this host.
+/// The units whose executable is installed by this product on this host.
 ///
 /// Two declarations can name each one, and both are declarations rather than
 /// guesses. The registry's own service set wins whenever it carries the
-/// label: an operator who adopted the unit stated where its file is, and that
-/// statement is newer than any shipped document. Otherwise the product
-/// declaration may LOCATE the unit itself — label, kind and unit file — and
-/// locating it is the statement that it exists. A product label the registry
-/// does not carry and the product does not locate is omitted and never
-/// restarted.
+/// label. For Stado, a registry unit executing
+/// `~/.stado/services/<service>/current/.../stado` is deliberately excluded:
+/// the root product installs only `$HOME/.stado/bin/stado`, so restarting that
+/// private unit here would restart unchanged bytes and then compare them with
+/// the new global digest. The shared private-reader convergence installs the
+/// verified archive into those trees before it performs their lifecycle.
 pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service::ManagedService> {
     let registry_units = service::declared_services(target);
     let mut resolved = Vec::new();
@@ -1548,6 +1653,9 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
                 })
             });
         if let Some(declared) = declared {
+            if product.name == "stado" && service::is_service_local_stado_reader(&declared) {
+                continue;
+            }
             if !resolved
                 .iter()
                 .any(|existing: &service::ManagedService| existing.unit_id() == declared.unit_id())
