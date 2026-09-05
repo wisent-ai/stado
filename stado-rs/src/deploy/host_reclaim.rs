@@ -186,9 +186,10 @@ const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
 const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
 const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
-/// Queue workdirs historically lived in `/tmp`; current macOS agents may use
-/// the per-user temporary container. Both roots carry the same proof policy.
-pub const DEFAULT_WORK_ROOTS: &str = "/tmp \"${TMPDIR:-}\"";
+/// Current agents retain queue workdirs under `$HOME/.stado/work/jobs`; older
+/// agents used `/tmp` or the per-user temporary container. All three roots
+/// carry the same queue-authority and process-liveness proof policy.
+pub const DEFAULT_WORK_ROOTS: &str = "\"$HOME/.stado/work/jobs\" /tmp \"${TMPDIR:-}\"";
 const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
 const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
 const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";

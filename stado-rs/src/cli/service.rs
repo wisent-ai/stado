@@ -541,7 +541,7 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Remove one key from a managed service's owner-controlled env file.
+    /// Remove one key from a managed env file or systemd definition.
     EnvUnset {
         /// Service whose host-local process reads the environment.
         name: String,
@@ -551,7 +551,7 @@ pub enum ServiceCommands {
         /// Exact environment variable name.
         #[arg(long)]
         key: String,
-        /// Environment file on the target, absolute or rooted at $HOME.
+        /// Runtime env file, or this service's exact systemd unit/drop-in path.
         #[arg(long)]
         env_file: String,
         #[arg(long)]
@@ -2564,10 +2564,22 @@ async fn update(
     // beside it under a directory that only matches the name.
     let runner = production_runner();
     let declared = &services[usize::default()];
-    let report = service::show_service(&target, declared, &runner)
+    // Archive membership follows the actual executable vector in the unit.
+    // `service show` is deliberately human presentation and may contain
+    // spaces in paths and arguments plus a resolved-link annotation.
+    let unit = service::fetch_unit_file(&target, declared, &runner)
         .await
         .map_err(click)?;
-    let program = report.detail.trim();
+    let observed = service::parse_unit_program(&unit)
+        .map_err(click)?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} has no executable program in {}",
+                declared.unit_id(),
+                unit.path
+            ))
+        })?;
+    let program = observed.as_str();
     let directory = program
         .split("/services/")
         .nth(usize::from(true))
@@ -4091,9 +4103,16 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
             .map_err(click)?;
         let unit_env = service::is_systemd_env_file(declared, env_file);
         let updated = if unit_env {
-            service::set_unit_env_key_on_host(&target, declared, env_file, key, value, &runner)
-                .await
-                .map_err(click)?
+            service::set_unit_env_key_on_host(
+                &target,
+                declared,
+                env_file,
+                key,
+                Some(value),
+                &runner,
+            )
+            .await
+            .map_err(click)?
         } else {
             service::set_env_key_on_host(&target, env_file, key, value, &runner)
                 .await
@@ -4196,9 +4215,15 @@ async fn env_unset(options: EnvUnsetOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let updated = service::unset_env_key_on_host(&target, env_file, key, &runner)
-            .await
-            .map_err(click)?;
+        let updated = if service::is_systemd_env_file(declared, env_file) {
+            service::set_unit_env_key_on_host(&target, declared, env_file, key, None, &runner)
+                .await
+                .map_err(click)?
+        } else {
+            service::unset_env_key_on_host(&target, env_file, key, &runner)
+                .await
+                .map_err(click)?
+        };
         if !updated.succeeded("env_unset") {
             failures.push(format!("{}: {}", declared.host, updated.failure()));
         }

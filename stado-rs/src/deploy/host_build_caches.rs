@@ -15,8 +15,9 @@
 //!
 //! `report` lists candidates with sizes; `prune` deletes them. Age and root
 //! arrive as explicit arguments, so the command carries no threshold of its
-//! own. A process snapshot plus `lsof +D` protects every candidate immediately
-//! before deletion, including when an operator explicitly overrides age.
+//! own. A process snapshot plus `lsof +D` over the cache's owning project
+//! protects every candidate immediately before deletion, including when an
+//! operator explicitly overrides age.
 
 use std::time::Duration;
 
@@ -58,7 +59,14 @@ process_absent() {
     *"$1"*) return 1 ;;
   esac
   [ -n "$lsof_bin" ] || return 2
-  "$lsof_bin" -n +D "$1" >/dev/null 2>&1
+  # Build processes normally keep their cwd at the project root, not inside
+  # `target`. Looking only below the tagged cache returned "idle" while Cargo
+  # was still writing it, and `rm` then raced those writes. The tag's parent is
+  # the narrow owner boundary that covers both cwd and cache files without
+  # treating an unrelated process elsewhere under the operator's scan root as
+  # a holder.
+  owner=$(/usr/bin/dirname "$1")
+  "$lsof_bin" -n +D "$owner" >/dev/null 2>&1
   status=$?
   case "$status" in
     0) return 1 ;;

@@ -7992,6 +7992,81 @@ pub struct UnitFile {
     pub content: String,
 }
 
+/// Read the actual executable from a launchd plist or systemd unit.
+///
+/// This is the typed counterpart to [`show_service`], whose detail is human
+/// presentation and may append arguments and resolved-link annotations.
+pub fn parse_unit_program(unit: &UnitFile) -> Result<Option<String>, DeployError> {
+    if unit.kind == KIND_LAUNCHD {
+        let document = parse_plist(&unit.content)?;
+        // Program overrides argv[0] when launchd declares both.
+        let program = document.get("Program").or_else(|| {
+            document
+                .get("ProgramArguments")
+                .and_then(Value::as_array)
+                .and_then(|arguments| arguments.first())
+        });
+        return program
+            .map(|program| {
+                program
+                    .as_str()
+                    .filter(|program| !program.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        DeployError(format!(
+                            "{}: {} declares an empty or non-string program",
+                            unit.host, unit.unit
+                        ))
+                    })
+            })
+            .transpose();
+    }
+
+    let mut in_service = false;
+    let mut command = None;
+    for line in logical_lines(&unit.content) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            in_service = name.trim() == "Service";
+            continue;
+        }
+        if !in_service {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "ExecStart" {
+            continue;
+        }
+        if value.trim().is_empty() {
+            command = None;
+            continue;
+        }
+        if command.is_some() {
+            continue;
+        }
+        let Some(mut program) = split_words(value).into_iter().next() else {
+            continue;
+        };
+        let prefix = program.len()
+            - program
+                .trim_start_matches(['@', '-', ':', '+', '!', '|'])
+                .len();
+        program.drain(..prefix);
+        if !program.is_empty() {
+            command = Some(program);
+        }
+    }
+    Ok(command)
+}
+
 /// `service env`'s fetch: the unit and its overriding definitions on the host.
 pub async fn fetch_unit_file(
     target: &ComputeTarget,
@@ -8257,12 +8332,13 @@ pub fn is_systemd_env_file(service: &ManagedService, path: &str) -> bool {
 }
 
 /// Update a declared systemd environment assignment without cycling the unit.
+/// `None` removes the assignment and an otherwise empty drop-in.
 pub async fn set_unit_env_key_on_host(
     target: &ComputeTarget,
     service: &ManagedService,
     env_path: &str,
     key: &str,
-    value: &str,
+    value: Option<&str>,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     if !is_systemd_env_file(service, env_path) {
@@ -8293,7 +8369,8 @@ for component in (path, *path.parents):
 before = path.stat()
 if not stat.S_ISREG(before.st_mode) or before.st_uid != int(sys.argv[1]):
     raise RuntimeError("unit environment file must be regular and owned by the service account")
-key, value = decode("@KEY_B64@"), decode("@VALUE_B64@")
+key = decode("@KEY_B64@")
+value = decode("@VALUE_B64@") if @SET_VALUE@ else None
 original = path.read_text()
 entries, pending = [], []
 for line in original.splitlines(keepends=True):
@@ -8325,16 +8402,26 @@ for raw in entries:
     output.append(raw)
 if in_service:
     insertion = len(output)
-if insertion is None:
-    output.append("\n[Service]\n")
-    insertion = len(output)
-if insertion and not output[insertion - 1].endswith("\n"):
-    output[insertion - 1] += "\n"
-escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
-output.insert(insertion, 'Environment="' + key + "=" + escaped + '"\n')
+if value is not None:
+    if insertion is None:
+        output.append("\n[Service]\n")
+        insertion = len(output)
+    if insertion and not output[insertion - 1].endswith("\n"):
+        output[insertion - 1] += "\n"
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    output.insert(insertion, 'Environment="' + key + "=" + escaped + '"\n')
 updated = "".join(output)
+empty_dropin = value is None and path.suffix == ".conf" and all(
+    not line.strip() or line.strip() == "[Service]" for line in updated.splitlines()
+)
 if updated == original:
     print("unchanged")
+elif empty_dropin:
+    current = path.lstat()
+    if (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size) != (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size):
+        raise RuntimeError("unit environment file changed during the update")
+    path.unlink()
+    print("changed")
 else:
     fd, temporary = tempfile.mkstemp(prefix=".stado-unit-env.", dir=path.parent)
     try:
@@ -8354,21 +8441,36 @@ else:
     print("changed")
 STADO_UNIT_ENV
 ); then
-  say 'env_set_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
+  say '@ACTION@_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
   exit 1
 fi
 if [ "$changed" = changed ] || [ "$(stado_systemctl show -p NeedDaemonReload --value "$unit")" = yes ]; then
   if ! stado_systemctl daemon-reload; then
-    say 'env_set_failed' 'unit environment changed but systemd could not reload it'
+    say '@ACTION@_failed' 'unit environment changed but systemd could not reload it'
     exit 1
   fi
 fi
-say 'env_set' "$changed; systemd definition refreshed without restarting the unit"
+say '@ACTION@' "$changed; systemd definition refreshed without restarting the unit"
 "###;
     let body = body
         .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
         .replace("@KEY_B64@", &STANDARD.encode(key.as_bytes()))
-        .replace("@VALUE_B64@", &STANDARD.encode(value.as_bytes()));
+        .replace(
+            "@VALUE_B64@",
+            &STANDARD.encode(value.unwrap_or_default().as_bytes()),
+        )
+        .replace(
+            "@SET_VALUE@",
+            if value.is_some() { "True" } else { "False" },
+        )
+        .replace(
+            "@ACTION@",
+            if value.is_some() {
+                "env_set"
+            } else {
+                "env_unset"
+            },
+        );
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
 }

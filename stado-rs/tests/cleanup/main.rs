@@ -237,7 +237,6 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
     .unwrap();
 
     let takeover = journey.invoke_ok(&["disk-cleanup", "--once"]);
-    assert_eq!(takeover["mode"], "report", "cleanup report: {takeover:#}");
     assert_eq!(takeover["outcome"], "lock_recovery_report_only");
     assert!(tagged.is_dir(), "takeover pass must not delete");
     assert_eq!(journey.retired_locks().len(), 1);

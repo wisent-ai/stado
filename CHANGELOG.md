@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.17
+
+- **Complete native delivery:** `release install-local` updates every registry-declared service-local Stado executable from the same verified archive and requires its existing image-convergence check to succeed. Archive validation reads the unit's actual executable, preserving quoted paths and launchd `Program` precedence instead of parsing presentation text.
+- **Safe disk recovery:** tagged-cache pruning checks activity in the owning project, including Cargo's working directory. Host reclamation includes the current persistent job directory and keeps queue-active or process-held work.
+- **Systemd environment migration:** `service env-unset` removes assignments from the same declared unit/drop-in paths supported by `env-set`, removes an emptied drop-in, and reloads definitions without restarting the service.
+- **Migration and rollback:** no stored schema changes. Rolling back loses complete private-reader delivery, persistent-work reclamation, and systemd assignment removal.
+- **Platforms:** the native release path remains available on `darwin-arm64` and `linux-amd64`.
+
 ## 0.16.16
 
 - **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.
