@@ -569,6 +569,32 @@ const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
 /// Total allocated KiB below the manual Figma export's fixed work tree.
 const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &["/usr/bin/du", "-sk", ".stado/work/figma-export"];
 
+/// Allocated size and open-file census for the two tagged Cargo trees that
+/// dominate the MacBook's cleanup inventory. Both roots are fixed: an
+/// operator cannot redirect either read at source or account data.
+const JOB_PROGRESS_TARGET_SIZE: &[&str] = &[
+    "/usr/bin/du",
+    "-sk",
+    "Documents/CodingProjects/Wisent/stado-job-progress-probe/stado-rs/target",
+];
+const JOB_PROGRESS_TARGET_OPEN_FILES: &[&str] = &[
+    "/usr/sbin/lsof",
+    "-n",
+    "+D",
+    "Documents/CodingProjects/Wisent/stado-job-progress-probe/stado-rs/target",
+];
+const WEB_HOSTING_TARGET_SIZE: &[&str] = &[
+    "/usr/bin/du",
+    "-sk",
+    "Documents/CodingProjects/Wisent/stado-web-hosting/stado-rs/target",
+];
+const WEB_HOSTING_TARGET_OPEN_FILES: &[&str] = &[
+    "/usr/sbin/lsof",
+    "-n",
+    "+D",
+    "Documents/CodingProjects/Wisent/stado-web-hosting/stado-rs/target",
+];
+
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
 ///
@@ -591,6 +617,10 @@ const HOME_ROOTED_READS: &[&[&str]] = &[
     WELES_ADMISSION_WORKER_MODULES,
     FIGMA_EXPORT_LOG_STAT,
     FIGMA_EXPORT_WORK_TREE_SIZE,
+    JOB_PROGRESS_TARGET_SIZE,
+    JOB_PROGRESS_TARGET_OPEN_FILES,
+    WEB_HOSTING_TARGET_SIZE,
+    WEB_HOSTING_TARGET_OPEN_FILES,
 ];
 
 /// Is this entry's fixed argv one of the home-rooted reads?
@@ -890,6 +920,32 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               from logging alone. The path, unit and recursion root are compile-time \
               constants, no operator word is appended, du stays within the managed account's \
               work tree, and the command writes nothing",
+    },
+    ApprovedCommand {
+        argv: JOB_PROGRESS_TARGET_SIZE,
+        why: "reads allocated KiB below only the inactive job-progress probe's standard-tagged \
+              Cargo target. The full host inventory times out before it reports this managed \
+              root; the fixed path and unit expose no source contents and du writes nothing",
+    },
+    ApprovedCommand {
+        argv: JOB_PROGRESS_TARGET_OPEN_FILES,
+        why: "lists open files only below the inactive job-progress probe's fixed Cargo target. \
+              A forced tagged-cache prune has no process guard of its own, so this read proves \
+              whether any process still holds that exact cache before it is considered. The \
+              recursive root is compile-time data and lsof writes nothing",
+    },
+    ApprovedCommand {
+        argv: WEB_HOSTING_TARGET_SIZE,
+        why: "reads allocated KiB below only the web-hosting worktree's standard-tagged Cargo \
+              target. The fixed managed root is the remaining large cache named by disk \
+              inventory; no operator path is accepted and du writes nothing",
+    },
+    ApprovedCommand {
+        argv: WEB_HOSTING_TARGET_OPEN_FILES,
+        why: "lists open files only below the web-hosting worktree's fixed Cargo target. A \
+              forced tagged-cache prune has no process guard of its own, so the cache remains \
+              protected unless this exact read finds no holder. The recursive root is \
+              compile-time data and lsof writes nothing",
     },
     ApprovedCommand {
         argv: &[
@@ -1530,6 +1586,20 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               last publication result. This distinguishes a stale manager definition from \
               a later environment override without restarting anything. The unit and \
               properties are fixed and credential values are not read",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "cat",
+            "stado-host-beacon.service",
+            "--no-pager",
+        ],
+        why: "prints the fixed beacon unit fragment followed by every systemd drop-in in \
+              precedence order. The loaded property view above names override paths but does \
+              not show which one still supplies an obsolete API URL after the managed base \
+              environment file was corrected. `cat` is read-only, the unit name and \
+              no-pager flag are fixed, and no operator path or arbitrary argument reaches \
+              systemd",
     },
 ];
 
