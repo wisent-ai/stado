@@ -32,7 +32,7 @@
     {
       "name": "stado",
       "summary": "The core object API for registry, queue and release state.",
-      "program": "$HOME/.stado/services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado",
+      "program": "$HOME/.stado/bin/stado",
       "args": [
         "dashboard",
         "--bind",

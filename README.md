@@ -373,6 +373,13 @@ stado capabilities --json
 
 See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
 
+For a loaded launchd label or systemd unit that the registry does not declare,
+`stado service bootout <exact-unit> --host <target> --domain system|user`
+retires only that exact init-system identity. Linux bootout disables and stops
+the unit and verifies it inactive without deleting its unit file; omitting the
+domain preserves system-first precedence. See
+[Channels](docs/channels.md#retiring-an-undeclared-init-system-unit).
+
 ### Weles mobile egress
 
 `stado egress mobile serve` is the data path for a Weles browser that must
@@ -567,9 +574,25 @@ See [Configuration and credentials](https://stado.wisent.com/docs/configuration)
 
 ### State and ownership
 
-One configured backend is canonical. A separately configured backup backend is
-a recovery destination, never an implicit fallback writer. Queue migrations
-use pause, drain, copy, verification, fencing, and explicit cutover.
+One configured backend is canonical. Client reads may consult a compatible
+backup only after a primary error; a successful absent answer from the primary
+is authoritative. Destructive janitor reads and object API server reads stay on
+the primary. Mutations commit there first and are then mirrored best-effort to
+the compatible backup, which is never promoted to writer. Queue migrations use
+pause, drain, copy, verification, fencing, and explicit cutover.
+
+To distinguish an authority switch from deletion without reading object
+content or walking either store, compare an existing coordinate in the fixed
+host roots:
+
+```console
+stado host backup-audit TARGET --object stado://probierz/queue/JOB.json --json
+```
+
+Repeat `--object` to compare more coordinates. Exact-object mode reports each
+side's state, byte count, and SHA-256, and reports `deadline_unproven` if the
+existing read-only hashing budget expires. It cannot be combined with replica
+reclamation. Omitting `--object` retains the whole-replica classification.
 
 Provider resources are mutable only when their ownership and expected state
 match the approved plan. Report-only is the default autonomy level.

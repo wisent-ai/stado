@@ -1919,6 +1919,14 @@ enum HostCommands {
     #[command(name = "backup-audit")]
     BackupAudit {
         target: String,
+        /// Compare only this exact object in the fixed primary and backup roots;
+        /// repeatable. Reports size and SHA-256, never object content.
+        #[arg(
+            long = "object",
+            value_name = "STADO_URI",
+            conflicts_with = "reclaim_twins"
+        )]
+        objects: Vec<String>,
         /// Delete the twins this pass proves. Names them and deletes nothing
         /// without --apply.
         #[arg(long = "reclaim-twins")]
@@ -2493,10 +2501,10 @@ enum HostCommands {
     /// The requirement is read from `browsers.json` inside the installed
     /// release, never hardcoded here, because Playwright pins an exact revision
     /// per component and a constant would verify the wrong path the moment the
-    /// release moved. Verification reports every component the release installs
-    /// by default; --repair installs only the ones named, defaulting to the one
-    /// Weles takes from that cache, so a repair never downloads browsers
-    /// nothing drives.
+    /// release moved. The report separately states whether the components
+    /// required by this invocation are present and whether any Chromium,
+    /// Firefox, or WebKit engine can open a page. --repair installs only the
+    /// components named, defaulting to ffmpeg.
     #[command(name = "weles-browser-runtime")]
     WelesBrowserRuntime {
         target: String,
@@ -3413,10 +3421,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::verify_release_platform(&target, &repo, &revision, json).await,
             HostCommands::BackupAudit {
                 target,
+                objects,
                 reclaim_twins,
                 apply,
                 json,
-            } => host::backup_audit(&target, reclaim_twins, apply, json).await,
+            } => host::backup_audit(&target, &objects, reclaim_twins, apply, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
