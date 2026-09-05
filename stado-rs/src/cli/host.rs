@@ -11504,6 +11504,7 @@ trap '/bin/rm -rf "$work"' EXIT HUP INT TERM
 export TMPDIR="$work/tmp"
 /bin/mkdir -p "$TMPDIR"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
+export CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
 /usr/bin/git -C "$work" init -q source
 /usr/bin/git -C "$work/source" remote add origin {repo}
 /usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
