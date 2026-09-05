@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.16.17
 
-- **Stable fleet workflow:** the private-reader update loop consumes every discovered service name before closing its here-string loop. The shell can execute the existing archive delivery and image refresh for each declared reader.
+- **Fleet delivery completion:** the stable deployment iterates each discovered service-local Stado reader before invoking its archive update. An empty reader set still succeeds, while every declared reader receives the canonical platform archive and image refresh instead of the shell aborting on an unbound loop variable.
+- **Migration and rollback:** no stored data changes. Rolling back restores the incomplete fleet loop and leaves the already-published platform artifacts available for a later corrected delivery.
+- **Platforms:** the corrected fleet pass delivers the existing signed `darwin-arm64` and `linux-amd64` release paths.
 
 ## 0.16.16
 
