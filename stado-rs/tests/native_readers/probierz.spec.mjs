@@ -109,6 +109,7 @@ await writeFile(tracePath, `${JSON.stringify({
     'the public service label-print readback proves the replacement device, inode, executable path, and SHA-256 equal the delivered root file before convergence succeeds',
     'repeating convergence leaves an already-correct process running under the same pid',
     'service update installs the real archive into a private tree, reloads the cached global definition, proves its replacement image, and leaves it running on an identical replay',
+    'an incompatible archive is refused while the current symlink, plist bytes, live pid and mapped private image remain unchanged',
   ],
   redaction: {
     status: 'verified_redacted',

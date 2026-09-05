@@ -736,7 +736,7 @@ host-wide or selected-binary CLI apply, preserves its decoded report plus
 actual exit status, and never re-derives the gate.
 
 Partial-state reader resume requires the target's global receiver to run Stado
-0.16.24 or newer, which owns the retained-archive arguments. An older receiver
+0.16.26 or newer, which owns the retained-archive arguments. An older receiver
 rejects that hidden command contract and the apply remains failed; first
 deliver a new immutable Stado version through the normal root path. There is
 no compatibility shim and no success inferred from an old receiver.

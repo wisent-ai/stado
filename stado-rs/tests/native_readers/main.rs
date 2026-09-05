@@ -45,6 +45,22 @@ struct Fixture {
     cleanup_finished: bool,
 }
 
+fn write_stado_archive(path: &Path, binary: &Path, member: &str) {
+    let compressed = flate2::write::GzEncoder::new(
+        fs::File::create(path).expect("create real Stado archive"),
+        flate2::Compression::fast(),
+    );
+    let mut package = tar::Builder::new(compressed);
+    package
+        .append_path_with_name(binary, member)
+        .expect("archive the built Stado executable");
+    package
+        .into_inner()
+        .expect("finish native archive")
+        .finish()
+        .expect("finish native archive compression");
+}
+
 impl Fixture {
     fn new() -> Self {
         let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-reader-runs");
@@ -79,19 +95,7 @@ impl Fixture {
             .expect("copy built Stado into the private root");
 
         let archive = root.path().join("stado-readers.tar.gz");
-        let compressed = flate2::write::GzEncoder::new(
-            fs::File::create(&archive).expect("create real Stado archive"),
-            flate2::Compression::fast(),
-        );
-        let mut package = tar::Builder::new(compressed);
-        package
-            .append_path_with_name(&root_binary, "stado")
-            .expect("archive the built Stado executable");
-        package
-            .into_inner()
-            .expect("finish native archive")
-            .finish()
-            .expect("finish native archive compression");
+        write_stado_archive(&archive, &root_binary, "stado");
         let archive_sha256 = file_identity(&archive).sha256;
 
         let unique = SystemTime::now()
@@ -725,6 +729,38 @@ fn service_update_reloads_a_cached_global_stado_definition_once() {
         fixture.wait_for_pid(None, Duration::from_secs(30)),
         private_pid,
         "replaying the same archive restarted an already-current private reader"
+    );
+    assert_maps(&fixture, private_pid, &private_image, &private_identity);
+
+    let current = private_path.parent().unwrap().parent().unwrap();
+    let previous_link = fs::read_link(current).expect("private current link");
+    let previous_plist = fs::read(&fixture.plist).expect("installed private declaration");
+    let wrong_layout = fixture.home.join("wrong-layout.tar.gz");
+    write_stado_archive(&wrong_layout, &fixture.root_binary, "bin/stado");
+    let refused = fixture
+        .command(&[
+            "service",
+            "update",
+            &fixture.label,
+            "--host",
+            HOST,
+            "--from-archive",
+            wrong_layout.to_str().expect("wrong archive path"),
+            "--refresh-image",
+            "--json",
+        ])
+        .output()
+        .expect("real archive refusal command runs");
+    println!("archive refusal: {}", said(&refused));
+    assert!(
+        !refused.status.success(),
+        "an incompatible layout was accepted"
+    );
+    assert_eq!(fs::read_link(current).unwrap(), previous_link);
+    assert_eq!(fs::read(&fixture.plist).unwrap(), previous_plist);
+    assert_eq!(
+        fixture.wait_for_pid(None, Duration::from_secs(30)),
+        private_pid
     );
     assert_maps(&fixture, private_pid, &private_image, &private_identity);
     fixture

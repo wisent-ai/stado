@@ -1,10 +1,19 @@
 # Changelog
 
+## 0.16.26
+
+- **Complete reader delivery:** root installation retains its verified archive and then updates every declared private Stado reader through the installed receiver. Partial retries leave identical root bytes unchanged but still check all global reader images; a failed root lifecycle is not repeated in the same apply. Cached launchd definitions are joined by native PID ownership, not by matching old arguments against a newly written plist.
+- **Recovery ownership:** the resident worker verifies its acquired lock descriptor on macOS and preserves that lock during confined noninteractive privileged snapshot reads. Resume reuses a staged release's recorded origin, supports path-only object API declarations, distinguishes a completed PID-less launchd unit from a starting worker, and refuses conflicting actions against an active owner.
+- **Native autostart state:** the read-back after enabling or disabling a launchd unit accepts both boolean overrides and native `enabled`/`disabled` names, preserving the captured boot state.
+- **Authority mutation receipts:** service ensure waits for a real registry read after changing a unit, without repeating either the host action or the conditional registry write. A later recording failure states the already-completed host action and actual process id.
+- **CLI and Desktop:** host-wide and selected-binary apply retain the complete CLI report and exit status, including failed private-reader JSON, stdout, and stderr. Both delivery adapters use the single CLI convergence path; the GitHub adapter retains its exact-source native driver between jobs.
+- **Migration and rollback:** the retained-archive receiver contract first appears in this source, not the already-bound 0.16.24 or 0.16.25 sources. Deploy 0.16.26 before resuming private readers. Existing storage schemas are unchanged; rollback restores the prior reader and recovery defects.
+- **Platforms:** native delivery covers `darwin-arm64` and `linux-amd64`; the lock and cached-definition corrections cover macOS. Real product-owned Probierz journeys cover both directions of a cached launchd program change.
+
 ## 0.16.25
 
 - **Reconciliation retries:** before fencing writers, `host storage-root-reconcile` reads the current canonical Stado version instead of reusing the version in an older captured target. An existing fence keeps its staged version pinned; an unavailable registry is an error, not permission to use cached declarations.
 - **Live transaction status:** owner reports retain `recorded_status` and include the native manager's current observation. A previously executing owner is reported as interrupted when its process is gone, or unobserved when the manager cannot be read.
-- **Native autostart state:** launchd inspection and mutation read-back accept both boolean overrides and the native `enabled`/`disabled` state names. Reconciliation can preserve and restore the observed boot state without treating a valid macOS answer as a refusal.
 - **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
 
 ## 0.16.24

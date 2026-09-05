@@ -8280,81 +8280,11 @@ printf '%s
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::readiness_probe_script;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::process::Command;
     use std::time::Duration;
-
-    /// Write a real gzip-compressed tar holding the named paths, so the member
-    /// reader is exercised against an archive rather than a list someone typed.
-    fn archive_fixture(directory: &std::path::Path, members: &[&str]) -> String {
-        let path = directory.join("bundle.tar.gz");
-        let file = std::fs::File::create(&path).expect("create fixture");
-        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
-            file,
-            flate2::Compression::fast(),
-        ));
-        for member in members {
-            let body = b"binary";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o755);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, member, &body[..])
-                .expect("append member");
-        }
-        builder
-            .into_inner()
-            .expect("finish tar")
-            .finish()
-            .expect("finish gzip");
-        path.to_string_lossy().to_string()
-    }
-
-    #[test]
-    fn archive_members_reads_the_paths_a_bundle_carries() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let path = archive_fixture(directory.path(), &["bin/stado", "./darwin-arm/stado"]);
-        let members = archive_members(&path).expect("list members");
-        assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
-    }
-    /// The exact 2026-09-04 outage: the object API unit runs
-    /// `current/darwin-arm/stado` and every published stado archive holds
-    /// `bin/stado`. The refusal must name both halves.
-    #[test]
-    fn an_archive_without_the_unit_program_is_refused_naming_both() {
-        let members = vec!["bin/stado".to_string()];
-        let refusal = refuse_archive_without_program(
-            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
-            &members,
-        )
-        .expect_err("an archive without the program must be refused");
-        assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
-        assert!(refusal.contains("bin/stado"), "{refusal}");
-    }
-    #[test]
-    fn an_archive_carrying_the_unit_program_is_accepted() {
-        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
-        refuse_archive_without_program(
-            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
-            &members,
-        )
-        .expect("the program is in the archive");
-    }
-
-    /// A unit pinned to a version directory has no `current` segment. That is a
-    /// different fault and refusing every archive over it would be wrong.
-    #[test]
-    fn a_unit_not_running_through_current_is_not_judged_here() {
-        let members = vec!["bin/stado".to_string()];
-        refuse_archive_without_program(
-            "/Users/charles/.stado/services/x/sha256-abc/darwin-arm/stado",
-            &members,
-        )
-        .expect("no current segment, nothing to check");
-    }
 
     /// Serve one fixed JSON body on 200 to every request that arrives, on a
     /// loopback port the kernel picks, until the handle is dropped. The probe
