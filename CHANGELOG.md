@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.26
+## 0.16.27
 
 - **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.
 - **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
