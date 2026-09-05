@@ -103,6 +103,18 @@ if [ -n "$base_sha" ] &&
   base_sha=""
 fi
 
+# Printed on every run, green ones included: a check whose comparison basis is
+# invisible while it passes cannot be audited, and the push path resolves its
+# base from a different field than the pull-request path does. This line is
+# where an operator sees which revision the attribution below would use.
+if [ -n "$base_sha" ]; then
+  printf 'base: %s (%s)\n' "$base_sha" "$base"
+elif [ -n "$self_comparison" ]; then
+  printf 'base: none -- %s is this revision and the tree is clean, so a refusal here cannot be attributed\n' "$base"
+else
+  printf 'base: none -- %s does not resolve to a commit here, so a refusal here cannot be attributed\n' "$base"
+fi
+
 # Whether the same step also refuses the base revision, run in the base's own
 # worktree so the answer is about that revision's files and nothing else.
 #
