@@ -678,7 +678,7 @@ async fn recycle_launchd(
                 unit.loaded_domains.len()
             ));
         }
-        let service = crate::deploy::service::kickstart_local_unit_in_domain(
+        let service = crate::deploy::service::kickstart_local_unit(
             &unit.label,
             &unit.path,
             Some(&unit.loaded_domains[0]),

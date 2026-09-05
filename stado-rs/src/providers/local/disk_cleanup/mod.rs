@@ -1760,7 +1760,7 @@ fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
 /// object is resolved by [`targets::RegistryStore`] instead of a hardcoded GCS
 /// bucket.
 async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
-    let store = targets::RegistryStore::open_primary_reads().await?;
+    let store = targets::RegistryStore::open().await?;
     let text = store
         .read_versioned()
         .await?

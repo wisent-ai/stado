@@ -6107,22 +6107,16 @@ pub fn units_running_replaced_images(
 /// Restart one launchd unit on THIS machine, in place.
 ///
 /// Without an observed owner, user units try `gui/<uid>` and then
-/// `user/<uid>`. Callers that already observed ownership use
-/// [`kickstart_local_unit_in_domain`] so the domain is selected before any
-/// mutation. System jobs use the same non-interactive `sudo -n` lifecycle path
-/// as the service installer and report refusal rather than prompting.
-///
-/// Returns the service target that answered.
-pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, String> {
-    kickstart_local_unit_in_domain(label, unit_path, None)
-}
-
-/// Restart one local launchd unit only in `observed_domain`, when supplied.
+/// `user/<uid>`. Callers that already observed ownership supply its exact
+/// domain so it is selected before any mutation. System jobs use the same
+/// non-interactive `sudo -n` lifecycle path as the service installer and
+/// report refusal rather than prompting.
 ///
 /// The unit path first establishes the allowed domain set. An observed owner
 /// outside that set is rejected before `launchctl` runs, so discovery cannot
-/// mutate one job and diagnose a cross-domain mismatch afterwards.
-pub fn kickstart_local_unit_in_domain(
+/// mutate one job and diagnose a cross-domain mismatch afterwards. Returns the
+/// service target that answered.
+pub fn kickstart_local_unit(
     label: &str,
     unit_path: &str,
     observed_domain: Option<&str>,
@@ -8285,7 +8279,7 @@ pub async fn set_unit_env_key_on_host(
     "$sudo_bin" -n -u "$service_user" "$@"
   fi
 }
-if ! changed=$(stado_unit_env_writer /usr/bin/python3 "$service_uid" <<'STADO_UNIT_ENV'
+if ! changed=$(stado_unit_env_writer /usr/bin/python3 - "$service_uid" 2>&1 <<'STADO_UNIT_ENV'
 import base64, os, pathlib, re, shlex, stat, sys, tempfile
 
 def decode(value):
@@ -8360,7 +8354,7 @@ else:
     print("changed")
 STADO_UNIT_ENV
 ); then
-  say 'env_set_failed' 'unit environment update failed'
+  say 'env_set_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
   exit 1
 fi
 if [ "$changed" = changed ] || [ "$(stado_systemctl show -p NeedDaemonReload --value "$unit")" = yes ]; then

@@ -2000,8 +2000,19 @@ fn unread_configuration() -> Vec<Finding> {
 /// plus the bodies it finds.
 #[allow(clippy::too_many_lines)]
 pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
-    let registry = read_registry().await?;
-    let store = JobStorage::new().await?;
+    // Doctor needs the typed registry and raw extension blocks to describe one
+    // observation. Derive both from one authoritative versioned read: using
+    // `read_registry` here could select the last-known-good copy, and fetching
+    // the raw document afterwards could then mix that copy with a different
+    // authority generation.
+    let (document, _) = fetch_versioned_document().await?;
+    let registry = targets::load_registry_from_value(&document).map_err(|error| {
+        CmdError::click(format!(
+            "invalid registry document at {}: {error}",
+            targets::registry_location()
+        ))
+    })?;
+    let store = JobStorage::for_primary_reads().await?;
     let beacons = load_beacons(&store).await?;
     let consumers = capacity::read_consumer_capacity(&store).await?;
     let now = Utc::now();
@@ -2055,25 +2066,13 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         .flatten()
         .map(|target| target.name.clone());
 
-    // The raw document, not the typed `Registry`. Two checks below need it and
-    // neither can use the loaded one: `service_directory` and
-    // `service_resolver` are raw-JSON blocks whose model lives in
-    // `service_resolution` so the unread-declaration check is about exactly the
-    // keys no model in this build names, and the build-versus-registry check
-    // has to hold this build's validator against the bytes the authority is
-    // serving.
-    //
-    // Read once, before the per-host loop, because both readers want the same
-    // document and a second fetch could answer with a different generation.
-    //
-    // This read is why the check below can fire at all. `read_registry` above
-    // does NOT gate on `validate_registry`: `fetch_registry_remote_uncached`
-    // loads the document through `load_registry_from_str`, which SKIPS what it
-    // cannot model, and only the last-known-good cache is held to the
-    // contract. So a build that refuses the published registry still reads it,
-    // still answers every question in this command, and — until this row
-    // existed — reported the fleet as if nothing had refused anything.
-    let document = fetch_document().await?;
+    // The raw document from the same versioned read that produced `registry`
+    // above. `service_directory`, `service_resolver`, and release/build checks
+    // need raw extension blocks, and a second fetch could answer with a
+    // different generation. Doctor is an observation of the canonical
+    // authority, so unlike general host-resolution commands it does not fall
+    // back to the on-disk last-known-good copy. A refused primary read remains
+    // a refusal instead of becoming findings about a stale document.
 
     for target in &registry.targets {
         let slugs = host_health::beacon_slugs(target, &target.name);

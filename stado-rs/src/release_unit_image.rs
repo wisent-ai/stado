@@ -1099,21 +1099,21 @@ pub(crate) async fn revisit_once(
             pick.unit
         )
     })?;
-    let (outcome, service_target) = match service::kickstart_local_unit(&pick.unit, &pick.unit_path)
-    {
-        Ok(service_target) => {
-            let after = settle(target, target_name, &pick.unit, pick.pid).await;
-            (
-                AttemptOutcome::Observed(refresh_outcome(&pick.running, after.as_ref())),
-                service_target,
-            )
-        }
-        // Recorded as what it was. A refused restart is an attempt this host
-        // has spent — re-issuing the same refused command every tick is the
-        // hot loop this module is bounded against — but it observed nothing,
-        // so it must not borrow an outcome word that claims a second read.
-        Err(reason) => (AttemptOutcome::RestartRefused, format!("refused: {reason}")),
-    };
+    let (outcome, service_target) =
+        match service::kickstart_local_unit(&pick.unit, &pick.unit_path, None) {
+            Ok(service_target) => {
+                let after = settle(target, target_name, &pick.unit, pick.pid).await;
+                (
+                    AttemptOutcome::Observed(refresh_outcome(&pick.running, after.as_ref())),
+                    service_target,
+                )
+            }
+            // Recorded as what it was. A refused restart is an attempt this host
+            // has spent — re-issuing the same refused command every tick is the
+            // hot loop this module is bounded against — but it observed nothing,
+            // so it must not borrow an outcome word that claims a second read.
+            Err(reason) => (AttemptOutcome::RestartRefused, format!("refused: {reason}")),
+        };
     // Replaces the `Attempting` record in place, on the same identity pair, so
     // the ledger holds one row per unit either way.
     record(
