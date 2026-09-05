@@ -411,10 +411,11 @@ pub struct CleanupReport {
     /// registry is read by every release at once, and a name a newer release
     /// knows is not a reason to run none of the ones this release knows.
     pub unknown_cleaners: Vec<String>,
-    /// Where the build-cache walk stopped, relative to its scan root, or
-    /// `None` when it crossed the whole tree. Carried across passes through
-    /// the state file: see [`build_caches::scan_build_caches`].
+    /// Human-readable position of the next build-cache visit. New passes
+    /// derive this from `builds_cursor`; legacy reports retain it for display.
     pub builds_resume_from: Option<String>,
+    /// The authoritative checkpoint, including all unvisited directories.
+    builds_cursor: Option<build_caches::BuildCachesCursor>,
     pub errors: Vec<String>,
 }
 
@@ -453,6 +454,7 @@ impl CleanupReport {
             unscanned_cleaners: Vec::new(),
             unknown_cleaners: Vec::new(),
             builds_resume_from: None,
+            builds_cursor: None,
             errors: Vec::new(),
         }
     }
@@ -574,6 +576,7 @@ impl CleanupReport {
             "active_job_count": self.active_job_count,
             "last_success_at": self.last_success_at,
             "build_caches_resume_from": self.builds_resume_from,
+            "build_caches_pending_directories": self.builds_cursor.as_ref().map_or(0, build_caches::BuildCachesCursor::pending_directories),
             "errors": self.errors,
         })
     }
@@ -1200,7 +1203,12 @@ fn writer_last_attempt(state: &Value, writer: &str) -> Option<f64> {
 /// Python `_write_state`: lstat the destination (refuse symlink / foreign
 /// owner), write to a sibling tempfile (O_EXCL, 0600), fsync, atomic
 /// rename, fsync the directory.
-fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<(), JanitorError> {
+fn write_state(
+    state_dir: &Path,
+    report: &Value,
+    cursor: Option<&build_caches::BuildCachesCursor>,
+    attempted_at: f64,
+) -> Result<(), JanitorError> {
     let destination = state_dir.join(STATE_NAME);
     match std::fs::symlink_metadata(&destination) {
         Ok(existing) => {
@@ -1296,6 +1304,15 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
     }
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
     state.insert("report".to_string(), report);
+    let checkpoint = if prevented_now {
+        previous
+            .get("build_caches_cursor")
+            .cloned()
+            .unwrap_or(Value::Null)
+    } else {
+        serde_json::to_value(cursor).map_err(|error| JanitorError::os(&error.to_string()))?
+    };
+    state.insert("build_caches_cursor".to_string(), checkpoint);
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()
@@ -1895,7 +1912,12 @@ fn finish(
     report.duration_ms = (started.elapsed().as_secs_f64() * 1000.0).max(0.0) as i64;
     if let Some(state_dir) = state_dir {
         let value = report.to_value();
-        if let Err(exc) = write_state(state_dir, &value, attempted_at) {
+        if let Err(exc) = write_state(
+            state_dir,
+            &value,
+            report.builds_cursor.as_ref(),
+            attempted_at,
+        ) {
             report.add_error("state_write", &exc);
             if report.outcome != "lock_busy" && report.outcome != "invalid_or_unavailable_policy" {
                 report.outcome = "partial_error".to_string();
@@ -2052,16 +2074,13 @@ async fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("last_success_at"))
         .and_then(|v| v.as_str().map(str::to_string));
-    // Where the previous pass's build-cache walk stopped. Without this the
-    // walk restarts at its root every pass and a tree larger than one pass's
-    // budget is never crossed: on 2026-09-01 `lukasz-macbook` held 879,559
-    // directories under the declared root against a `max_scan_items` ceiling
-    // of 100,000, so the same first eleven percent was scanned hourly and the
-    // caches in the rest were unreachable by construction.
+    // A legacy position alone cannot resume without replaying prior levels.
+    // The next actual scan migrates it to a durable unvisited frontier.
     report.builds_resume_from = previous_report
         .as_ref()
         .and_then(|r| r.get("build_caches_resume_from"))
         .and_then(|v| v.as_str().map(str::to_string));
+    report.builds_cursor = build_caches::BuildCachesCursor::from_state(&previous);
     let before = match free_bytes(home) {
         Ok(free) => free,
         Err(exc) => {
@@ -2262,7 +2281,7 @@ async fn run_with_lock(
             ]),
         ),
         deadline,
-        report.builds_resume_from.clone(),
+        report.builds_cursor.take(),
         &mut report,
     );
     let remaining_after_builds = (policy.max_scan_items
@@ -2699,6 +2718,7 @@ async fn cleanup_once(
             // the declared target, and made every interrupted scan restart at
             // the root.
             if let Ok(previous) = read_state(&state_dir) {
+                report.builds_cursor = build_caches::BuildCachesCursor::from_state(&previous);
                 if let Some(previous) = previous.get("report").and_then(Value::as_object) {
                     report.last_success_at = previous
                         .get("last_success_at")
