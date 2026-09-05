@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.10
+
+- **Release-capacity correction:** local `host reclaim` now runs disk cleanup exclusively through the exact Stado binary that owns the invocation. A tagged release can therefore use its corrected bounded janitor during pre-publication capacity recovery instead of re-entering the older installed janitor that is holding the retired lock; remote targets retain their installed authoritative executable.
+- **Lifecycle boundary:** no manual service restart or bootstrap is added. Normal digest-pinned `install-local` delivery retains the existing idle-slot agent handoff and launchd service declaration.
+- **Migration and rollback:** no stored data changes. The immutable 0.16.9 tag remains at its original source and published no release objects; rolling back restores installed-binary-first pre-publication cleanup.
+- **Platforms and evidence:** the local release-capacity path runs on the native control-plane platform; the existing remote reclaim path and installed-candidate fallback are unchanged.
+
 ## 0.16.9
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
