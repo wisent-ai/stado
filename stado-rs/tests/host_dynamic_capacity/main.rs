@@ -73,7 +73,9 @@ impl Journey {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        let executable = std::env::var_os("STADO_TEST_BINARY")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into());
+        let mut command = Command::new(executable);
         command
             .env_clear()
             .env("HOME", self.home.path())
