@@ -78,6 +78,7 @@ struct StadoApp: App {
             SettingsView(
                 deploymentStore: delegate.deploymentStore,
                 operationsStore: delegate.operationsStore,
+                fleetStore: delegate.fleetStore,
                 journey: delegate.firstUseJourney
             )
         }
