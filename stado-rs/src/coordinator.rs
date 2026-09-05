@@ -582,12 +582,20 @@ pub async fn run_tick(
             "model policy refresh failed; retaining last good policy: {exc}"
         ));
     }
-    // Fire recurring (cron) schedules FIRST so any job submitted this tick
-    // is visible to the assignment + dispatch passes below, instead of
-    // waiting a full interval_seconds to be picked up.
-    let n_fired = fire_due_schedules(store, log, Utc::now()).await?;
-    if n_fired > 0 {
-        log(&format!("schedules: fired {n_fired} due schedule(s)"));
+    // Fire recurring (cron) schedules FIRST so any job submitted this tick is
+    // visible to the assignment + dispatch passes below, instead of waiting a
+    // full interval_seconds to be picked up. One malformed or concurrently
+    // retired schedule occurrence is not allowed to suppress queue recovery:
+    // on 2026-09-05 a missing Spis run manifest made launchd restart this
+    // coordinator before it could reap a dead release worker on every tick.
+    match fire_due_schedules(store, log, Utc::now()).await {
+        Ok(n_fired) if n_fired > 0 => {
+            log(&format!("schedules: fired {n_fired} due schedule(s)"))
+        }
+        Ok(_) => {}
+        Err(error) => log(&format!(
+            "schedules: reconciliation degraded; continuing queue recovery: {error}"
+        )),
     }
     // Coordinator-authoritative sizing: re-zero any queued job whose model
     // has no measured peak (stamp the measured peak if one exists) BEFORE
@@ -605,20 +613,27 @@ pub async fn run_tick(
         ));
     }
     // Phantom-job reaper: a worker that dies mid-job leaves its running/
-    // record behind, and the per-cloud-provider monitor arms above never
-    // run on a fleet with no cloud provider (or one whose API is down) —
-    // the queue then reports capacity that does not exist and the job
-    // waits forever. This provider-neutral pass requeues the job once its
-    // worker lease (status/<job_id>/heartbeat, HEARTBEAT_STALE_MINUTES)
-    // expires, fails it with a stored reason on the second expiry, and
-    // clears queued assignments naming silent workers. It runs BEFORE
-    // assignment and dispatch so recovered jobs are claimable this tick.
+    // record behind, and the per-cloud-provider monitor arms above never run
+    // on a fleet with no cloud provider (or one whose API is down). The
+    // provider-neutral pass completes a stale release job when its already
+    // durable receipt and archive verify, otherwise requeues once and fails
+    // on the second expiry. It also clears queued assignments naming silent
+    // workers. It runs BEFORE assignment and dispatch so recovered work is
+    // visible in this tick.
     let reaped = crate::queue::reaper::reap_expired_leases(store, log).await?;
-    if reaped.requeued > 0 || reaped.failed > 0 || reaped.assignments_cleared > 0 {
+    if reaped.release_completions > 0
+        || reaped.requeued > 0
+        || reaped.failed > 0
+        || reaped.assignments_cleared > 0
+    {
         log(&format!(
-            "lease-reaper: requeued {} phantom job(s), failed {} on second expiry, \
-             cleared {} silent-worker assignment(s)",
-            reaped.requeued, reaped.failed, reaped.assignments_cleared
+            "lease-reaper: completed {} release job(s) from durable output, requeued {} \
+             phantom job(s), failed {} on second expiry, cleared {} silent-worker \
+             assignment(s)",
+            reaped.release_completions,
+            reaped.requeued,
+            reaped.failed,
+            reaped.assignments_cleared
         ));
     }
     let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {
