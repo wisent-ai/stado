@@ -10,6 +10,7 @@
 //! GET /api/object/stat?uri=stado://... - product object metadata
 //! POST /api/object/compose - atomically publish verified object chunks
 //! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
+//! GET /api/host/inventory?target=... - authenticated fresh inventory of one declared host
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
 //! GET /api/machine/status?job_id=... - read canonical machine status
@@ -1471,8 +1472,8 @@ impl Dashboard {
                 }
             }
         } else {
-            // At most one of these two paths matches, so at most one boundary
-            // is ever revalidated here.
+            // At most one of these paths matches, so at most one boundary is
+            // ever consulted here.
             if path_no_query == "/api/service/status"
                 && !self.boundaries_available(&[Boundary::Service]).await
             {
@@ -1488,6 +1489,17 @@ impl Dashboard {
                     "AUTH_UNAVAILABLE",
                     "machine authorization unavailable",
                 )));
+            }
+            if path_no_query == "/api/host/inventory" {
+                if !self.boundaries_available(&[Boundary::Registry]).await {
+                    return send_json(
+                        http_status("503"),
+                        &json!({"error": "registry authorization unavailable"}),
+                    );
+                }
+                if let Err(response) = registry_policy::authorized(request, "policy-read").await {
+                    return response;
+                }
             }
             if path_no_query == "/api/service/status" {
                 let query = request
@@ -1528,6 +1540,26 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
+        if path == "/api/host/inventory" {
+            let target = match host_inventory_target(query) {
+                Ok(target) => target,
+                Err(response) => return Ok(response),
+            };
+            let runner = crate::deploy::production_runner();
+            return Ok(
+                match crate::deploy::host_inventory::inventory_host(&target, &runner).await {
+                    Ok(report) => send_json(http_status("200"), &report),
+                    Err(error) => send_json(
+                        http_status("503"),
+                        &json!({
+                            "target": target,
+                            "status": crate::deploy::host_channel::FAILED_STATUS,
+                            "error": error.to_string(),
+                        }),
+                    ),
+                },
+            );
+        }
         if path == "/api/release/object" {
             // Public read-only release channel. This dashboard route is the
             // store's delivery endpoint; an operator-owned TLS reverse proxy
@@ -3346,6 +3378,21 @@ fn query_value(values: &[(String, String)], name: &str) -> Option<String> {
         .iter()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.clone())
+}
+
+/// One canonical registry target and no other query authority.
+///
+/// The handler resolves this name through [`crate::deploy::host_inventory::inventory_host`];
+/// it never becomes an SSH address supplied directly by the client.
+fn host_inventory_target(query: &str) -> Result<String, Response> {
+    let values = parse_qs(query);
+    if values.len() != 1 || values[0].0 != "target" || values[0].1.is_empty() {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "exactly one non-empty target is required"}),
+        ));
+    }
+    Ok(values[0].1.clone())
 }
 
 fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Response> {

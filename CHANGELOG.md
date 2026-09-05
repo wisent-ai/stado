@@ -1,19 +1,20 @@
 # Changelog
 
+## 0.16.25
+
+- **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
+
 ## 0.16.24
 
-- **Storage recovery:** the resident transaction checks its acquired lock with descriptor-authoritative metadata on macOS. Noninteractive privileged snapshot reads retain that same lock, remain confined to the captured roots, and preserve immutable copy verification. Recovery retains unrelated native units and derives its release origin from the captured object API declaration. A mutating command acknowledges `accepted` without claiming completion; the durable status receipt remains authoritative.
-- **Complete reader delivery:** `release install-local` and `service converge --apply` reuse the exact verified archive retained under the version/platform release tree. Root activation excludes independently installed private readers; the existing service-update and image-proof lifecycle then updates every declared private Stado reader. A partial retry can recover the retained archive without rewriting or restarting an already-attested root, and any private failure keeps convergence failed.
-- **Reader receipts and Desktop:** byte-identical delivery repairs attestation and the queue handshake without rewriting the root, and private updates invoke the newly installed Stado path. Failed child JSON, stdout, and stderr remain in `stado-readers.detail`. Desktop host-wide and selected-binary apply retain the complete report and actual CLI exit status.
-- **Migration and rollback:** partial-state reader resume requires a receiver running 0.16.24 or newer; older receivers reject its hidden archive arguments. Deploy the new immutable root normally before resuming private readers. No stored data schema changes; rolling back restores the prior reader-ordering and macOS lock-observation failures.
-- **Platforms:** native delivery supports `darwin-arm64` and `linux-amd64`; the descriptor correction and real launchd reader journey apply to macOS.
-
-## 0.16.23
-
+- **Stable proxy startup:** activation and rollback wait for the stable readiness endpoint using the product's declared readiness timeout. A live process or a fixed 200 ms delay no longer substitutes for a listening, forwarding proxy; an exited process still fails immediately, and an expired wait reports the last observed error.
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
 - **Object API recovery:** loaded process identity, storage root, and authenticated reads determine readiness, rather than the plist alone. Recovery shares the storage-handoff lock and refuses to change authority; `host storage-root-reconcile` remains the single snapshot, copy, and rollback implementation.
 - **Runtime storage identity:** `/api/state.json` reports the serving PID, version, backend, and local root. Direct-primary requirements and primary-only registry reads are preserved.
 - **Service archives:** extraction is staged beside an installed version, the declared executable must exist before activation, existing immutable contents remain intact, and `current` changes atomically. Replaying the active archive preserves the existing no-relink behavior.
+
+## 0.16.23
+
+- **Release coordinate:** this coordinate remains bound to source `d38c960e82747fd94e954eeaba0fd202e5509a16`. The integrated authority, recovery, and archive changes use a new coordinate rather than overwriting that source identity.
 
 ## 0.16.22
 
@@ -169,6 +170,7 @@
 ## 0.16.4
 
 - **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.
+- **Launchd definition convergence:** `service ensure` now compares the desired Program and argument vector with launchd's retained definition, not only the plist. A stale retained definition is reloaded only after executable and plist preflight, and success requires launchd readback plus the running executable to match. Rollback is attempted only when the prior on-disk definition genuinely differs; an already-desired plist is not reactivated after the replacement lifecycle fails.
 - **Recovery deadline:** the protected-read wait now uses 180 elapsed seconds rather than 180 potentially slow network attempts.
 - **Executable ownership:** the object API now runs the host's canonical delivered `$HOME/.stado/bin/stado`, whose version is governed by `targets[].managed_versions.stado`, instead of an independently content-addressed service image whose source checksum was not retained in the service declaration. The catalog, physical-store recovery definition, registry reconciliation, and Stado product unit ownership agree on that one path; release activation restarts the object unit only on a host whose registry service set declares its exact label.
 - **Migration:** run the existing `stado host recover-object-api TARGET` to repoint and recover the physical unit, then reconcile the managed service declaration with `stado service ensure --from $HOME/.stado/bin/stado`, the existing dashboard argv, and the unit's explicit recovered environment. Recovery alone does not rewrite the registry.
