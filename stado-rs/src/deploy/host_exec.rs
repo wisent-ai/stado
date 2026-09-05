@@ -905,6 +905,12 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               informational flag are fixed",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/file", "-L", "/bin/ls"],
+        why: "reports the fixed /bin/ls target's executable format while dereferencing only \
+              that source-fixed path; it does not execute the binary, accept an operator path, \
+              or change filesystem state",
+    },
+    ApprovedCommand {
         argv: &[
             "/bin/ps",
             "axww",
