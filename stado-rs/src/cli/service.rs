@@ -2635,16 +2635,32 @@ async fn update(
         follow_current(&target, declared, &directory, &runner).await?
     };
     let image_refresh = if refresh_image {
-        let before = service::inspect_process(&target, declared, &runner)
+        let units = service::loaded_units(&target, &runner)
             .await
             .map_err(click)?;
+        let before = units
+            .iter()
+            .find(|unit| unit.label == declared.unit_id())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{host}: {} is absent from the domain-bound launchd inventory",
+                    declared.unit_id()
+                ))
+            })?;
         if before.pid.is_empty() {
+            if before.loaded_domains.len() != 1 {
+                return Err(CmdError::click(format!(
+                    "{host}: {} has no live pid and {} loaded domains; refusing to guess a lifecycle action",
+                    declared.unit_id(),
+                    before.loaded_domains.len()
+                )));
+            }
             let started = service::restart_service(&target, declared, &runner)
                 .await
                 .map_err(click)?;
             if !started.succeeded("restarted") {
                 return Err(CmdError::click(format!(
-                    "{host}: {} was freshly observed without a live pid and did not start: {}",
+                    "{host}: {} was confirmed loaded without a live pid and did not start: {}",
                     declared.unit_id(),
                     started.failure()
                 )));
