@@ -11067,12 +11067,6 @@ pub async fn config_show(target: &str) -> Result<(), CmdError> {
     remote_config(target, RemoteConfigAction::Show).await
 }
 
-/// Run the installed binary's schema migration on a fleet host. The local
-/// migration preserves the exact prior profile and refuses future schemas.
-pub async fn config_migrate(target: &str) -> Result<(), CmdError> {
-    remote_config(target, RemoteConfigAction::Migrate).await
-}
-
 /// Persist one configuration field on a fleet host. Values travel base64
 /// encoded inside the audited script and are decoded into argv, never parsed by
 /// a remote shell. When `reload_service` is named, the existing service
@@ -11303,7 +11297,6 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
 
 pub(crate) enum RemoteConfigAction<'a> {
     Show,
-    Migrate,
     Set { key: &'a str, value: &'a str },
 }
 
@@ -11340,12 +11333,10 @@ pub(crate) async fn remote_config_output(
 ) -> Result<String, CmdError> {
     let action = match action {
         RemoteConfigAction::Show => "\"$binary\" config show".to_string(),
-        RemoteConfigAction::Migrate => {
-            "\"$binary\" config migrate\n\"$binary\" config show".to_string()
-        }
         RemoteConfigAction::Set { key, value } => format!(
             "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             \"$binary\" config migrate\n\
              \"$binary\" config set \"$key\" \"$value\"\n\
              \"$binary\" config show",
             STANDARD.encode(key.as_bytes()),
