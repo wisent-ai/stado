@@ -1150,9 +1150,10 @@ PY"#,
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "object API listener did not close",
+        return Err(DeployError(format!(
+            "object API listener on {}:{port} did not close: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     Ok(())
@@ -1230,9 +1231,10 @@ PY"#,
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "unit file could not be snapshotted",
+        return Err(DeployError(format!(
+            "unit snapshot failed for {path} on {}: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     let value = output
@@ -1298,9 +1300,9 @@ async fn correlate_served_store(
     .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
     let script = format!(
-        r#"STADO_CORRELATION={} STADO_OBJECT_PORT={} /usr/bin/python3 - <<'PY'
+        r#"STADO_OBJECT_PORT={port} /usr/bin/python3 - <<'PY'
 import base64, hashlib, json, os, urllib.parse, urllib.request
-payload = json.loads(base64.b64decode(os.environ['STADO_CORRELATION']))
+payload = json.loads(base64.b64decode('{encoded}'))
 port = int(os.environ['STADO_OBJECT_PORT'])
 token_path = os.path.expanduser('~/.stado/queue-object-api-token')
 with open(token_path, encoding='utf-8') as handle:
@@ -1376,15 +1378,14 @@ print('STADO_SERVED_STORE\t' + json.dumps({{
     'primary_root': os.path.expanduser('~/.stado/local-storage'),
     'backup_root': os.path.expanduser('~/.stado/local-backup'),
 }}, sort_keys=True, separators=(',', ':')))
-PY"#,
-        shlex_quote(&encoded),
-        port
+PY"#
     );
     let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "object API physical-store correlation failed",
+        return Err(DeployError(format!(
+            "object API physical-store correlation failed on {}:{port}: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     output
@@ -2340,13 +2341,16 @@ async fn restore_unit_snapshot(
         .as_ref()
         .ok_or_else(|| DeployError(format!("{} has no captured exact unit bytes", writer.label)))?;
     let script = format!(
-        r#"STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={:o} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'
+        r#"STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'
 import base64, hashlib, os, stat, subprocess, tempfile
 path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
 body = base64.b64decode(os.environ['STADO_UNIT_BODY'])
 expected = os.environ['STADO_UNIT_SHA']
 if hashlib.sha256(body).hexdigest() != expected:
     raise SystemExit('captured unit bytes fail their digest')
+expected_metadata = (int(os.environ['STADO_UNIT_MODE']),
+                     int(os.environ['STADO_UNIT_UID']),
+                     int(os.environ['STADO_UNIT_GID']))
 work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')
 os.makedirs(work, mode=0o700, exist_ok=True)
 fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)
@@ -2356,7 +2360,7 @@ try:
         handle.flush()
         os.fsync(handle.fileno())
     command = ['/usr/bin/sudo', '-n', '/usr/bin/install',
-               '-m', os.environ['STADO_UNIT_MODE'],
+               '-m', format(expected_metadata[0], 'o'),
                '-o', os.environ['STADO_UNIT_UID'],
                '-g', os.environ['STADO_UNIT_GID'], temporary, path]
     result = subprocess.run(command, stdin=subprocess.DEVNULL,
@@ -2372,6 +2376,10 @@ finally:
 info = os.lstat(path)
 if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
     raise SystemExit('restored unit is not a regular file')
+observed_metadata = (stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
+if observed_metadata != expected_metadata:
+    raise SystemExit('restored unit mode/uid/gid mismatch: expected ' +
+                     str(expected_metadata) + ', observed ' + str(observed_metadata))
 with open(path, 'rb') as handle:
     if hashlib.sha256(handle.read()).hexdigest() != expected:
         raise SystemExit('restored unit digest mismatch')
@@ -2387,9 +2395,11 @@ PY"#,
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "exact unit bytes were not restored",
+        return Err(DeployError(format!(
+            "exact unit restoration failed for {} on {}: {}",
+            writer.label,
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     Ok(())
