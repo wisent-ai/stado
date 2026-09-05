@@ -494,8 +494,8 @@ pub(crate) fn stage_for_attestation(
     Ok(())
 }
 
-/// Restart the OTHER managed units that were executing the binaries this
-/// update just replaced.
+/// Reconcile OTHER managed units configured to run, or still executing,
+/// the binaries this update just replaced.
 ///
 /// Why this exists: [`replace_verified`] renames a new binary over the old
 /// one, and only the process that ran the update re-execs itself. A unit that
@@ -625,12 +625,10 @@ async fn recycle_launchd(
             continue;
         }
         let running = running_images.get(&pid);
-        let directly_declared = paths.iter().any(|path| {
-            unit.program
-                .split_whitespace()
-                .next()
-                .is_some_and(|program| program == path)
-        });
+        let declared_program = unit.program.split_whitespace().next();
+        let directly_declared = paths
+            .iter()
+            .any(|path| declared_program == Some(path.as_str()));
         if directly_declared && running.is_none() {
             return Err(format!(
                 "{context}: the kernel image for {} pid {pid} is unreadable",
@@ -639,7 +637,8 @@ async fn recycle_launchd(
         }
         let selected = running.and_then(|running| {
             installed_images.iter().find(|(path, installed)| {
-                running.path.trim_end_matches(" (deleted)") == path
+                (declared_program == Some(path.as_str())
+                    || running.path.trim_end_matches(" (deleted)") == path)
                     && !running.is_same_file(installed)
             })
         });
