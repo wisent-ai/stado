@@ -34,10 +34,11 @@
 //! swapped in mid-walk anywhere in that tree would be a recursive delete of
 //! whatever it pointed at.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -49,6 +50,101 @@ use super::safefs;
 use super::{euid, free_bytes, ifmt, CleanupReport, JanitorError, GIB, IFDIR, IFLNK, IFREG};
 use crate::deploy::host_build_caches::CACHEDIR_SIGNATURE;
 use crate::targets::{DiskCleanerPolicy, DiskCleanupPolicy};
+use serde::{Deserialize, Serialize};
+
+/// Ordinary names stay readable; non-UTF-8 Unix names retain their exact bytes.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+enum CursorPath {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+impl CursorPath {
+    fn as_path(&self) -> &Path {
+        match self {
+            Self::Text(path) => Path::new(path),
+            Self::Bytes(path) => Path::new(OsStr::from_bytes(path)),
+        }
+    }
+}
+
+impl From<PathBuf> for CursorPath {
+    fn from(path: PathBuf) -> Self {
+        match path.into_os_string().into_string() {
+            Ok(path) => Self::Text(path),
+            Err(path) => Self::Bytes(path.into_vec()),
+        }
+    }
+}
+
+impl From<CursorPath> for PathBuf {
+    fn from(path: CursorPath) -> Self {
+        match path {
+            CursorPath::Text(path) => Self::from(path),
+            CursorPath::Bytes(path) => Self::from(OsString::from_vec(path)),
+        }
+    }
+}
+
+/// Durable breadth-first work queue for a bounded build-cache walk.
+///
+/// `frontier[0]` is the directory currently being examined; the remaining
+/// paths are directories already discovered but not yet opened. `next_child`
+/// is the first entry in `frontier[0]` that has not been examined. Persisting
+/// both pieces is what makes a deadline a pause rather than a restart: the
+/// next pass opens one parent and continues immediately, without rebuilding
+/// every shallower level of the tree.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct BuildCachesCursor {
+    version: u8,
+    root: CursorPath,
+    frontier: VecDeque<CursorPath>,
+    next_child: Option<CursorPath>,
+}
+
+impl BuildCachesCursor {
+    fn fresh(root: PathBuf) -> Self {
+        Self {
+            version: 1,
+            root: root.into(),
+            frontier: VecDeque::from([PathBuf::new().into()]),
+            next_child: None,
+        }
+    }
+
+    fn valid_for(&self, root: &Path) -> bool {
+        let relative = |path: &Path| {
+            path.components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+        };
+        self.version == 1
+            && self.root.as_path() == root
+            && !self.frontier.is_empty()
+            && self.frontier.iter().all(|path| relative(path.as_path()))
+            && self.next_child.as_ref().is_none_or(|path| {
+                let path = path.as_path();
+                relative(path)
+                    && path.file_name().is_some()
+                    && path.parent() == self.frontier.front().map(CursorPath::as_path)
+            })
+    }
+
+    pub(super) fn from_state(state: &serde_json::Value) -> Option<Self> {
+        Self::deserialize(state.get("build_caches_cursor")?).ok()
+    }
+
+    pub(super) fn pending_directories(&self) -> usize {
+        self.frontier.len()
+    }
+
+    pub(super) fn resume_label(&self) -> Option<String> {
+        self.next_child
+            .as_ref()
+            .or_else(|| self.frontier.front())
+            .map(|path| path.as_path().to_string_lossy().into_owned())
+    }
+}
 
 /// The standard's file name; the signature lives in its first line.
 const TAG_NAME: &str = "CACHEDIR.TAG";
@@ -143,6 +239,11 @@ fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<PathBuf> {
         home.join(".cache").join("huggingface").join("hub"),
         cargo_registry(home),
     ];
+    // A CLI running out of a tagged build tree must not unlink its own
+    // executable while it is restoring the host's ability to do work.
+    if let Ok(executable) = std::env::current_exe() {
+        roots.push(executable);
+    }
     let configured_root = |name: &str, default: &[&str]| -> PathBuf {
         match policy.cleaners.get(name).and_then(|c| c.root.as_deref()) {
             Some(root) => crate::config_file::expand_tilde(root),
@@ -184,24 +285,13 @@ struct Walk<'a> {
     reserved: Vec<PathBuf>,
     /// Bytes this pass expects to have freed, against `max_bytes_per_pass`.
     deleted_bytes: i64,
-    /// Where the previous pass stopped, as a path relative to the scan
-    /// root, and the level that path sits on. `None` means "start at the
-    /// root".
-    ///
-    /// A level-order walk visits by increasing depth and, within a depth, in
-    /// lexicographic order, so `(depth, relative path)` is a total order over
-    /// everything the walk examines and "before the cursor" is decidable
-    /// without remembering the tree. Skipping forward is not charged to the
-    /// scan budget, exactly as the depth-first cursor it replaces was not:
-    /// re-crossing the shallow levels costs the pass wall clock, never
-    /// candidates.
-    resume: Option<PathBuf>,
-    resume_depth: usize,
-    /// The directory this pass could not get to, recorded the moment a
-    /// budget refuses it, so the next pass starts there instead of at the
-    /// root. Relative to the scan root. `None` once the walk has crossed the
-    /// whole tree.
-    halted_at: Option<PathBuf>,
+    /// Directories discovered but not yet fully examined, in breadth-first
+    /// order. Unlike the former positional cursor, this queue is durable:
+    /// resuming never has to reconstruct old levels before doing new work.
+    frontier: VecDeque<CursorPath>,
+    /// First unexamined child of the directory at the front of `frontier`.
+    /// `None` means that parent has not been started.
+    next_child: Option<PathBuf>,
 }
 
 impl<'a> Walk<'a> {
@@ -386,20 +476,6 @@ impl<'a> Walk<'a> {
         Ok(Progress::Continue)
     }
 
-    /// Whether `(depth, relative)` was already examined by an earlier pass.
-    ///
-    /// A level-order walk visits by increasing depth and, within a depth, in
-    /// lexicographic order, so this pair is a total order over everything the
-    /// walk examines. A cursor naming a directory that has since been deleted
-    /// simply resumes at the next surviving entry, exactly as the
-    /// component-matching depth-first cursor did.
-    fn before_cursor(&self, depth: usize, relative: &Path) -> bool {
-        match &self.resume {
-            None => false,
-            Some(cursor) => (depth, relative) < (self.resume_depth, cursor.as_path()),
-        }
-    }
-
     /// Examine the tree one level at a time, stopping at every directory its
     /// own build tool tagged as regenerable.
     ///
@@ -426,61 +502,59 @@ impl<'a> Walk<'a> {
         root: &Path,
         report: &mut CleanupReport,
     ) -> Result<Progress, JanitorError> {
-        // The frontier is the directories at one depth whose children are
-        // still unexamined, as paths relative to the scan root. Paths and not
-        // descriptors: one level of this tree holds tens of thousands of
-        // directories on a developer host, far past any descriptor limit, so
-        // a level-order walk cannot hold the level open the way the
-        // depth-first walk held one descriptor per level.
-        //
-        // `safefs::open_path` re-opens a frontier entry one component at a
-        // time with `O_DIRECTORY|O_NOFOLLOW` from the root descriptor, which
-        // is the same refusal to follow a symlink swapped in mid-walk that
-        // holding the descriptor gave: a component that is no longer a
-        // directory we own fails the open, and the entry is skipped.
-        let mut frontier: Vec<PathBuf> = vec![PathBuf::new()];
-        let mut depth = 0usize;
-        while !frontier.is_empty() {
-            if depth + 1 > MAX_DEPTH {
-                report.skip_builds("depth_cap", frontier.len() as i64);
-                return Ok(Progress::Continue);
+        while let Some(parent) = self.frontier.pop_front().map(PathBuf::from) {
+            if Instant::now() >= self.deadline {
+                self.frontier.push_front(parent.into());
+                report.caps.deadline = true;
+                report.skip_builds("scan_deadline", 1);
+                return Ok(Progress::Halt);
             }
-            let mut next: Vec<PathBuf> = Vec::new();
-            for parent in &frontier {
-                let parent_fd = if parent.as_os_str().is_empty() {
-                    safefs::dup_fd(root_fd)?
-                } else {
-                    let parts: Vec<OsString> = parent
-                        .components()
-                        .map(|part| part.as_os_str().to_os_string())
-                        .collect();
-                    match safefs::open_path(root_fd, &parts) {
-                        Ok(descriptor) => descriptor,
-                        // The tree moved under the walk between one level and
-                        // the next. Nothing beneath this entry is examined
-                        // this pass; the next one re-reads it from the root.
-                        Err(_) => {
-                            report.skip_builds("entry_replaced", 1);
-                            continue;
-                        }
+            let depth = parent.components().count();
+            if depth >= MAX_DEPTH {
+                self.next_child = None;
+                report.skip_builds("depth_cap", 1);
+                continue;
+            }
+            // A durable queue is only a location hint. Reopen and revalidate
+            // every component against today's tree and policy before using it.
+            let parent_fd = (|| -> Result<std::os::fd::OwnedFd, JanitorError> {
+                let mut descriptor = safefs::dup_fd(root_fd)?;
+                let mut absolute = root.to_path_buf();
+                for part in parent.components() {
+                    absolute.push(part);
+                    let child = safefs::open_dir_at(descriptor.as_raw_fd(), part.as_os_str())?;
+                    let info = safefs::fstat(child.as_raw_fd())?;
+                    if info.st_uid != euid()
+                        || info.st_dev != self.root_dev
+                        || self.reserved.iter().any(|item| absolute.starts_with(item))
+                    {
+                        return Err(JanitorError::os("queued directory is no longer safe"));
                     }
-                };
-                if let Progress::Halt = self.examine(
-                    parent_fd.as_raw_fd(),
-                    root,
-                    parent,
-                    depth,
-                    &mut next,
-                    report,
-                )? {
-                    return Ok(Progress::Halt);
+                    let guards_reserved =
+                        self.reserved.iter().any(|item| item.starts_with(&absolute));
+                    if !guards_reserved && matches!(self.read_tag(child.as_raw_fd())?, Tag::Signed)
+                    {
+                        return Err(JanitorError::os("queued ancestor is now a tagged cache"));
+                    }
+                    descriptor = child;
+                }
+                Ok(descriptor)
+            })();
+            let parent_fd = match parent_fd {
+                Ok(descriptor) => descriptor,
+                Err(_) => {
+                    self.next_child = None;
+                    report.skip_builds("entry_replaced", 1);
+                    continue;
+                }
+            };
+            match self.examine(parent_fd.as_raw_fd(), root, &parent, report) {
+                Ok(Progress::Continue) => self.next_child = None,
+                result => {
+                    self.frontier.push_front(parent.into());
+                    return result;
                 }
             }
-            // Lexicographic within the level, so `before_cursor` above is
-            // comparing against the order the walk actually visits in.
-            next.sort();
-            frontier = next;
-            depth += 1;
         }
         Ok(Progress::Continue)
     }
@@ -492,8 +566,6 @@ impl<'a> Walk<'a> {
         parent_fd: RawFd,
         root: &Path,
         parent: &Path,
-        depth: usize,
-        next: &mut Vec<PathBuf>,
         report: &mut CleanupReport,
     ) -> Result<Progress, JanitorError> {
         let names = match entry_names(parent_fd) {
@@ -503,47 +575,29 @@ impl<'a> Walk<'a> {
                 return Ok(Progress::Continue);
             }
         };
-        let child_depth = depth + 1;
-        for name in names {
-            let relative = parent.join(&name);
-            // Everything an earlier pass already decided is re-crossed to
-            // reach the cursor, and charged to nothing: resuming costs this
-            // walk wall clock, never candidates. Its tag is still read,
-            // because a cache skipped as "already judged" must still be
-            // pruned rather than descended into on the way past.
-            let before = self.before_cursor(child_depth, &relative);
+        let first = self
+            .next_child
+            .take()
+            .and_then(|path| path.file_name().map(OsStr::to_os_string))
+            .unwrap_or_default();
+        for name in names.range(first..) {
+            let relative = parent.join(name);
             if Instant::now() >= self.deadline {
                 report.caps.deadline = true;
                 report.skip_builds("scan_deadline", 1);
-                // Halting while still catching up leaves the cursor where it
-                // was: this pass reached nothing new, so it has nothing newer
-                // to hand the next one.
-                let halt = if before {
-                    self.resume.clone()
-                } else {
-                    Some(relative)
-                };
-                self.halted_at = self.halted_at.take().or(halt);
+                self.next_child = Some(relative);
                 return Ok(Progress::Halt);
             }
-            let info = match safefs::fstatat_nofollow(parent_fd, &name) {
+            let info = match safefs::fstatat_nofollow(parent_fd, name) {
                 Ok(info) => info,
                 Err(_) => {
-                    if !before {
-                        report.skip_builds("stat_failed", 1);
-                    }
+                    report.skip_builds("stat_failed", 1);
                     continue;
                 }
             };
             let kind = ifmt(info.st_mode as u32);
             if kind == IFLNK {
-                // Never followed, never a candidate, and reported so an
-                // operator can see the cleaner declined rather than missed
-                // it. `O_NOFOLLOW` below would refuse it anyway; saying so
-                // here is what makes the refusal visible.
-                if !before {
-                    report.skip_builds("symlink_not_followed", 1);
-                }
+                report.skip_builds("symlink_not_followed", 1);
                 continue;
             }
             if kind != IFDIR {
@@ -551,18 +605,14 @@ impl<'a> Walk<'a> {
             }
             let absolute = root.join(&relative);
             if self.reserved.iter().any(|item| absolute.starts_with(item)) {
-                if !before {
-                    report.skip_builds("reserved_or_hidden", 1);
-                }
+                report.skip_builds("reserved_or_hidden", 1);
                 continue;
             }
-            if !before {
-                if let Progress::Halt = self.charge(report) {
-                    self.halted_at.get_or_insert(relative);
-                    return Ok(Progress::Halt);
-                }
+            if let Progress::Halt = self.charge(report) {
+                self.next_child = Some(relative);
+                return Ok(Progress::Halt);
             }
-            let child = match safefs::open_dir_at(parent_fd, &name) {
+            let child = match safefs::open_dir_at(parent_fd, name) {
                 Ok(child) => child,
                 Err(exc)
                     if matches!(
@@ -570,9 +620,6 @@ impl<'a> Walk<'a> {
                         Some(nix::libc::ELOOP) | Some(nix::libc::ENOTDIR)
                     ) =>
                 {
-                    // `fstatat` said directory, the `O_NOFOLLOW` open says
-                    // symlink or non-directory: the name was swapped between
-                    // the two calls.
                     report.skip_builds("entry_replaced", 1);
                     continue;
                 }
@@ -581,7 +628,13 @@ impl<'a> Walk<'a> {
                     continue;
                 }
             };
-            let child_info = safefs::fstat(child.as_raw_fd())?;
+            let child_info = match safefs::fstat(child.as_raw_fd()) {
+                Ok(info) => info,
+                Err(_) => {
+                    report.skip_builds("stat_failed", 1);
+                    continue;
+                }
+            };
             if !same_object(&child_info, &info) {
                 report.skip_builds("entry_replaced", 1);
                 continue;
@@ -590,10 +643,6 @@ impl<'a> Walk<'a> {
                 report.skip_builds("unsafe_owner_or_device", 1);
                 continue;
             }
-            // A directory that CONTAINS a reserved root may still hide build
-            // caches deeper down, so it goes on the next level — but its own
-            // tag can never authorize deleting it, because that would take
-            // the reserved root with it.
             let guards_reserved = self.reserved.iter().any(|item| item.starts_with(&absolute));
             let tag = match self.read_tag(child.as_raw_fd()) {
                 Ok(tag) => tag,
@@ -604,35 +653,25 @@ impl<'a> Walk<'a> {
             };
             match tag {
                 Tag::Signed if guards_reserved => {
-                    if !before {
-                        report.skip_builds("reserved_or_hidden", 1);
-                    }
-                    next.push(relative);
+                    report.skip_builds("reserved_or_hidden", 1);
+                    self.frontier.push_back(relative.into());
                 }
-                // PRUNED AT THE TAG, and never put on the next level. The tag
-                // is the build tool's statement that this directory is one
-                // regenerable unit, so the walk has no business inside it:
-                // its contents are neither candidates nor scannable items.
+                // Tagged caches remain indivisible candidates, never parents
+                // whose contents can be independently selected for deletion.
                 Tag::Signed => {
-                    if !before {
-                        if let Progress::Halt =
-                            self.judge(parent_fd, &name, child.as_raw_fd(), &child_info, report)?
-                        {
-                            self.halted_at.get_or_insert(relative);
-                            return Ok(Progress::Halt);
+                    match self.judge(parent_fd, name, child.as_raw_fd(), &child_info, report) {
+                        Ok(Progress::Continue) => {}
+                        result => {
+                            self.next_child = Some(relative);
+                            return result;
                         }
                     }
                 }
-                // A tag file whose first line is not the signature is not a
-                // permission. Reported, and the walk continues downward: the
-                // caches below it are unaffected by a stray file above.
                 Tag::Unsigned => {
-                    if !before {
-                        report.skip_builds("untagged", 1);
-                    }
-                    next.push(relative);
+                    report.skip_builds("untagged", 1);
+                    self.frontier.push_back(relative.into());
                 }
-                Tag::Absent => next.push(relative),
+                Tag::Absent => self.frontier.push_back(relative.into()),
             }
         }
         Ok(Progress::Continue)
@@ -707,68 +746,41 @@ fn remove_contents(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), J
 /// scan also honours: unlike the other two roots, this one can be the whole
 /// of `$HOME`, where the walk — not the deletion — is the expensive half.
 ///
-/// `resume_from` is where the previous pass stopped, and the walk continues
-/// from there rather than restarting at the root. Without it the two budgets
-/// above are not a throttle but a ceiling on how much of the tree can ever be
-/// seen: on 2026-09-01 `lukasz-macbook` declared this cleaner over a root
-/// holding 879,559 directories, `max_scan_items` is capped at
-/// [`crate::targets::MAX_SCAN_ITEMS_CEILING`], and one pass crossed exactly
-/// its share in the 30-second deadline.
-///
-/// The cursor was not enough on its own, because the ORDER was wrong. The
-/// walk is level-order ([`Walk::walk_levels`]): a build tool writes its cache
-/// at the top of the tree it generates, so candidates are shallow and depth
-/// is somebody's contents. Measured on that same root on 2026-09-02, a
-/// depth-first pass spent 7,297 charges without leaving the first
-/// repository's `node_modules` and reported `eligible_items: 0`,
-/// `expected_bytes: 0`; level-order spent 70,306 on the same tree, under the
-/// same policy and the same deadline, and found 78 eligible caches holding
-/// 294 GiB.
+/// The durable frontier contains the unvisited directories, not merely the
+/// position of the last visit. Older positional cursors restart once to build
+/// this queue; subsequent passes open the next parent directly. Replaying all
+/// prior levels used to consume the entire deadline with zero newly scanned
+/// directories on every pass.
 ///
 /// Neither the order nor the cursor changes WHICH directories may be
 /// deleted. Every criterion — the tag, the age, the reserved roots, the
 /// ownership and device checks — is applied exactly as it would be on a walk
 /// that started at the root and went straight down.
-pub fn scan_build_caches(
+pub(super) fn scan_build_caches(
     home: &Path,
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
     deadline: Instant,
-    resume_from: Option<String>,
+    cursor: Option<BuildCachesCursor>,
     report: &mut CleanupReport,
 ) {
-    // Seeded before the early returns: a pass that declines to walk must
-    // leave the cursor where it was, not clear it. Only a walk that actually
-    // ran may say where the next one starts.
-    report.builds_resume_from = resume_from.clone();
+    // A pass that declines to walk must preserve its existing checkpoint.
+    report.builds_cursor = cursor;
     let Some(configured) = policy.cleaners.get("build_caches") else {
         return;
     };
     if remaining_scan <= 0 {
         return;
     }
-    let body = |report: &mut CleanupReport| -> Result<Option<PathBuf>, JanitorError> {
-        // Default root is `$HOME` itself: build trees live wherever the
-        // operator checked the repository out, and no fixed subdirectory of
-        // home describes that. `root` narrows the walk for a host whose
-        // home is too large to cross within one deadline.
+    let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
         let root = match &configured.root {
             Some(configured_root) => {
                 let expanded = crate::config_file::expand_tilde(configured_root);
                 if !expanded.is_dir() {
                     report.skip_builds("root_absent", 1);
-                    // A root that is not there this pass says nothing about
-                    // how far the last walk got, so the cursor is handed
-                    // back unchanged rather than cleared.
-                    return Ok(resume_from.as_deref().map(PathBuf::from));
+                    return Ok(());
                 }
-                // Resolved, because the reserved roots below are named
-                // relative to the resolved home: a root spelled through a
-                // symlink (`/tmp/...` for `/private/tmp/...` on macOS) would
-                // otherwise compare unequal to a reserved path it contains,
-                // and the guard that keeps the janitor's own state dir alive
-                // would silently stop matching.
                 std::fs::canonicalize(&expanded)?
             }
             None => home.to_path_buf(),
@@ -778,11 +790,11 @@ pub fn scan_build_caches(
         if root_info.st_uid != euid() {
             return Err(JanitorError::os("build cache root ownership mismatch"));
         }
-        let resume = resume_from.as_deref().map(PathBuf::from);
-        let resume_depth = resume
-            .as_deref()
-            .map(|path| path.components().count())
-            .unwrap_or_default();
+        let cursor = report
+            .builds_cursor
+            .take()
+            .filter(|cursor| cursor.valid_for(&root))
+            .unwrap_or_else(|| BuildCachesCursor::fresh(root.clone()));
         let mut walk = Walk {
             home,
             policy,
@@ -793,25 +805,29 @@ pub fn scan_build_caches(
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home, policy),
             deleted_bytes: 0,
-            resume,
-            resume_depth,
-            halted_at: None,
+            frontier: cursor.frontier,
+            next_child: cursor.next_child.map(PathBuf::from),
         };
-        // The root itself is never a candidate, tagged or not: the cleaner
-        // deletes caches inside the root it was given, and a root it
-        // deleted would leave the next pass reporting `root_absent` about a
-        // home directory.
-        walk.walk_levels(root_fd.as_raw_fd(), &root, report)?;
-        // Already relative to the scan root: the level-order frontier is
-        // built from relative paths, so there is no prefix to strip.
-        Ok(walk.halted_at)
+        // The root itself is never a candidate. Its queued children are
+        // revalidated through directory descriptors before they are used.
+        let result = walk.walk_levels(root_fd.as_raw_fd(), &root, report);
+        report.builds_cursor = if walk.frontier.is_empty() {
+            None
+        } else {
+            Some(BuildCachesCursor {
+                version: 1,
+                root: root.into(),
+                frontier: walk.frontier,
+                next_child: walk.next_child.map(CursorPath::from),
+            })
+        };
+        report.builds_resume_from = report
+            .builds_cursor
+            .as_ref()
+            .and_then(BuildCachesCursor::resume_label);
+        result.map(|_| ())
     };
-    match body(report) {
-        // A walk that reached the end of the tree clears the cursor, so the
-        // next pass starts over and re-examines what has changed since.
-        Ok(halted) => {
-            report.builds_resume_from = halted.map(|path| path.to_string_lossy().into_owned());
-        }
-        Err(exc) => report.add_error("build_caches", &exc),
+    if let Err(exc) = body(report) {
+        report.add_error("build_caches", &exc);
     }
 }

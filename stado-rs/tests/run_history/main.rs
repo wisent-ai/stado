@@ -156,3 +156,64 @@ fn coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry()
         "a retained terminal lifecycle blob must be reaped"
     );
 }
+
+#[test]
+#[ignore = "Probierz records the real coordinator retention journey"]
+fn coordinator_preserves_settled_history_and_refuses_missing_unretired_history() {
+    for source_retired in [true, false] {
+        let journey = Journey::new();
+        journey.invoke_ok(&[
+            "submit",
+            "--run-id",
+            RUN_ID,
+            "--provider",
+            "local",
+            "printf cancelled-history",
+        ]);
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(journey.run_path()).unwrap()).unwrap();
+        let job_id = manifest["entries"][0]["job_id"].as_str().unwrap();
+        journey.invoke_ok(&["cancel", job_id]);
+        let terminal_path = journey
+            .storage
+            .join("cancelled")
+            .join(format!("{job_id}.json"));
+        let terminal = fs::read(&terminal_path).unwrap();
+        let transition_path = fs::read_dir(journey.storage.join("job-transitions"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let mut transition: Value =
+            serde_json::from_slice(&fs::read(&transition_path).unwrap()).unwrap();
+        // Recreate the older writer's completed record, without changing the
+        // real cancellation result or its exact transition identity.
+        transition["state"] = Value::from("completed");
+        fs::write(&transition_path, serde_json::to_vec(&transition).unwrap()).unwrap();
+        if !source_retired {
+            let queue_path = journey.storage.join("queue").join(format!("{job_id}.json"));
+            let mut source: Value =
+                serde_json::from_slice(&fs::read(&queue_path).unwrap()).unwrap();
+            source["state"] = Value::from(format!(
+                "transitioning:{}",
+                transition["transition_id"].as_str().unwrap()
+            ));
+            fs::write(queue_path, serde_json::to_vec(&source).unwrap()).unwrap();
+        }
+        fs::remove_file(journey.run_path()).unwrap();
+
+        let output = journey.invoke(&["coordinator", "--once"]);
+        assert_eq!(
+            output.status.success(),
+            source_retired,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(terminal_path).unwrap(), terminal);
+        assert!(
+            !journey.run_path().exists(),
+            "recovery must not invent run history"
+        );
+    }
+}

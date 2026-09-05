@@ -13,7 +13,9 @@
 //! through `/api/release/object`, verify the archive SHA-256, check the
 //! required layout, stage the selected member under a versioned directory,
 //! and only after every artifact is verified repoint the active release and
-//! restart every declared unit that runs it.
+//! restart each declared unit that executes that install root. Independently
+//! installed Stado reader trees consume the retained verified archive through
+//! the enclosing `service converge` contract.
 //! A missing or mismatched release archive leaves the currently active
 //! release untouched and aborts the deployment. That
 //! sentence is the whole design; everything below is it, applied to whatever
@@ -87,17 +89,19 @@
 //!   unit: a label alone has to be FOUND in the registry's own declared
 //!   service set ([`service::declared_services`]) before it is touched, while
 //!   a label together with the unit file locates a unit the product itself
-//!   declares. Every resolved owner is restarted through the shipped
-//!   `service restart` program. A product with no declared units is activated
-//!   and reported as having no units, not silently "restarted".
+//!   declares. Every resolved owner of this install root is restarted through
+//!   the shipped `service restart` program. A product with no such units is
+//!   activated and reported as having no units, not silently "restarted".
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::products::{self, Install, Product, Readback};
-use super::{host_channel, service};
+use super::{host_channel, service, service_label_print};
 use super::{shlex_quote, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -113,6 +117,9 @@ pub const PLANNED_STATUS: &str = "planned";
 /// timeout for probes and activation, but bound download, hashing and extract
 /// with enough time for the declared public release channel.
 const STAGE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Verified Stado archive retained beside its attestation image until every
+/// service-local reader has installed the same delivered bytes.
+pub const READER_ARCHIVE_NAME: &str = "stado-reader-convergence.tar.gz";
 
 /// The remote marker prefix, in the tab-delimited `STADO_*` protocol
 /// [`crate::deploy::host_recovery::parse_output`] established.
@@ -234,7 +241,7 @@ pub(crate) fn loopback_http_origin(origin: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// What an operator asked for, before any of it has been checked.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseRequest {
     pub binary: String,
     pub version: String,
@@ -590,6 +597,12 @@ say platform "$host_platform"
 read_version "$active_path"
 say active_state "$read_version_state"
 say active_version "$read_version_value"
+active_sha256=""
+if [ ! -L "$active_path" ] && [ -f "$active_path" ]; then
+  active_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$active_path" 2>/dev/null || true)
+  active_sha256=${active_digest_line%% *}
+fi
+say active_sha256 "$active_sha256"
 
 if [ -L "$staged_path" ]; then
   staged_state=refused_symlink
@@ -601,6 +614,12 @@ else
   staged_state=absent
 fi
 say staged_state "$staged_state"
+staged_sha256=""
+if [ "$staged_state" = present ]; then
+  staged_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$staged_path" 2>/dev/null || true)
+  staged_sha256=${staged_digest_line%% *}
+fi
+say staged_sha256 "$staged_sha256"
 say sanitizer "$sanitizer_state"
 say step probe
 "##;
@@ -741,6 +760,7 @@ stado_home="$HOME/.stado"
 staged_dir="$stado_home/releases/$binary/$version/$platform"
 staged_path="$staged_dir/$binary"
 archive_path="$staged_dir/.$archive_name.incoming"
+reader_archive="$staged_dir/$reader_archive_name"
 incoming="$staged_dir/.$binary.incoming"
 
 # The plan enforced the scheme contract before this script existed: HTTPS
@@ -794,32 +814,96 @@ if ! /usr/bin/tar -xOzf "$archive_path" "$member" > "$incoming"; then
   say layout archive_extract_failed
   exit 1
 fi
-/bin/rm -f "$archive_path"
 if [ ! -s "$incoming" ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say layout empty
   exit 1
 fi
 /bin/chmod 755 "$incoming"
 read_version "$incoming"
 if [ "$read_version_state" != reported ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say layout "$read_version_state"
   exit 1
 fi
 if [ "$read_version_value" != "$version" ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say layout version_mismatch
   exit 1
 fi
 say layout ok
+if [ "$binary" = stado ]; then
+  /bin/mv -f "$archive_path" "$reader_archive"
+else
+  /bin/rm -f "$archive_path"
+fi
+
 
 /bin/mv -f "$incoming" "$staged_path"
+staged_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$staged_path")
+staged_sha256=${staged_digest_line%% *}
+say staged_sha256 "$staged_sha256"
 say staged "$version"
 say step stage
 "##;
+/// Fetch only the immutable Stado archive needed to resume service-local
+/// reader convergence. This deliberately does not extract or activate the
+/// root program: a byte-attested root may already be complete while a private
+/// reader remains old.
+const REMOTE_RETAIN_READER_ARCHIVE_BODY: &str = r##"
+stado_release_step=retain_reader_archive
+staged_dir="$HOME/.stado/releases/$binary/$version/$platform"
+archive_path="$staged_dir/.$archive_name.reader-incoming"
+reader_archive="$staged_dir/$reader_archive_name"
+for required in /usr/bin/curl /usr/bin/openssl /usr/bin/awk /usr/bin/tr /usr/bin/wc; do
+  if [ ! -x "$required" ]; then
+    say fetch "missing_${required##*/}"
+    exit 1
+  fi
+done
+
+
+/bin/mkdir -p "$staged_dir"
+/bin/rm -f "$archive_path"
+if ! fetch_release_object \
+  "stado://releases/$product/$version/$platform/$archive_name" \
+  "$archive_path"; then
+  /bin/rm -f "$archive_path"
+  exit 1
+fi
+digest_line=$(/usr/bin/openssl dgst -sha256 -r "$archive_path")
+actual_sha256=${digest_line%% *}
+say sha256 "$actual_sha256"
+if [ "$actual_sha256" != "$expected_sha256" ]; then
+  /bin/rm -f "$archive_path"
+  say verify mismatch
+  exit 1
+fi
+/bin/mv -f "$archive_path" "$reader_archive"
+say verify ok
+say step retain_reader_archive
+"##;
 
 /// Phase three, program shape: atomically activate the version-checked file
+const REMOTE_RECHECK_STAGE_BODY: &str = r##"
+stado_release_step=stage
+staged_path="$HOME/.stado/releases/$binary/$version/$platform/$binary"
+if [ -L "$staged_path" ] || [ ! -f "$staged_path" ] || [ ! -x "$staged_path" ]; then
+  say verify staged_missing
+  exit 1
+fi
+read_version "$staged_path"
+if [ "$read_version_state" != reported ] || [ "$read_version_value" != "$version" ]; then
+  say verify staged_version_mismatch
+  exit 1
+fi
+staged_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$staged_path")
+staged_sha256=${staged_digest_line%% *}
+say staged_sha256 "$staged_sha256"
+say verify ok
+say step stage
+"##;
+
 /// staged from the digest-verified archive. Re-reading the version makes this
 /// phase refuse a replaced or corrupt staged file independently of the
 /// caller's ordering.
@@ -856,6 +940,9 @@ if [ "$binary" = stado ]; then
   /bin/mv -f "$release_version_incoming" "$bin_dir/stado.release-version"
 fi
 say activated "$version"
+active_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$active_path")
+active_sha256=${active_digest_line%% *}
+say active_sha256 "$active_sha256"
 
 # The receipt, beside the artefact it describes.
 #
@@ -1282,13 +1369,14 @@ fn release_resolve(release_api: &str) -> String {
 /// closed alphabet of path characters and refuses everything else.
 fn bindings(plan: &ReleasePlan) -> String {
     let mut bound = format!(
-        "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nexpected_sha256={}\n\
-         release_api={}\nmember={}\nsource_commit={}\ndelivered_by={}\ninstall_root=\"{}\"\n",
+        "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nreader_archive_name={}\n\
+         expected_sha256={}\nrelease_api={}\nmember={}\nsource_commit={}\ndelivered_by={}\ninstall_root=\"{}\"\n",
         shlex_quote(&plan.product.name),
         shlex_quote(&plan.product.source.product),
         shlex_quote(&plan.version),
         shlex_quote(&plan.platform),
         shlex_quote(plan.archive_name()),
+        shlex_quote(READER_ARCHIVE_NAME),
         shlex_quote(&plan.sha256),
         shlex_quote(&plan.release_api),
         shlex_quote(&plan.member),
@@ -1334,6 +1422,7 @@ fn bindings(plan: &ReleasePlan) -> String {
             shlex_quote(&plan.product.install.preserve().join("\n")),
         )),
     }
+
     bound
 }
 
@@ -1362,6 +1451,74 @@ pub fn stage_script(plan: &ReleasePlan) -> String {
             bindings(plan)
         ),
     }
+}
+/// Ensure the canonical Stado archive is retained for private reader
+/// convergence without activating or restarting the already-attested root.
+///
+/// Ordinary root staging moves its already-downloaded archive into this
+/// namespace. A resumed partial state first reuses that exact file when its
+/// digest still matches; only an absent or corrupt retained file is fetched,
+/// and that fallback neither extracts the root member nor touches a unit.
+pub async fn ensure_stado_reader_archive(
+    target: &ComputeTarget,
+    request: &ReleaseRequest,
+    self_store: bool,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    let plan = plan(target, request, self_store)?;
+    if plan.product.name != "stado" || plan.product.install.is_tree() {
+        return Err(DeployError(
+            "reader archive convergence is defined only for the Stado program product".to_string(),
+        ));
+    }
+    let cached_script = format!(
+        "{}set -euo pipefail\n\
+         reader_archive=\"$HOME/.stado/releases/$binary/$version/$platform/$reader_archive_name\"\n\
+         [ -f \"$reader_archive\" ] && [ ! -L \"$reader_archive\" ]\n\
+         digest_line=$(/usr/bin/openssl dgst -sha256 -r \"$reader_archive\")\n\
+         actual_sha256=${{digest_line%% *}}\n\
+         [ \"$actual_sha256\" = \"$expected_sha256\" ]\n",
+        bindings(&plan),
+    );
+    if host_channel::run_script(target, &cached_script, runner)
+        .await?
+        .ok()
+    {
+        return Ok(());
+    }
+
+    let script = format!(
+        "{}{SANITIZE_PRELUDE}{FETCH_PRELUDE}{REMOTE_RETAIN_READER_ARCHIVE_BODY}",
+        bindings(&plan),
+    );
+    let output =
+        host_channel::run_script_with_timeout(target, &script, STAGE_TIMEOUT, runner).await?;
+    let output_markers = markers(&output.stdout);
+    if !output.ok() || marker(&output_markers, "step") != "retain_reader_archive" {
+        return Err(DeployError(format!(
+            "cannot retain the verified Stado reader archive: {}",
+            step_failure(&output_markers, &output)
+        )));
+    }
+    if marker(&output_markers, "sha256") != plan.sha256 {
+        return Err(DeployError(
+            "retained Stado reader archive did not report the canonical digest".to_string(),
+        ));
+    }
+    Ok(())
+}
+/// Re-verify one already-staged program without consulting the release
+/// authority. Its version and digest are checked again before activation.
+pub fn recheck_staged_script(plan: &ReleasePlan) -> Result<String, DeployError> {
+    if plan.product.install.is_tree() {
+        return Err(DeployError(
+            "pre-staged recovery activation supports program products only".to_string(),
+        ));
+    }
+    Ok(format!(
+        "{}{SANITIZE_PRELUDE}{REMOTE_RECHECK_STAGE_BODY}",
+        bindings(plan)
+    ))
 }
 
 /// The activation program for one plan.
@@ -1419,10 +1576,15 @@ pub fn marker_values<'a>(markers: &'a [(String, String)], key: &str) -> Vec<&'a 
 
 /// What went wrong in a program that did not finish.
 ///
-/// The last marker it managed to emit, which is always the one that decided
-/// to exit, falling back to the transport's own last word when the program
-/// never spoke at all.
+/// The remote program's stderr is its diagnostic channel. Keep its last line
+/// whenever one exists; a final progress marker such as `status failed` says
+/// only that the phase failed and must not replace the captured cause. The
+/// last marker remains the fallback for scripts that reported no stderr, and
+/// the transport fallback covers commands that produced neither.
 fn step_failure(markers: &[(String, String)], output: &CommandOutput) -> String {
+    if !output.stderr.trim().is_empty() {
+        return host_channel::last_error_line(output, "ssh failed");
+    }
     match markers.last() {
         Some((key, value)) => format!("{key} {value}"),
         None => host_channel::last_error_line(output, "ssh failed"),
@@ -1452,16 +1614,16 @@ fn fail(report: &mut Map<String, Value>, exit_code: i32, error: String) -> Value
     Value::Object(std::mem::take(report))
 }
 
-/// The units that run this product on this host.
+/// The units whose executable is installed by this product on this host.
 ///
 /// Two declarations can name each one, and both are declarations rather than
 /// guesses. The registry's own service set wins whenever it carries the
-/// label: an operator who adopted the unit stated where its file is, and that
-/// statement is newer than any shipped document. Otherwise the product
-/// declaration may LOCATE the unit itself — label, kind and unit file — and
-/// locating it is the statement that it exists. A product label the registry
-/// does not carry and the product does not locate is omitted and never
-/// restarted.
+/// label. For Stado, a registry unit executing
+/// `~/.stado/services/<service>/current/.../stado` is deliberately excluded:
+/// the root product installs only `$HOME/.stado/bin/stado`, so restarting that
+/// private unit here would restart unchanged bytes and then compare them with
+/// the new global digest. The shared private-reader convergence installs the
+/// verified archive into those trees before it performs their lifecycle.
 pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service::ManagedService> {
     let registry_units = service::declared_services(target);
     let mut resolved = Vec::new();
@@ -1491,6 +1653,9 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
                 })
             });
         if let Some(declared) = declared {
+            if product.name == "stado" && service::is_service_local_stado_reader(&declared) {
+                continue;
+            }
             if !resolved
                 .iter()
                 .any(|existing: &service::ManagedService| existing.unit_id() == declared.unit_id())
@@ -1500,6 +1665,49 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
         }
     }
     resolved
+}
+/// Recheck and atomically switch only the ordinary active program path.
+///
+/// Storage authority recovery must install its forward unit definition before
+/// the API starts, so it performs unit restoration itself after this handoff.
+/// The returned digest is the mapped active file and must equal the digest
+/// persisted by [`stage_declared_release`].
+pub async fn activate_staged_program(
+    target: &ComputeTarget,
+    staged: &StagedRelease,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let plan = plan(target, &staged.request, staged.self_store)?;
+    let recheck = host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?;
+    let recheck_markers = markers(&recheck.stdout);
+    if !recheck.ok() || marker(&recheck_markers, "step") != "stage" {
+        return Err(DeployError(step_failure(&recheck_markers, &recheck)));
+    }
+    if marker(&recheck_markers, "staged_sha256") != staged.staged_sha256 {
+        return Err(DeployError(
+            "staged runtime digest changed before activation".to_string(),
+        ));
+    }
+    let probe = host_channel::run_script(target, &probe_script(&plan), runner).await?;
+    let probe_markers = markers(&probe.stdout);
+    if probe.ok()
+        && marker(&probe_markers, "step") == "probe"
+        && marker(&probe_markers, "active_sha256") == staged.staged_sha256
+    {
+        return Ok(staged.staged_sha256.clone());
+    }
+    let activated = host_channel::run_script(target, &activate_script(&plan), runner).await?;
+    let activate_markers = markers(&activated.stdout);
+    if !activated.ok() || marker(&activate_markers, "step") != "activate" {
+        return Err(DeployError(step_failure(&activate_markers, &activated)));
+    }
+    let active = marker(&activate_markers, "active_sha256").to_string();
+    if active != staged.staged_sha256 {
+        return Err(DeployError(
+            "active runtime does not map the staged release digest".to_string(),
+        ));
+    }
+    Ok(active)
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,6 +1723,35 @@ pub async fn release_target(
     target: &ComputeTarget,
     request: &ReleaseRequest,
     self_store: bool,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    release_target_inner(target, request, self_store, None, runner).await
+}
+
+/// Activate bytes staged by this same release protocol before an authority
+/// outage. The caller supplies the extracted program digest reported by the
+/// staging invocation; activation and every restarted unit must map that exact
+/// digest. Tree products are intentionally excluded from this recovery seam.
+pub async fn activate_staged_target(
+    target: &ComputeTarget,
+    request: &ReleaseRequest,
+    self_store: bool,
+    staged_sha256: &str,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    if !is_sha256(staged_sha256) {
+        return Err(DeployError(
+            "pre-staged release digest is not a SHA-256".to_string(),
+        ));
+    }
+    release_target_inner(target, request, self_store, Some(staged_sha256), runner).await
+}
+
+async fn release_target_inner(
+    target: &ComputeTarget,
+    request: &ReleaseRequest,
+    self_store: bool,
+    pre_staged_sha256: Option<&str>,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let plan = plan(target, request, self_store)?;
@@ -1621,12 +1858,55 @@ pub async fn release_target(
         ));
     }
 
-    // Already there. Not a deployment, and not reported as one.
+    // A matching version banner is not enough: the active file must still be
+    // the retained staged image and every declared program unit must map it.
+    // A proven match returns without restarting; stale or unobservable units
+    // fall through to the ordinary stage/activate/restart path.
+    let mut already_proven_units = BTreeMap::<String, Value>::new();
     if active_version == plan.version && !plan.reinstall {
-        report.insert("steps".to_string(), json!(steps));
-        report.insert("exit_code".to_string(), json!(probe.code));
-        report.insert("status".to_string(), json!(ALREADY_ACTIVE_STATUS));
-        return Ok(Value::Object(report));
+        if plan.product.install.is_tree() {
+            report.insert("steps".to_string(), json!(steps));
+            report.insert("exit_code".to_string(), json!(probe.code));
+            report.insert("status".to_string(), json!(ALREADY_ACTIVE_STATUS));
+            return Ok(Value::Object(report));
+        }
+        let active_sha256 = marker(&probe_markers, "active_sha256");
+        let staged_sha256 = marker(&probe_markers, "staged_sha256");
+        let mut unit_processes = Vec::new();
+        let mut exact_image = is_sha256(active_sha256) && active_sha256 == staged_sha256;
+        if exact_image {
+            for declared in &units {
+                let state = service_label_print::print_label(
+                    target,
+                    declared.unit_id(),
+                    service::BootoutScope::Any,
+                    runner,
+                )
+                .await?;
+                let mapped = state.pid.is_some()
+                    && state.process_started_at.is_some()
+                    && state.process_executable.is_some()
+                    && state.process_device.is_some()
+                    && state.process_inode.is_some_and(|inode| inode != 0)
+                    && state.process_sha256.as_deref() == Some(active_sha256);
+                if mapped {
+                    let evidence = state.to_json();
+                    unit_processes.push(evidence.clone());
+                    already_proven_units.insert(declared.unit_id().to_string(), evidence);
+                } else {
+                    exact_image = false;
+                }
+            }
+        }
+        if exact_image {
+            report.insert("active_sha256".to_string(), json!(active_sha256));
+            report.insert("unit_processes".to_string(), json!(unit_processes));
+            report.insert("steps".to_string(), json!(steps));
+            report.insert("exit_code".to_string(), json!(probe.code));
+            report.insert("status".to_string(), json!(ALREADY_ACTIVE_STATUS));
+            return Ok(Value::Object(report));
+        }
+        report.insert("active_image_proved".to_string(), json!(false));
     }
 
     if plan.dry_run {
@@ -1640,10 +1920,14 @@ pub async fn release_target(
         return Ok(Value::Object(report));
     }
 
-    // Phase two: fetch, verify, stage. Still nothing in the install root.
-    let stage =
+    // Phase two: fetch/verify/stage for ordinary delivery, or re-verify the
+    // exact extracted digest persisted before an authority outage.
+    let stage = if pre_staged_sha256.is_some() {
+        host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?
+    } else {
         host_channel::run_script_with_timeout(target, &stage_script(&plan), STAGE_TIMEOUT, runner)
-            .await?;
+            .await?
+    };
     let stage_markers = markers(&stage.stdout);
     report.insert(
         "fetched_sha256".to_string(),
@@ -1661,7 +1945,49 @@ pub async fn release_target(
         report.insert("active_version_unchanged".to_string(), json!(true));
         return Ok(fail(&mut report, stage.code, detail));
     }
+    let staged_sha256 = marker(&stage_markers, "staged_sha256").to_string();
+    if pre_staged_sha256.is_some_and(|expected| expected != staged_sha256) {
+        let detail = "pre-staged program digest changed before activation".to_string();
+        steps.push(step_entry(
+            "stage",
+            host_channel::FAILED_STATUS,
+            Some(detail.clone()),
+        ));
+        report.insert("steps".to_string(), json!(steps));
+        report.insert("active_version_unchanged".to_string(), json!(true));
+        return Ok(fail(&mut report, stage.code, detail));
+    }
+    if !plan.product.install.is_tree() && !is_sha256(&staged_sha256) {
+        let detail = "staging did not report the exact extracted program digest".to_string();
+        steps.push(step_entry(
+            "stage",
+            host_channel::FAILED_STATUS,
+            Some(detail.clone()),
+        ));
+        report.insert("steps".to_string(), json!(steps));
+        report.insert("active_version_unchanged".to_string(), json!(true));
+        return Ok(fail(&mut report, stage.code, detail));
+    }
+    report.insert("staged_sha256".to_string(), json!(staged_sha256));
     steps.push(step_entry("stage", "ok", None));
+    let mut prior_unit_state = BTreeMap::new();
+    for declared in &units {
+        let state = service_label_print::print_label(
+            target,
+            declared.unit_id(),
+            service::BootoutScope::Any,
+            runner,
+        )
+        .await?;
+        prior_unit_state.insert(declared.unit_id().to_string(), state);
+    }
+    report.insert(
+        "unit_processes_before".to_string(),
+        json!(prior_unit_state
+            .values()
+            .map(|state| state.to_json())
+            .collect::<Vec<_>>()),
+    );
 
     // Phase three: activate. Reached only because phase two verified.
     let activate = host_channel::run_script(target, &activate_script(&plan), runner).await?;
@@ -1677,6 +2003,21 @@ pub async fn release_target(
         return Ok(fail(&mut report, activate.code, detail));
     }
     steps.push(step_entry("activate", "ok", None));
+    let active_sha256 = marker(&activate_markers, "active_sha256").to_string();
+    if !plan.product.install.is_tree()
+        && (!is_sha256(&active_sha256) || active_sha256 != staged_sha256)
+    {
+        let detail =
+            "activation did not map the exact digest verified from the release archive".to_string();
+        steps.push(step_entry(
+            "activate",
+            host_channel::FAILED_STATUS,
+            Some(detail.clone()),
+        ));
+        report.insert("steps".to_string(), json!(steps));
+        return Ok(fail(&mut report, activate.code, detail));
+    }
+    report.insert("active_sha256".to_string(), json!(active_sha256));
     if plan.product.install.is_tree() {
         // The paths this delivery actually replaced, as the host named them
         // one by one. An operator asking what a tree delivery touched gets
@@ -1687,7 +2028,10 @@ pub async fn release_target(
         );
     }
 
-    // Phase four: restart every declared unit that runs the installed binary.
+    // Phase four: restart every declared unit, then join the new init-system
+    // pid to the image digest activation just reported. The shared CLI's
+    // installed version is not evidence about a service process.
+    let mut unit_processes = Vec::new();
     if units.is_empty() {
         steps.push(step_entry(
             "restart",
@@ -1701,9 +2045,100 @@ pub async fn release_target(
         let mut failures = Vec::new();
         for declared in &units {
             let unit_id = declared.unit_id().to_string();
+            if let Some(evidence) = already_proven_units.get(&unit_id) {
+                steps.push(step_entry(
+                    "restart",
+                    "already_mapped",
+                    Some(format!(
+                        "{unit_id} already maps the activated immutable image"
+                    )),
+                ));
+                unit_processes.push(evidence.clone());
+                continue;
+            }
+            let arguments = std::iter::once(declared.program.as_str())
+                .chain(declared.args.iter().map(String::as_str))
+                .collect::<Vec<_>>();
+            if crate::self_update::defers_to_release_handshake(&arguments) {
+                if let Some(evidence) = prior_unit_state.get(&unit_id) {
+                    unit_processes.push(evidence.to_json());
+                }
+                steps.push(step_entry(
+                    "restart",
+                    "deferred_to_release_handshake",
+                    Some(format!(
+                        "{unit_id} is the queue agent and will recycle itself after its current slot"
+                    )),
+                ));
+                continue;
+            }
             match service::restart_service(target, declared, runner).await {
                 Ok(restarted) if restarted.succeeded("restarted") => {
-                    steps.push(step_entry("restart", "ok", Some(unit_id)));
+                    match service_label_print::print_label(
+                        target,
+                        declared.unit_id(),
+                        service::BootoutScope::Any,
+                        runner,
+                    )
+                    .await
+                    {
+                        Ok(current) => {
+                            let previous = prior_unit_state.get(&unit_id);
+                            let previous_pid = previous.and_then(|state| state.pid.as_deref());
+                            let previous_start =
+                                previous.and_then(|state| state.process_started_at.as_deref());
+                            let current_pid = current.pid.as_deref();
+                            let current_start = current.process_started_at.as_deref();
+                            let fresh = current_pid.is_some()
+                                && current_start.is_some()
+                                && (current_pid != previous_pid || current_start != previous_start);
+                            let exact_image = current.process_executable.is_some()
+                                && current.process_device.is_some()
+                                && current.process_inode.is_some_and(|inode| inode != 0)
+                                && (plan.product.install.is_tree()
+                                    || current.process_sha256.as_deref()
+                                        == Some(active_sha256.as_str()));
+                            unit_processes.push(current.to_json());
+                            if fresh && exact_image {
+                                let detail = format!(
+                                    "{unit_id} fresh pid {} image {} sha256 {}",
+                                    current.pid.as_deref().unwrap_or_default(),
+                                    current.process_executable.as_deref().unwrap_or_default(),
+                                    current.process_sha256.as_deref().unwrap_or_default()
+                                );
+                                steps.push(step_entry("restart", "ok", Some(detail)));
+                            } else {
+                                let detail = format!(
+                                    "{unit_id}: restart did not prove a fresh pid on the activated immutable image; prior pid={} start={} current pid={} start={} executable={} device={} inode={} sha256={} identity_unavailable={}",
+                                    previous_pid.unwrap_or_default(),
+                                    previous_start.unwrap_or_default(),
+                                    current_pid.unwrap_or_default(),
+                                    current_start.unwrap_or_default(),
+                                    current.process_executable.as_deref().unwrap_or_default(),
+                                    current.process_device.unwrap_or_default(),
+                                    current.process_inode.unwrap_or_default(),
+                                    current.process_sha256.as_deref().unwrap_or_default(),
+                                    current.process_identity_unavailable.as_deref().unwrap_or_default()
+                                );
+                                steps.push(step_entry(
+                                    "restart",
+                                    host_channel::FAILED_STATUS,
+                                    Some(detail.clone()),
+                                ));
+                                failures.push((1, detail));
+                            }
+                        }
+                        Err(error) => {
+                            let detail =
+                                format!("{unit_id}: process identity read failed: {error}");
+                            steps.push(step_entry(
+                                "restart",
+                                host_channel::FAILED_STATUS,
+                                Some(detail.clone()),
+                            ));
+                            failures.push((1, detail));
+                        }
+                    }
                 }
                 Ok(restarted) => {
                     let detail = format!("{unit_id}: {}", restarted.failure());
@@ -1733,13 +2168,12 @@ pub async fn release_target(
                 .collect::<Vec<_>>()
                 .join("; ");
             report.insert("steps".to_string(), json!(steps));
-            // The new binary IS active; only the named units still run the old
-            // image. Saying "failed" without saying that would send an
-            // operator looking for an artifact that is already in place.
+            report.insert("unit_processes".to_string(), json!(unit_processes));
             report.insert("activated".to_string(), json!(true));
             return Ok(fail(&mut report, exit_code, detail));
         }
     }
+    report.insert("unit_processes".to_string(), json!(unit_processes));
 
     // Every stable bind this host declares, proven listening before this
     // reports `ok`.
@@ -2465,15 +2899,18 @@ async fn has_managed_loopback_forward(
             .any(|line| line.starts_with("STADO_RELEASE_FORWARD\t")))
 }
 
-/// Deliver one declared product to one canonical registry host.
-pub async fn release_host(
+/// Resolve one declared immutable release while its catalog authority is
+/// available. Storage recovery persists this request before taking that
+/// authority offline, then uses the ordinary stage and activation programs;
+/// no transaction-specific executable path enters a unit file.
+pub async fn resolve_release_request(
     target_name: &str,
     binary: &str,
     version: &str,
     dry_run: bool,
     reinstall: bool,
     runner: &Runner,
-) -> Result<Value, DeployError> {
+) -> Result<(ComputeTarget, ReleaseRequest, bool), DeployError> {
     let product = products::product(binary)?;
     if !is_exact_semver(version) {
         return Err(DeployError(format!(
@@ -2500,17 +2937,6 @@ pub async fn release_host(
         || registry
             .service(OBJECT_API_SERVICE)
             .is_some_and(|object_api| object_api.active_host == target.name);
-    // Two roles, one string, and they are not the same address.
-    //
-    // This process reads the catalog from `release_api_origin()`, which has to
-    // be reachable from HERE. The TARGET then fetches the archive itself, and
-    // the host that serves the release object API is the one case where the
-    // public name is the worse address: `charless-mac-mini` asking its own
-    // tailnet name hairpins back into its own `tailscale serve`. The service
-    // directory states the address each host uses to reach a loopback
-    // service, so the target's own entry is that address, and
-    // `release_origin_allowed` has always permitted loopback HTTP for exactly
-    // this case.
     let target_release_api = registry
         .service(OBJECT_API_SERVICE)
         .filter(|object_api| object_api.active_host == target.name)
@@ -2518,8 +2944,6 @@ pub async fn release_host(
         .map(|endpoint| endpoint.url.trim_end_matches('/').to_string())
         .filter(|url| loopback_http_origin(url))
         .unwrap_or(release_api);
-    // The published byte count, read here so the target never derives it from
-    // a `Range: 0-0` answer. See `cli::storage::release_object_size`.
     let archive_uri = format!(
         "stado://releases/{}/{version}/{platform}/{}",
         product.source.product, identity.archive_name
@@ -2540,5 +2964,65 @@ pub async fn release_host(
         dry_run,
         reinstall,
     };
+    Ok((target, request, self_store))
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedRelease {
+    pub request: ReleaseRequest,
+    pub self_store: bool,
+    pub staged_sha256: String,
+}
+
+/// Fetch, verify and stage the currently declared runtime without changing the
+/// active path or restarting a unit.
+pub async fn stage_declared_release(
+    target_name: &str,
+    binary: &str,
+    version: &str,
+    runner: &Runner,
+) -> Result<StagedRelease, DeployError> {
+    let (target, request, self_store) =
+        resolve_release_request(target_name, binary, version, false, true, runner).await?;
+    let plan = plan(&target, &request, self_store)?;
+    let probe = host_channel::run_script(&target, &probe_script(&plan), runner).await?;
+    let probe_markers = markers(&probe.stdout);
+    if !probe.ok()
+        || marker(&probe_markers, "step") != "probe"
+        || marker(&probe_markers, "sanitizer") != "ok"
+        || marker(&probe_markers, "platform") != plan.platform
+    {
+        return Err(DeployError(step_failure(&probe_markers, &probe)));
+    }
+    let stage =
+        host_channel::run_script_with_timeout(&target, &stage_script(&plan), STAGE_TIMEOUT, runner)
+            .await?;
+    let stage_markers = markers(&stage.stdout);
+    if !stage.ok() || marker(&stage_markers, "step") != "stage" {
+        return Err(DeployError(step_failure(&stage_markers, &stage)));
+    }
+    let staged_sha256 = marker(&stage_markers, "staged_sha256").to_string();
+    if !is_sha256(&staged_sha256) {
+        return Err(DeployError(
+            "staged declared runtime did not report its extracted program digest".to_string(),
+        ));
+    }
+    Ok(StagedRelease {
+        request,
+        self_store,
+        staged_sha256,
+    })
+}
+
+/// Deliver one declared product to one canonical registry host.
+pub async fn release_host(
+    target_name: &str,
+    binary: &str,
+    version: &str,
+    dry_run: bool,
+    reinstall: bool,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let (target, request, self_store) =
+        resolve_release_request(target_name, binary, version, dry_run, reinstall, runner).await?;
     release_target(&target, &request, self_store, runner).await
 }

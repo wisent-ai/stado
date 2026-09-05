@@ -52,6 +52,11 @@ use super::CmdError;
 /// The state a live launchd/systemd unit reports
 /// (`deploy/host_health_beacon_macos.sh`, `deploy/host_health_beacon.sh`).
 const ACTIVE_STATE: &str = "active";
+/// A successful timer-triggered oneshot with an active native trigger.
+///
+/// This is intentionally distinct from [`ACTIVE_STATE`]: it proves scheduled
+/// lifecycle health, not a continuously running process.
+const SCHEDULED_STATE: &str = "scheduled";
 
 /// Exit code for a registry write refused because the document had already
 /// moved: `sysexits.h`'s `EX_TEMPFAIL`, "try again".
@@ -1240,6 +1245,65 @@ impl Beacon {
             other => Some(other.to_string()),
         }
     }
+
+    /// Whether a `scheduled` unit carries the complete native evidence the
+    /// publisher requires before assigning that state.
+    fn scheduled_unit_is_healthy(&self, unit: &str) -> bool {
+        let Some(fields) = self
+            .body
+            .as_ref()
+            .and_then(|body| body.get("units"))
+            .and_then(Value::as_object)
+            .and_then(|units| units.get(unit))
+            .and_then(Value::as_object)
+        else {
+            return false;
+        };
+        let common_evidence = fields.get("state").and_then(Value::as_str) == Some(SCHEDULED_STATE)
+            && fields.get("service_type").and_then(Value::as_str) == Some("oneshot")
+            && fields
+                .get("manager")
+                .and_then(Value::as_str)
+                .is_some_and(|manager| matches!(manager, "system" | "user"))
+            && fields
+                .get("triggered_by")
+                .and_then(Value::as_array)
+                .is_some_and(|triggers| {
+                    fields
+                        .get("active_trigger")
+                        .and_then(Value::as_str)
+                        .is_some_and(|active| {
+                            triggers
+                                .iter()
+                                .any(|trigger| trigger.as_str() == Some(active))
+                        })
+                })
+            && fields
+                .get("trigger_state")
+                .and_then(Value::as_str)
+                .is_some_and(|state| matches!(state, "active" | "activating" | "reloading"));
+        if !common_evidence {
+            return false;
+        }
+        match fields.get("run_state").and_then(Value::as_str) {
+            Some("running") => {
+                fields.get("native_state").and_then(Value::as_str) == Some("activating")
+            }
+            Some("succeeded") => {
+                fields
+                    .get("native_state")
+                    .and_then(Value::as_str)
+                    .is_some_and(|state| matches!(state, "inactive" | "active" | "reloading"))
+                    && fields.get("result").and_then(Value::as_str) == Some("success")
+                    && fields.get("exec_main_status").and_then(Value::as_str) == Some("0")
+                    && fields
+                        .get("last_started_at")
+                        .and_then(Value::as_str)
+                        .is_some_and(|stamp| !stamp.is_empty() && stamp != "n/a")
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Every beacon in the store, keyed by slug — the `<slug>.json` stem that
@@ -1275,15 +1339,30 @@ async fn load_beacons(store: &JobStorage) -> Result<BTreeMap<String, Beacon>, Cm
     Ok(beacons)
 }
 
-/// The beacon a target resolves to, by the same slug rule
+/// The newest beacon a target resolves to, by the same slug rule
 /// `monitor::host_health::load_host_health` resolves forward.
+fn beacon_for_slugs<'a>(
+    slugs: &[String],
+    beacons: &'a BTreeMap<String, Beacon>,
+) -> Option<&'a Beacon> {
+    let mut selected: Option<&Beacon> = None;
+    for slug in slugs {
+        let Some(candidate) = beacons.get(slug) else {
+            continue;
+        };
+        if selected.is_none_or(|current| candidate.observed_at() > current.observed_at()) {
+            selected = Some(candidate);
+        }
+    }
+    selected
+}
+
 fn beacon_for<'a>(
     target: &ComputeTarget,
     beacons: &'a BTreeMap<String, Beacon>,
 ) -> Option<&'a Beacon> {
-    host_health::beacon_slugs(target, &target.name)
-        .into_iter()
-        .find_map(|slug| beacons.get(&slug))
+    let slugs = host_health::beacon_slugs(target, &target.name);
+    beacon_for_slugs(&slugs, beacons)
 }
 
 /// One service a registry target declares it manages.
@@ -2000,8 +2079,19 @@ fn unread_configuration() -> Vec<Finding> {
 /// plus the bodies it finds.
 #[allow(clippy::too_many_lines)]
 pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
-    let registry = read_registry().await?;
-    let store = JobStorage::new().await?;
+    // Doctor needs the typed registry and raw extension blocks to describe one
+    // observation. Derive both from one authoritative versioned read: using
+    // `read_registry` here could select the last-known-good copy, and fetching
+    // the raw document afterwards could then mix that copy with a different
+    // authority generation.
+    let (document, _) = fetch_versioned_document().await?;
+    let registry = targets::load_registry_from_value(&document).map_err(|error| {
+        CmdError::click(format!(
+            "invalid registry document at {}: {error}",
+            targets::registry_location()
+        ))
+    })?;
+    let store = JobStorage::for_primary_reads().await?;
     let beacons = load_beacons(&store).await?;
     let consumers = capacity::read_consumer_capacity(&store).await?;
     let now = Utc::now();
@@ -2055,25 +2145,13 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         .flatten()
         .map(|target| target.name.clone());
 
-    // The raw document, not the typed `Registry`. Two checks below need it and
-    // neither can use the loaded one: `service_directory` and
-    // `service_resolver` are raw-JSON blocks whose model lives in
-    // `service_resolution` so the unread-declaration check is about exactly the
-    // keys no model in this build names, and the build-versus-registry check
-    // has to hold this build's validator against the bytes the authority is
-    // serving.
-    //
-    // Read once, before the per-host loop, because both readers want the same
-    // document and a second fetch could answer with a different generation.
-    //
-    // This read is why the check below can fire at all. `read_registry` above
-    // does NOT gate on `validate_registry`: `fetch_registry_remote_uncached`
-    // loads the document through `load_registry_from_str`, which SKIPS what it
-    // cannot model, and only the last-known-good cache is held to the
-    // contract. So a build that refuses the published registry still reads it,
-    // still answers every question in this command, and — until this row
-    // existed — reported the fleet as if nothing had refused anything.
-    let document = fetch_document().await?;
+    // The raw document from the same versioned read that produced `registry`
+    // above. `service_directory`, `service_resolver`, and release/build checks
+    // need raw extension blocks, and a second fetch could answer with a
+    // different generation. Doctor is an observation of the canonical
+    // authority, so unlike general host-resolution commands it does not fall
+    // back to the on-disk last-known-good copy. A refused primary read remains
+    // a refusal instead of becoming findings about a stale document.
 
     for target in &registry.targets {
         let slugs = host_health::beacon_slugs(target, &target.name);
@@ -2155,8 +2233,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
             // repair that happens silently is the same defect as a failure
             // that happens silently, and a new severity word for it would be
             // a third vocabulary for one condition. Only for units an enabled
-            // policy explicitly owns, and `None` on every host today because
-            // no registry carries `release_unit_image_revisit`.
+            // policy explicitly owns.
             let mut sentence = image.sentence();
             if let Some(clause) = revisit.as_ref().and_then(|revisit| revisit.clause(&image)) {
                 sentence.push_str(&clause);
@@ -2187,7 +2264,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         {
             findings.push(Finding::new(skew.kind(), &target.name, skew.sentence()));
         }
-        let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
+        let Some(beacon) = beacon_for_slugs(&slugs, &beacons) else {
             findings.push(Finding::new(
                 "no-heartbeat",
                 &target.name,
@@ -2238,17 +2315,21 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     )
                     .about(declared.id.as_str()),
                 ),
-                Some(state) if state != ACTIVE_STATE => findings.push(
-                    Finding::new(
-                        "unit-not-active",
-                        &target.name,
-                        format!(
-                            "registry declares service {} ({}) but {} reports state={state}",
-                            declared.name, declared.id, beacon.path
-                        ),
+                Some(state)
+                    if state != ACTIVE_STATE && !beacon.scheduled_unit_is_healthy(&declared.id) =>
+                {
+                    findings.push(
+                        Finding::new(
+                            "unit-not-active",
+                            &target.name,
+                            format!(
+                                "registry declares service {} ({}) but {} reports state={state}",
+                                declared.name, declared.id, beacon.path
+                            ),
+                        )
+                        .about(declared.id.as_str()),
                     )
-                    .about(declared.id.as_str()),
-                ),
+                }
                 Some(_) => {}
             }
         }
@@ -2573,8 +2654,14 @@ pub(crate) fn human_age(age: TimeDelta) -> String {
 /// reporting is exactly what this table exists to surface, and a row that
 /// is absent surfaces nothing.
 pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
-    let registry = read_registry().await?;
-    let store = JobStorage::new().await?;
+    let (document, _) = fetch_versioned_document().await?;
+    let registry = targets::load_registry_from_value(&document).map_err(|error| {
+        CmdError::click(format!(
+            "invalid registry document at {}: {error}",
+            targets::registry_location()
+        ))
+    })?;
+    let store = JobStorage::for_primary_reads().await?;
     let beacons = load_beacons(&store).await?;
     let now = Utc::now();
 

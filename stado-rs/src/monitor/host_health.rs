@@ -138,54 +138,76 @@ pub async fn load_host_health(
 
     let bucket = store.bucket_name().to_string();
     let candidates = beacon_slugs(target, identity);
+    let mut selected = None;
 
+    // A target may retain more than one registry-owned identity after a
+    // hostname change. Candidate order is only a lookup preference; it is not
+    // a time authority. Read every existing alias and select the newest object
+    // observation so an older alias cannot mask a fresher beacon.
     for slug in &candidates {
         let path = format!("{HEALTH_PREFIX}/{slug}.json");
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             continue;
         };
-
-        let beacon: Value =
-            serde_json::from_str(&versioned.content).map_err(|_| HostHealthError::InvalidJson {
-                bucket: bucket.clone(),
-                path: path.clone(),
-            })?;
-        let Value::Object(beacon) = beacon else {
-            return Err(HostHealthError::NotAnObject {
-                bucket: bucket.clone(),
-                path: path.clone(),
-            });
-        };
-
         let updated_at = store.backend().updated_at(&path).await?;
-        let object = json!({
-            "uri": format!("gs://{bucket}/{path}"),
-            "generation": versioned.version,
-            "updated_at": updated_at.map(|ts| ts.to_rfc3339()),
-            "created_at": Value::Null,
-            "size_bytes": versioned.content.len(),
-            "etag": Value::Null,
-        });
-        let target_json = json!({
-            "name": target.name,
-            "kind": target.kind,
-            "hostnames": target.hostnames,
-        });
-        return Ok(HostHealthReport {
-            target: target_json,
-            object,
-            beacon,
-        });
+        let reported_at = serde_json::from_str::<Value>(&versioned.content)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("reported_at")
+                    .and_then(Value::as_str)
+                    .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+                    .map(|stamp| stamp.with_timezone(&chrono::Utc))
+            });
+        let observed_at = updated_at.or(reported_at);
+        let replace = selected
+            .as_ref()
+            .is_none_or(|(_, _, _, selected_at)| observed_at > *selected_at);
+        if replace {
+            selected = Some((path, versioned, updated_at, observed_at));
+        }
     }
 
-    let attempted = candidates
-        .iter()
-        .map(|slug| format!("{HEALTH_PREFIX}/{slug}.json"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(HostHealthError::NoBeacon {
-        name: target.name.clone(),
-        paths: attempted,
+    let Some((path, versioned, updated_at, _)) = selected else {
+        let attempted = candidates
+            .iter()
+            .map(|slug| format!("{HEALTH_PREFIX}/{slug}.json"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HostHealthError::NoBeacon {
+            name: target.name.clone(),
+            paths: attempted,
+        });
+    };
+    let beacon: Value =
+        serde_json::from_str(&versioned.content).map_err(|_| HostHealthError::InvalidJson {
+            bucket: bucket.clone(),
+            path: path.clone(),
+        })?;
+    let Value::Object(beacon) = beacon else {
+        return Err(HostHealthError::NotAnObject {
+            bucket: bucket.clone(),
+            path: path.clone(),
+        });
+    };
+
+    let object = json!({
+        "uri": format!("gs://{bucket}/{path}"),
+        "generation": versioned.version,
+        "updated_at": updated_at.map(|ts| ts.to_rfc3339()),
+        "created_at": Value::Null,
+        "size_bytes": versioned.content.len(),
+        "etag": Value::Null,
+    });
+    let target_json = json!({
+        "name": target.name,
+        "kind": target.kind,
+        "hostnames": target.hostnames,
+    });
+    Ok(HostHealthReport {
+        target: target_json,
+        object,
+        beacon,
     })
 }
 

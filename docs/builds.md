@@ -15,6 +15,8 @@ the product has a separate release-control rollout policy.
 The Stado delivery job starts its worker from the digest-pinned candidate
 archive and that worker uses itself for `install-local`; a broken older
 installed worker therefore cannot prevent the release that repairs it.
+A non-Stado archive contains that product rather than another Stado binary, so
+its delivery runs the installed Stado worker against the digest-pinned archive.
 
 Repeating `stado release submit` resumes the same release run. An initial
 platform submission keeps its original stable job identity and output URI. If
@@ -73,15 +75,26 @@ receipt evidence before restoring the run's prior state; failure preserves the
 previous passed delivery while recording the terminal failure and restoring the
 run state.
 
+`stado host config-set TARGET KEY VALUE` migrates an older deployment profile
+through the installed `stado config migrate` before applying the field.
+The migration preserves the exact prior file beside the profile and refuses
+newer schemas. No separate migration command is needed;
+`--reload-service SERVICE` activates the change through the declared service policy.
+
 ## Release publication authority
 
-Release signing and authenticated release-object publication resolve one
-declared credential authority: `release_api.skarbiec.url`. They use separate
-least-privilege identities and owner-only token files on that same Skarbiec:
-`stado-release-coordinator` reads only the signing key, while
-`stado-release-api-verifier` reads the product publisher bearer named by
-`release_api.publishers`. `STADO_API_TOKEN` remains a generic object API
-credential and is never substituted for a product's release publisher.
+The publisher command reads the bearer named by `release_api.publishers` through
+its selected credential store and configured `WC_SKARBIEC_CONSUMER` grant.
+When owner credentials are available, Stado adds only that item's `token` read
+to the same grant before reading it; an already authorized read does not depend
+on that repair being available.
+
+The release server uses `release_api.skarbiec.url` and its separate
+`stado-release-api-verifier` grant to verify the publisher bearer. Release
+signing uses the same declared authority with `stado-release-coordinator`,
+which reads only the signing key. The publisher command never authenticates
+its credential read as the server verifier, and `STADO_API_TOKEN` remains a
+generic object API credential, never a product release bearer.
 
 The public release route accepts exactly one `uri` query field. Exact
 `GET /api/release/object?uri=stado://releases/...` reads and byte ranges are
@@ -107,6 +120,32 @@ an exact dead release-proxy orphan; without a declared pair, that branch refuses
 before sending `TERM` because it has no known service to restore.
 Only the pair on the release target authorizes that restore; a similarly named
 entry under `targets[].services` is never inferred as a fallback.
+
+## Wait for the stable release endpoint
+
+A blue-green candidate is not active merely because its own port answers.
+Stado also checks the stable proxy's process, immutable release identity,
+generation, upstream port, and declared readiness endpoint before routing is
+reported as complete. Activation, reconciliation, and rollback allow that
+endpoint to become ready within the product's
+`strategy.readiness_timeout_seconds`; they do not assume a newly spawned proxy
+has bound its socket after a fixed delay.
+
+An exited proxy fails immediately. When the deadline expires, the refusal names
+the stable URL, allowed seconds, and last connection error or HTTP status.
+Identity and generation mismatches still fail without waiting.
+
+Read the proxy's own output separately from the candidate's output:
+
+```console
+stado release logs brama --target charless-mac-mini --version proxy --stream both --json
+stado release logs brama --target charless-mac-mini --version 0.2.69 --stream both --json
+stado release quarantine list brama --target charless-mac-mini --json
+```
+
+After repairing the recorded cause, `release quarantine clear` retires only the
+exact digest named by `--digest` and records the required `--reason`. It does not
+rebuild or replace the signed release.
 
 ## Resolve the executable that is actually active
 
@@ -210,7 +249,27 @@ stado host verify-release-platform charless-mac-mini \
 
 The command accepts only a public HTTPS repository and a full 40-character lowercase commit. Source is cloned into the host's managed `~/.stado/work` area and removed when the run ends. A platform passes only when the build artifact is downloaded and verified and the signed release is published, installed, and executed on that same platform.
 
-Probierz owns the combined `platform-matrix` journey in `stado-rs/tests/platform-matrix/`. It runs macOS through the managed host channel and submits Linux to the pinned `local-ubuntu-server` worker through the normal Stado queue, so an inbound SSH port is not a requirement. The Linux worker verifies the digest of the published Skarbiec binary before using it and keeps a managed Cargo cache under `~/.stado/work`. The journey runs the platforms one after another because both release checks use the same canonical test product and version.
+Probierz owns the combined `platform-matrix` journey in `stado-rs/tests/platform-matrix/`. It runs macOS through the managed host channel and submits Linux to the pinned `local-ubuntu-server` worker through the normal Stado queue, so an inbound SSH port is not a requirement. The Linux worker verifies the digest of the published Skarbiec binary before using it and keeps Cargo output inside that job's `.wisent-output` tree, covered by terminal-job cleanup. The journey runs the platforms one after another because both release checks use the same canonical test product and version.
+The matrix also cancels a release build and proves that its replacement uses a
+different job, then publishes, installs, and executes the product on each
+platform. Linux submissions use a stable Probierz-derived run ID, and Probierz
+retains the submission identity and complete terminal job report with its logs.
+Both paths use the published, digest-pinned Skarbiec 0.1.3 binary rather than
+rebuilding a moving dependency branch, and keep temporary files in managed work.
+Disposable qualification builds omit debug symbols and incremental caches;
+runtime checks and disk admission thresholds remain unchanged. The Linux
+journey removes its own Cargo output on success or failure and keeps the
+downloaded signing tool in ignored work files, so the recorded source stays
+clean.
+
+For disk pressure, `stado host disk TARGET --json` includes Linux inventory
+under the managed home, `/home`, `/mnt`, `/var`, and `/opt`.
+`stado host reclaim TARGET --apply --reason TEXT` also recognizes the former
+`~/.stado/work/platform-matrix-cargo-target` cache. It refuses linked,
+unrecognizable, younger-than-one-hour, or live-held trees; unrelated untagged
+directories remain outside that cleanup. `host build-caches` reports
+`no-cache-tags`, `root-protected`, or `scan-failed` rather than making those
+cases look like a successful empty scan.
 
 ## Evidence
 

@@ -35,11 +35,9 @@ ensure_host_archive() {
   if [ ! -s "$archive" ]; then
     rm -f "$archive"
     if [ "$state" = present ]; then
-      /usr/bin/curl -fsSLG --data-urlencode "uri=$archive_uri" \
-        "$STADO_API_URL/api/release/object" -o "$archive"
+      "$stado_bin" storage get "$archive_uri" "$archive"
     elif [ "$state" = absent ]; then
-      /usr/bin/curl -fsSLG --data-urlencode "uri=$source_uri" \
-        "$STADO_API_URL/api/release/object" -o "$archive"
+      "$stado_bin" storage get "$source_uri" "$archive"
     else
       echo "FATAL: canonical archive state is ${state:-unknown}: $archive_uri" >&2
       exit 1
@@ -59,41 +57,68 @@ while IFS=$'\t' read -r target platform; do
     echo "FATAL: $target needs $manifest, release channel state is ${state:-unknown}" >&2
     exit 1
   fi
+  manifest_file="$work_root/release-manifest-$platform.json"
+  "$stado_bin" storage get "$manifest" "$manifest_file"
+  expected_sha256="$(jq -er \
+    --arg version "$version" \
+    --arg platform "$platform" \
+    --arg source_commit "$tag_commit" \
+    'if (keys | sort) == ["platform", "product", "sha256", "source_commit", "version"]
+        and .product == "stado"
+        and .version == $version
+        and .platform == $platform
+        and .source_commit == $source_commit
+        and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+     then .sha256
+     else error("release manifest identity mismatch")
+     end' "$manifest_file")"
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
   if [ "$target" = "$self_target" ]; then
     ensure_host_archive "$platform" yes
-    manifest_file="$work_root/release-manifest-$platform.json"
-    /usr/bin/curl -fsSLG --data-urlencode "uri=$manifest" \
-      "$STADO_API_URL/api/release/object" -o "$manifest_file"
-    expected_sha256="$(jq -er \
-      --arg version "$version" \
-      --arg platform "$platform" \
-      --arg source_commit "$tag_commit" \
-      'if (keys | sort) == ["platform", "product", "sha256", "source_commit", "version"]
-          and .product == "stado"
-          and .version == $version
-          and .platform == $platform
-          and .source_commit == $source_commit
-          and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
-       then .sha256
-       else error("release manifest identity mismatch")
-       end' "$manifest_file")"
     installed="$("$HOME/.stado/bin/stado" --version 2>/dev/null || true)"
-    if [ "$installed" != "stado $version" ]; then
+    installed_version="${installed#stado }"
+    installed_version="${installed_version%% *}"
+    if [ "$installed_version" != "$version" ]; then
       WISENT_RELEASE_ARCHIVE="$work_root/$platform.tar.gz" \
         WISENT_RELEASE_SHA256="$expected_sha256" \
+        WISENT_PRODUCT=stado WISENT_VERSION="$version" \
         env -u STADO_API_TOKEN "$stado_bin" release install-local \
           --member stado --name stado
     fi
     installed="$("$HOME/.stado/bin/stado" --version)"
-    [ "$installed" = "stado $version" ] || {
+    installed_version="${installed#stado }"
+    installed_version="${installed_version%% *}"
+    [ "$installed_version" = "$version" ] || {
       echo "FATAL: $target reports $installed after local Stado release" >&2
       exit 1
     }
+    "$HOME/.stado/bin/stado" release converge-local-readers --name stado
   else
     ensure_host_archive "$platform" no
     "$stado_bin" host release "$target" --binary stado --version "$version" --json
-    "$stado_bin" service converge "$target" stado --json
   fi
+  readers="$(printf '%s' "$registry" | jq -r --arg target "$target" '
+    [.targets[] | select(.name == $target) | .services[]?
+      | select((.program? | type) == "string")
+      | select((.program | contains("/.stado/services/")) and (.program | endswith("/stado")))
+      | .name]
+    | if length == (unique | length) then .[]?
+      else error("declared service-local Stado reader names must be unique")
+      end
+  ')"
+  if [ -n "$readers" ]; then
+    ensure_host_archive "$platform" yes
+    archive="$work_root/$platform.tar.gz"
+    actual_sha256="$(openssl dgst -sha256 "$archive")"
+    [ "${actual_sha256##* }" = "$expected_sha256" ] || {
+      echo "FATAL: $target private-reader archive digest mismatch" >&2
+      exit 1
+    }
+    while IFS= read -r reader; do
+      "$stado_bin" service update "$reader" --host "$target" \
+        --from-archive "$archive" --refresh-image --json
+    done <<< "$readers"
+  fi
+  "$stado_bin" service converge "$target" stado --apply --json
   echo "$target: stado $version installed and in-sync"
 done <<< "$targets"

@@ -145,11 +145,12 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-  # One audited capacity pass runs before either platform reaches the sole
-  # control-plane runner. Keeping this as a dependency instead of duplicating
-  # it inside both jobs prevents two release siblings from reclaiming the same
-  # disk and gives the bounded host operation a retry after a transient scan
-  # timeout.
+  # One serialized capacity transaction runs before either platform reaches
+  # the sole control-plane runner. The installed product restores enough
+  # declared capacity to admit the corrected candidate build; that candidate
+  # then completes canonical reclamation and must reach the full declared
+  # target before any release coordinate is claimed. Keeping this as a
+  # dependency prevents two release siblings from competing for the same disk.
   release-capacity:
     needs: identity
     runs-on: [self-hosted, stado-control-plane]
@@ -157,44 +158,71 @@ jobs:
       STADO_VERSION: ${{ needs.identity.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-      # The tree being released judges its own capacity.
-      #
-      # This step used to run `$HOME/.stado/bin/stado`, which is by
-      # construction older than the revision under release — and on 2026-09-03
-      # that staleness cost the 0.13.50 train everything: a migration created
-      # `queue_priority/` beside `queue/`, the installed gateway answered
-      # `prefix=queue/` with both, the installed client could not build the
-      # terminal-workdir keep-list, and the job refused before a single object
-      # was published. The fix for that listing is in this tree; the installed
-      # binary cannot have it, and a release that cannot start until the fix
-      # is installed cannot install the fix.
-      # This job used to reclaim capacity only after compiling the binary
-      # that performs the reclaim. On a self-hosted runner, a failed build's
-      # target directory survives into the next attempt; 0.15.24 exhausted
-      # the disk twice at this exact boundary before any coordinate was
-      # claimed. Clear only Cargo's declared output before asking the runner
-      # to compile the capacity binary.
-      - name: Reclaim prior capacity Rust cache
+      # The 0.16.7 job already cleaned this exact Cargo target immediately
+      # before the identical locked build and still exhausted the volume. Its
+      # later `host reclaim` could never run because the binary it needed was
+      # the build that failed. Reclaim the runner's declared non-checkout roots
+      # with the installed product first; the bounded janitor substage may
+      # spend its own shared scan budget, but host reclaim then continues
+      # through its separately declared scratch, delivery, cache and clone
+      # stages.
+      - name: Reclaim declared runner capacity
+        run: |
+          "$HOME/.stado/bin/stado" host reclaim lukasz-macbook --apply \
+            --reason "stado $STADO_VERSION release build requires declared host capacity" \
+            --json
+      # Cargo output is checkout-relative, not the `.stado/build-work` tree
+      # owned by host reclaim. Clear that exact second source of scratch. The
+      # installed binary need only restore the declared low-watermark admission
+      # needed to compile its replacement: the corrected candidate must be
+      # allowed to run before the full target verdict is required.
+      - name: Reclaim declared release Rust scratch
         run: cargo clean --manifest-path stado-rs/Cargo.toml
+      - name: Require candidate build admission
+        run: |
+          set -euo pipefail
+          set +e
+          gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
+          set -e
+          GATES_JSON="$gates" python3 -c '
+          import json, os
+          report = json.loads(os.environ["GATES_JSON"])
+          disk = report.get("disk") or {}
+          free = disk.get("free_gb")
+          low = disk.get("low_watermark_gb")
+          if free is None or low is None:
+              raise SystemExit("host gates did not report free_gb and low_watermark_gb")
+          if free < low:
+              raise SystemExit(f"runner capacity remains below build admission: {free:.2f} < {low} GiB")
+          print(f"candidate build admitted: {free:.2f} >= {low} GiB")
+          '
       - name: Build the capacity binary from this revision
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
-      - name: Reclaim declared release capacity
+      - name: Reclaim declared capacity with candidate
         run: |
-          stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          reclaimed=false
-          for attempt in 1 2 3; do
-            if "$stado" host reclaim lukasz-macbook --apply \
-              --reason "stado $STADO_VERSION release build requires declared scratch capacity" \
-              --json; then
-              reclaimed=true
-              break
-            fi
-            sleep "$((attempt * 5))"
-          done
-          if [ "$reclaimed" != true ]; then
-            echo "::error::Declared release capacity could not be reclaimed after three attempts"
-            false
-          fi
+          "$GITHUB_WORKSPACE/stado-rs/target/release/stado" host reclaim \
+            lukasz-macbook --apply \
+            --reason "stado $STADO_VERSION candidate completes declared host reclamation" \
+            --json
+      - name: Require declared build capacity
+        run: |
+          set -euo pipefail
+          set +e
+          gates=$("$GITHUB_WORKSPACE/stado-rs/target/release/stado" host gates \
+            lukasz-macbook --json)
+          set -e
+          GATES_JSON="$gates" python3 -c '
+          import json, os
+          report = json.loads(os.environ["GATES_JSON"])
+          disk = report.get("disk") or {}
+          free = disk.get("free_gb")
+          target = disk.get("target_free_gb")
+          if free is None or target is None:
+              raise SystemExit("host gates did not report free_gb and target_free_gb")
+          if free < target:
+              raise SystemExit(f"runner capacity remains below target: {free:.2f} < {target} GiB")
+          print(f"runner capacity proved: {free:.2f} >= {target} GiB")
+          '
 
       # Every call below first claims one create-only record at version scope,
       # then its platform record. The shared version write is the arbitration
@@ -217,6 +245,23 @@ jobs:
       - name: Reclaim capacity Rust cache
         if: always()
         run: cargo clean --manifest-path stado-rs/Cargo.toml
+      - name: Require capacity after candidate scratch reset
+        if: always()
+        run: |
+          set -euo pipefail
+          set +e
+          gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
+          set -e
+          GATES_JSON="$gates" python3 -c '
+          import json, os
+          report = json.loads(os.environ["GATES_JSON"])
+          disk = report.get("disk") or {}
+          free = disk.get("free_gb")
+          target = disk.get("target_free_gb")
+          if free is None or target is None or free < target:
+              raise SystemExit(f"runner capacity below target after scratch reset: {free} < {target}")
+          print(f"runner capacity retained: {free:.2f} >= {target} GiB")
+          '
 
   # One platform, judged on its own. A failure here no longer decides whether
   # darwin ever publishes.
@@ -381,12 +426,14 @@ jobs:
           }
           reconcile_release_lifecycles() {
             retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --product stado --json \
+              charless-mac-mini --json \
               > "$RUNNER_TEMP/release-lifecycles.json"
             jq -e '
-              .items == ["stado-release-publisher"] and
+              .exact == true and
+              (.items | type == "array") and
+              (.items | index("stado-release-publisher")) != null and
               (.source_lifecycles | type == "array") and
-              (.source_lifecycles | length) == 1 and
+              (.source_lifecycles | length) == (.items | length) and
               all(
                 .source_lifecycles[];
                 (.item | type == "string" and length > 0) and
@@ -535,9 +582,38 @@ jobs:
               sleep "$((attempt * 2))"
             done
             if [ "$published" != true ]; then
+              # Every attempt failed, so whatever this object staged is
+              # residue: `put` writes a large body as
+              # `<key>.__stado_upload/<id>/<index>` parts and only
+              # composition promotes them, so a publish that never composed
+              # leaves parts and no object. On 2026-09-04 the 0.15.25
+              # darwin-arm64 archive was left as 19 such parts, 57 MiB the
+              # release-store janitor cannot even see as a version and no
+              # reader can resolve. Discard them here, where the target URI
+              # is still known, and then fail.
+              "$stado_bin" storage abort-upload "$uri" --json || true
               echo "::error::Could not create and verify $uri after $max_attempts attempts"
               false
             fi
+          done
+
+      - name: Discard staged Linux upload parts
+        if: always()
+        run: |
+          # Idempotent and safe after success: composition deletes the parts
+          # it promoted, so a published coordinate has none and this reports
+          # zero. It runs on cancellation and on any later failure too,
+          # because the parts outlive the process that staged them.
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          export STADO_API_URL="$STADO_WRITER_API_URL"
+          if [ ! -x "$stado_bin" ] || [ ! -d "$RUNNER_TEMP/stado-release" ]; then
+            echo "no publisher or no release directory: nothing was staged"
+            exit 0
+          fi
+          for source in "$RUNNER_TEMP"/stado-release/*; do
+            name="${source##*/}"
+            "$stado_bin" storage abort-upload \
+              "stado://releases/stado/$STADO_VERSION/linux-amd64/$name" --json || true
           done
 
       - name: Validate public Linux release delivery
@@ -618,6 +694,33 @@ jobs:
             ! jq -e '.providers_disabled // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
             jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
           fi
+
+      # The public route, asked BEFORE anything is published, because every
+      # later step depends on it and the repair for it used to sit at the end
+      # of the job. On 2026-09-04 this job failed at "Create immutable native
+      # release through Stado" while the loopback listener behind the route
+      # was down, so "Reconcile public release ingress" - which IS the repair,
+      # `stado host recover-object-api` - was skipped on exactly the run that
+      # needed it, and the route stayed 502 for hours. Asking here fails the
+      # job in seconds with the route's own answer instead of after a full
+      # build and publish.
+      - name: Require the public release route before publishing
+        run: |
+          route="$STADO_PUBLIC_RELEASE_API_URL/api/release/object"
+          # A malformed `uri` is answered by the route's own handler, so the
+          # expected status is a refusal, not a success: what is being tested
+          # is that the loopback listener answers at all. 502 is what a dead
+          # listener behind the Funnel produces, and 000 is curl failing to
+          # reach the host.
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "$route?uri=stado://releases/precondition")"
+          echo "public release route answered HTTP $status"
+          case "$status" in
+            502|503|504|000)
+              echo "::error::The public release route answers HTTP $status: the object API behind it is not serving. Repair it with 'stado host recover-object-api charless-mac-mini' before publishing."
+              false
+              ;;
+          esac
 
 
       - name: Create immutable native release through Stado
@@ -744,6 +847,10 @@ jobs:
               fi
               sleep "$((attempt * 2))"
             done
+            # No attempt composed, so the parts this staged are residue: a
+            # coordinate holding `<key>.__stado_upload/<id>/<index>` and no
+            # object. The 0.15.25 darwin-arm64 archive was left exactly so.
+            "$stado_bin" storage abort-upload "$uri" --json || true
             echo "::error::Could not create and verify $uri after 12 attempts"
             return 1
           }
@@ -790,26 +897,18 @@ jobs:
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Validate public native release delivery
-        run: |
-          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
-          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          bash "$STADO_SOURCE_DIR/scripts/verify_public_stado_release.sh" \
-            "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
-            "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
-            "$RUNNER_TEMP"
-
-      - name: Deliver verified native release
-        run: |
-          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
-          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          "$stado_bin" host declare-version "$COORD_TARGET" \
-            --binary stado \
-            --version "$STADO_NATIVE_RELEASE_VERSION" \
-            --json
-          "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
-
+      # Immediately after publication and `if: always()`, because this step IS
+      # the route's repair - `stado host recover-object-api` - and it used to
+      # sit at the END of this job, after delivery. That order meant it was
+      # skipped on precisely the runs that broke the route: on 2026-09-04 the
+      # job failed at "Create immutable native release through Stado" and this
+      # step never ran, leaving `/api/release/object` answering 502 through
+      # both the Funnel and `stado.wisent.com` while `install-stado.sh`,
+      # `self_update.rs`, `host_release.rs` and `host_recovery_release.rs` all
+      # read that path. A repair reachable only on the happy path is not a
+      # repair.
       - name: Reconcile public release ingress
+        if: always()
         run: |
           "$HOME/.stado/bin/stado" host recover-object-api \
             charless-mac-mini --json \
@@ -835,6 +934,26 @@ jobs:
                   "http://127.0.0.1:8765/api/release/object")
               ] | any
             '
+
+      - name: Validate public native release delivery
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          bash "$STADO_SOURCE_DIR/scripts/verify_public_stado_release.sh" \
+            "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
+            "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
+            "$RUNNER_TEMP"
+
+      - name: Deliver verified native release
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          "$stado_bin" host declare-version "$COORD_TARGET" \
+            --binary stado \
+            --version "$STADO_NATIVE_RELEASE_VERSION" \
+            --json
+          "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
+
 
       - name: Reload TLS reverse proxy
         if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
@@ -877,7 +996,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Converge every required Stado delivery
+      - name: Converge every required Stado delivery and reader
         run: |
           set -euo pipefail
           stado_bin="$HOME/.stado/bin/stado"
@@ -891,7 +1010,7 @@ jobs:
               [
                 .deliveries[]
                 | select(.required == true)
-                | select(.argv == ["stado", "release", "install-local"])
+                | select(.argv[0:3] == ["stado", "release", "install-local"])
                 | .target
               ]
               | if length > 0 and length == (unique | length)

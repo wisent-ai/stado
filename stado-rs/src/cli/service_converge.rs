@@ -360,7 +360,7 @@ pub async fn converge(
         return report_gate(&rows);
     }
 
-    let pass = apply_releases(&resolved.name, &rows, &runner).await;
+    let mut pass = apply_releases(&resolved.name, &rows, &runner).await;
     // Re-read rather than trust delivery's own word for it. A `host release`
     // that reports `released` has testified about its own work, which is the
     // one witness that cannot establish the fact being claimed; the version the
@@ -369,6 +369,18 @@ pub async fn converge(
     // convergence are not the same claim.
     let reported = read_installed(&resolved, &runner).await;
     let mut rows = verdict_rows(&declared, &reported);
+    let stado_root_in_sync = rows.iter().any(|row| {
+        row.binary == "stado"
+            && row.verdict == IN_SYNC
+            && reported
+                .as_ref()
+                .ok()
+                .and_then(|entries| entries.get("stado"))
+                .is_some_and(|entry| entry.attestation == ATTEST_MATCH)
+    });
+    if stado_root_in_sync {
+        converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
+    }
     // Asked again after the delivery for the same reason the versions are: a
     // release ends in a restart, and whether the restarted process is executing
     // the artefact that was just installed is exactly the claim `--apply` is
@@ -1382,6 +1394,100 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
     pass
 }
 
+/// Finish the runtime half even when the installed Stado file was already
+/// attested and at the declared version.
+///
+/// Root delivery retains the exact catalog-verified archive beside the staged
+/// binary. Pass that archive and its independently resolved catalog digest to
+/// the target CLI: global-path owners are recycled first, then the existing
+/// service-update implementation installs the same bytes into every private
+/// reader tree before restarting and proving its process image.
+async fn converge_native_readers(
+    target: &ComputeTarget,
+    declared: &[(String, String)],
+    runner: &Runner,
+    pass: &mut AppliedPass,
+) {
+    let Some(version) = declared
+        .iter()
+        .find(|(name, _)| name == "stado")
+        .map(|(_, version)| version.clone())
+    else {
+        return;
+    };
+    // A Stado release row means host release already attempted the root
+    // lifecycle in this pass. Do not kick those owners a second time; the row
+    // retains any root failure while private delivery still gets its one turn.
+    let skip_global = pass
+        .releases
+        .iter()
+        .any(|release| release.binary == "stado");
+    let (reader_target, request, self_store) = match host_release::resolve_release_request(
+        &target.name,
+        "stado",
+        &version,
+        false,
+        false,
+        runner,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            pass.releases.push(Released {
+                binary: "stado-readers".to_string(),
+                version,
+                status: FAILED,
+                detail: format!("cannot resolve the Stado reader archive: {error}"),
+            });
+            return;
+        }
+    };
+    if let Err(error) =
+        host_release::ensure_stado_reader_archive(&reader_target, &request, self_store, runner)
+            .await
+    {
+        pass.releases.push(Released {
+            binary: "stado-readers".to_string(),
+            version,
+            status: FAILED,
+            detail: error.to_string(),
+        });
+        return;
+    }
+    let script = format!(
+        "set -euo pipefail\n\
+         archive=\"$HOME/.stado/releases/stado/{}/{}/{}\"\n\
+         \"$HOME/.stado/bin/stado\" release converge-local-readers \
+         --name stado --archive \"$archive\" --sha256 {}{}\n",
+        request.version,
+        request.platform,
+        host_release::READER_ARCHIVE_NAME,
+        crate::deploy::shlex_quote(&request.sha256),
+        if skip_global { " --skip-global" } else { "" },
+    );
+    let outcome = host_channel::run_script(&reader_target, &script, runner).await;
+    let (status, detail) = match outcome {
+        Ok(output) if output.ok() => (COMPLETED, output.stdout.trim().to_string()),
+        Ok(output) => {
+            let captured = json!({
+                "operation": "native_reader_convergence",
+                "exit_code": output.code,
+                "stderr": output.stderr.trim(),
+                "stdout": output.stdout.trim(),
+            });
+            (FAILED, captured.to_string())
+        }
+        Err(error) => (FAILED, error.to_string()),
+    };
+    pass.releases.push(Released {
+        binary: "stado-readers".to_string(),
+        version,
+        status,
+        detail,
+    });
+}
+
 /// One delivery, recorded. The only call site of
 /// [`host_release::release_host`] in this command, so a host that is behind and
 /// a host whose bytes cannot be attested are converged by the same path and
@@ -1401,21 +1507,39 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
             let status = report
                 .get("status")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+                .unwrap_or_default();
             let delivered = matches!(
-                status.as_str(),
+                status,
                 host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
             );
+            // `host release` reports host-side refusals as a structured
+            // `Ok(report)`, with any diagnostic in `error`. Reducing that
+            // report to its status discarded the only place a cause could be
+            // retained: historical trains printed only `detail: "failed"`,
+            // which does not establish whether the inner report had an error.
+            let detail = if delivered {
+                status.to_string()
+            } else {
+                report
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .filter(|detail| !detail.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        if status.is_empty() {
+                            String::from("the delivery reported neither a status nor an error")
+                        } else {
+                            format!(
+                                "delivery returned non-success status {status} without an error"
+                            )
+                        }
+                    })
+            };
             pass.releases.push(Released {
                 binary: row.binary.clone(),
                 version: row.declared.clone(),
                 status: if delivered { COMPLETED } else { FAILED },
-                detail: if status.is_empty() {
-                    String::from("the delivery reported no status")
-                } else {
-                    status
-                },
+                detail,
             });
         }
         Err(error) => pass.releases.push(Released {
@@ -1586,7 +1710,16 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
 /// looked, after one it means the convergence cannot be shown to have happened.
 fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
     let unresolved: Vec<&Row> = rows.iter().filter(|row| row.verdict != IN_SYNC).collect();
-    if unresolved.is_empty() {
+    let failed = pass
+        .releases
+        .iter()
+        .filter(|entry| entry.status == FAILED)
+        .count();
+    if unresolved.is_empty()
+        && failed == 0
+        && pass.undeliverable.is_empty()
+        && pass.refused.is_empty()
+    {
         return Ok(());
     }
     for row in &unresolved {
@@ -1597,11 +1730,10 @@ fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
             row.installed_cell()
         );
     }
-    let failed = pass
-        .releases
-        .iter()
-        .filter(|entry| entry.status == FAILED)
-        .count();
+    // A failed delivery remains a failed apply even when the final read finds
+    // matching bytes (for example because another release actor converged the
+    // host concurrently). The delivery receipt is an asserted part of this
+    // operation, not disposable progress text.
     // "no delivery ran" is a different diagnosis from "one ran and failed", and
     // both are different from "one ran, said it worked, and the host still
     // reports the old version" — and different again from "the drift is real

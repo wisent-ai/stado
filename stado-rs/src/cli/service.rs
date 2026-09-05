@@ -102,29 +102,28 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Boot one loaded launchd label out of its system or user domain.
+    /// Boot one exact launchd label or systemd unit out of its system or user
+    /// scope.
     ///
-    /// `stop` ends a declared unit and the processes launchd disowned from it.
-    /// Nothing ended a process whose label the registry never declared, or
-    /// whose label was removed while the process kept running. On
-    /// charless-mac-mini that is how a `stado agent` from 2026-08-27 kept
-    /// publishing the host's capacity through three release deliveries, two
-    /// restarts, a `service stop` and a `service remove`, refusing 55 pinned
-    /// jobs for a week — and why `service list --undeclared` could name the
-    /// state while no command could end it.
+    /// `stop` and `retire` require a registry declaration. This command is for
+    /// a loaded unit the registry does not declare, including an obsolete
+    /// duplicate that `service list --undeclared` found. It never removes the
+    /// unit's file.
     ///
-    /// For a label the registry does not declare, which `stop` cannot resolve
-    /// and `retire` cannot reach. `service list --undeclared` names them.
+    /// On Linux the selected systemd manager stops and disables only the exact
+    /// requested unit, then Stado reads back that it is inactive and not
+    /// enabled. On Darwin the selected launchd domain is booted out as before.
     Bootout {
-        /// launchd label, as the host knows it.
+        /// Exact launchd label or systemd unit name, as the host knows it.
         label: String,
         /// Registry host that has it loaded.
         #[arg(long)]
         host: String,
-        /// Which launchd domain to act in: `system`, `user`, or unset for the
-        /// historical order (system first, user domains only if the system
-        /// domain holds nothing). A label loaded in BOTH domains has two jobs
-        /// and the unset order can only ever reach the system one.
+        /// Which init-system scope to act in: `system`, `user`, or unset for
+        /// `any`. The unset order is system first, then the calling account
+        /// only when the system scope holds no exact unit by this name. A name
+        /// loaded in both scopes identifies two jobs; pass `user` to leave its
+        /// system sibling untouched.
         #[arg(long)]
         domain: Option<String>,
         #[arg(long)]
@@ -302,6 +301,9 @@ pub enum ServiceCommands {
     RefreshImage {
         /// The host's own name for the unit: the launchd label.
         name: String,
+        /// Succeed without restarting when kernel image identity already matches.
+        #[arg(long)]
+        if_needed: bool,
         #[arg(long)]
         json: bool,
     },
@@ -346,6 +348,9 @@ pub enum ServiceCommands {
         /// Point `current` back at a version directory already on the host.
         #[arg(long, conflicts_with_all = ["from_artifact", "from_archive"])]
         rollback_to: Option<String>,
+        /// Reconcile and verify the live kernel image after installation.
+        #[arg(long)]
+        refresh_image: bool,
         #[arg(long)]
         json: bool,
     },
@@ -511,10 +516,12 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Replace one key in a managed service's owner-controlled env file.
+    /// Replace one key in a managed runtime env file or systemd definition.
     ///
     /// The value is read from an owner-only local file and travels only inside
     /// the approved encrypted channel's request body.
+    /// A systemd unit or its own .conf drop-in is updated in place; the manager
+    /// reloads changed definitions without restarting the running service.
     EnvSet {
         /// Service whose host-local process reads the environment.
         name: String,
@@ -524,7 +531,7 @@ pub enum ServiceCommands {
         /// Exact environment variable name.
         #[arg(long)]
         key: String,
-        /// Environment file on the target, absolute or rooted at $HOME.
+        /// Runtime env file, or this service's exact systemd unit/drop-in path.
         #[arg(long)]
         env_file: String,
         /// Absolute owner-only local file containing the value.
@@ -534,7 +541,7 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Remove one key from a managed service's owner-controlled env file.
+    /// Remove one key from a managed env file or systemd definition.
     EnvUnset {
         /// Service whose host-local process reads the environment.
         name: String,
@@ -544,7 +551,7 @@ pub enum ServiceCommands {
         /// Exact environment variable name.
         #[arg(long)]
         key: String,
-        /// Environment file on the target, absolute or rooted at $HOME.
+        /// Runtime env file, or this service's exact systemd unit/drop-in path.
         #[arg(long)]
         env_file: String,
         #[arg(long)]
@@ -959,12 +966,12 @@ pub enum ServiceCommands {
     /// not exist, the unit is rendered for launchd's system domain and
     /// installed as a daemon in /Library/LaunchDaemons.
     ///
-    /// An existing unit is only ever restarted in place (`kickstart -k`), never
-    /// unloaded and bootstrapped back: that sequence took the always-on host
-    /// down once already. A loaded unit whose definition names a different
-    /// program is refused rather than overwritten, because launchd holds the
-    /// definition it bootstrapped and a rewritten file under a live job changes
-    /// nothing an operator can see.
+    /// An existing matching definition is restarted in place with
+    /// `kickstart -k`. When launchd's retained Program or ProgramArguments
+    /// differs from the desired definition, ensure first validates the
+    /// replacement executable and complete rendered plist, then reloads that
+    /// definition once and verifies launchd's readback and running executable.
+    /// An unreadable retained definition is refused without touching the job.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
@@ -982,6 +989,10 @@ pub enum ServiceCommands {
         /// program and the two are never mixed.
         #[arg(long = "arg")]
         args: Vec<String>,
+        /// Non-secret NAME=VALUE persisted with the unit; repeat for each key.
+        /// Use secret-sync for credentials, never put them on the command line.
+        #[arg(long = "env", value_name = "NAME=VALUE")]
+        env: Vec<String>,
         /// Why this host must run this unit. Required: `ensure` installs units
         /// and restarts running ones, and every such change is recorded beside
         /// the registry document it declared the unit in.
@@ -1024,7 +1035,7 @@ pub enum ServiceCommands {
     /// The effective environment a managed unit runs with, secrets
     /// redacted.
     ///
-    /// Parsed from the unit's own plist / systemd unit file. Values whose
+    /// Parsed from the plist or systemd unit and its drop-ins. Values whose
     /// variable name looks like a credential are replaced, in the table and
     /// in `--json` alike.
     Env {
@@ -1108,15 +1119,18 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
-        ServiceCommands::RefreshImage { name, json } => {
-            crate::cli::service_refresh_image::refresh_image(&name, json).await
-        }
+        ServiceCommands::RefreshImage {
+            name,
+            if_needed,
+            json,
+        } => crate::cli::service_refresh_image::refresh_image(&name, if_needed, json).await,
         ServiceCommands::Update {
             name,
             host,
             from_artifact,
             from_archive,
             rollback_to,
+            refresh_image,
             json,
         } => {
             update(
@@ -1125,6 +1139,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 from_artifact.as_deref(),
                 from_archive.as_deref(),
                 rollback_to.as_deref(),
+                refresh_image,
                 json,
             )
             .await
@@ -1460,6 +1475,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host,
             from,
             args,
+            env,
             reason,
             as_daemon,
             as_launch_agent,
@@ -1470,6 +1486,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 host: &host,
                 from: from.as_deref(),
                 args: &args,
+                env: &env,
                 reason: &reason,
                 as_daemon,
                 as_launch_agent,
@@ -1795,13 +1812,13 @@ async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     fail_if_any(&failures, "scan for undeclared units")
 }
 
-/// `service bootout LABEL --host HOST [--domain system|user]` — take one loaded
-/// label out of launchd, declared or not.
+/// `service bootout LABEL --host HOST [--domain system|user]` — take one exact
+/// unit out of launchd or systemd, whether the registry declares it or not.
 ///
-/// Without `--domain` the system domain is tried first and the user domains
-/// only if it holds nothing, which is right for the usual single job and cannot
-/// reach the second job of a label loaded in both. `--domain user` is what ends
-/// a stale LaunchAgent copy while leaving the declared system daemon running.
+/// Without `--domain`, the system scope is tried first and the calling
+/// account's scope only when the system manager holds no exact unit by that
+/// name. Explicit `user` is what ends a stale user unit while leaving its
+/// canonical system sibling running.
 async fn bootout(
     label: &str,
     host: &str,
@@ -2048,53 +2065,80 @@ async fn label_print(
             state.host
         )));
     }
-    table::print(
-        &["FIELD", "VALUE"],
-        &[
-            vec![
-                "domain".to_string(),
-                dash(state.domain.as_deref().unwrap_or("")),
-            ],
-            vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
-            vec![
-                "state".to_string(),
-                dash(state.state.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "last exit code".to_string(),
-                dash(state.last_exit_code.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "runs".to_string(),
-                dash(state.runs.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "path".to_string(),
-                dash(state.path.as_deref().unwrap_or("")),
-            ],
-            vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
-            vec![
-                "unit file state".to_string(),
-                dash(state.unit_file_state.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "restart".to_string(),
-                dash(state.restart.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "triggers".to_string(),
-                dash(state.triggers.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "triggered by".to_string(),
-                dash(state.triggered_by.as_deref().unwrap_or("")),
-            ],
-            vec![
-                "part of".to_string(),
-                dash(state.part_of.as_deref().unwrap_or("")),
-            ],
+    let mut rows = vec![
+        vec![
+            "domain".to_string(),
+            dash(state.domain.as_deref().unwrap_or("")),
         ],
-    );
+        vec!["pid".to_string(), dash(state.pid.as_deref().unwrap_or(""))],
+        vec![
+            "state".to_string(),
+            dash(state.state.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "last exit code".to_string(),
+            dash(state.last_exit_code.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "runs".to_string(),
+            dash(state.runs.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "path".to_string(),
+            dash(state.path.as_deref().unwrap_or("")),
+        ],
+        vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
+    ];
+    if state.event_read_status.is_some() {
+        rows.extend([
+            vec![
+                "stdout path".to_string(),
+                dash(state.stdout_path.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "stderr path".to_string(),
+                dash(state.stderr_path.as_deref().unwrap_or("")),
+            ],
+            vec![
+                "recent launchd events".to_string(),
+                dash(
+                    &state
+                        .recent_events
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" | "),
+                ),
+            ],
+            vec![
+                "launchd event read".to_string(),
+                dash(state.event_read_status.as_deref().unwrap_or("")),
+            ],
+        ]);
+    }
+    rows.extend([
+        vec![
+            "unit file state".to_string(),
+            dash(state.unit_file_state.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "restart".to_string(),
+            dash(state.restart.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "triggers".to_string(),
+            dash(state.triggers.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "triggered by".to_string(),
+            dash(state.triggered_by.as_deref().unwrap_or("")),
+        ],
+        vec![
+            "part of".to_string(),
+            dash(state.part_of.as_deref().unwrap_or("")),
+        ],
+    ]);
+    table::print(&["FIELD", "VALUE"], &rows);
     // A loaded unit whose file is gone is the shape no directory scan can
     // report, so it is called out rather than left to be inferred from a path.
     if state.path.is_none() {
@@ -2501,6 +2545,7 @@ async fn update(
     reference: Option<&str>,
     archive: Option<&str>,
     rollback_to: Option<&str>,
+    refresh_image: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
@@ -2519,10 +2564,22 @@ async fn update(
     // beside it under a directory that only matches the name.
     let runner = production_runner();
     let declared = &services[usize::default()];
-    let report = service::show_service(&target, declared, &runner)
+    // Archive membership follows the actual executable vector in the unit.
+    // `service show` is deliberately human presentation and may contain
+    // spaces in paths and arguments plus a resolved-link annotation.
+    let unit = service::fetch_unit_file(&target, declared, &runner)
         .await
         .map_err(click)?;
-    let program = report.detail.trim();
+    let observed = service::parse_unit_program(&unit)
+        .map_err(click)?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} has no executable program in {}",
+                declared.unit_id(),
+                unit.path
+            ))
+        })?;
+    let program = observed.as_str();
     let directory = program
         .split("/services/")
         .nth(usize::from(true))
@@ -2552,9 +2609,49 @@ async fn update(
         println!("{host}: {name} -> {version} (takes effect on the next restart)");
         return Ok(());
     }
-    let installed = match (reference, archive) {
-        (Some(reference), None) => install_from_artifact(&target, &directory, reference).await?,
-        (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
+    // The relink is the dangerous half: `current` moves and launchd's next
+    // spawn reads a path that may not exist in the tree that just arrived.
+    // Checking the archive's member list against the unit's own program path
+    // costs one local read and is the difference between a refusal and an
+    // outage. On 2026-09-04 the object API unit, whose program is
+    // `current/darwin-arm/stado`, was pointed at a published stado archive
+    // that holds exactly `bin/stado`; `current` relinked, launchd could not
+    // spawn, the job left the system domain, and every `/api/object` read on
+    // the fleet failed for eleven minutes.
+    if let Some(path) = archive {
+        let members = archive_members(path)?;
+        refuse_archive_without_program(program, &members).map_err(CmdError::click)?;
+    }
+    let (installed, already_active) = match (reference, archive) {
+        (Some(reference), None) => (
+            install_from_artifact(&target, &directory, reference).await?,
+            false,
+        ),
+        (None, Some(path)) => {
+            let marker = format!("/services/{directory}/");
+            let required = if let Some((_, rest)) = program.split_once(&marker) {
+                rest.split_once('/')
+                    .map(|(_, tail)| tail.to_string())
+                    .ok_or_else(|| {
+                        CmdError::click("managed service program has no archive member")
+                    })?
+            } else {
+                let executable = std::path::Path::new(program)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| CmdError::click("managed service program has no filename"))?;
+                format!("darwin-arm/{executable}")
+            };
+            if !std::path::Path::new(&required)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(CmdError::click(
+                    "managed service archive member is not relative",
+                ));
+            }
+            install_from_archive(&target, &directory, path, &required, &runner).await?
+        }
         (None, None) => {
             return Err(CmdError::click(
                 "update needs --from-artifact REF or --from-archive PATH",
@@ -2566,22 +2663,84 @@ async fn update(
             ))
         }
     };
-    // A unit pinned to a version directory never sees an install: `current`
-    // moves and the job keeps executing the path it was rendered with, so the
-    // deployment reports success and the machine runs what it ran before. Point
-    // it at `current`, which is what makes a later install or a rollback a
-    // relink rather than a redeploy.
-    let followed = follow_current(&target, declared, &directory, &runner).await?;
+    let followed = if already_active {
+        false
+    } else {
+        // A unit pinned to a version directory never sees an install: `current`
+        // moves and the job keeps executing the path it was rendered with.
+        follow_current(&target, declared, &directory, &runner).await?
+    };
+    let image_refresh = if refresh_image {
+        let units = service::loaded_units(&target, &runner)
+            .await
+            .map_err(click)?;
+        let before = units
+            .iter()
+            .find(|unit| unit.label == declared.unit_id())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{host}: {} is absent from the domain-bound launchd inventory",
+                    declared.unit_id()
+                ))
+            })?;
+        if before.pid.is_empty() {
+            if before.loaded_domains.len() != 1 {
+                return Err(CmdError::click(format!(
+                    "{host}: {} has no live pid and {} loaded domains; refusing to guess a lifecycle action",
+                    declared.unit_id(),
+                    before.loaded_domains.len()
+                )));
+            }
+            let started = service::restart_service(&target, declared, &runner)
+                .await
+                .map_err(click)?;
+            if !started.succeeded("restarted") {
+                return Err(CmdError::click(format!(
+                    "{host}: {} was confirmed loaded without a live pid and did not start: {}",
+                    declared.unit_id(),
+                    started.failure()
+                )));
+            }
+        }
+        let script = format!(
+            "set -euo pipefail\n\"$HOME/.stado/bin/stado\" service refresh-image {} \
+             --if-needed --json",
+            crate::deploy::shlex_quote(declared.unit_id()),
+        );
+        let output = host_channel::run_script(&target, &script, &runner)
+            .await
+            .map_err(click)?;
+        if !output.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: {}",
+                host_channel::last_error_line(&output, "the running image did not converge")
+            )));
+        }
+        serde_json::from_str::<Value>(output.stdout.trim()).map_err(|error| {
+            CmdError::click(format!(
+                "{host}: image refresh returned invalid JSON: {error}; stdout={}",
+                output.stdout.trim()
+            ))
+        })?
+    } else {
+        Value::Null
+    };
     if json {
         print_json(&json!({
             "host": host,
             "service": name,
+            "image_refresh": image_refresh,
             "unit_repointed": followed,
             "version": installed.version,
             "sha256": installed.sha256,
-            "status": "updated",
-            "effective": "on next restart",
+            "status": if already_active { "already_installed" } else { "updated" },
+            "effective": if refresh_image { "running image verified" } else { "on next restart" },
         }))?;
+    } else if refresh_image {
+        println!(
+            "{host}: {name} -> {} (running image verified)",
+            installed.version
+        );
     } else {
         println!(
             "{host}: {name} -> {} (takes effect on the next restart)",
@@ -2913,6 +3072,7 @@ async fn rollback_service_release(
         None,
         Some(previous),
         false,
+        false,
     )
     .await?;
     let report = if options.reload_unit {
@@ -3070,6 +3230,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
             host: options.host,
             from: None,
             args: &[],
+            env: &[],
             reason: &reason,
             as_daemon: true,
             as_launch_agent: false,
@@ -3187,6 +3348,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         None,
         archive_path.to_str(),
         None,
+        false,
         false,
     )
     .await
@@ -3882,6 +4044,39 @@ async fn verify_env_write(
     })
 }
 
+async fn verify_unit_env_write(
+    target: &targets::ComputeTarget,
+    declared: &service::ManagedService,
+    key: &str,
+    value: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<ReadBack, CmdError> {
+    let unit = service::fetch_unit_file(target, declared, runner)
+        .await
+        .map_err(click)?;
+    let observed = service::parse_systemd_unit(&unit.content)
+        .env
+        .into_iter()
+        .rev()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.replace("%%", "%"));
+    let state = match observed.as_deref() {
+        Some(found) if found == value => service_env_file::EXPECT_MATCHED,
+        Some(_) => service_env_file::EXPECT_DIFFERS,
+        None => service_env_file::EXPECT_ABSENT,
+    };
+    Ok(ReadBack {
+        state,
+        chars: observed
+            .as_ref()
+            .map_or(0, |value| value.chars().count() as u32),
+        effective: observed.and_then(|value| {
+            (service::redact_secret_value(key, &value) != service::REDACTED).then_some(value)
+        }),
+        marker: None,
+    })
+}
+
 async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
     let EnvSetOptions {
         name,
@@ -3930,9 +4125,23 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let updated = service::set_env_key_on_host(&target, env_file, key, value, &runner)
+        let unit_env = service::is_systemd_env_file(declared, env_file);
+        let updated = if unit_env {
+            service::set_unit_env_key_on_host(
+                &target,
+                declared,
+                env_file,
+                key,
+                Some(value),
+                &runner,
+            )
             .await
-            .map_err(click)?;
+            .map_err(click)?
+        } else {
+            service::set_env_key_on_host(&target, env_file, key, value, &runner)
+                .await
+                .map_err(click)?
+        };
         let wrote = updated.succeeded("env_set");
         if !wrote {
             failures.push(format!("{}: {}", declared.host, updated.failure()));
@@ -3942,7 +4151,11 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         // command reported `env_set` twice for a value a host-side reconciler
         // restored within seconds, and nothing said so.
         let verdict = if wrote {
-            let readback = verify_env_write(&target, env_file, key, value, &runner).await?;
+            let readback = if unit_env {
+                verify_unit_env_write(&target, declared, key, value, &runner).await?
+            } else {
+                verify_env_write(&target, env_file, key, value, &runner).await?
+            };
             if let Some(failure) = readback.failure(&declared.host, key) {
                 failures.push(failure);
             }
@@ -4026,9 +4239,15 @@ async fn env_unset(options: EnvUnsetOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let updated = service::unset_env_key_on_host(&target, env_file, key, &runner)
-            .await
-            .map_err(click)?;
+        let updated = if service::is_systemd_env_file(declared, env_file) {
+            service::set_unit_env_key_on_host(&target, declared, env_file, key, None, &runner)
+                .await
+                .map_err(click)?
+        } else {
+            service::unset_env_key_on_host(&target, env_file, key, &runner)
+                .await
+                .map_err(click)?
+        };
         if !updated.succeeded("env_unset") {
             failures.push(format!("{}: {}", declared.host, updated.failure()));
         }
@@ -5109,8 +5328,9 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
 /// lease. Holding the same lease across withdrawal and the host action makes a
 /// stale tick stop at that boundary instead of starting the unit between the
 /// stop body and its postcondition probe.
-async fn with_service_mutation_lease<T, F, Fut>(
-    service: &ManagedService,
+async fn with_service_mutation_subject<T, F, Fut>(
+    host: &str,
+    unit: &str,
     operation: F,
 ) -> Result<T, CmdError>
 where
@@ -5118,7 +5338,7 @@ where
     Fut: Future<Output = Result<T, CmdError>>,
 {
     let store = beacon_store().await?;
-    let subject = format!("service:{}:{}", service.host, service.unit_id());
+    let subject = format!("service:{host}:{unit}");
     let decision = format!(
         "service-lifecycle-{}",
         chrono::Utc::now().timestamp_micros()
@@ -5166,6 +5386,17 @@ where
     }
 }
 
+async fn with_service_mutation_lease<T, F, Fut>(
+    service: &ManagedService,
+    operation: F,
+) -> Result<T, CmdError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, CmdError>>,
+{
+    with_service_mutation_subject(&service.host, service.unit_id(), operation).await
+}
+
 #[derive(Clone)]
 struct ReconcilerFence {
     baseline_report: Option<String>,
@@ -5194,6 +5425,17 @@ async fn reconciler_report_id(store: &JobStorage) -> Result<Option<String>, CmdE
     .await
     .map(|report| report.map(|report| report.created_at))
     .map_err(|error| CmdError::click(error.to_string()))
+}
+
+async fn capture_reconciler_fence(document: &Value) -> Result<Option<ReconcilerFence>, CmdError> {
+    let Some(interval) = active_coordinator_interval(document) else {
+        return Ok(None);
+    };
+    let store = beacon_store().await?;
+    Ok(Some(ReconcilerFence {
+        baseline_report: reconciler_report_id(&store).await?,
+        timeout_seconds: interval.saturating_mul(2).saturating_add(60).min(900),
+    }))
 }
 
 async fn wait_for_reconciler_fence(fence: Option<&ReconcilerFence>) -> Result<(), CmdError> {
@@ -5233,15 +5475,7 @@ async fn suspend_service_declaration(
     unit: &str,
 ) -> Result<(ManagedService, String, Option<ReconcilerFence>), CmdError> {
     let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-    let fence = if let Some(interval) = active_coordinator_interval(&document) {
-        let store = beacon_store().await?;
-        Some(ReconcilerFence {
-            baseline_report: reconciler_report_id(&store).await?,
-            timeout_seconds: interval.saturating_mul(2).saturating_add(60).min(900),
-        })
-    } else {
-        None
-    };
+    let fence = capture_reconciler_fence(&document).await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
     let generation = registry::push_document_if(&document, &expected_generation).await?;
     Ok((removed, generation, fence))
@@ -5519,6 +5753,271 @@ fn document_contains_string(value: &Value, needle: &str) -> bool {
         _ => false,
     }
 }
+fn handoff_receipt_path(product: &str, version: &str, host: &str) -> std::path::PathBuf {
+    crate::config_file::expand_tilde("~")
+        .join(".stado/work/service-release")
+        .join(product)
+        .join(version)
+        .join(format!("handoff-{host}.json"))
+}
+
+fn persist_handoff_receipt(
+    path: &std::path::Path,
+    report: &Value,
+    replace: bool,
+) -> Result<(), CmdError> {
+    use std::io::Write as _;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| CmdError::click("handoff receipt path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut bytes = serde_json::to_vec_pretty(report)?;
+    bytes.push(b'\n');
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(&bytes)?;
+    staged.as_file().sync_all()?;
+    if replace {
+        staged.persist(path).map_err(|error| error.error)?;
+    } else if let Err(error) = staged.persist_noclobber(path) {
+        let existing = std::fs::read(path)?;
+        if existing != bytes {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} already exists with different content",
+                path.display()
+            )));
+        }
+        drop(error);
+    }
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn read_handoff_receipt(path: &std::path::Path) -> Result<Option<Value>, CmdError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
+            CmdError::click(format!(
+                "handoff receipt {} is invalid JSON: {error}",
+                path.display()
+            ))
+        })?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn registry_has_intended_handoff(
+    document: &Value,
+    profile: &str,
+    service_name: &str,
+    product: &str,
+    host: &str,
+    legacy_identities: [&str; 3],
+) -> bool {
+    let units_external = document
+        .get("placement_profiles")
+        .and_then(Value::as_array)
+        .and_then(|profiles| {
+            profiles
+                .iter()
+                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(profile))
+        })
+        .and_then(|profile| profile.get("hosts"))
+        .and_then(Value::as_object)
+        .map(|hosts| {
+            !hosts.is_empty()
+                && hosts.values().all(|template| {
+                    template
+                        .get("units")
+                        .and_then(|units| units.get(service_name))
+                        .is_some_and(|unit| {
+                            unit.get("controller").and_then(Value::as_str)
+                                == Some("release-control")
+                                && unit.get("product").and_then(Value::as_str) == Some(product)
+                        })
+                })
+        })
+        == Some(true);
+    let legacy_removed = document
+        .get("release_control")
+        .and_then(|control| control.get("products"))
+        .and_then(|products| products.get(product))
+        .and_then(|policy| policy.get("targets"))
+        .and_then(|targets| targets.get(host))
+        .is_some_and(|target| {
+            target.get("legacy_launchd_label").is_none()
+                && target.get("legacy_launchd_plist").is_none()
+        });
+    let legacy_unreachable = legacy_identities
+        .into_iter()
+        .all(|identity| !identity.is_empty() && !document_contains_string(document, identity));
+    units_external && legacy_removed && legacy_unreachable
+}
+
+fn same_remote_file_identity(left: &Value, right: &Value) -> bool {
+    ["path", "sha256", "size", "mode"]
+        .into_iter()
+        .all(|field| left.get(field) == right.get(field))
+}
+
+async fn finish_handoff_under_lease(
+    document: &Value,
+    target: &crate::targets::ComputeTarget,
+    installed_stado: &str,
+    receipt_path: &std::path::Path,
+    mut report: Value,
+    observed_generation: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let host = report["host"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no host"))?
+        .to_owned();
+    let product = report["product"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no product"))?
+        .to_owned();
+    let service_name = report["service"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no service"))?
+        .to_owned();
+    let legacy_label = report["legacy"]["label"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?
+        .to_owned();
+    let legacy_program = report["retirement"]["binary_receipt"]["path"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no legacy binary path"))?
+        .to_owned();
+    let runner = production_runner();
+
+    if report["generation"].is_null() {
+        let observed_generation = observed_generation.ok_or_else(|| {
+            CmdError::click("recovered handoff has no observed registry generation")
+        })?;
+        report["recovery"] = json!({
+            "original_cas_generation": Value::Null,
+            "original_cas_generation_status": "unknown_after_interruption",
+            "observed_registry_generation": observed_generation,
+        });
+    }
+    report["status"] = json!("registry_committed");
+    persist_handoff_receipt(receipt_path, &report, true)?;
+    let fence_capture = capture_reconciler_fence(document).await;
+    report["reconciler_fence"] = json!({
+        "status": if fence_capture.is_ok() { "pending" } else { "capture_failed" },
+        "baseline_report_id": fence_capture
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(|fence| fence.baseline_report.as_deref()),
+        "timeout_seconds": fence_capture
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|fence| fence.timeout_seconds),
+        "error": fence_capture.as_ref().err().map(ToString::to_string),
+    });
+    persist_handoff_receipt(receipt_path, &report, true)?;
+    let active = host_channel::run_program(
+        target,
+        &[
+            installed_stado,
+            "release",
+            "active-binary",
+            &product,
+            "--target",
+            &host,
+            "--json",
+        ],
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    if !active.ok() {
+        return Err(CmdError::click(format!(
+            "{host}: installed Stado rejected active release binary: {}",
+            host_channel::last_error_line(&active, "active-binary failed")
+        )));
+    }
+    let active: Value = serde_json::from_str(active.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "{host}: active-binary returned invalid JSON: {error}"
+        ))
+    })?;
+    if active["state"] != "active" || active["product"] != product || active["target"] != host {
+        return Err(CmdError::click(format!(
+            "{host}: active-binary identity no longer matches the durable handoff receipt"
+        )));
+    }
+    for field in ["version", "artifact_sha256", "manifest_sha256"] {
+        if active[field] != report["release"][field] {
+            return Err(CmdError::click(format!(
+                "{host}: active release {field} no longer matches the durable handoff receipt"
+            )));
+        }
+    }
+    let fence = fence_capture?;
+    wait_for_reconciler_fence(fence.as_ref()).await?;
+    let label = service_label_print::print_label(
+        target,
+        &legacy_label,
+        service::BootoutScope::System,
+        &runner,
+    )
+    .await
+    .map_err(click)?;
+    if label.loaded() {
+        return Err(CmdError::click(format!(
+            "{host}: legacy launchd label {legacy_label:?} was restarted after registry handoff"
+        )));
+    }
+    require_no_executable_caller(target, &legacy_program, &runner).await?;
+    report["status"] = json!("handed_off");
+    report["retirement"]["status"] = json!("eligible");
+    report["reconciler_fence"]["status"] = json!("satisfied");
+    persist_handoff_receipt(receipt_path, &report, true)?;
+    if json_output {
+        print_json(&report)
+    } else {
+        println!(
+            "{host}: {service_name} handed to release-control product {product} at registry generation {}",
+            report["generation"]
+        );
+        Ok(())
+    }
+}
+
+async fn finish_committed_handoff(
+    document: &Value,
+    target: &crate::targets::ComputeTarget,
+    installed_stado: &str,
+    receipt_path: &std::path::Path,
+    report: Value,
+    observed_generation: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let host = report["host"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no host"))?
+        .to_owned();
+    let legacy_label = report["legacy"]["label"]
+        .as_str()
+        .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?
+        .to_owned();
+    with_service_mutation_subject(&host, &legacy_label, || {
+        finish_handoff_under_lease(
+            document,
+            target,
+            installed_stado,
+            receipt_path,
+            report,
+            Some(observed_generation),
+            json_output,
+        )
+    })
+    .await
+}
 /// Transfer one placed service from generic unit lifecycle to release-control.
 ///
 /// Every runtime fact is established before the sole registry CAS. The target
@@ -5562,17 +6061,15 @@ async fn handoff_release_control(
         .into_iter()
         .find(|profile| profile.name == profile_name)
         .ok_or_else(|| CmdError::click(format!("placement profile {profile_name:?} is absent")))?;
-    for (template_host, template) in &profile.hosts {
-        let unit = template.units.get(service_name).ok_or_else(|| {
-            CmdError::click(format!(
-                "placement host {template_host:?} has no {service_name:?} template"
-            ))
-        })?;
-        if unit.managed().is_none() {
-            return Err(CmdError::click(format!(
-                "placement service {service_name:?} is already release-controlled"
-            )));
-        }
+    if let Some(transaction) = crate::placement::transactions(&document)
+        .map_err(CmdError::click)?
+        .into_iter()
+        .find(|transaction| transaction.profile == profile_name)
+    {
+        return Err(CmdError::click(format!(
+            "placement profile {profile_name:?} is owned by active transaction {:?}",
+            transaction.id
+        )));
     }
 
     let control = crate::release_control::control(&document)?
@@ -5607,6 +6104,72 @@ async fn handoff_release_control(
                 desired.version, target_policy.platform
             ))
         })?;
+    let receipt_path = handoff_receipt_path(product, &desired.version, host);
+    let prior_receipt = read_handoff_receipt(&receipt_path)?;
+    if let Some(receipt) = prior_receipt.as_ref() {
+        let same_intent = receipt["schema"] == "stado.service-release-control-handoff.v1"
+            && receipt["service"] == service_name
+            && receipt["host"] == host
+            && receipt["profile"] == profile_name
+            && receipt["product"] == product
+            && receipt["release"]["version"] == desired.version
+            && receipt["release"]["artifact_sha256"] == desired_artifact.artifact_sha256
+            && receipt["release"]["manifest_sha256"] == desired_artifact.manifest_sha256;
+        if !same_intent {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} records a different operation",
+                receipt_path.display()
+            )));
+        }
+        let receipt_label = receipt["legacy"]["label"]
+            .as_str()
+            .ok_or_else(|| CmdError::click("handoff receipt has no legacy label"))?;
+        let receipt_plist = receipt["retirement"]["plist_receipt"]["path"]
+            .as_str()
+            .ok_or_else(|| CmdError::click("handoff receipt has no legacy plist path"))?;
+        let receipt_program = receipt["retirement"]["binary_receipt"]["path"]
+            .as_str()
+            .ok_or_else(|| CmdError::click("handoff receipt has no legacy binary path"))?;
+        if registry_has_intended_handoff(
+            &document,
+            profile_name,
+            service_name,
+            product,
+            host,
+            [receipt_label, receipt_plist, receipt_program],
+        ) {
+            let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
+            return finish_committed_handoff(
+                &document,
+                &target,
+                &installed_stado,
+                &receipt_path,
+                receipt.clone(),
+                &expected_generation,
+                json_output,
+            )
+            .await;
+        }
+        if receipt["status"] != "prepared" {
+            return Err(CmdError::click(format!(
+                "handoff receipt {} says {:?}, but the registry does not match its intended handoff",
+                receipt_path.display(),
+                receipt["status"]
+            )));
+        }
+    }
+    for (template_host, template) in &profile.hosts {
+        let unit = template.units.get(service_name).ok_or_else(|| {
+            CmdError::click(format!(
+                "placement host {template_host:?} has no {service_name:?} template"
+            ))
+        })?;
+        if unit.managed().is_none() {
+            return Err(CmdError::click(format!(
+                "placement service {service_name:?} is already release-controlled"
+            )));
+        }
+    }
     let legacy_label = target_policy
         .legacy_launchd_label
         .as_deref()
@@ -5638,177 +6201,222 @@ async fn handoff_release_control(
         )));
     }
 
-    let runner = production_runner();
-    let state_path = crate::release_agent::host_state_path(&target_policy.state_dir, product);
-    let state_text = host_channel::remote_read_file(&target, &state_path, &runner)
-        .await
-        .map_err(click)?
-        .ok_or_else(|| {
-            CmdError::click(format!("{host}: release state is absent at {state_path}"))
-        })?;
-    let state = crate::release_agent::parse_state_document(
-        state_text.as_bytes(),
-        product,
-        host,
-        &state_path,
-    )
-    .map_err(CmdError::click)?;
-    let active = state.active.as_ref().ok_or_else(|| {
-        CmdError::click(format!(
-            "{host}: release-control has no active {product:?} process"
-        ))
-    })?;
-    if state.phase != crate::release_agent::RolloutPhase::Committed
-        || state.candidate.is_some()
-        || state.proxy_pid.is_none()
-        || state.rollout_generation != desired.rollout_generation
-        || active.version != desired.version
-        || active.artifact_sha256 != desired_artifact.artifact_sha256
-        || active.manifest_sha256 != desired_artifact.manifest_sha256
-    {
-        return Err(CmdError::click(format!(
-            "{host}: release-control {product:?} is not the settled desired release"
-        )));
-    }
-
-    let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
-    let active_binary = host_channel::run_program(
-        &target,
-        &[
-            &installed_stado,
-            "release",
-            "active-binary",
+    with_service_mutation_lease(&legacy, || async {
+        let runner = production_runner();
+        let state_path = crate::release_agent::host_state_path(&target_policy.state_dir, product);
+        let state_text = host_channel::remote_read_file(&target, &state_path, &runner)
+            .await
+            .map_err(click)?
+            .ok_or_else(|| {
+                CmdError::click(format!("{host}: release state is absent at {state_path}"))
+            })?;
+        let state = crate::release_agent::parse_state_document(
+            state_text.as_bytes(),
             product,
-            "--target",
             host,
-            "--json",
-        ],
-        &runner,
-    )
-    .await
-    .map_err(click)?;
-    if !active_binary.ok() {
-        return Err(CmdError::click(format!(
-            "{host}: installed Stado rejected active release binary: {}",
-            host_channel::last_error_line(&active_binary, "active-binary failed")
-        )));
-    }
-    let active_binary: Value =
-        serde_json::from_str(active_binary.stdout.trim()).map_err(|error| {
+            &state_path,
+        )
+        .map_err(CmdError::click)?;
+        let active = state.active.as_ref().ok_or_else(|| {
             CmdError::click(format!(
-                "{host}: active-binary returned invalid JSON: {error}"
+                "{host}: release-control has no active {product:?} process"
             ))
         })?;
-    if active_binary["state"] != "active"
-        || active_binary["product"] != product
-        || active_binary["target"] != host
-        || active_binary["version"] != desired.version
-        || active_binary["artifact_sha256"] != desired_artifact.artifact_sha256
-        || active_binary["manifest_sha256"] != desired_artifact.manifest_sha256
-    {
-        return Err(CmdError::click(format!(
-            "{host}: active-binary identity does not match the desired release"
-        )));
-    }
-
-    let serving = target_policy
-        .blue_green_serving()
-        .map_err(CmdError::click)?;
-    let readiness_url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    let readiness = host_channel::run_program(
-        &target,
-        &[
-            "/usr/bin/curl",
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--max-time",
-            "3",
-            "--output",
-            "/dev/null",
-            &readiness_url,
-        ],
-        &runner,
-    )
-    .await
-    .map_err(click)?;
-    if !readiness.ok() {
-        return Err(CmdError::click(format!(
-            "{host}: release-control readiness failed at {readiness_url}: {}",
-            host_channel::last_error_line(&readiness, "readiness request failed")
-        )));
-    }
-    let label = service_label_print::print_label(
-        &target,
-        legacy_label,
-        service::BootoutScope::System,
-        &runner,
-    )
-    .await
-    .map_err(click)?;
-    if label.loaded() {
-        return Err(CmdError::click(format!(
-            "{host}: legacy launchd label {legacy_label:?} is still loaded"
-        )));
-    }
-    require_no_executable_caller(&target, &legacy.program, &runner).await?;
-    let plist_identity = remote_file_identity(&target, legacy_plist, &runner).await?;
-    let binary_identity = remote_file_identity(&target, &legacy.program, &runner).await?;
-
-    service::remove_service(&mut document, host, legacy_label).map_err(click)?;
-    externalize_release_controlled_profile(&mut document, profile_name, service_name, product)?;
-    remove_release_legacy_identity(&mut document, product, host)?;
-    crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
-    for obsolete in [legacy_label, legacy_plist, legacy.program.as_str()] {
-        if obsolete.is_empty() || document_contains_string(&document, obsolete) {
+        if state.phase != crate::release_agent::RolloutPhase::Committed
+            || state.candidate.is_some()
+            || state.proxy_pid.is_none()
+            || state.rollout_generation != desired.rollout_generation
+            || active.version != desired.version
+            || active.artifact_sha256 != desired_artifact.artifact_sha256
+            || active.manifest_sha256 != desired_artifact.manifest_sha256
+        {
             return Err(CmdError::click(format!(
-                "registry handoff left obsolete executable identity {obsolete:?} reachable"
+                "{host}: release-control {product:?} is not the settled desired release"
             )));
         }
-    }
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let generation = registry::push_document_if(&document, &expected_generation).await?;
 
-    let report = json!({
-        "schema": "stado.service-release-control-handoff.v1",
-        "status": "handed_off",
-        "service": service_name,
-        "host": host,
-        "profile": profile_name,
-        "controller": "release-control",
-        "product": product,
-        "expected_generation": expected_generation,
-        "generation": generation,
-        "release": {
-            "version": active.version,
-            "rollout_generation": state.rollout_generation,
-            "artifact_sha256": active.artifact_sha256,
-            "manifest_sha256": active.manifest_sha256,
-            "proxy_pid": state.proxy_pid,
-            "active_binary": active_binary["path"],
-            "readiness_url": readiness_url,
-        },
-        "legacy": {
-            "label": legacy_label,
-            "loaded": false,
-            "registry_referrers": [],
-        },
-        "retirement": {
-            "status": "pending",
-            "order": ["plist", "binary"],
-            "plist_receipt": plist_identity,
-            "binary_receipt": binary_identity,
-        },
-    });
-    if json_output {
-        print_json(&report)
-    } else {
-        println!(
-            "{host}: {service_name} handed to release-control product {product} at registry generation {generation}"
-        );
-        Ok(())
-    }
+        let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
+        let active_binary = host_channel::run_program(
+            &target,
+            &[
+                &installed_stado,
+                "release",
+                "active-binary",
+                product,
+                "--target",
+                host,
+                "--json",
+            ],
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if !active_binary.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: installed Stado rejected active release binary: {}",
+                host_channel::last_error_line(&active_binary, "active-binary failed")
+            )));
+        }
+        let active_binary: Value =
+            serde_json::from_str(active_binary.stdout.trim()).map_err(|error| {
+                CmdError::click(format!(
+                    "{host}: active-binary returned invalid JSON: {error}"
+                ))
+            })?;
+        if active_binary["state"] != "active"
+            || active_binary["product"] != product
+            || active_binary["target"] != host
+            || active_binary["version"] != desired.version
+            || active_binary["artifact_sha256"] != desired_artifact.artifact_sha256
+            || active_binary["manifest_sha256"] != desired_artifact.manifest_sha256
+        {
+            return Err(CmdError::click(format!(
+                "{host}: active-binary identity does not match the desired release"
+            )));
+        }
+
+        let serving = target_policy
+            .blue_green_serving()
+            .map_err(CmdError::click)?;
+        let readiness_url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
+        let readiness = host_channel::run_program(
+            &target,
+            &[
+                "/usr/bin/curl",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--max-time",
+                "3",
+                "--output",
+                "/dev/null",
+                &readiness_url,
+            ],
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if !readiness.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: release-control readiness failed at {readiness_url}: {}",
+                host_channel::last_error_line(&readiness, "readiness request failed")
+            )));
+        }
+        let label = service_label_print::print_label(
+            &target,
+            legacy_label,
+            service::BootoutScope::System,
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if label.loaded() {
+            return Err(CmdError::click(format!(
+                "{host}: legacy launchd label {legacy_label:?} is still loaded"
+            )));
+        }
+        require_no_executable_caller(&target, &legacy.program, &runner).await?;
+        let observed_plist_identity = remote_file_identity(&target, legacy_plist, &runner).await?;
+        let observed_binary_identity =
+            remote_file_identity(&target, &legacy.program, &runner).await?;
+        let (plist_identity, binary_identity) = if let Some(receipt) = prior_receipt.as_ref() {
+            let stored_plist = &receipt["retirement"]["plist_receipt"];
+            let stored_binary = &receipt["retirement"]["binary_receipt"];
+            if !same_remote_file_identity(stored_plist, &observed_plist_identity)
+                || !same_remote_file_identity(stored_binary, &observed_binary_identity)
+            {
+                return Err(CmdError::click(format!(
+                    "handoff receipt {} no longer matches the exact legacy files",
+                    receipt_path.display()
+                )));
+            }
+            (stored_plist.clone(), stored_binary.clone())
+        } else {
+            (observed_plist_identity, observed_binary_identity)
+        };
+
+        service::remove_service(&mut document, host, legacy_label).map_err(click)?;
+        externalize_release_controlled_profile(&mut document, profile_name, service_name, product)?;
+        remove_release_legacy_identity(&mut document, product, host)?;
+        crate::service_resolution::advance_generation(&mut document).map_err(CmdError::click)?;
+        for obsolete in [legacy_label, legacy_plist, legacy.program.as_str()] {
+            if obsolete.is_empty() || document_contains_string(&document, obsolete) {
+                return Err(CmdError::click(format!(
+                    "registry handoff left obsolete executable identity {obsolete:?} reachable"
+                )));
+            }
+        }
+        crate::targets::validate_registry(&document)
+            .map_err(|error| CmdError::click(error.to_string()))?;
+
+        let refreshing_prepared_receipt = prior_receipt.is_some();
+        let mut report = if let Some(receipt) = prior_receipt.as_ref() {
+            let mut receipt = receipt.clone();
+            receipt["expected_generation"] = json!(expected_generation);
+            receipt["generation"] = Value::Null;
+            receipt["status"] = json!("prepared");
+            receipt["reconciler_fence"] = json!({"status": "not_captured"});
+            receipt
+        } else {
+            json!({
+                "schema": "stado.service-release-control-handoff.v1",
+                "status": "prepared",
+                "service": service_name,
+                "host": host,
+                "profile": profile_name,
+                "controller": "release-control",
+                "product": product,
+                "expected_generation": expected_generation,
+                "generation": Value::Null,
+                "receipt_path": receipt_path,
+                "intended_post_handoff": {
+                    "controller": "release-control",
+                    "product": product,
+                    "legacy_registry_identities_removed": true,
+                },
+                "release": {
+                    "version": active.version,
+                    "rollout_generation": state.rollout_generation,
+                    "artifact_sha256": active.artifact_sha256,
+                    "manifest_sha256": active.manifest_sha256,
+                    "proxy_pid": state.proxy_pid,
+                    "active_binary": active_binary["path"],
+                    "readiness_url": readiness_url,
+                },
+                "reconciler_fence": {
+                    "status": "not_captured",
+                },
+                "legacy": {
+                    "label": legacy_label,
+                    "loaded": false,
+                    "registry_referrers": [],
+                },
+                "retirement": {
+                    "status": "pending",
+                    "order": ["plist", "binary"],
+                    "plist_receipt": plist_identity,
+                    "binary_receipt": binary_identity,
+                },
+            })
+        };
+        persist_handoff_receipt(&receipt_path, &report, refreshing_prepared_receipt)?;
+        let generation = registry::push_document_if(&document, &expected_generation).await?;
+        report["status"] = json!("registry_committed");
+        report["generation"] = json!(generation);
+        persist_handoff_receipt(&receipt_path, &report, true)?;
+
+        finish_handoff_under_lease(
+            &document,
+            &target,
+            &installed_stado,
+            &receipt_path,
+            report,
+            None,
+            json_output,
+        )
+        .await
+    })
+    .await
 }
 
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
@@ -6380,6 +6988,7 @@ struct EnsureOptions<'a> {
     host: &'a str,
     from: Option<&'a str>,
     args: &'a [String],
+    env: &'a [String],
     reason: &'a str,
     as_daemon: bool,
     as_launch_agent: bool,
@@ -6398,9 +7007,10 @@ pub(crate) struct UnitProgram {
     pub(crate) source: &'static str,
     /// Stable unit identity supplied by a registry or catalog declaration.
     pub(crate) unit: Option<String>,
-    /// Environment the catalog declares for the unit, placeholders intact;
-    /// empty for every other source, which declares none.
+    /// Non-secret environment declared by this unit, with target placeholders intact.
     pub(crate) env: std::collections::BTreeMap<String, String>,
+    /// Exact authored systemd definition retained by registry lifecycle repairs.
+    pub(crate) systemd_unit: String,
 }
 pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
     let unit_id = service.unit_id();
@@ -6461,7 +7071,12 @@ pub(crate) fn unit_program(
             args: args.to_vec(),
             source: "flag",
             unit: None,
-            env: Default::default(),
+            env: declared
+                .map(|service| service.env.clone())
+                .unwrap_or_default(),
+            systemd_unit: declared
+                .map(|service| service.systemd_unit.clone())
+                .unwrap_or_default(),
         });
     }
     if !args.is_empty() {
@@ -6476,7 +7091,8 @@ pub(crate) fn unit_program(
             args: declared.args.clone(),
             source: "registry",
             unit: Some(declared.unit_id().to_string()),
-            env: Default::default(),
+            env: declared.env.clone(),
+            systemd_unit: declared.systemd_unit.clone(),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -6494,6 +7110,7 @@ pub(crate) fn unit_program(
             source: "catalog",
             unit: entry.unit,
             env: entry.env,
+            systemd_unit: String::new(),
         });
     }
     let bundled =
@@ -6511,7 +7128,8 @@ pub(crate) fn unit_program(
             args: shipped.args,
             source: "shipped",
             unit: Some(unit),
-            env: Default::default(),
+            env: shipped.env,
+            systemd_unit: shipped.systemd_unit,
         });
     }
     Err(CmdError::usage(format!(
@@ -6579,6 +7197,7 @@ pub(crate) async fn ensure_local_dependency(
         host: &host,
         from: None,
         args: &[],
+        env: &[],
         reason,
         as_daemon,
         as_launch_agent: false,
@@ -6587,42 +7206,46 @@ pub(crate) async fn ensure_local_dependency(
     .await
 }
 
-/// Re-render one declared service after its managed configuration changes,
-/// then restart it in place so the running process reads the new value.
+/// Reload an existing managed service after its configuration changes.
 ///
-/// The declaration half is the same idempotent reconciliation `stado service
-/// ensure` performs; config mutation must not grow a second lifecycle path
-/// that unloads a healthy unit directly.
-///
-/// The restart half is what makes `--reload-service` true. A config change is
-/// the one case where "already running the declared program" is not "already
-/// correct": the program is identical and its inputs are not. Every
-/// configuration reader in this binary — `config::object_api_namespaces`
-/// among them — is a `LazyLock` read once per process, so a unit `ensure`
-/// leaves untouched goes on serving the policy it started with. That is how
-/// granting the `service_audit/` prefix on charless-mac-mini printed
-/// `already_correct` for the object API and then refused the very next write.
-///
-/// `restart` is the in-place path — `launchctl kickstart -k` for a system
-/// LaunchDaemon, which never unloads the job — so this stays one lifecycle
-/// path rather than becoming the second one.
-pub(crate) async fn reconcile_after_config_change(
-    name: &str,
-    host: &str,
-    reason: &str,
-) -> Result<(), CmdError> {
-    ensure(EnsureOptions {
-        name,
-        host,
-        from: None,
-        args: &[],
-        reason,
-        as_daemon: true,
-        as_launch_agent: false,
-        as_json: false,
-    })
-    .await?;
+/// Configuration values are cached for the process lifetime. Native restart
+/// preserves the unit's current command, including adopted units that have no
+/// catalog recipe from which `ensure` could rebuild them.
+pub(crate) async fn reconcile_after_config_change(name: &str, host: &str) -> Result<(), CmdError> {
     restart(name, Some(host), None, None, false).await
+}
+
+/// A changed unit may own the registry API itself. Wait for an actual
+/// authoritative read after activation, not merely the new process's PID.
+/// Only reads are repeated; the host action and conditional write never are.
+async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
+    let mut last_error = None;
+    let ready = async {
+        loop {
+            match registry::fetch_versioned_document().await {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => {
+                    let code = error.failure.unwrap_or_else(|| {
+                        crate::failure::classify_message(
+                            error.message.as_deref().unwrap_or_default(),
+                        )
+                    });
+                    if !code.retryable() {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(30), ready).await {
+        Ok(result) => result,
+        Err(_) => Err(last_error.unwrap_or_else(|| {
+            CmdError::click("the registry did not answer within 30 seconds after unit activation")
+                .stating(crate::failure::FailureCode::InfraDown)
+        })),
+    }
 }
 
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
@@ -6726,6 +7349,26 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit.args.join(" ")
         );
     }
+    let home = crate::deploy::service_catalog::home_for(&target);
+    let mut env_overrides = unit.env;
+    for assignment in options.env {
+        let (name, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| CmdError::usage("--env requires NAME=VALUE"))?;
+        env_overrides.insert(name.to_string(), value.to_string());
+    }
+    for (name, value) in env_overrides {
+        let value = crate::deploy::service_catalog::resolve_word(
+            &value,
+            &home,
+            Some(&target.release_platform),
+            &target.name,
+        );
+        match unit_env.iter_mut().find(|(key, _)| key == &name) {
+            Some((_, current)) => *current = value,
+            None => unit_env.push((name, value)),
+        }
+    }
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise
@@ -6743,10 +7386,29 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             &unit.args,
             &unit_env,
         ),
-        None => service::plan_deploy(&target, options.name, &unit.program, &unit.args),
+        None => service::plan_deploy_labelled(
+            &target,
+            options.name,
+            &crate::deploy::local_install::label(service::DEPLOY_KIND, options.name),
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
     }
     .map_err(click)?;
     let mut plan = plan;
+    if !unit.systemd_unit.is_empty() {
+        if !target.release_platform.starts_with("linux") {
+            return Err(CmdError::click(format!(
+                "{} declares a systemd unit definition on non-Linux platform {}",
+                options.name, target.release_platform
+            )));
+        }
+        let definition = std::mem::take(&mut unit.systemd_unit);
+        unit.systemd_unit =
+            service::retain_systemd_unit(&mut plan, &definition, &unit_env, unit.source == "flag")
+                .map_err(click)?;
+    }
     // A declared path is the service's durable domain choice. In particular,
     // a LaunchAgent intentionally placed on an always-on Mac must not become
     // a daemon again when ensure or the autonomy reconciler runs later.
@@ -6796,46 +7458,85 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;
     record.args = unit.args;
-    let generation = match &already {
-        // Declared, at the same file and running the same program, by the
-        // registry: the document already says what this pass just confirmed,
-        // so nothing is written to it.
-        Some(existing)
-            if existing.source == SOURCE_REGISTRY
-                && existing.path == record.path
-                && existing.kind == record.kind
-                && existing.program == record.program
-                && existing.args == record.args =>
-        {
+    record.env = unit_env.into_iter().collect();
+    record.systemd_unit = unit.systemd_unit;
+    let persisted = async {
+        let recovered_snapshot = if outcome.changed() {
+            Some(registry_after_host_change().await?)
+        } else {
             None
-        }
-        // Declared by the registry at a different file. The system-domain
-        // daemon path is not the per-login agent path, and a declaration
-        // naming a file the host does not have is one no later command can
-        // act on, so the declaration is corrected in one document write.
-        Some(existing) if existing.source == SOURCE_REGISTRY => {
-            // Expected generation: this read. `existing` and `record` were
-            // decided before it — the unit was already ensured on the host —
-            // so a lost race is reported instead of retried: re-running the
-            // correction would replace a declaration this pass never saw.
-            let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-            service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
-            service::add_service(&mut document, &record).map_err(click)?;
-            Some(registry::push_document_if(&document, &expected_generation).await?)
-        }
-        // Undeclared, or carried by the fixed host-recovery list. Both become
-        // an explicit registry declaration, which for the recovery case is
-        // exactly what `service adopt` is for.
-        _ => Some(record_declaration(&record).await?),
-    };
+        };
+        let generation = match &already {
+            // Declared, at the same file and running the same program, by the
+            // registry: the document already says what this pass just confirmed,
+            // so nothing is written to it.
+            Some(existing)
+                if existing.source == SOURCE_REGISTRY
+                    && existing.path == record.path
+                    && existing.kind == record.kind
+                    && existing.program == record.program
+                    && existing.args == record.args
+                    && existing.env == record.env
+                    && existing.systemd_unit == record.systemd_unit =>
+            {
+                None
+            }
+            // Declared by the registry at a different file. The system-domain
+            // daemon path is not the per-login agent path, and a declaration
+            // naming a file the host does not have is one no later command can
+            // act on, so the declaration is corrected in one document write.
+            Some(existing) if existing.source == SOURCE_REGISTRY => {
+                // Expected generation: this read. `existing` and `record` were
+                // decided before it — the unit was already ensured on the host —
+                // so a lost race is reported instead of retried: re-running the
+                // correction would replace a declaration this pass never saw.
+                let (mut document, expected_generation) = match recovered_snapshot {
+                    Some(snapshot) => snapshot,
+                    None => registry::fetch_versioned_document().await?,
+                };
+                service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
+                service::add_service(&mut document, &record).map_err(click)?;
+                Some(registry::push_document_if(&document, &expected_generation).await?)
+            }
+            // Undeclared, or carried by the fixed host-recovery list. Both become
+            // an explicit registry declaration, which for the recovery case is
+            // exactly what `service adopt` is for.
+            _ => Some(record_declaration(&record).await?),
+        };
 
-    // Recorded only when something actually changed. An audit trail that also
-    // records the passes which changed nothing is one nobody reads.
-    let audited = if outcome.changed() || generation.is_some() {
-        Some(record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref()).await?)
-    } else {
-        None
-    };
+        // Recorded only when something actually changed. An audit trail that also
+        // records the passes which changed nothing is one nobody reads.
+        let audited = if outcome.changed() || generation.is_some() {
+            Some(
+                record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref())
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok::<_, CmdError>(audited)
+    }
+    .await;
+    let audited = persisted.map_err(|mut error| {
+        let cause = error
+            .message
+            .as_deref()
+            .unwrap_or("registry operation failed");
+        error.failure = Some(
+            error
+                .failure
+                .unwrap_or_else(|| crate::failure::classify_message(cause)),
+        );
+        error.message = Some(format!(
+            "{host}: {} is running (action {}, pid {}), but recording the completed ensure \
+             failed: {cause}. No host action was repeated.",
+            options.name,
+            outcome.action,
+            outcome.pid.trim(),
+        ));
+        error.json = options.as_json;
+        error
+    })?;
 
     if options.as_json {
         // Exactly the contract's keys: a desktop client consumes this shape.
@@ -7110,12 +7811,96 @@ async fn install_from_artifact(
 /// the approved channel, checksummed on the far side, unpacked into a version
 /// directory named for its own digest, and `current` is relinked only after the
 /// digest matches.
+/// The paths a gzip-compressed release archive carries, in archive order.
+///
+/// Read locally, before anything is copied to a host: the cheapest moment to
+/// learn that a bundle cannot satisfy the unit it is meant for.
+fn archive_members(path: &str) -> Result<Vec<String>, CmdError> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| CmdError::click(format!("cannot read archive {path}: {error}")))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let entries = archive
+        .entries()
+        .map_err(|error| CmdError::click(format!("{path} is not a tar archive: {error}")))?;
+    let mut members = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| CmdError::click(format!("{path} could not be listed: {error}")))?;
+        let path = entry.path().map_err(|error| {
+            CmdError::click(format!("{path} holds an unreadable name: {error}"))
+        })?;
+        members.push(normalize_member(&path.to_string_lossy()));
+    }
+    Ok(members)
+}
+
+/// One archive path, comparable: no `./` prefix, no trailing slash.
+fn normalize_member(raw: &str) -> String {
+    raw.trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Refuse an archive that does not carry the file the unit executes after the
+/// installer adds its fixed `darwin-arm/` platform directory.
+///
+/// The unit's program is an absolute path through `current`, while
+/// [`ARCHIVE_INSTALL_BODY`] extracts the archive inside
+/// `version_dir/darwin-arm`. A unit running
+/// `.../current/darwin-arm/stado` therefore needs a root archive member
+/// `stado`, not a second `darwin-arm/stado` nesting. Both sides are named in
+/// the refusal, because the useful sentence is the mismatch, not the fact of
+/// one.
+fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(), String> {
+    let Some(relative) = program.split("/current/").nth(usize::from(true)) else {
+        // A unit pinned to a version directory rather than `current` is a
+        // different fault, reported by `follow_current`; there is no program
+        // path to look for here and inventing one would refuse every archive.
+        return Ok(());
+    };
+    let relative = normalize_member(relative);
+    let Some(archive_relative) = relative.strip_prefix("darwin-arm/") else {
+        return Err(format!(
+            "refusing to relink `current`: the archive installer writes below \
+             current/darwin-arm, but the unit runs current/{relative}"
+        ));
+    };
+    if archive_relative.is_empty() || members.iter().any(|member| member == archive_relative) {
+        return Ok(());
+    }
+    let mut held: Vec<&str> = members
+        .iter()
+        .filter(|member| !member.ends_with('/'))
+        .map(String::as_str)
+        .take(6)
+        .collect();
+    if members.len() > held.len() {
+        held.push("…");
+    }
+    Err(format!(
+        "refusing to relink `current`: the unit runs current/{relative}; the archive holds {}. \
+         Pointing `current` at a tree without that file does not fail here - it fails at \
+         launchd's next spawn, which cannot report why, and a KeepAlive job that cannot spawn \
+         leaves its domain. Install an archive whose layout matches the unit's program, or \
+         change the unit's program to a path this archive carries.",
+        if held.is_empty() {
+            "nothing".to_string()
+        } else {
+            held.join(", ")
+        }
+    ))
+}
+
+/// Extract beside the immutable version and confirm the declared executable
+/// before atomically replacing `current`. Never remove an installed version
+/// while extracting its replacement.
 async fn install_from_archive(
     target: &crate::targets::ComputeTarget,
     directory: &str,
     path: &str,
+    required: &str,
     runner: &crate::deploy::Runner,
-) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+) -> Result<(crate::deploy::artifact_install::InstalledArtifact, bool), CmdError> {
     let bytes = std::fs::read(path)?;
     let digest = {
         use sha2::{Digest, Sha256};
@@ -7175,11 +7960,12 @@ async fn install_from_archive(
     }
 
     let script = format!(
-        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\n{ARCHIVE_INSTALL_BODY}",
+        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\nrequired={}\n{ARCHIVE_INSTALL_BODY}",
         crate::deploy::shlex_quote(directory),
         crate::deploy::shlex_quote(&version),
         crate::deploy::shlex_quote(&digest),
         crate::deploy::shlex_quote(&staged),
+        crate::deploy::shlex_quote(required),
     );
     let output = host_channel::run_script(target, &script, runner)
         .await
@@ -7191,18 +7977,27 @@ async fn install_from_archive(
             host_channel::last_error_line(&output, "the archive did not install")
         )));
     }
-    Ok(crate::deploy::artifact_install::InstalledArtifact {
-        program_path: format!("$HOME/.stado/services/{directory}/current"),
-        version,
-        sha256: digest,
-    })
+    let already_active = output
+        .stdout
+        .lines()
+        .any(|line| line == "STADO_SERVICE_ARCHIVE already_active");
+    Ok((
+        crate::deploy::artifact_install::InstalledArtifact {
+            program_path: format!("$HOME/.stado/services/{directory}/current"),
+            version,
+            sha256: digest,
+        },
+        already_active,
+    ))
 }
 
 const ARCHIVE_INSTALL_BODY: &str = r#"
 root="$HOME/.stado/services/$name"
 version_dir="$root/$version"
 archive="$HOME/$staged"
-trap 'rm -f "$archive"' EXIT
+incoming="$root/.$version.incoming.$$"
+link="$root/.current.new.$$"
+trap 'rm -f "$archive" "$link"; rm -rf "$incoming"' EXIT
 
 [ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; exit 1; }
 actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
@@ -7211,20 +8006,48 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
-rm -rf "$version_dir"
-/bin/mkdir -p "$version_dir/darwin-arm"
-/usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
+/bin/mkdir -p "$incoming/darwin-arm"
+/usr/bin/tar -xzf "$archive" -C "$incoming/darwin-arm"
+if [ ! -f "$incoming/$required" ] || [ ! -x "$incoming/$required" ]; then
+  printf '%s\n' "archive does not carry the declared executable $required; current is unchanged" >&2
+  exit 1
+fi
+if [ -e "$version_dir" ]; then
+  if ! /usr/bin/diff -qr "$incoming" "$version_dir" >/dev/null; then
+    printf '%s\n' "existing immutable version $version differs from its archive; current is unchanged" >&2
+    exit 1
+  fi
+  [ -x "$version_dir/$required" ] || {
+    printf '%s\n' "existing immutable version $version has no executable $required; current is unchanged" >&2
+    exit 1
+  }
+  rm -rf "$incoming"
+else
+  /usr/bin/python3 - "$incoming" "$version_dir" <<'PY'
+import os, sys
+os.rename(sys.argv[1], sys.argv[2])
+PY
+fi
+
+if [ -L "$root/current" ] &&
+   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ]; then
+  trap - EXIT
+  rm -f "$archive"
+  printf '%s\n' 'STADO_SERVICE_ARCHIVE already_active'
+  exit 0
+fi
 
 # `current` is a directory here on some hosts and a symlink on others; either
 # way the previous one is kept beside the new version rather than deleted, so a
 # rollback is a rename.
 if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
-  /bin/mv "$root/current" "$root/current.before-$version"
-else
-  rm -f "$root/current"
+  /bin/mv "$root/current" "$root/current.before-$version.$$"
 fi
-/bin/ln -sfn "$version_dir" "$root/.current.new"
-/bin/mv -f "$root/.current.new" "$root/current"
+/bin/ln -s "$version_dir" "$link"
+/usr/bin/python3 - "$link" "$root/current" <<'PY'
+import os, sys
+os.replace(sys.argv[1], sys.argv[2])
+PY
 trap - EXIT
 rm -f "$archive"
 printf '%s\n' "$version_dir"
@@ -7462,6 +8285,76 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::process::Command;
     use std::time::Duration;
+
+    /// Write a real gzip-compressed tar holding the named paths, so the member
+    /// reader is exercised against an archive rather than a list someone typed.
+    fn archive_fixture(directory: &std::path::Path, members: &[&str]) -> String {
+        let path = directory.join("bundle.tar.gz");
+        let file = std::fs::File::create(&path).expect("create fixture");
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            file,
+            flate2::Compression::fast(),
+        ));
+        for member in members {
+            let body = b"binary";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, member, &body[..])
+                .expect("append member");
+        }
+        builder
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip");
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn archive_members_reads_the_paths_a_bundle_carries() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = archive_fixture(directory.path(), &["bin/stado", "./darwin-arm/stado"]);
+        let members = archive_members(&path).expect("list members");
+        assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
+    }
+    /// The exact 2026-09-04 outage: the object API unit runs
+    /// `current/darwin-arm/stado` and every published stado archive holds
+    /// `bin/stado`. The refusal must name both halves.
+    #[test]
+    fn an_archive_without_the_unit_program_is_refused_naming_both() {
+        let members = vec!["bin/stado".to_string()];
+        let refusal = refuse_archive_without_program(
+            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+            &members,
+        )
+        .expect_err("an archive without the program must be refused");
+        assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
+        assert!(refusal.contains("bin/stado"), "{refusal}");
+    }
+    #[test]
+    fn an_archive_carrying_the_unit_program_is_accepted() {
+        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
+        refuse_archive_without_program(
+            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+            &members,
+        )
+        .expect("the program is in the archive");
+    }
+
+    /// A unit pinned to a version directory has no `current` segment. That is a
+    /// different fault and refusing every archive over it would be wrong.
+    #[test]
+    fn a_unit_not_running_through_current_is_not_judged_here() {
+        let members = vec!["bin/stado".to_string()];
+        refuse_archive_without_program(
+            "/Users/charles/.stado/services/x/sha256-abc/darwin-arm/stado",
+            &members,
+        )
+        .expect("no current segment, nothing to check");
+    }
 
     /// Serve one fixed JSON body on 200 to every request that arrives, on a
     /// loopback port the kernel picks, until the handle is dropped. The probe

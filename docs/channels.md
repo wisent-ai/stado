@@ -19,7 +19,45 @@ The host channel resolves the target from the canonical registry, checks its pin
 
 Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. Mutating workflows use their owning commands, such as `stado service file-sync`, `stado service secret-sync`, `stado release apply`, or `stado host reconcile-object-verifier`. Secret values are read and written on the target; they never appear in the remote argument list or command result.
 
+Set `RUST_LOG=stado::deploy::host_channel=trace` when the same operation needs OpenSSH's own transport diagnosis. Stado adds `-vvv` to the shared SSH invocation only while that existing tracing target is enabled; normal argv is unchanged, and the debug stream remains verbatim in the operation's existing stderr and status receipt.
+
 An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
+
+### Retiring an undeclared init-system unit
+
+`stado service bootout <exact-unit> --host <target> [--domain system|user]` is the declaration-independent stop path for a unit found by `service list --undeclared` or `service label-print`. It addresses the exact launchd label or systemd unit name supplied; it does not derive a prefix or add or remove a `.service` suffix. With no domain, Stado preserves system-first precedence and checks the calling account only when the system manager holds no exact unit by that name. Pass `--domain user` when the same or a related canonical name must remain running in system scope.
+
+On Linux, bootout uses the target account's explicit systemd user bus for `user` scope and the existing non-interactive privilege path for `system`. It runs `systemctl disable --now` for only the exact requested identity, then refuses unless that identity reads back inactive and not enabled. An absent identity is a retry-safe `absent`; manager, privilege, disable, identity, and postcondition failures are `refused`. On Darwin, the existing system or per-login launchd bootout and absence checks are unchanged. Neither platform branch deletes the unit definition; file removal remains a separate `stado host remove-file` operation.
+
+For example, the obsolete Ubuntu user unit `com.wisent.compute.service.stado-resolver.service.service.service` can be retired with an explicit user-domain bootout. The canonical `com.wisent.stado-resolver.service` is a different exact identity and is not selected or changed.
+
+### Keeping a service's non-secret environment
+
+`stado service ensure <name> --host <target> --env NAME=VALUE --reason <reason>`
+records each non-secret assignment in the managed service's `env` map and renders
+it into the host unit. Repeat `--env` for multiple keys; the last assignment wins.
+Recorded values override catalog defaults and survive subsequent `ensure` calls
+and automatic repairs. `$HOME`, `$STADO_HOST`, and `$STADO_PLATFORM` expand
+against the target, not the caller. Credentials still use `secret-sync`, never
+`--env`.
+
+If a loaded unit's arguments match but its rendered environment differs,
+`ensure` saves the prior definition and loads the new one. On macOS this requires
+bootout and bootstrap: kickstart alone would reuse launchd's old environment.
+If the new definition fails to start, `ensure` restores and starts the previous
+definition and reports failure; it never reports the requested environment as
+applied after rollback. A different executable or argument vector remains an
+explicit conflict on a loaded macOS unit.
+
+For an independently managed instance outside a release policy's target map,
+`registry doctor` accepts pinned environment only when both the registry record
+and the local unit file contain the product's exact required values. A remote
+unit that was not read is not treated as agreeing.
+
+Run `stado host exec <target> -- stado registry doctor` to measure those
+host-local facts through Stado. The fixed read-only command uses the target's
+installed binary and returns its own registry and executing-image findings;
+running the doctor on a workstation cannot establish them for another host.
 
 ### Release-controlled placement handoff
 
@@ -38,6 +76,8 @@ A logical service whose process lifecycle belongs to the release controller inst
 The external shape must appear in every host template for that service and name one release product. The service directory still owns its route, active host, endpoint, consumers, and generation; the placement profile still owns state, routing units, and probes. Routing units remain ordinary Stado-managed units. Static validation requires the route's active host, endpoint, active-host probe, product, release target, and stable bind to agree; it rejects a target service row or any legacy launchd restore field on every target of the owning product. Resolution and verification therefore keep using the route without pretending the external process is a target-managed unit.
 
 Install 0.15.24 or newer on every registry reader and agent before publishing this shape. Then run `stado service handoff-release-control <service> --host <active-host> --product <product> --json` once. The command proves the committed desired release, active signed executable, stable proxy, readiness, inactive legacy unit, legacy file digests, and absence of an executable caller before one generation-bound compare-and-swap externalizes all templates, removes the active target row, removes the legacy restore identity, and advances the release and directory generations. It preserves the route, endpoints, consumers, profile state, routing units, and probes. Every placement mutation refuses a release-controlled member before a transaction or host action.
+A handoff invocation first fsyncs a version-scoped `prepared` receipt under `~/.stado/work/service-release/<product>/<version>/`, then performs the sole registry compare-and-swap and immediately advances that receipt to `registry_committed`. If the caller is interrupted, rerun the identical command: a matching prepared receipt is reused only after the same intent, exact legacy files, active release, and still-managed lifecycle are re-proved; a registry that already carries the intended handoff causes the command to skip the successful CAS, reacquire the same per-service lease, and finish the reconciler-report fence. Do not delete or replace the receipt, issue a different handoff, or infer completion from the registry shape alone; `handed_off` with a satisfied fence is the retirement boundary.
+
 
 After the successful handoff, retire the reported plist and convenience binary separately with `host retire-file`, plist first. Each handoff receipt supplies the unique transaction, SHA-256, byte count, and four-digit mode passed to the mutating command's four explicit binding flags; do not perform another dry-run or an unbound mutation. Each retirement reports `retired` or retry-safe `absent`, so a failure after the plist move preserves an exact partial-cleanup record and the binary operation remains independently resumable. Rollback after handoff is not a binary downgrade: it requires a new generation-bound registry change, restoration of both archived files, and proof that release-control is no longer serving. Older readers cannot parse the external shape and must not be reintroduced while it is published.
 
@@ -76,7 +116,7 @@ When a host answers through one of those routes but its beacon is stale, `stado 
 
 Stado Desktop shows **Repair beacon publication** only for that repairable diagnosis. The action runs the same command and keeps its success or refusal on the Hosts screen; a stale host with a different publisher failure remains diagnostic-only until its own exact repair exists.
 
-`host exec`'s allowlist takes no operator-supplied path, so it reads no files. A managed unit's owner-controlled env file — the one a launcher `.`-sources, not the one the unit file declares — is read with `stado service env-show <service> --host <target> --env-file <path>`, through the same channel and the same `$HOME` confinement `stado service env-set` writes through. Values whose key looks like a credential, and URLs carrying userinfo, are withheld on the target and never cross the channel; endpoints, ports and variable references are shown, because those are what an operator must verify. `stado service endpoint-check` reconciles the loopback endpoints that file declares against the target's own socket table and exits non-zero when a declared dependency is dead.
+`host exec`'s allowlist takes no operator-supplied path and exposes no arbitrary shell. Entries that inspect a path fix that path and every flag in source. Fixed Cargo metadata is a typed `stado host inventory <target>` section instead: it uses lstat for the managed account's `$HOME/.cargo` and preserves that entry's link target, then follows only its fixed `bin` child and inventories every direct child including dotfiles with type, mode, numeric ownership, size, modification epoch, and symlink target. This supports the ordinary layout where Cargo home is a link to a mounted cache without accepting an operator-selected path or opening a file body. `entries_seen`, `entries_complete`, `entries_state`, and the enclosing `complete` field make truncation, a refused or partial traversal, malformed metadata, or a sanitized name explicit. The CLI tables the same fields, and Stado Desktop's Hosts inspector requests that typed report on demand for one selected canonical host through the authenticated `GET /api/host/inventory?target=…` route; it does not spawn the CLI. The content-reading exceptions remain exact: the fixed OpenSSH diagnosis reads only `/etc/ssh/sshd_config` and the last 200 records of `ssh.service`, with the file, unit, line bound and pager mode all fixed in source. A managed unit's owner-controlled env file — the one a launcher `.`-sources, not the one the unit file declares — is read with `stado service env-show <service> --host <target> --env-file <path>`, through the same channel and the same `$HOME` confinement `stado service env-set` writes through. Values whose key looks like a credential, and URLs carrying userinfo, are withheld on the target and never cross the channel; endpoints, ports and variable references are shown, because those are what an operator must verify. `stado service endpoint-check` reconciles the loopback endpoints that file declares against the target's own socket table and exits non-zero when a declared dependency is dead.
 
 A configuration surface Stado can write and cannot read is not a boundary, it is a blind spot: on 2026-08-30 a managed unit named a Skarbiec endpoint nothing served, two writes of the correct endpoint were reverted, and no command could show either fact. `stado service env-set` therefore reads the key back through the same channel after writing it and exits non-zero unless the file's effective assignment holds what it wrote. The comparison happens on the target, so a secret is verified exactly without its value returning.
 
@@ -214,6 +254,18 @@ The directory joins a producer, its endpoint, and declared consumers. `stado ser
 
 A directory declaration is not proof of a live route. Verification records which consumer reached which endpoint and why a refusal occurred.
 
+### The marker holds the address that host dials
+
+Several products resolve a service from an owner-only file, `~/.stado/forwards/<service>.local`, rather than from an environment variable: Skarbiec's credential bridge reads `weles-admission.local` this way. `stado service directory publish` writes those files, and what it must write depends on where the service runs.
+
+- The host that SERVES the service gets the address it serves on, from `endpoints[<that host>]`.
+- Every other host gets its OWN resolver adapter for that service, from `service_resolver.adapters[]`, because the serving host's loopback port means something else — or nothing — on their machine.
+- A service whose resolver declares one adapter per consumer is refused by name, listing the consumers: the marker's filename carries no consumer, so nothing elects one consumer's socket for the rest.
+
+`publish` reports the source of every address it wrote (`directory-endpoint` or `resolver-adapter`), reports every marker no declaration accounts for as a fossil, and removes exactly those under `--prune`. `stado host inventory <host>` judges each marker against both declared sources and prints `declared_source` beside its verdict, and Stado Desktop's Hosts screen shows the same rows under **Service addresses this host dials**.
+
+Publishing skipped every service placed elsewhere until 2026-09-05, which left those markers as whatever last wrote them: `lukasz-macbook` carried `brama.local` at `127.0.0.1:8080`, Brama's port on the Mac mini and an unrelated service's port on the laptop, and `weles-admission.local` at `8788` while that host's adapter binds `17614`. A consumer reading either file dialled the wrong service, and the inventory called the correct address `undeclared` because it compared markers with `endpoints` alone.
+
 ## Object authorization
 
 The object API authorizes an action in two stages:
@@ -240,20 +292,53 @@ stado host reconcile-object-verifier <target> --json
 The command derives the item set from `object_api.namespaces`, asks Skarbiec on the target to bind the existing bearer to that exact set, and reports item names and expiry only. It never prints the bearer.
 
 Release publication has a separate verifier and per-product policy set. Reconcile
-only the product being published:
+the verifier to the complete declared publisher set:
 
 ```console
-stado host reconcile-release-verifier <target> --product <product> --json
+stado host reconcile-release-verifier <target> --json
 ```
 
-The command resolves `<product>` through `release_api.publishers`, reads only that
-controller-owned publisher item, writes only its target-local shadow, and adds
-only its `token` read to the existing verifier grant. Other product capabilities
-and shadows are preserved and are never rotated by this operation. Release
-preflight proves the caller credential with an authenticated operation under the
-same product prefix. A public `releases/` stat proves neither boundary.
+The command compares the caller's `release_api.publishers` with the configuration
+the target actually consumes and refuses before mutation when they differ. It
+copies every controller-owned publisher item into the target-local shadows and
+binds the existing verifier bearer to exactly their `token` reads, removing
+capabilities for retired publishers without rotating or printing the bearer.
+Release preflight proves the caller credential with an authenticated operation
+under the same product prefix. A public `releases/` stat proves neither boundary.
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
+
+### The object API runs the managed binary, since 2026-09-04
+
+`com.wisent.always-on.stado-object-api` used to execute a private service
+tree, `.../services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado`,
+which nothing in the release pipeline ever moved: the control-plane job
+delivers with `stado host declare-version` plus `stado service converge
+<host> stado --apply`, and that pair resolves one root per managed binary,
+`$HOME/.stado/bin/<binary>`. The object API was not on that root, so it was
+the one unit on the host frozen at whatever build last installed it by hand
+— on 2026-09-04, a build old enough that its release refusals carried no
+`reason` code, while every other unit on the host had rolled forward many
+times.
+
+It now runs `$HOME/.stado/bin/stado`, the same managed binary as the
+resolver, the control plane, the release agent and the queue agent, and it is
+listed among the `stado` product's units. So `stado host declare-version
+<host> --binary stado --version <v>` followed by `stado host release <host>
+--binary stado --version <v>` moves the object API with every roll and
+restarts it with the rest, and the `deploy-control-plane` job needs no step
+of its own for it.
+
+The corollary is worth stating because it caused an outage before it was
+understood: a unit's program and the archive a version arrives in must
+agree. `stado service update --from-archive` now reads the unit's declared
+program, inspects the archive's member list, and refuses when the program is
+not in it, naming both — `the unit runs current/darwin-arm/stado; the
+archive holds bin/stado`. Relinking `current` at a tree without the
+program does not fail at install time. It fails at launchd's next spawn,
+which cannot say why, and a KeepAlive job that cannot spawn leaves its
+domain, so the repair stops being a rollback and becomes a privileged
+bootstrap.
 
 ## Workload grants and service authentication
 
