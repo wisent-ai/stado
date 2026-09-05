@@ -3061,8 +3061,9 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 }
 
 /// `stado host inventory TARGET [--json]` — the stado-managed binaries,
-/// forward markers and loopback listeners of TARGET, and the verdict on
-/// whether each marker still matches a live listener.
+/// fixed Cargo-home metadata and bin membership, forward markers and loopback
+/// listeners of TARGET, and the verdict on whether each marker still matches
+/// a live listener.
 ///
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
@@ -3665,6 +3666,91 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect::<Vec<Vec<String>>>(),
+    );
+
+    // The fixed Cargo paths and their children are part of the same typed
+    // report in JSON and text. Keeping the table here avoids a second
+    // filesystem reader that could drift from the JSON document.
+    let cargo = report.get("cargo").and_then(Value::as_object);
+    let cargo_roots = [("$HOME/.cargo", "home"), ("$HOME/.cargo/bin", "bin")]
+        .iter()
+        .filter_map(|(path, key)| {
+            cargo.and_then(|value| value.get(*key)).map(|metadata| {
+                vec![
+                    (*path).to_string(),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+        })
+        .collect::<Vec<Vec<String>>>();
+    super::table::print(
+        &[
+            "CARGO PATH",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_roots,
+    );
+    let cargo_entries = cargo
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    super::table::print(
+        &[
+            "CARGO BIN ENTRY",
+            "NAME STATE",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_entries
+            .iter()
+            .map(|metadata| {
+                vec![
+                    cell(metadata.get("name")),
+                    cell(metadata.get("name_state")),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+    println!(
+        "Cargo bin membership: state={} listed={} seen={} entries_complete={} complete={}",
+        cell(cargo.and_then(|value| value.get("entries_state"))),
+        cargo_entries.len(),
+        cell(cargo.and_then(|value| value.get("entries_seen"))),
+        cell(cargo.and_then(|value| value.get("entries_complete"))),
+        cell(cargo.and_then(|value| value.get("complete"))),
     );
 
     let markers = section("forwards");
@@ -10876,7 +10962,10 @@ pub async fn storage_root_reconcile(
             println!("verified objects: {count}");
         }
     }
-    report_outcome(&report, "ok")
+    // Mutating phases only acknowledge that the target-native owner was
+    // accepted. Their terminal result remains the durable STATUS receipt.
+    // Keep STATUS on the ordinary completed-report convention.
+    report_outcome(&report, if phase == "status" { "ok" } else { "accepted" })
 }
 pub async fn storage_root_reconcile_worker(
     target: &str,

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.24
+## 0.16.26
 
 - **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
 - **Desktop services:** the service inspector exposes the same runner repair and shows its result or refusal without replacing the CLI's diagnosis.
@@ -8,12 +8,31 @@
 - **Migration and rollback:** no stored schema changes. Repair retains the registered runner's own version, including an upstream auto-update; rollback restores the earlier installer's signature stripping.
 - **Platforms:** apphost repair applies to `darwin-arm64`; Linux runner installation is unchanged.
 
-## 0.16.23
+- **Cargo inventory:** `stado host inventory` reports fixed Cargo-root metadata and complete direct bin membership, including cache symlinks and hidden entries, with explicit partial-read states. Stado Desktop reads the same typed report through the authenticated host inventory API.
+- **Service convergence:** catalog lookup resolves both product names and native unit identities, so label-addressed repairs retain the full required environment. Object API recovery preserves unrelated installed unit fields rather than competing with the shared renderer.
+- **Completion recording:** after a unit changes, `service ensure` waits up to 30 seconds for an authoritative registry read before recording completion. Only retryable reads are repeated; host actions and conditional writes are not. A later failure names the completed action, running PID, and original recording error.
 
+## 0.16.25
+
+- **Reconciliation retries:** before fencing writers, `host storage-root-reconcile` reads the current canonical Stado version instead of reusing the version in an older captured target. An existing fence keeps its staged version pinned; an unavailable registry is an error, not permission to use cached declarations.
+- **Live transaction status:** owner reports retain `recorded_status` and include the native manager's current observation. A previously executing owner is reported as interrupted when its process is gone, or unobserved when the manager cannot be read.
+- **Native autostart state:** launchd inspection and mutation read-back accept both boolean overrides and the native `enabled`/`disabled` state names. Reconciliation can preserve and restore the observed boot state without treating a valid macOS answer as a refusal.
+- **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
+- **Complete Stado reader delivery:** `release install-local` and `service converge --apply` share the catalog-verified archive retained in the version/platform release tree. Root activation excludes independently installed service-tree readers; convergence includes every registry-declared private Stado reader through the existing idempotent service-update and image-proof lifecycle. A partial-state resume can restore a missing retained archive without reinstalling or kicking an already-attested root, leaves already-current reader images running, preserves the queue-agent handshake, and reports any private install or process-image failure as a failed convergence. Resume requires a receiver built from a release that contains the hidden retained-archive contract; a version banner alone is not evidence of that source identity, and an older receiver rejects the arguments and remains failed rather than claiming full reader convergence.
+- **Reader resume and receipts:** a required `install-local` delivery whose global payload is byte-identical repairs attestation and the queue handshake without rewriting the root, then reruns the image-idempotent global reader pass before private updates through the explicit newly installed Stado path. Global processes already mapped to the installed inode are not kicked; stale ones are reconciled, while the queue agent keeps its installed-release handshake. Failed private child JSON, stdout, and stderr survive in `stado-readers.detail`. Stado Desktop can apply host-wide or selected-binary convergence and retains the complete decoded receipt together with the CLI exit status.
+
+## 0.16.24
+
+- **Stable proxy startup:** activation and rollback wait for the stable readiness endpoint using the product's declared readiness timeout. A live process or a fixed 200 ms delay no longer substitutes for a listening, forwarding proxy; an exited process still fails immediately, and an expired wait reports the last observed error.
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
+
 - **Object API recovery:** loaded process identity, storage root, and authenticated reads determine readiness, rather than the plist alone. Recovery shares the storage-handoff lock and refuses to change authority; `host storage-root-reconcile` remains the single snapshot, copy, and rollback implementation.
 - **Runtime storage identity:** `/api/state.json` reports the serving PID, version, backend, and local root. Direct-primary requirements and primary-only registry reads are preserved.
 - **Service archives:** extraction is staged beside an installed version, the declared executable must exist before activation, existing immutable contents remain intact, and `current` changes atomically. Replaying the active archive preserves the existing no-relink behavior.
+
+## 0.16.23
+
+- **Release coordinate:** this coordinate remains bound to source `d38c960e82747fd94e954eeaba0fd202e5509a16`. The integrated authority, recovery, and archive changes use a new coordinate rather than overwriting that source identity.
 
 ## 0.16.22
 
@@ -169,6 +188,7 @@
 ## 0.16.4
 
 - **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.
+- **Launchd definition convergence:** `service ensure` now compares the desired Program and argument vector with launchd's retained definition, not only the plist. A stale retained definition is reloaded only after executable and plist preflight, and success requires launchd readback plus the running executable to match. Rollback is attempted only when the prior on-disk definition genuinely differs; an already-desired plist is not reactivated after the replacement lifecycle fails.
 - **Recovery deadline:** the protected-read wait now uses 180 elapsed seconds rather than 180 potentially slow network attempts.
 - **Executable ownership:** the object API now runs the host's canonical delivered `$HOME/.stado/bin/stado`, whose version is governed by `targets[].managed_versions.stado`, instead of an independently content-addressed service image whose source checksum was not retained in the service declaration. The catalog, physical-store recovery definition, registry reconciliation, and Stado product unit ownership agree on that one path; release activation restarts the object unit only on a host whose registry service set declares its exact label.
 - **Migration:** run the existing `stado host recover-object-api TARGET` to repoint and recover the physical unit, then reconcile the managed service declaration with `stado service ensure --from $HOME/.stado/bin/stado`, the existing dashboard argv, and the unit's explicit recovered environment. Recovery alone does not rewrite the registry.

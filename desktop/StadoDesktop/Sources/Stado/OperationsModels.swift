@@ -586,15 +586,21 @@ struct HostReclaimStage: Decodable, Identifiable, Sendable {
     }
 }
 
-/// `stado service converge <host> --json`, read-only: what each declared unit
-/// runs, and what the process on the host is actually executing.
+/// One report from `stado service converge <host> [binary] --json`.
+///
+/// Report mode leaves the apply arrays empty. Apply mode carries every
+/// delivery, refusal and binary that could not be delivered, even when the
+/// process exits non-zero; `StadoCLI` deliberately decodes that stdout first.
 struct ServiceConvergeReport: Decodable, Sendable {
     let target: String
     let applied: Bool
+    let releases: [ServiceConvergeRelease]
+    let undeliverable: [ServiceConvergeUndeliverable]
+    let refused: [ServiceConvergeRefusal]
     let units: [ServiceUnit]
 
     enum CodingKeys: String, CodingKey {
-        case target, applied
+        case target, applied, releases, undeliverable, refused
         case units = "binaries"
     }
 
@@ -602,8 +608,46 @@ struct ServiceConvergeReport: Decodable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
         applied = try values.decodeIfPresent(Bool.self, forKey: .applied) ?? false
+        releases = try values.decodeIfPresent([ServiceConvergeRelease].self, forKey: .releases) ?? []
+        undeliverable =
+            try values.decodeIfPresent([ServiceConvergeUndeliverable].self, forKey: .undeliverable) ?? []
+        refused = try values.decodeIfPresent([ServiceConvergeRefusal].self, forKey: .refused) ?? []
         units = try values.decodeIfPresent([ServiceUnit].self, forKey: .units) ?? []
     }
+
+}
+
+struct ServiceConvergeRelease: Decodable, Sendable {
+    let binary: String
+    let version: String
+    let status: String
+    let detail: String
+}
+
+struct ServiceConvergeUndeliverable: Decodable, Sendable {
+    let binary: String
+    let detail: String
+}
+
+struct ServiceConvergeRefusal: Decodable, Sendable {
+    let binary: String
+    let declaredVersion: String
+    let installedVersion: String
+    let remediation: String
+
+    enum CodingKeys: String, CodingKey {
+        case binary, remediation
+        case declaredVersion = "declared_version"
+        case installedVersion = "installed_version"
+    }
+}
+
+/// The exact invocation and its complete decoded answer. Kept apart from
+/// refreshed service state so a refresh cannot erase mutation evidence.
+struct ServiceConvergeReceipt: Sendable {
+    let arguments: [String]
+    let exitCode: Int32
+    let report: ServiceConvergeReport
 }
 
 struct ServiceUnit: Decodable, Sendable {
@@ -1620,6 +1664,59 @@ struct ReleaseRow: Identifiable, Sendable {
     }
 }
 
+// MARK: - Typed host filesystem inventory
+
+/// `GET /api/host/inventory?target=…`, narrowed to the fixed Cargo filesystem
+/// section the Hosts inspector renders.
+struct HostInventoryReport: Decodable, Sendable {
+    let target: String
+    let status: String
+    let error: String?
+    let cargo: HostCargoInventory?
+}
+
+/// The managed account's `$HOME/.cargo` and fixed `bin` child.
+struct HostCargoInventory: Decodable, Sendable {
+    let home: HostFilesystemMetadata
+    let bin: HostFilesystemMetadata
+    let entries: [HostFilesystemMetadata]
+    let entriesSeen: UInt64
+    let entriesComplete: Bool
+    let entriesState: String
+    let complete: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case home, bin, entries, complete
+        case entriesSeen = "entries_seen"
+        case entriesComplete = "entries_complete"
+        case entriesState = "entries_state"
+    }
+}
+
+/// One lstat row from the fixed Cargo inventory.
+struct HostFilesystemMetadata: Decodable, Sendable {
+    let name: String
+    let nameState: String
+    let kind: String
+    let metadataState: String
+    let bytes: UInt64?
+    let mode: String
+    let uid: UInt64?
+    let gid: UInt64?
+    let modifiedEpoch: Int64?
+    let symlinkTarget: String
+    let symlinkTargetState: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, kind, bytes, mode, uid, gid
+        case nameState = "name_state"
+        case metadataState = "metadata_state"
+        case modifiedEpoch = "modified_epoch"
+        case symlinkTarget = "symlink_target"
+        case symlinkTargetState = "symlink_target_state"
+    }
+}
+
 // MARK: - Connectivity, sleep and silence
 
 /// `stado host link <host> --json`.
@@ -1753,6 +1850,42 @@ struct HostConnectionPathProbe: Decodable, Identifiable, Sendable {
     let error: String?
 
     var id: String { name }
+}
+
+/// One `~/.stado/forwards/<service>.url` marker as `stado host inventory`
+/// reports it: the address consumers on that host dial, whether anything
+/// answers there, and whether it is the address the fleet declares for them.
+///
+/// The console had no surface for these at all, and they are what a product
+/// on that host actually resolves a service through. On 2026-09-05
+/// `lukasz-macbook` carried `weles-admission` at `18794` while its own
+/// resolver adapter for that service binds `17614`; the file was the only
+/// statement of the address and nothing displayed it.
+struct HostForwardMarker: Decodable, Identifiable, Sendable {
+    let name: String
+    let url: String
+    /// `matches`, `stale`, `unreadable` or `unknown`: whether anything answers
+    /// where the marker points.
+    let reconciliation: String
+    /// The address the fleet declares for this host, when it declares one.
+    let declaredUrl: String?
+    /// `directory-endpoint` when this host serves the service,
+    /// `resolver-adapter` when it dials its own adapter, `undeclared` when the
+    /// fleet claims neither.
+    let declaredSource: String
+    /// `matches`, `disagrees` or `undeclared`.
+    let declarationVerdict: String
+
+    var id: String { name }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case url
+        case reconciliation
+        case declaredUrl = "declared_url"
+        case declaredSource = "declared_source"
+        case declarationVerdict = "declaration_verdict"
+    }
 }
 
 /// Why a reachable host stopped publishing beacons, read from the managed

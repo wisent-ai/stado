@@ -976,12 +976,12 @@ pub enum ServiceCommands {
     /// not exist, the unit is rendered for launchd's system domain and
     /// installed as a daemon in /Library/LaunchDaemons.
     ///
-    /// An existing unit is only ever restarted in place (`kickstart -k`), never
-    /// unloaded and bootstrapped back: that sequence took the always-on host
-    /// down once already. A loaded unit whose definition names a different
-    /// program is refused rather than overwritten, because launchd holds the
-    /// definition it bootstrapped and a rewritten file under a live job changes
-    /// nothing an operator can see.
+    /// An existing matching definition is restarted in place with
+    /// `kickstart -k`. When launchd's retained Program or ProgramArguments
+    /// differs from the desired definition, ensure first validates the
+    /// replacement executable and complete rendered plist, then reloads that
+    /// definition once and verifies launchd's readback and running executable.
+    /// An unreadable retained definition is refused without touching the job.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
@@ -7242,6 +7242,39 @@ pub(crate) async fn reconcile_after_config_change(name: &str, host: &str) -> Res
     restart(name, Some(host), None, None, false).await
 }
 
+/// A changed unit may own the registry API itself. Wait for an actual
+/// authoritative read after activation, not merely the new process's PID.
+/// Only reads are repeated; the host action and conditional write never are.
+async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
+    let mut last_error = None;
+    let ready = async {
+        loop {
+            match registry::fetch_versioned_document().await {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => {
+                    let code = error.failure.unwrap_or_else(|| {
+                        crate::failure::classify_message(
+                            error.message.as_deref().unwrap_or_default(),
+                        )
+                    });
+                    if !code.retryable() {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(30), ready).await {
+        Ok(result) => result,
+        Err(_) => Err(last_error.unwrap_or_else(|| {
+            CmdError::click("the registry did not answer within 30 seconds after unit activation")
+                .stating(crate::failure::FailureCode::InfraDown)
+        })),
+    }
+}
+
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh
@@ -7454,48 +7487,83 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     record.args = unit.args;
     record.env = unit_env.into_iter().collect();
     record.systemd_unit = unit.systemd_unit;
-    let generation = match &already {
-        // Declared, at the same file and running the same program, by the
-        // registry: the document already says what this pass just confirmed,
-        // so nothing is written to it.
-        Some(existing)
-            if existing.source == SOURCE_REGISTRY
-                && existing.path == record.path
-                && existing.kind == record.kind
-                && existing.program == record.program
-                && existing.args == record.args
-                && existing.env == record.env
-                && existing.systemd_unit == record.systemd_unit =>
-        {
+    let persisted = async {
+        let recovered_snapshot = if outcome.changed() {
+            Some(registry_after_host_change().await?)
+        } else {
             None
-        }
-        // Declared by the registry at a different file. The system-domain
-        // daemon path is not the per-login agent path, and a declaration
-        // naming a file the host does not have is one no later command can
-        // act on, so the declaration is corrected in one document write.
-        Some(existing) if existing.source == SOURCE_REGISTRY => {
-            // Expected generation: this read. `existing` and `record` were
-            // decided before it — the unit was already ensured on the host —
-            // so a lost race is reported instead of retried: re-running the
-            // correction would replace a declaration this pass never saw.
-            let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-            service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
-            service::add_service(&mut document, &record).map_err(click)?;
-            Some(registry::push_document_if(&document, &expected_generation).await?)
-        }
-        // Undeclared, or carried by the fixed host-recovery list. Both become
-        // an explicit registry declaration, which for the recovery case is
-        // exactly what `service adopt` is for.
-        _ => Some(record_declaration(&record).await?),
-    };
+        };
+        let generation = match &already {
+            // Declared, at the same file and running the same program, by the
+            // registry: the document already says what this pass just confirmed,
+            // so nothing is written to it.
+            Some(existing)
+                if existing.source == SOURCE_REGISTRY
+                    && existing.path == record.path
+                    && existing.kind == record.kind
+                    && existing.program == record.program
+                    && existing.args == record.args
+                    && existing.env == record.env
+                    && existing.systemd_unit == record.systemd_unit =>
+            {
+                None
+            }
+            // Declared by the registry at a different file. The system-domain
+            // daemon path is not the per-login agent path, and a declaration
+            // naming a file the host does not have is one no later command can
+            // act on, so the declaration is corrected in one document write.
+            Some(existing) if existing.source == SOURCE_REGISTRY => {
+                // Expected generation: this read. `existing` and `record` were
+                // decided before it — the unit was already ensured on the host —
+                // so a lost race is reported instead of retried: re-running the
+                // correction would replace a declaration this pass never saw.
+                let (mut document, expected_generation) = match recovered_snapshot {
+                    Some(snapshot) => snapshot,
+                    None => registry::fetch_versioned_document().await?,
+                };
+                service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
+                service::add_service(&mut document, &record).map_err(click)?;
+                Some(registry::push_document_if(&document, &expected_generation).await?)
+            }
+            // Undeclared, or carried by the fixed host-recovery list. Both become
+            // an explicit registry declaration, which for the recovery case is
+            // exactly what `service adopt` is for.
+            _ => Some(record_declaration(&record).await?),
+        };
 
-    // Recorded only when something actually changed. An audit trail that also
-    // records the passes which changed nothing is one nobody reads.
-    let audited = if outcome.changed() || generation.is_some() {
-        Some(record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref()).await?)
-    } else {
-        None
-    };
+        // Recorded only when something actually changed. An audit trail that also
+        // records the passes which changed nothing is one nobody reads.
+        let audited = if outcome.changed() || generation.is_some() {
+            Some(
+                record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref())
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok::<_, CmdError>(audited)
+    }
+    .await;
+    let audited = persisted.map_err(|mut error| {
+        let cause = error
+            .message
+            .as_deref()
+            .unwrap_or("registry operation failed");
+        error.failure = Some(
+            error
+                .failure
+                .unwrap_or_else(|| crate::failure::classify_message(cause)),
+        );
+        error.message = Some(format!(
+            "{host}: {} is running (action {}, pid {}), but recording the completed ensure \
+             failed: {cause}. No host action was repeated.",
+            options.name,
+            outcome.action,
+            outcome.pid.trim(),
+        ));
+        error.json = options.as_json;
+        error
+    })?;
 
     if options.as_json {
         // Exactly the contract's keys: a desktop client consumes this shape.
