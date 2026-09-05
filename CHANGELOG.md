@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.16.7
+
+- **Exact storage-root evidence:** `stado host backup-audit TARGET --object STADO_URI` compares only the named existing object in the host's declared local primary and backup roots. The read-only report returns each side's state, byte count, and SHA-256 without returning object content or walking either store; repeat `--object` for additional coordinates.
+- **Safety boundary:** exact-object mode accepts validated `stado://` object references, conflicts with replica reclamation, and stops hashing at the existing read-only deadline with an explicit `deadline_unproven` state instead of allowing the host channel to truncate. The existing whole-replica classification and same-pass `--reclaim-twins --apply` behavior are unchanged.
+- **Migration and rollback:** no stored data changes. Rolling back removes exact root comparison and leaves operators unable to distinguish an authority switch from lifecycle deletion without a broad replica scan.
+- **Platforms and evidence:** the diagnostic uses the existing host channel on the supported native platforms. Formatting, locked all-target compilation, and Clippy cover the source change; release publication supplies native manifests and source provenance.
+
+## 0.16.6
+
+- **Terminal workdir retention:** disk cleanup keeps its listing-only live-job scan, then reads lifecycle bodies only for bounded on-disk candidates whose names overlap live and terminal prefixes. Only a typed retired transition, a matching terminal destination, and no live, fenced, malformed, or unknown document authorize removal. Cleaned sources must retain the expected immutable submission identity; the current source must name the current transition, while valid historical cleaned transitions in other prefixes remain supported.
+- **Storage authority:** destructive janitor queue and registry reads stay on the configured primary, including through the Stado object adapter. The object API server refuses a self-referential Stado primary. Both paths use the existing replica wrapper in primary-read mode, preserving compatible backup writes; ordinary clients retain read failover.
+- **Migration:** no queue or registry rewrite is required. Existing valid cleaned transition sentinels remain durable, and no global job-document scan is introduced.
+- **Rollback boundary:** rolling back restores permanent retention of workdirs whose cleaned queue/running sentinels outlive run reaping, lets Stado-configured destructive readers treat a separately configured backup as authority, and lets other compatible-backend authority reads fail over after primary errors.
+- **Platforms and evidence:** the affected cleanup and object-server paths support the existing native platforms. Formatting, locked all-target compilation, and Clippy cover the source change; release delivery retains platform manifests and source provenance.
+
 ## 0.16.5
 
 - **Atomic handoff fencing:** `service handoff-release-control` now refuses a placement profile already owned by an active move transaction before it contacts the host. Runtime checks and the sole registry compare-and-swap run under the existing per-unit service lifecycle lease. Before that CAS, the command durably writes the exact cleanup identities and intended handoff as a `prepared` product work receipt; after it, the receipt advances immediately to `registry_committed`, then records a post-CAS reconciler-report baseline, waits for a newer report, and rechecks both the unloaded legacy label and absence of old-executable callers. Reinvocation validates a matching receipt, exact release, and targeted registry state, skips an already successful CAS, reacquires the same lease, records the observed recovery generation without inventing a lost CAS generation, and finishes the shared fence path. A still-managed retry whose CAS lost to an unrelated registry write refreshes only the prepared generation after repeating the exact checks and preserving its original cleanup tokens.

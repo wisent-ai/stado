@@ -23,7 +23,7 @@ pub mod release_store;
 pub mod safefs;
 pub mod weles;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -1728,21 +1728,22 @@ fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
 // canonical policy resolution
 // ---------------------------------------------------------------------------
 
-/// Fetch the canonical object directly; destructive checks never use
-/// fallback/cache. Generation-pinned via the store's versioned read (reload +
-/// pinned download, with the same 412-retry the Python SDK path relies on).
+/// Fetch the canonical registry through this process's configured primary;
+/// destructive checks never use fallback/cache. Generation-pinned via the
+/// store's versioned read (reload + pinned download, with the same 412-retry
+/// the Python SDK path relies on).
 ///
 /// The registry remains fail-closed: malformed, incomplete, or unreadable
-/// policy never authorizes deletion. When this host is configured as a client
-/// of its own Stado object API, however, cleanup uses the server's explicitly
-/// declared direct backing store. Otherwise disk exhaustion could make the
-/// listener unavailable and thereby disable the janitor needed to recover it.
+/// policy never authorizes deletion. A client configured with the Stado object
+/// adapter must read that authority. Its separately configured backup is not a
+/// substitute: it may be intentionally distinct, stale, or unable to represent
+/// the primary namespace at all.
 ///
 /// DEVIATION from Python, matching `targets::download_registry_blob`: the
 /// object is resolved by [`targets::RegistryStore`] instead of a hardcoded GCS
-/// bucket. The direct-server constructor preserves that adapter choice.
+/// bucket.
 async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
-    let store = targets::RegistryStore::open_for_server().await?;
+    let store = targets::RegistryStore::open_primary_reads().await?;
     let text = store
         .read_versioned()
         .await?
@@ -1909,71 +1910,91 @@ fn finish(
     value
 }
 
-/// Every job id currently in `queue` or `running` from an already-open store,
-/// or `None` when the keep-list could not be built inside `budget`.
+/// Every job id named by `queue` or `running`, without downloading job
+/// documents. Transition sentinels stay on this conservative set.
+async fn listed_live_job_ids(store: &crate::queue::JobStorage) -> Option<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    for state in ["queue", "running"] {
+        ids.extend(store.list_job_ids(state).await.ok()?);
+    }
+    Some(ids)
+}
+
+/// Build the conservative listing-only keep set inside `budget`.
 ///
-/// The keep-list for [`queue_workdirs`]. Read best-effort so an unreadable
-/// store cannot turn a disk repair into an outage. A partial read is discarded
-/// rather than narrowed, because a keep-list missing the running job's id
-/// authorizes deleting the tree that job is writing into. `host reclaim`
-/// deliberately delegates these directories to this locked path and does not
-/// maintain another keep-list.
-///
-/// [`crate::queue::JobStorage::list_job_ids`] and NOT `list_jobs`: this wants
-/// ids, the ids are in the object names, and downloading every job document to
-/// read a field out of it is what cost charless-mac-mini 818 seconds — see
-/// that function for the measurement. The `budget` is the same defect's other
-/// half: the read had no bound at all, so however long the transport took was
-/// how long the pass took.
-///
-/// Public as the test seam for both properties; `fetch_live_job_ids` is this
-/// at the real store with [`KEEP_LIST_BUDGET`].
+/// Public as the existing seam that proves no queue document is downloaded.
 pub async fn live_job_ids_within(
     store: &crate::queue::JobStorage,
     budget: Duration,
 ) -> Option<Vec<String>> {
+    tokio::time::timeout(budget, listed_live_job_ids(store))
+        .await
+        .ok()
+        .flatten()
+        .map(BTreeSet::into_iter)
+        .map(Iterator::collect)
+}
+
+/// Refine the listing-only keep set for the bounded workdir population.
+///
+/// Only ids that exist on disk and whose names occur in both a live and a
+/// terminal prefix cost authoritative document reads. The typed storage query
+/// accepts only a retired transition with its matching terminal destination
+/// and no live or in-flight source. Any failed list/read or timeout makes the
+/// whole keep-list unavailable, so the workdir cleaner deletes nothing.
+async fn live_job_ids_for_candidates_within(
+    store: &crate::queue::JobStorage,
+    candidates: &BTreeSet<String>,
+    budget: Duration,
+) -> Option<Vec<String>> {
     let read = async {
-        let mut ids = Vec::new();
-        for state in ["queue", "running"] {
-            ids.extend(store.list_job_ids(state).await.ok()?);
+        let mut live = listed_live_job_ids(store).await?;
+        let mut terminal_names = BTreeSet::new();
+        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+            terminal_names.extend(store.list_job_ids(prefix).await.ok()?);
         }
-        Some(ids)
+        for job_id in candidates {
+            if !live.contains(job_id) || !terminal_names.contains(job_id) {
+                continue;
+            }
+            match store.workdir_job_state(job_id).await.ok()? {
+                crate::queue::storage::WorkdirJobState::Terminal => {
+                    live.remove(job_id);
+                }
+                crate::queue::storage::WorkdirJobState::Live
+                | crate::queue::storage::WorkdirJobState::Unknown => {}
+            }
+        }
+        Some(live.into_iter().collect())
     };
     tokio::time::timeout(budget, read).await.ok().flatten()
 }
 
-/// [`live_job_ids_within`] against the queue's authoritative backing store.
-///
-/// An agent normally reaches a `stado` primary through the local object API.
-/// Cleanup cannot depend on that listener while disk exhaustion is the reason
-/// it is unavailable: use the same explicitly configured direct backup that
-/// backs the server itself. Other primary adapters remain unchanged.
-async fn fetch_live_job_ids() -> Option<Vec<String>> {
-    let store = if crate::config::wc_storage_backend() == "stado" {
-        crate::queue::JobStorage::for_server().await
-    } else {
-        crate::queue::JobStorage::new().await
-    }
-    .ok()?;
-    live_job_ids_within(&store, KEEP_LIST_BUDGET).await
+/// Build the refined keep-list against this process's configured authoritative
+/// primary. Construction and layout validation are part of the same budget as
+/// every listing and versioned read.
+async fn fetch_live_job_ids(
+    candidates: &BTreeSet<String>,
+    budget: Duration,
+) -> Option<Vec<String>> {
+    let read = async {
+        let store = crate::queue::JobStorage::for_primary_reads().await.ok()?;
+        live_job_ids_for_candidates_within(&store, candidates, budget).await
+    };
+    tokio::time::timeout(budget, read).await.ok().flatten()
 }
 
 /// The post-lock half of `run_cleanup_once` (policy resolution through
-/// outcome selection). Split out so tests can inject the canonical
-/// registry document and a fabricated home without touching GCS or the
-/// real `$HOME`. `_lock` holds the exclusive run lock until return
-/// (Python's `finally: flock(LOCK_UN)`).
+/// outcome selection). Split out so tests can inject the canonical registry
+/// document and a fabricated home without touching GCS or the real `$HOME`.
+/// `_lock` holds the exclusive run lock through candidate enumeration,
+/// authoritative state reads, and deletion.
 #[allow(clippy::too_many_arguments)]
-fn run_with_lock(
+async fn run_with_lock(
     home: &Path,
     state_dir: &Path,
     _lock: ExclusiveLock,
     registry: Result<Value, JanitorError>,
-    // Every job id in `queue` or `running`: the keep-list the
-    // `queue_workdirs` cleaner judges a workdir's job against. `None` means
-    // the queue store could not be read this pass, and that cleaner then
-    // removes nothing rather than deleting a live job's tree.
-    live_jobs: Option<Vec<String>>,
     mut report: CleanupReport,
     started: Instant,
     attempted_at: f64,
@@ -2277,17 +2298,40 @@ fn run_with_lock(
         report.caps.scan = true;
     }
     // The queue's own per-job trees, scanned last on the budget the rest leave.
-    // They live under the persistent agent-owned work root and are judged by
-    // their job's state rather than by age, so nothing about the order above
-    // changes what this pass may take — only how much of it.
+    // Candidate names are captured under this same janitor lock. The queue
+    // authority then downloads bodies only for candidates whose names overlap
+    // live and terminal prefixes; everything unreadable remains on the keep
+    // set, and any store failure disables this cleaner for the whole pass.
+    let workdir_budget = share(
+        remaining_after_clones,
+        declared_after(&[backup_twins::CLEANER]),
+    );
+    let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
+        match queue_workdirs::candidate_job_ids(home, workdir_budget, deadline) {
+            Ok(candidates) => {
+                let budget = deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(KEEP_LIST_BUDGET);
+                let wait = Instant::now();
+                let ids = fetch_live_job_ids(&candidates, budget).await;
+                report.store_wait_ms = report
+                    .store_wait_ms
+                    .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
+                ids
+            }
+            Err(error) => {
+                report.add_error(queue_workdirs::CLEANER, &error);
+                None
+            }
+        }
+    } else {
+        Some(Vec::new())
+    };
     queue_workdirs::scan_queue_workdirs(
         home,
         &policy,
         attempted_at,
-        share(
-            remaining_after_clones,
-            declared_after(&[backup_twins::CLEANER]),
-        ),
+        workdir_budget,
         deadline,
         live_jobs.as_deref(),
         &mut report,
@@ -2555,32 +2599,14 @@ async fn cleanup_once(
     } else {
         Some(state_dir.as_path())
     };
-    // Registry and queue reads are network operations and have no filesystem
-    // side effects. Resolve them before taking the exclusive janitor lock: one
-    // stalled store request must not prevent every other agent and cleanup
-    // process on this host from reading policy or reclaiming disk.
+    // Resolve the canonical policy before taking the exclusive janitor lock.
+    // It has no filesystem side effects, and an unavailable authority fails
+    // closed before blocking another cleanup process.
     //
-    // And bound them, because moving them off the lock was only half the
-    // problem. This pass no longer runs inside the agent tick (see
-    // `super::super::agent_janitor`), so an unbounded read here can no longer
-    // hold a capacity broadcast directly -- but it still wedges the only pass
-    // that reclaims disk on this host, for as long as the store takes, while
-    // holding the cross-process janitor lock; and disk pressure is what
-    // closes claiming. Measured at 639 s and 2,178 s on 2026-09-03 against a
-    // slow object-store route. A janitor input is not worth a host's ability
-    // to reclaim its own disk.
-    //
-    // Both timeouts degrade the way this pass already degrades when a store
-    // answers badly, so nothing new can be deleted because of one: an
-    // unresolved registry yields `invalid_or_unavailable_policy` and no
-    // cleaner runs, and `live_jobs: None` makes `queue_workdirs` remove
-    // nothing rather than risk a live job's tree.
-    //
-    // Timed as well as bounded, and the total recorded on the report: these
-    // two reads are the only thing a pass waits on before it has decided
-    // whether to do anything, so they are the only way a `healthy_noop` can
-    // cost 818 seconds. The budget stops that from happening; the measurement
-    // is what proves it stopped. See [`CleanupReport::store_wait_ms`].
+    // The workdir keep-list is different: its candidate names must be captured
+    // under the same lock that protects deletion. `run_with_lock` performs that
+    // candidate-bounded authority read immediately before the workdir cleaner,
+    // inside both the store-read budget and the pass deadline.
     let store_wait = Instant::now();
     let input_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
     let registry = match tokio::time::timeout(input_budget, fetch_canonical_registry()).await {
@@ -2590,9 +2616,6 @@ async fn cleanup_once(
             constants::AGENT_STORE_READ_TIMEOUT_S
         ))),
     };
-    let live_jobs = tokio::time::timeout(input_budget, fetch_live_job_ids())
-        .await
-        .unwrap_or_default();
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
     // The lock is taken with a stated deadline, and a hold past its own
     // deadline is answered rather than waited out. `lock_busy` used to be the
@@ -2758,7 +2781,6 @@ async fn cleanup_once(
         &state_dir,
         lock,
         registry,
-        live_jobs,
         report,
         started,
         attempted_at,
@@ -2767,6 +2789,7 @@ async fn cleanup_once(
         lock_recovery,
         log_fn,
     )
+    .await
 }
 
 // ---------------------------------------------------------------------------

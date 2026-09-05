@@ -5639,9 +5639,7 @@ fn registry_has_intended_handoff(
     service_name: &str,
     product: &str,
     host: &str,
-    legacy_label: &str,
-    legacy_plist: &str,
-    legacy_program: &str,
+    legacy_identities: [&str; 3],
 ) -> bool {
     let units_external = document
         .get("placement_profiles")
@@ -5677,7 +5675,7 @@ fn registry_has_intended_handoff(
             target.get("legacy_launchd_label").is_none()
                 && target.get("legacy_launchd_plist").is_none()
         });
-    let legacy_unreachable = [legacy_label, legacy_plist, legacy_program]
+    let legacy_unreachable = legacy_identities
         .into_iter()
         .all(|identity| !identity.is_empty() && !document_contains_string(document, identity));
     units_external && legacy_removed && legacy_unreachable
@@ -5965,9 +5963,7 @@ async fn handoff_release_control(
             service_name,
             product,
             host,
-            receipt_label,
-            receipt_plist,
-            receipt_program,
+            [receipt_label, receipt_plist, receipt_program],
         ) {
             let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
             return finish_committed_handoff(
