@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.16.16
 
+- **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.
+- **Deletion safety:** job entries still use non-following descriptor-relative operations, ownership and device checks, bounded passes, and the authoritative live-job keep list.
 - **Registry observations:** `registry doctor` derives its typed and raw views from one authoritative registry generation. Canonical reads no longer silently use a disaster-recovery replica or a product namespace, and live beacon/capacity reads stay on the primary.
 - **Linux service environment:** the systemd environment writer executes its Python input as a script rather than treating the service UID as a filename. A refused write retains the writer's actual error; a corrected unit definition is reloaded without restarting its service.
-- **Migration and rollback:** no stored-state migration is required. Rolling back can restore stale registry observations and the broken systemd environment-writer invocation.
-- **Platforms:** `darwin-arm64` and `linux-amd64` remain supported through the existing signed release and delivery paths.
+- **Migration and rollback:** no stored data changes. Rolling back restores the unresolved legacy-root open, stale registry observations, and the broken systemd environment-writer invocation.
+- **Platforms:** `darwin-arm64` and `linux-amd64` remain supported through the existing signed release and delivery paths; the native Probierz matrix retains exact-source qualification.
 
 ## 0.16.15
 
