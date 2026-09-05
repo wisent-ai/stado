@@ -2024,10 +2024,6 @@ async fn run_with_lock(
     // Plan only: pin an `enforce` policy down to the janitor's own `report`
     // mode and persist nothing. See `preview_cleanup_once`.
     preview: bool,
-    // A predecessor lock inode is still live, or was replaced during this
-    // pass. Scan and persist diagnostics, but never delete until every
-    // predecessor kernel lock has actually been released.
-    lock_recovery: bool,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     // A preview leaves no trace. The state file is the janitor's record of
@@ -2051,7 +2047,7 @@ async fn run_with_lock(
     // not second implementations of the policy.
     //
     // `off` and `report` policies are left exactly as the registry states.
-    if (preview || lock_recovery) && policy.mode == "enforce" {
+    if preview && policy.mode == "enforce" {
         policy.mode = "report".to_string();
     }
     report.target_name = Some(target.name);
@@ -2478,9 +2474,7 @@ async fn run_with_lock(
     // nothing to delete" and "I got 7,297 directories into one repository's
     // `node_modules` and ran out of time", with 174 tagged build caches and
     // a 62 GiB `target/` unexamined behind it.
-    if lock_recovery {
-        report.outcome = "lock_recovery_report_only".to_string();
-    } else if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
+    if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
         report.outcome = "cap_reached".to_string();
     } else if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
@@ -2578,6 +2572,57 @@ pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
     cleanup_once(i64::default(), true, true, CleanupWriter::Cli, log_fn).await
+}
+
+fn preserve_previous_report(state_dir: &Path, report: &mut CleanupReport) {
+    let Ok(previous) = read_state(state_dir) else {
+        return;
+    };
+    report.builds_cursor = build_caches::BuildCachesCursor::from_state(&previous);
+    let Some(previous) = previous.get("report").and_then(Value::as_object) else {
+        return;
+    };
+    report.last_success_at = previous
+        .get("last_success_at")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.target_name = previous
+        .get("target_name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.policy_digest = previous
+        .get("policy_digest")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.policy_defaulted = previous
+        .get("policy_defaulted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    report.mode = previous
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.check_interval_seconds = previous
+        .get("check_interval_seconds")
+        .and_then(Value::as_i64);
+    report.low_bytes = previous.get("low_bytes").and_then(Value::as_i64);
+    report.target_bytes = previous.get("target_bytes").and_then(Value::as_i64);
+    report.pressure_active = previous.get("pressure_active").and_then(Value::as_bool);
+    report.builds_resume_from = previous
+        .get("build_caches_resume_from")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.unscanned_cleaners = previous
+        .get("unscanned_cleaners")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
 }
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
@@ -2717,53 +2762,7 @@ async fn cleanup_once(
             // next writer stop at the low watermark instead of finishing at
             // the declared target, and made every interrupted scan restart at
             // the root.
-            if let Ok(previous) = read_state(&state_dir) {
-                report.builds_cursor = build_caches::BuildCachesCursor::from_state(&previous);
-                if let Some(previous) = previous.get("report").and_then(Value::as_object) {
-                    report.last_success_at = previous
-                        .get("last_success_at")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.target_name = previous
-                        .get("target_name")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.policy_digest = previous
-                        .get("policy_digest")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.policy_defaulted = previous
-                        .get("policy_defaulted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    report.mode = previous
-                        .get("mode")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.check_interval_seconds = previous
-                        .get("check_interval_seconds")
-                        .and_then(Value::as_i64);
-                    report.low_bytes = previous.get("low_bytes").and_then(Value::as_i64);
-                    report.target_bytes = previous.get("target_bytes").and_then(Value::as_i64);
-                    report.pressure_active =
-                        previous.get("pressure_active").and_then(Value::as_bool);
-                    report.builds_resume_from = previous
-                        .get("build_caches_resume_from")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.unscanned_cleaners = previous
-                        .get("unscanned_cleaners")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_string)
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                }
-            }
+            preserve_previous_report(&state_dir, &mut report);
             if let Ok(free) = free_bytes(&home) {
                 report.free_bytes_before = Some(free);
                 report.free_bytes_after = Some(free);
@@ -2790,11 +2789,19 @@ async fn cleanup_once(
     };
     if predecessor_active {
         let detail =
-            "a retired cleanup lock inode is still held; this pass scans and persists diagnostics but deletes nothing";
+            "a retired cleanup lock inode is still held; this pass persists diagnostics without scanning or deleting";
         log_fn(&format!("disk cleanup: {detail}"));
         report.add_error("lock_predecessor_active", &JanitorError::os(detail));
     }
-    let lock_recovery = taken_over || predecessor_active;
+    if taken_over || predecessor_active {
+        report.outcome = "lock_recovery_report_only".to_string();
+        preserve_previous_report(&state_dir, &mut report);
+        if let Ok(free) = free_bytes(&home) {
+            report.free_bytes_before = Some(free);
+            report.free_bytes_after = Some(free);
+        }
+        return finish(report, started, Some(&home), persist, attempted_at, log_fn);
+    }
 
     run_with_lock(
         &home,
@@ -2806,7 +2813,6 @@ async fn cleanup_once(
         attempted_at,
         force,
         preview,
-        lock_recovery,
         log_fn,
     )
     .await

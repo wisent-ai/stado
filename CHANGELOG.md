@@ -11,6 +11,11 @@
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
 - **Platform regression evidence:** the existing fleet journey now uses current durable job identities, retains its complete remote job reports, and exercises the cancelled-build retry on both native platforms.
+- **Bounded cleanup:** build-cache directory enumeration now checks the pass deadline while reading names instead of draining an arbitrarily large directory before the first budget check. A partial enumeration is reported as an incomplete pass and authorizes no deletion.
+- **Lock recovery:** taking over an overdue cleanup lock, or finding a still-held retired lock inode, persists the existing `lock_recovery_report_only` outcome and returns immediately. Recovery no longer repeats the unbounded filesystem scan that stranded the predecessor.
+- **Owned command cleanup:** every command launched through Stado's shared production runner owns a fresh local process group containing its shell or SSH client and local descendants. Timeout or cancellation kills that locally owned group before releasing supervision, so a timed-out local diagnostic cannot orphan its own `du` child. The boundary does not claim that processes beyond an SSH connection joined the local group.
+- **Migration and rollback:** no stored data changes. Existing overdue cleanup owners must be closed by exact PID/unit identity through Stado before retrying cleanup. Rolling back restores unbounded directory enumeration, recovery rescans, and direct-child-only timeout cleanup.
+- **Platforms and evidence:** the affected cleanup and command-runner paths cover both native platforms. Formatting, locked compilation, and Clippy cover the corrected source; immutable publication retains source and platform identities.
 
 ## 0.16.8
 
