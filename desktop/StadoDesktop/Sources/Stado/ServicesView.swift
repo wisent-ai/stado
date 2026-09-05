@@ -923,6 +923,18 @@ struct ServicesView: View {
             }
             deployAffordance(entry)
             restartAffordance(entry)
+            if entry.kind == "launchd" {
+                WisentActionButton(
+                    action: WisentAction(
+                        "Repair GitHub runner runtime",
+                        symbol: "wrench",
+                        kind: .secondary,
+                        isEnabled: !fleetStore.mutation.isWorking
+                    ) {
+                        Task { await fleetStore.repairRunnerRuntime(entry) }
+                    }
+                )
+            }
             removeFileAffordance(entry)
         }
     }
