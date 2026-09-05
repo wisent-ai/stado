@@ -86,8 +86,9 @@ fn validate_sources(value: &Value) -> Result<(), HandlerError> {
             .and_then(Value::as_array)
             .ok_or(HandlerError::UpstreamFailure)?;
         if roots.iter().any(|root| {
-            root.as_str()
-                .map_or(true, |root| !Path::new(root).is_absolute() || root.contains('\0'))
+            root.as_str().map_or(true, |root| {
+                !Path::new(root).is_absolute() || root.contains('\0')
+            })
         }) {
             return Err(HandlerError::UpstreamFailure);
         }
@@ -107,11 +108,7 @@ fn validate_sources(value: &Value) -> Result<(), HandlerError> {
 
 async fn discover(host_id: &str) -> Result<(crate::targets::ComputeTarget, Value), HandlerError> {
     let target = target(host_id).await?;
-    let sources = run_owner(
-        &target,
-        &["oko-cli", "transcripts", "sources", "--json"],
-    )
-    .await?;
+    let sources = run_owner(&target, &["oko-cli", "transcripts", "sources", "--json"]).await?;
     validate_sources(&sources)?;
     Ok((target, sources))
 }
@@ -123,7 +120,11 @@ fn discovered_root(sources: &Value, runtime: &str, root: &str) -> bool {
                 && entry
                     .get("roots")
                     .and_then(Value::as_array)
-                    .is_some_and(|roots| roots.iter().any(|candidate| candidate.as_str() == Some(root)))
+                    .is_some_and(|roots| {
+                        roots
+                            .iter()
+                            .any(|candidate| candidate.as_str() == Some(root))
+                    })
         })
     })
 }
@@ -197,7 +198,10 @@ async fn adopt(body: &[u8]) -> HandlerResult {
         || required_counts
             .iter()
             .any(|field| adoption.get(*field).and_then(Value::as_u64).is_none())
-        || receipt.get("catalogProcessed").and_then(Value::as_u64).is_none()
+        || receipt
+            .get("catalogProcessed")
+            .and_then(Value::as_u64)
+            .is_none()
         || receipt
             .get("database")
             .and_then(Value::as_str)
