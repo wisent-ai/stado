@@ -672,7 +672,10 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
     }
     blockers
 }
-async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
+async fn builder(
+    platform: &str,
+    pinned: Option<&str>,
+) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -700,14 +703,17 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
     let declared_for_platform = registry
         .targets
         .iter()
-        .filter(|target| target.release_platform == platform)
+        .filter(|target| {
+            target.release_platform == platform && pinned.is_none_or(|name| target.name == name)
+        })
         .count();
     let mut considered: Vec<(String, Claimability)> = Vec::new();
     let mut candidates: Vec<_> = registry
         .targets
         .into_iter()
         .filter_map(|target| {
-            if target.release_platform != platform {
+            if target.release_platform != platform || pinned.is_some_and(|name| target.name != name)
+            {
                 return None;
             }
             let (consumer, publication) = live_consumers.get(&target.name)?;
@@ -769,8 +775,12 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
                     .collect::<Vec<_>>()
                     .join("; ")
             };
+            let selection = match pinned {
+                Some(name) => format!("{platform} on saved builder {name}"),
+                None => platform.to_owned(),
+            };
             CmdError::click(format!(
-                "no live fleet builder can CLAIM release_platform {platform}; capacity read \
+                "no live fleet builder can CLAIM release_platform {selection}; capacity read \
              from {store} namespace {:?} listed {} live consumer(s) and the registry \
              declares {} target(s) for that platform. Considered: {verdicts}. A host that \
              publishes capacity but claims nothing cannot build: read \
@@ -1188,17 +1198,71 @@ async fn enqueue(
     manifest_uri: &str,
     prior_terminal_job_id: Option<&str>,
 ) -> Result<PlatformRun, CmdError> {
-    let queue_control = crate::queue::control::read(store)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if queue_control.paused {
+    let submission_run_id = match prior_terminal_job_id {
+        Some(prior_job_id) => stable_run_id(
+            "release-platform",
+            &format!("{id}\0{platform}\0{prior_job_id}"),
+        ),
+        None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
+    };
+    let request_path = run_path(&m.product, id, &format!("requests/{platform}.json"));
+    let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
+    let saved_bytes = store.read_bytes(&request_path).await?;
+    let saved_request: Option<WorkerRequest> = saved_bytes
+        .as_deref()
+        .map(serde_json::from_slice)
+        .transpose()
+        .map_err(|error| {
+            CmdError::click(format!(
+                "invalid saved release request {request_path}: {error}"
+            ))
+        })?;
+    if saved_request
+        .as_ref()
+        .is_some_and(|request| request.builder.is_empty())
+    {
         return Err(CmdError::click(format!(
-            "release submission cannot enqueue {platform} while the queue is paused ({})",
-            queue_control.pause_summary()
+            "saved release request {request_path} has no builder"
         )));
     }
+    let saved_submission = if saved_request.is_some() {
+        crate::queue::runs::read_run(store, &submission_run_id).await?
+    } else {
+        None
+    };
+    if saved_submission.is_none() {
+        let queue_control = crate::queue::control::read(store)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if queue_control.paused {
+            return Err(CmdError::click(format!(
+                "release submission cannot enqueue {platform} while the queue is paused ({})",
+                queue_control.pause_summary()
+            )));
+        }
+    }
     let recipe = &m.platforms[platform];
-    let (host, consumer) = builder(&recipe.runner_platform).await?;
+    let (builder_name, consumer) =
+        if let (Some(request), Some(submission)) = (&saved_request, &saved_submission) {
+            let consumer = submission
+                .get("request")
+                .and_then(|request| request.get("options"))
+                .and_then(|options| options.get("pinned_host"))
+                .and_then(Value::as_str)
+                .filter(|consumer| !consumer.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "saved release submission {submission_run_id} has no pinned consumer"
+                    ))
+                })?;
+            (request.builder.clone(), consumer.to_owned())
+        } else {
+            let pinned = saved_request
+                .as_ref()
+                .map(|request| request.builder.as_str());
+            let (host, consumer) = builder(&recipe.runner_platform, pinned).await?;
+            (host.name, consumer)
+        };
     let mut resolved = Map::new();
     resolved.insert(
         "source".into(),
@@ -1222,18 +1286,20 @@ async fn enqueue(
         // `ecosystem/sources/...`. Publisher and worker computed different keys
         // for one object, and the build failed with `input input-skarbiec is
         // absent` naming an object that was on the store's disk the whole time.
-        let bytes = super::storage::fetch_object(&v.uri).await?;
-        let staged_sha = release_control::sha256_bytes(&bytes);
-        if staged_sha != v.sha256 {
-            return Err(CmdError::click(format!(
-                "input {name} at {} hashes to {staged_sha}, recipe declares {}",
-                v.uri, v.sha256
-            )));
-        }
         let leaf = format!("inputs/{name}.tar.gz");
         let staged_path = run_path(&m.product, id, &leaf);
         let staged_uri = run_uri(&m.product, id, &leaf);
-        queue_immutable(&staged_path, &bytes).await?;
+        if saved_request.is_none() {
+            let bytes = super::storage::fetch_object(&v.uri).await?;
+            let staged_sha = release_control::sha256_bytes(&bytes);
+            if staged_sha != v.sha256 {
+                return Err(CmdError::click(format!(
+                    "input {name} at {} hashes to {staged_sha}, recipe declares {}",
+                    v.uri, v.sha256
+                )));
+            }
+            queue_immutable(&staged_path, &bytes).await?;
+        }
         resolved.insert(
             format!("input-{name}"),
             input(&staged_uri, &path, &v.sha256),
@@ -1255,7 +1321,7 @@ async fn enqueue(
         product: m.product.clone(),
         version: version.into(),
         platform: platform.into(),
-        builder: host.name.clone(),
+        builder: builder_name.clone(),
         source_commit: commit.into(),
         source_sha256: source_sha.into(),
         manifest_sha256: manifest_sha.into(),
@@ -1264,19 +1330,23 @@ async fn enqueue(
         inputs,
         secret_env: recipe.secret_env.clone(),
     };
-    let bytes = serde_json::to_vec(&request)?;
-    let sha = release_control::sha256_bytes(&bytes);
-    let request_path = run_path(&m.product, id, &format!("requests/{platform}.json"));
-    let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
-    queue_immutable(&request_path, &bytes).await?;
-    resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
-    let submission_run_id = match prior_terminal_job_id {
-        Some(prior_job_id) => stable_run_id(
-            "release-platform",
-            &format!("{id}\0{platform}\0{prior_job_id}"),
-        ),
-        None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
+    let bytes = match saved_bytes {
+        Some(bytes) => {
+            if saved_request.as_ref() != Some(&request) {
+                return Err(CmdError::click(format!(
+                    "immutable queue object differs: {request_path}"
+                )));
+            }
+            bytes
+        }
+        None => {
+            let bytes = serde_json::to_vec(&request)?;
+            queue_immutable(&request_path, &bytes).await?;
+            bytes
+        }
     };
+    let sha = release_control::sha256_bytes(&bytes);
+    resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let output_uri = match prior_terminal_job_id {
         Some(_) => run_uri(
             &m.product,
@@ -1305,7 +1375,7 @@ async fn enqueue(
         .ok_or_else(|| CmdError::click("durable release submission returned no job"))?;
     Ok(PlatformRun {
         platform: platform.into(),
-        builder: host.name,
+        builder: builder_name,
         job_id: job.job_id.clone(),
         output_prefix: format!("status/{}/output/", job.job_id),
         state: PlatformRunState::Submitted,
@@ -1947,7 +2017,9 @@ async fn run_deliveries(
             // installs locally; only target-less deliveries fall back to any
             // live builder of the platform.
             let consumer = if d.target.is_empty() {
-                builder(&m.platforms[&d.platform].runner_platform).await?.1
+                builder(&m.platforms[&d.platform].runner_platform, None)
+                    .await?
+                    .1
             } else {
                 target_consumer(&d.target).await?
             };
@@ -2389,9 +2461,12 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         let request_sha = release_control::sha256_bytes(&request_bytes);
         queue_immutable(&request_path, &request_bytes).await?;
         let consumer = if delivery.target.is_empty() {
-            builder(&manifest.platforms[&delivery.platform].runner_platform)
-                .await?
-                .1
+            builder(
+                &manifest.platforms[&delivery.platform].runner_platform,
+                None,
+            )
+            .await?
+            .1
         } else {
             target_consumer(&delivery.target).await?
         };
