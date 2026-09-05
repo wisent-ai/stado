@@ -2605,7 +2605,13 @@ enum HostGuiAutomationCommands {
     /// Reconcile the signed Apple challenge helper and grant it and the
     /// installed CuaDriver Accessibility for the registry-bound GUI user.
     #[command(name = "grant-accessibility")]
-    GrantAccessibility { target: String },
+    GrantAccessibility {
+        target: String,
+        /// Prepare only the Apple challenge helper; leave CuaDriver, its
+        /// Accessibility grants, and its runtime unchanged.
+        #[arg(long)]
+        apple_only: bool,
+    },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
     Disable {
@@ -3131,7 +3137,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
                 target,
-            }) => host::gui_automation_grant_accessibility(&target).await,
+                apple_only,
+            }) => host::gui_automation_grant_accessibility(&target, apple_only).await,
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }

@@ -1251,18 +1251,24 @@ async fn reconcile_autologin(
 async fn grant_accessibility_inner(
     target: &ComputeTarget,
     items: &mut Vec<(String, String)>,
+    apple_only: bool,
     runner: &Runner,
 ) -> Result<(), DeployError> {
     require_target(target)?;
-    let identity = app_identity(target, CUA_DRIVER_APP, runner)
-        .await?
-        .ok_or_else(|| DeployError("CuaDriver.app is not installed".to_string()))?;
-    if identity.bundle != CUA_DRIVER_BUNDLE_ID {
-        return Err(DeployError(format!(
-            "CuaDriver.app has bundle id {}, expected {}",
-            identity.bundle, CUA_DRIVER_BUNDLE_ID
-        )));
-    }
+    let identity = if apple_only {
+        None
+    } else {
+        let identity = app_identity(target, CUA_DRIVER_APP, runner)
+            .await?
+            .ok_or_else(|| DeployError("CuaDriver.app is not installed".to_string()))?;
+        if identity.bundle != CUA_DRIVER_BUNDLE_ID {
+            return Err(DeployError(format!(
+                "CuaDriver.app has bundle id {}, expected {}",
+                identity.bundle, CUA_DRIVER_BUNDLE_ID
+            )));
+        }
+        Some(identity)
+    };
     let helper = helper_identity(target, apple_challenge_helper_path(), runner)
         .await?
         .ok_or_else(|| DeployError("Apple challenge helper is not installed".to_string()))?;
@@ -1316,14 +1322,20 @@ async fn grant_accessibility_inner(
     }
 
     let command_home = host_channel::remote_home(target, runner).await?;
-    let cua_requirement = code_requirement_hex(
-        target,
-        &command_home,
-        "cua-driver",
-        &identity.requirement,
-        runner,
-    )
-    .await?;
+    let cua_requirement = if let Some(identity) = &identity {
+        Some(
+            code_requirement_hex(
+                target,
+                &command_home,
+                "cua-driver",
+                &identity.requirement,
+                runner,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let helper_requirement = code_requirement_hex(
         target,
         &command_home,
@@ -1386,16 +1398,37 @@ async fn grant_accessibility_inner(
              X'{requirement}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now'));"
         )
     };
+    let (clients, inserts, expected_count) =
+        if let (Some(identity), Some(requirement)) = (&identity, &cua_requirement) {
+            (
+                format!(
+                    "((client = '{}' AND client_type = 0) \
+                     OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
+                     OR (client = '{}' AND client_type = 1))",
+                    identity.bundle,
+                    apple_challenge_helper_path(),
+                ),
+                format!(
+                    "{} {} {}",
+                    insert(&identity.bundle, 0, requirement),
+                    insert(CUA_DRIVER_EXECUTABLE, 1, requirement),
+                    insert(apple_challenge_helper_path(), 1, &helper_requirement),
+                ),
+                "3",
+            )
+        } else {
+            (
+                format!(
+                    "(client = '{}' AND client_type = 1)",
+                    apple_challenge_helper_path(),
+                ),
+                insert(apple_challenge_helper_path(), 1, &helper_requirement),
+                "1",
+            )
+        };
     let sql = format!(
         "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
-         AND ((client = '{}' AND client_type = 0) \
-         OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
-         OR (client = '{}' AND client_type = 1)); {} {} {} COMMIT;",
-        identity.bundle,
-        apple_challenge_helper_path(),
-        insert(&identity.bundle, 0, &cua_requirement),
-        insert(CUA_DRIVER_EXECUTABLE, 1, &cua_requirement),
-        insert(apple_challenge_helper_path(), 1, &helper_requirement),
+         AND {clients}; {inserts} COMMIT;",
     );
     run_sudo(
         target,
@@ -1406,11 +1439,7 @@ async fn grant_accessibility_inner(
     .await?;
     let verify_sql = format!(
         "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
-         AND auth_value = 2 AND ((client = '{}' AND client_type = 0) \
-         OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
-         OR (client = '{}' AND client_type = 1));",
-        identity.bundle,
-        apple_challenge_helper_path(),
+         AND auth_value = 2 AND {clients};",
     );
     let granted = run_sudo(
         target,
@@ -1420,18 +1449,25 @@ async fn grant_accessibility_inner(
     )
     .await?
     .stdout;
-    if granted.trim() != "3" {
+    if granted.trim() != expected_count {
         return Err(DeployError(
-            "the CuaDriver and Apple challenge Accessibility grants were not read back".to_string(),
+            if apple_only {
+                "the Apple challenge Accessibility grant was not read back"
+            } else {
+                "the CuaDriver and Apple challenge Accessibility grants were not read back"
+            }
+            .to_string(),
         ));
     }
-    items.push(("accessibility".to_string(), "granted".to_string()));
+    if let Some(identity) = identity {
+        items.push(("accessibility".to_string(), "granted".to_string()));
+        items.push(("accessibility-client".to_string(), identity.bundle));
+    }
     items.push((
         "apple-challenge-accessibility".to_string(),
         "granted".to_string(),
     ));
     items.push(("accessibility-user".to_string(), user));
-    items.push(("accessibility-client".to_string(), identity.bundle));
     items.push(("accessibility-backup".to_string(), backup));
     Ok(())
 }
@@ -2019,22 +2055,29 @@ pub async fn enable(
         reconcile_app(target, &mut items, runner).await?;
         reconcile_apple_challenge_helper(target, &mut items, runner).await?;
         reconcile_autologin(target, password, &mut items, runner).await?;
-        grant_accessibility_inner(target, &mut items, runner).await?;
+        grant_accessibility_inner(target, &mut items, false, runner).await?;
         reconcile_runtime(target, &mut items, runner).await
     }
     .await;
     report(target, items, result)
 }
 
-pub async fn grant_accessibility(target: &ComputeTarget, runner: &Runner) -> GuiAutomationReport {
+pub async fn grant_accessibility(
+    target: &ComputeTarget,
+    apple_only: bool,
+    runner: &Runner,
+) -> GuiAutomationReport {
     let mut items = Vec::new();
     let result = async {
         let user = login_user(target, runner).await?;
         require_declared_session(target, &user)?;
         items.push(("automated-session".to_string(), user));
         reconcile_apple_challenge_helper(target, &mut items, runner).await?;
-        grant_accessibility_inner(target, &mut items, runner).await?;
-        reconcile_runtime(target, &mut items, runner).await
+        grant_accessibility_inner(target, &mut items, apple_only, runner).await?;
+        if !apple_only {
+            reconcile_runtime(target, &mut items, runner).await?;
+        }
+        Ok(())
     }
     .await;
     report(target, items, result)
