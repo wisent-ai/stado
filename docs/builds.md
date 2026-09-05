@@ -241,6 +241,56 @@ A recipe accepts only an `https://` clone URL. Credentials do not belong in the 
 
 A successful process exit without every declared artifact is a failed build. A host merely declaring a platform is insufficient: a live worker must publish capacity for that platform.
 
+## The quality gate names whose revision refused
+
+`.wisent-release.json` declares `platforms.<platform>.quality`: the argv the
+release worker executes before it builds. `scripts/quality_gate.sh` reads that
+same key and runs the same argv, so a pull request is judged by the gate the
+release stands behind, with one declaration used twice.
+
+A pull request is judged on its **merge result**, so a step that already
+refuses the base branch refuses every pull request opened against it — for
+files the author never touched. On a refusal the script therefore re-runs that
+one step against the base revision in its own `git worktree` and reports:
+
+| Verdict | Meaning | Who repairs it |
+|---|---|---|
+| `verdict=introduced` | the step passes on the base and refuses this revision | this change |
+| `verdict=inherited` | the step already refuses the base, at the printed sha | the base, in its own change |
+| `verdict=unattributed` | the base could not be checked out, or a clean tree is being compared against its own commit, so ownership is unknown | read the printed step and decide |
+
+The base is the pull request's base sha, and on a push to `main` the commit
+before that push. Comparing `main` against `origin/main` compares the revision
+under judgement against itself, which would answer `inherited` for every
+failure and never name the push that caused it; the script refuses that as
+evidence and says so.
+
+Running it by hand on a checkout with an uncommitted break still attributes:
+the base sha equals `HEAD`, but the base's own worktree does not carry the
+break, so the comparison is real and the answer is `introduced`.
+
+Every verdict still fails the gate: an inherited failure is a failure, and the
+release would hit it with a version already spent. What changes is that the
+message no longer sends the wrong author to reformat somebody else's code.
+
+Run it by hand exactly as CI does:
+
+```console
+$ bash scripts/quality_gate.sh --base origin/main
+platform: darwin-arm64
+.wisent-release.json declares 3 quality step(s) for darwin-arm64
+```
+
+`--manifest` reads a different manifest and `--help` prints this contract. An
+absent platform, an absent `quality` key or an empty one is a refusal, not a
+pass with zero steps.
+
+This exists because on 2026-09-04 and 2026-09-05 `main` carried unformatted
+`cli/onboarding.rs`, then `cli/identity.rs`, then `dashboard/mod.rs`. Each one
+turned every open pull request red, the gate said "fix the tree" to authors who
+had touched none of those files, and three of them reformatted another
+revision's code to get their own work through.
+
 ## Verify every supported platform
 
 The release platform matrix runs both real journeys on the fleet's macOS ARM64 and Linux AMD64 workers. It checks out one exact public commit on each host, uses a real host-local Skarbiec binary for the isolated signing grant, then runs the native-build and complete release journeys.
