@@ -32,8 +32,7 @@
 //! command is one named unit per invocation, typed by an operator who has
 //! read the row, and the scheduled caller may touch only the exact launchd
 //! labels the registry's top-level `release_unit_image_revisit` block
-//! authorises for that host — a key no registry carries today — one of them
-//! per tick. Neither widens the other.
+//! authorises for that host, one of them per tick. Neither widens the other.
 //!
 //! The predicate is not reimplemented here. `deploy::service::
 //! observe_unit_images` is the one pass `registry doctor` reads, so a unit this

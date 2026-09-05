@@ -1312,8 +1312,9 @@ enum HostPublisherRunnerCommands {
     /// Install or reconcile the desktop publisher and grant its release secrets.
     Install {
         target: String,
-        /// Repository that may consume the shared release secrets. Repeat as needed.
-        #[arg(long = "repository", required = true)]
+        /// Repository that receives the shared release secrets. Repeat as needed;
+        /// omit when reconciling only the installed runner.
+        #[arg(long = "repository")]
         repositories: Vec<String>,
         /// Emit the lifecycle report as JSON.
         #[arg(long)]

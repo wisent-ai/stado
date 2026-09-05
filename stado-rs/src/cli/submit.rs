@@ -378,7 +378,7 @@ pub(super) async fn resolve_pinned_host(value: &str) -> Result<String, CmdError>
     if value.is_empty() {
         return Ok(String::new());
     }
-    let registry = crate::targets::load_registry_auto()
+    let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     let Some(target) = registry.lookup(value) else {
