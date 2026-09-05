@@ -666,14 +666,14 @@ if [ "$cargo_home_kind" != directory ] && [ "$cargo_home_kind" != symlink ] && \
    [ "$cargo_home_kind" != missing ]; then
   cargo_entries_state=refused_parent_not_directory
   cargo_entries_complete=false
-elif [ "$cargo_bin_kind" = symlink ]; then
-  cargo_entries_state=refused_symlink
-  cargo_entries_complete=false
-elif [ "$cargo_bin_kind" = directory ]; then
-  if [ ! -r "$cargo_bin" ]; then
+elif [ "$cargo_bin_kind" = directory ] || [ "$cargo_bin_kind" = symlink ]; then
+  if [ ! -d "$cargo_bin" ]; then
+    cargo_entries_state=refused_not_directory
+    cargo_entries_complete=false
+  elif [ ! -r "$cargo_bin" ]; then
     cargo_entries_state=refused_unreadable
     cargo_entries_complete=false
-  elif ! /usr/bin/find "$cargo_bin" -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1; then
+  elif ! /usr/bin/find -H "$cargo_bin" -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1; then
     # Globs do not expose a traversal status. A fixed, depth-one walk does,
     # so an I/O or permission failure cannot become a complete empty list.
     cargo_entries_state=partial_traversal
@@ -1158,7 +1158,7 @@ pub struct CargoInventory {
     pub entries_seen: u64,
     /// True only when `entries` names every child.
     pub entries_complete: bool,
-    /// `read`, `missing`, `partial_traversal`, `refused_symlink`,
+    /// `read`, `missing`, `partial_traversal`,
     /// `refused_not_directory`, `refused_unreadable`, or
     /// `refused_parent_not_directory`.
     pub entries_state: String,
