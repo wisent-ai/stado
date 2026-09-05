@@ -489,11 +489,18 @@ if phase == "status":
 
 
 def inventory(root, paths):
-    return [{
-        "path": relative,
-        "body": regular_identity(os.path.join(root, relative)),
-        "metadata": regular_identity(metadata_path(root, relative)),
-    } for relative in paths]
+    result = []
+    for relative in paths:
+        body_path = os.path.join(root, relative)
+        body = regular_identity(body_path)
+        if body is None:
+            raise FileNotFoundError(body_path)
+        result.append({
+            "path": relative,
+            "body": body,
+            "metadata": regular_identity(metadata_path(root, relative)),
+        })
+    return result
 
 
 def validate_inventory(root, objects, label):
@@ -519,7 +526,7 @@ def validate_complete_inventory(root, objects, label):
         fail(label + " metadata namespace changed")
 
 
-def fenced_checkpoint_inventory(root):
+def complete_physical_inventory(root):
     paths = object_paths(root)
     return paths, inventory(root, paths), physical_inventory(root)
 
@@ -598,17 +605,15 @@ if phase in ("preflight", "checkpoint", "apply", "arm-activation", "arm-rollback
 
 
 if phase == "preflight":
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
-    backup_physical = physical_inventory(backup)
-    primary_physical = physical_inventory(primary)
+    backup_paths, backup_objects, backup_physical = complete_physical_inventory(backup)
+    primary_paths, primary_objects, primary_physical = complete_physical_inventory(primary)
     print("STADO_STORAGE_RECONCILE\t" + json.dumps({
         "schema": schema,
         "transaction": tx,
         "status": "observed",
         "observed_at": time.time(),
-        "backup_qualified": inventory(backup, backup_paths),
-        "primary_qualified": inventory(primary, primary_paths),
+        "backup_qualified": backup_objects,
+        "primary_qualified": primary_objects,
         "backup_physical": backup_physical,
         "primary_physical": primary_physical,
         "physical_snapshot_exclusions": [],
@@ -742,8 +747,8 @@ if phase == "checkpoint":
     if receipt is not None and receipt.get("status") != "checkpointing":
         fail("checkpoint receipt is not resumable: " + str(receipt.get("status")))
     if receipt is None:
-        backup_paths, backup_objects, backup_physical = fenced_checkpoint_inventory(backup)
-        primary_paths, primary_objects, primary_physical = fenced_checkpoint_inventory(primary)
+        backup_paths, backup_objects, backup_physical = complete_physical_inventory(backup)
+        primary_paths, primary_objects, primary_physical = complete_physical_inventory(primary)
         checkpoint_evidence = {
             "schema": "stado.storage-root-checkpoint-evidence.v1",
             "transaction": tx,
