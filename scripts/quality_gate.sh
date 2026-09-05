@@ -85,11 +85,29 @@ if git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
   base_sha="$(git rev-parse "$base^{commit}")"
 fi
 
+# A revision compared against itself measures nothing, and it would answer
+# `inherited` for every failure -- exactly backwards, because on a push to
+# `main` the revision under judgement IS `origin/main`. So the base has to be a
+# different revision than the one being judged.
+#
+# "Different revision" is the base commit against the WORKING TREE, not against
+# `HEAD`: run by hand on a checkout of `main` with an uncommitted break, the
+# base sha equals `HEAD` and the comparison is still real, because the base's
+# own worktree does not carry that break. Only a clean tree at the base commit
+# has nothing to compare.
+self_comparison=""
+if [ -n "$base_sha" ] &&
+   [ "$base_sha" = "$(git rev-parse 'HEAD^{commit}')" ] &&
+   [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+  self_comparison="yes"
+  base_sha=""
+fi
+
 # Whether the same step also refuses the base revision, run in the base's own
 # worktree so the answer is about that revision's files and nothing else.
 #
-# A base that cannot be checked out is not evidence either way: the step's own
-# verdict stands and the report says the base was not consulted.
+# A base that cannot be checked out, or that is this revision, is not evidence
+# either way: the step's own verdict stands and the report says so.
 inherited() {
   local index="$1" checkout status
   [ -n "$base_sha" ] || return 2
@@ -126,8 +144,14 @@ while [ "$index" -lt "$steps" ]; do
         printf "::error::verdict=inherited step='%s' base=%s: the release quality step refuses this revision AND already refuses %s at %s, so this pull request did not introduce it and reformatting here fixes somebody else's revision. Repair %s in its own change; this gate stays red until that lands.\n" \
           "$name" "$base_sha" "$base" "$base_sha" "$base" >&2 ;;
       2)
-        printf "::error::verdict=unattributed step='%s': the release quality step refuses this revision and the base (%s) could not be checked out to compare, so whose revision carries it is unknown. Fix the tree; do not narrow the step.\n" \
-          "$name" "$base" >&2 ;;
+        if [ -n "$self_comparison" ]; then
+          printf "::error::verdict=unattributed step='%s': the release quality step refuses this revision, and the base given (%s) IS this revision, so there is nothing to compare it against. This is the answer on a push to the branch itself: pass the commit before it to learn whether that push introduced the failure. Fix the tree; do not narrow the step.\n" \
+            "$name" "$base" >&2
+        else
+          printf "::error::verdict=unattributed step='%s': the release quality step refuses this revision and the base (%s) could not be checked out to compare, so whose revision carries it is unknown. Fix the tree; do not narrow the step.\n" \
+            "$name" "$base" >&2
+        fi
+        ;;
       *)
         printf "::error::verdict=introduced step='%s': the release quality step refuses this revision and passes on %s at %s, so this change introduces it. It is declared in %s and the release worker runs the same argv, so this is the failure the release would have hit -- with a version already spent on it. Fix the tree; do not narrow the step.\n" \
           "$name" "$base" "$base_sha" "$manifest" >&2 ;;
