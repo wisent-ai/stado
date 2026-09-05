@@ -1586,7 +1586,16 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
 /// looked, after one it means the convergence cannot be shown to have happened.
 fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
     let unresolved: Vec<&Row> = rows.iter().filter(|row| row.verdict != IN_SYNC).collect();
-    if unresolved.is_empty() {
+    let failed = pass
+        .releases
+        .iter()
+        .filter(|entry| entry.status == FAILED)
+        .count();
+    if unresolved.is_empty()
+        && failed == 0
+        && pass.undeliverable.is_empty()
+        && pass.refused.is_empty()
+    {
         return Ok(());
     }
     for row in &unresolved {
@@ -1597,11 +1606,10 @@ fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
             row.installed_cell()
         );
     }
-    let failed = pass
-        .releases
-        .iter()
-        .filter(|entry| entry.status == FAILED)
-        .count();
+    // A failed delivery remains a failed apply even when the final read finds
+    // matching bytes (for example because another release actor converged the
+    // host concurrently). The delivery receipt is an asserted part of this
+    // operation, not disposable progress text.
     // "no delivery ran" is a different diagnosis from "one ran and failed", and
     // both are different from "one ran, said it worked, and the host still
     // reports the old version" — and different again from "the drift is real
