@@ -10319,21 +10319,36 @@ const PRIMARY_ROOT: &str = ".stado/local-storage";
 /// the deletion — and they did move on this host, twice, in one evening.
 pub async fn backup_audit(
     target: &str,
+    object_uris: &[String],
     reclaim_twins: bool,
     apply: bool,
     json: bool,
 ) -> Result<(), CmdError> {
+    if !object_uris.is_empty() && (reclaim_twins || apply) {
+        return Err(CmdError::click(
+            "exact object inspection is read-only and cannot reclaim backup objects",
+        ));
+    }
     let namespace = crate::config::wc_stado_storage_namespace();
-    if namespace.trim().is_empty() {
+    if namespace.trim().is_empty() && object_uris.is_empty() {
         return Err(CmdError::click(
             "this control plane has no storage.stado.namespace, so a replica path cannot be \
              resolved to a primary address",
         ));
     }
+    let objects = object_uris
+        .iter()
+        .map(|uri| {
+            crate::object_store::ObjectRef::parse(uri)
+                .map(|object| object.storage_path())
+                .map_err(|error| CmdError::click(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let plan = crate::deploy::host_backup_audit::AuditPlan {
         namespace: namespace.to_string(),
         backup_root: BACKUP_ROOT.to_string(),
         primary_root: PRIMARY_ROOT.to_string(),
+        objects,
         reclaim: reclaim_twins,
         apply,
     };
@@ -10353,11 +10368,31 @@ pub async fn backup_audit(
                 )
             })
             .collect();
+        let objects = audit
+            .objects
+            .iter()
+            .map(|object| {
+                json!({
+                    "path": object.path,
+                    "primary": {
+                        "state": object.primary.state,
+                        "bytes": object.primary.bytes,
+                        "sha256": object.primary.sha256,
+                    },
+                    "backup": {
+                        "state": object.backup.state,
+                        "bytes": object.backup.bytes,
+                        "sha256": object.backup.sha256,
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
         print_json(&json!({
             "host": audit.host,
             "complete": audit.complete,
             "unavailable": audit.unavailable,
             "classes": classes,
+            "objects": objects,
             "reclaimable_bytes": audit.reclaimable_bytes(),
             "retained_bytes": audit.retained_bytes(),
             "reclaim": {
@@ -10375,6 +10410,27 @@ pub async fn backup_audit(
             "free_kb_before": audit.free_kb_before,
             "free_kb_after": audit.free_kb_after,
         }));
+        return Ok(());
+    }
+    if !audit.objects.is_empty() {
+        for object in &audit.objects {
+            println!("{}", object.path);
+            for (name, identity) in [("primary", &object.primary), ("backup", &object.backup)] {
+                println!(
+                    "  {name}: state={} bytes={} sha256={}",
+                    identity.state,
+                    identity
+                        .bytes
+                        .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                    identity.sha256.as_deref().unwrap_or("-"),
+                );
+            }
+        }
+        if !audit.complete {
+            return Err(CmdError::click(
+                "the host did not complete exact backup-object inspection",
+            ));
+        }
         return Ok(());
     }
     for class in [
