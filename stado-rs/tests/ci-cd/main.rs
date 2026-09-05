@@ -18,7 +18,41 @@ use serde_json::{json, Value};
 
 #[path = "../support/skarbiec.rs"]
 mod skarbiec_support;
-use skarbiec_support::SkarbiecFixture;
+use skarbiec_support::{SkarbiecFixture, SkarbiecItem};
+
+impl SkarbiecFixture {
+    fn start_release(home: &Path, private_key: &Path) -> Self {
+        use base64::Engine;
+
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(fs::read(private_key).unwrap());
+        let item = SkarbiecItem::new(
+            "ci-release-signing",
+            "key-pair",
+            json!({
+                "schema": "skarbiec.item.v2",
+                "kind": "key-pair",
+                "fields": {"private_key": encoded},
+                "context": {"service": "stado-release"}
+            }),
+        );
+        Self::start(
+            home,
+            &[item],
+            "stado-release-coordinator",
+            "read:ci-release-signing#private_key",
+            "release-signing-grant",
+        )
+    }
+}
+
+fn release_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("linux", "x86_64") => "linux-amd64",
+        (os, arch) => panic!("unsupported real release test platform: {os}-{arch}"),
+    }
+}
 
 fn run(command: &mut Command) -> Output {
     let out = command.output().expect("command starts");

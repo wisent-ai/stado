@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 fn executable_file(path: &Path) -> bool {
@@ -221,30 +221,6 @@ impl SkarbiecFixture {
             "real Skarbiec did not become ready: {}",
             fs::read_to_string(home.join("skarbiec.err")).unwrap_or_default()
         );
-    }
-
-    pub fn start_release(home: &Path, private_key: &Path) -> Self {
-        use base64::Engine;
-
-        let encoded =
-            base64::engine::general_purpose::STANDARD.encode(fs::read(private_key).unwrap());
-        let item = SkarbiecItem::new(
-            "ci-release-signing",
-            "key-pair",
-            json!({
-                "schema": "skarbiec.item.v2",
-                "kind": "key-pair",
-                "fields": {"private_key": encoded},
-                "context": {"service": "stado-release"}
-            }),
-        );
-        Self::start(
-            home,
-            &[item],
-            "stado-release-coordinator",
-            "read:ci-release-signing#private_key",
-            "release-signing-grant",
-        )
     }
 
     pub fn url(&self) -> String {
