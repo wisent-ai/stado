@@ -1259,8 +1259,7 @@ impl Beacon {
         else {
             return false;
         };
-        let common_evidence = fields.get("state").and_then(Value::as_str)
-            == Some(SCHEDULED_STATE)
+        let common_evidence = fields.get("state").and_then(Value::as_str) == Some(SCHEDULED_STATE)
             && fields.get("service_type").and_then(Value::as_str) == Some("oneshot")
             && fields
                 .get("manager")
@@ -1274,7 +1273,9 @@ impl Beacon {
                         .get("active_trigger")
                         .and_then(Value::as_str)
                         .is_some_and(|active| {
-                            triggers.iter().any(|trigger| trigger.as_str() == Some(active))
+                            triggers
+                                .iter()
+                                .any(|trigger| trigger.as_str() == Some(active))
                         })
                 })
             && fields
@@ -2316,8 +2317,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     .about(declared.id.as_str()),
                 ),
                 Some(state)
-                    if state != ACTIVE_STATE
-                        && !beacon.scheduled_unit_is_healthy(&declared.id) =>
+                    if state != ACTIVE_STATE && !beacon.scheduled_unit_is_healthy(&declared.id) =>
                 {
                     findings.push(
                         Finding::new(
