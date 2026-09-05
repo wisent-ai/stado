@@ -1457,11 +1457,10 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
                 host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
             );
             // `host release` reports host-side refusals as a structured
-            // `Ok(report)`, with the diagnostic in `error`. Reducing that
-            // report to its status discarded the only cause: the 0.16.19
-            // train printed `detail: "failed"` after the installed root had
-            // reached 0.16.19, so neither the failed reader nor its stderr
-            // survived into the convergence receipt.
+            // `Ok(report)`, with any diagnostic in `error`. Reducing that
+            // report to its status discarded the only place a cause could be
+            // retained: historical trains printed only `detail: "failed"`,
+            // which does not establish whether the inner report had an error.
             let detail = if delivered {
                 status.to_string()
             } else {
@@ -1472,9 +1471,9 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
                     .map(str::to_string)
                     .unwrap_or_else(|| {
                         if status.is_empty() {
-                            String::from("the delivery reported no status")
+                            String::from("the delivery reported neither a status nor an error")
                         } else {
-                            status.to_string()
+                            format!("delivery returned non-success status {status} without an error")
                         }
                     })
             };
