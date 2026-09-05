@@ -9,7 +9,7 @@
 //! value is installed.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -43,6 +43,7 @@ static RESIDENT_OWNER_TOKEN: OnceLock<String> = OnceLock::new();
 static RESIDENT_RUNNER_GATE: OnceLock<Value> = OnceLock::new();
 static RESIDENT_LOCK_FD: OnceLock<i32> = OnceLock::new();
 static RESIDENT_TARGET: OnceLock<crate::targets::ComputeTarget> = OnceLock::new();
+static RESIDENT_NATIVE_MANAGER: OnceLock<Value> = OnceLock::new();
 const ROLLBACK_OBJECT_API_SCRIPT: &str = r#"set -euo pipefail
 if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   printf 'unsupported_os\n' >&2
@@ -108,7 +109,7 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 "#;
 
 const REMOTE_SCRIPT: &str = r#"set -u
-STADO_RECONCILE_PHASE=@PHASE@ STADO_RECONCILE_TX=@TRANSACTION@ STADO_RECONCILE_FENCE=@FENCE@ STADO_RECONCILE_OWNER_TOKEN=@OWNER_TOKEN@ STADO_RECONCILE_LOCK_FD=@LOCK_FD@ /usr/bin/python3 - <<'STADO_RECONCILE_EOF'
+STADO_RECONCILE_PHASE=@PHASE@ STADO_RECONCILE_TX=@TRANSACTION@ STADO_RECONCILE_OWNER_TOKEN=@OWNER_TOKEN@ STADO_RECONCILE_LOCK_FD=@LOCK_FD@ STADO_RECONCILE_TRANSITION_RETIRED_STATE=@TRANSITION_RETIRED_STATE@ /usr/bin/python3 - <<'STADO_RECONCILE_EOF'
 import ctypes, datetime, fcntl, hashlib, json, os, stat, sys, time
 
 phase = os.environ["STADO_RECONCILE_PHASE"]
@@ -124,12 +125,15 @@ owner_path = os.path.join(work, "operation-owner.json")
 owner_token = os.environ.get("STADO_RECONCILE_OWNER_TOKEN", "")
 receipt_path = os.path.join(work, "receipt.json")
 fence_path = os.path.join(work, "lifecycle-fence.json")
+checkpoint_evidence_path = os.path.join(work, "checkpoint-evidence.json")
+lifecycle_decisions_path = os.path.join(work, "lifecycle-decisions.json")
+final_lifecycle_observations_path = os.path.join(
+    work, "final-lifecycle-observations.json")
 lock_path = os.path.join(home, ".stado", "recovery", "storage-root-reconcile.lock")
-schema = "stado.storage-root-reconcile.v1"
+schema = "stado.storage-root-reconcile.v2"
 staging = os.path.join(work, ".clone-staging")
-fence_payload = os.environ.get("STADO_RECONCILE_FENCE", "")
 lifecycle_root = "ecosystem/probierz/"
-transition_retired_state = @TRANSITION_RETIRED_STATE@
+transition_retired_state = os.environ["STADO_RECONCILE_TRANSITION_RETIRED_STATE"]
 
 
 def fail(message):
@@ -174,6 +178,53 @@ def atomic_json(path, value):
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
     fsync_dir(os.path.dirname(path))
+
+
+def immutable_json_file(path, label):
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode):
+            fail(label + " is not a regular file: " + path)
+        with open(path, "rb") as handle:
+            encoded = handle.read()
+        value = json.loads(encoded)
+    except Exception as error:
+        fail(label + " is absent or invalid: " + str(error))
+    reference = {
+        "path": path,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "bytes": len(encoded),
+    }
+    return value, reference
+
+
+def load_immutable_json(reference, path, label):
+    if not isinstance(reference, dict) or reference.get("path") != path:
+        fail(label + " reference does not name its canonical transaction file")
+    value, observed = immutable_json_file(path, label)
+    if observed != reference:
+        fail(label + " bytes differ from their durable reference")
+    return value
+
+
+def persist_immutable_json(path, value, label):
+    encoded = (json.dumps(
+        value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if os.path.lexists(path):
+        try:
+            info = os.lstat(path)
+            if not stat.S_ISREG(info.st_mode):
+                fail(label + " collides with a non-regular file: " + path)
+            with open(path, "rb") as handle:
+                existing = handle.read()
+        except Exception as error:
+            fail("cannot inspect " + label + ": " + str(error))
+        if existing != encoded:
+            fail(label + " changed after its immutable publication")
+    else:
+        atomic_json(path, value)
+    _, reference = immutable_json_file(path, label)
+    return reference
 
 
 def clone_file(source, destination):
@@ -385,34 +436,16 @@ if phase == "read-fence":
         with open(fence_path, "r", encoding="utf-8") as handle:
             fence = json.load(handle)
     except FileNotFoundError:
-        fence = {"schema": "stado.storage-root-fence.v3", "transaction": tx,
+        fence = {"schema": "stado.storage-root-fence.v4", "transaction": tx,
                  "status": "absent", "writers": []}
     print("STADO_STORAGE_RECONCILE\t" +
           json.dumps(fence, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
 
 
-if phase == "record-fence":
-    try:
-        fence = json.loads(fence_payload)
-    except Exception as error:
-        fail("lifecycle fence payload is invalid: " + str(error))
-    if (fence.get("schema") != "stado.storage-root-fence.v3"
-            or fence.get("transaction") != tx):
-        fail("lifecycle fence payload belongs to another transaction")
-    atomic_json(fence_path, fence)
-    print("STADO_STORAGE_RECONCILE\t" + json.dumps({
-        "schema": fence["schema"],
-        "transaction": tx,
-        "status": fence.get("status"),
-        "receipt_path": fence_path,
-        "writers": len(fence.get("writers", [])),
-        "queue_drained": fence.get("queue", {}).get("drained", False),
-    }, sort_keys=True, separators=(",", ":")))
-    raise SystemExit(0)
 
 def emit(receipt):
-    decisions = receipt.get("lifecycle_decisions", [])
+    decisions = receipt.get("lifecycle_decision_counts", {})
     summary = {
         "schema": receipt.get("schema"),
         "transaction": receipt.get("transaction"),
@@ -420,17 +453,15 @@ def emit(receipt):
         "receipt_path": receipt_path,
         "backup_checkpoint": receipt.get("backup_checkpoint"),
         "primary_checkpoint": receipt.get("primary_checkpoint"),
-        "backup_objects": len(receipt.get("backup_objects", [])),
-        "primary_objects": len(receipt.get("primary_objects", [])),
+        "backup_objects": receipt.get("backup_objects", 0),
+        "primary_objects": receipt.get("primary_objects", 0),
         "verified_objects": receipt.get("verified_objects", 0),
-        "backup_physical_files": len(receipt.get("backup_physical", {}).get("files", [])),
-        "primary_physical_files": len(receipt.get("primary_physical", {}).get("files", [])),
+        "backup_physical_files": receipt.get("backup_physical_files", 0),
+        "primary_physical_files": receipt.get("primary_physical_files", 0),
         "physical_snapshot_exclusions": receipt.get("physical_snapshot_exclusions", []),
         "lifecycle_decisions": {
-            "queued_cancellation": sum(1 for item in decisions
-                                        if item.get("kind") == "queued_cancellation"),
-            "retained_outcome_cleanup": sum(1 for item in decisions
-                                             if item.get("kind") == "retained_outcome_cleanup"),
+            "queued_cancellation": decisions.get("queued_cancellation", 0),
+            "retained_outcome_cleanup": decisions.get("retained_outcome_cleanup", 0),
         },
     }
     print("STADO_STORAGE_RECONCILE\t" +
@@ -605,13 +636,42 @@ for fixed_root in (primary, backup):
 if sys.platform != "darwin":
     fail("copy-on-write storage reconciliation requires Darwin clonefile semantics")
 
+def load_checkpoint_evidence(receipt):
+    evidence = load_immutable_json(
+        receipt.get("checkpoint_evidence"),
+        checkpoint_evidence_path,
+        "checkpoint evidence",
+    )
+    if (not isinstance(evidence, dict)
+            or evidence.get("schema") != "stado.storage-root-checkpoint-evidence.v1"
+            or evidence.get("transaction") != tx
+            or evidence.get("source") != backup
+            or evidence.get("destination") != primary):
+        fail("checkpoint evidence belongs to another reconciliation")
+    primary_objects = evidence.get("primary_objects")
+    backup_objects = evidence.get("backup_objects")
+    backup_physical = evidence.get("backup_physical")
+    primary_physical = evidence.get("primary_physical")
+    if (not isinstance(backup_objects, list)
+            or not isinstance(primary_objects, list)
+            or not isinstance(backup_physical, dict)
+            or not isinstance(primary_physical, dict)):
+        fail("checkpoint evidence inventories are invalid")
+    if (receipt.get("backup_objects") != len(backup_objects)
+            or receipt.get("primary_objects") != len(primary_objects)
+            or receipt.get("backup_physical_files") != len(backup_physical.get("files", []))
+            or receipt.get("primary_physical_files") != len(primary_physical.get("files", []))):
+        fail("checkpoint receipt counts differ from immutable checkpoint evidence")
+    return backup_objects, primary_objects, backup_physical, primary_physical
+
+
 if phase == "checkpoint":
     try:
         with open(fence_path, "r", encoding="utf-8") as handle:
             fence = json.load(handle)
     except Exception as error:
         fail("durable lifecycle fence is absent or unreadable: " + str(error))
-    if (fence.get("schema") != "stado.storage-root-fence.v3"
+    if (fence.get("schema") != "stado.storage-root-fence.v4"
             or fence.get("transaction") != tx or fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or not (fence.get("staged_runtime") or {}).get("staged_sha256")
@@ -636,6 +696,21 @@ if phase == "checkpoint":
         primary_objects = inventory(primary, primary_paths)
         backup_physical = physical_inventory(backup)
         primary_physical = physical_inventory(primary)
+        checkpoint_evidence = {
+            "schema": "stado.storage-root-checkpoint-evidence.v1",
+            "transaction": tx,
+            "source": backup,
+            "destination": primary,
+            "backup_objects": backup_objects,
+            "primary_objects": primary_objects,
+            "backup_physical": backup_physical,
+            "primary_physical": primary_physical,
+            "physical_snapshot_exclusions": [],
+            "snapshot_scope": "full_physical_roots",
+            "handoff_scope": "ecosystem/ qualified objects and matching .metadata/ecosystem sidecars",
+        }
+        checkpoint_evidence_reference = persist_immutable_json(
+            checkpoint_evidence_path, checkpoint_evidence, "checkpoint evidence")
         receipt = {
             "schema": schema,
             "transaction": tx,
@@ -647,25 +722,19 @@ if phase == "checkpoint":
             "effective_lifecycle_checkpoint": effective_lifecycle_snapshot,
             "checkpoint_started_at": time.time(),
             "writer_fence": fence,
-            "backup_objects": backup_objects,
-            "primary_objects": primary_objects,
-            "backup_physical": backup_physical,
-            "primary_physical": primary_physical,
+            "checkpoint_evidence": checkpoint_evidence_reference,
+            "backup_objects": len(backup_objects),
+            "primary_objects": len(primary_objects),
+            "backup_physical_files": len(backup_physical.get("files", [])),
+            "primary_physical_files": len(primary_physical.get("files", [])),
             "physical_snapshot_exclusions": [],
             "snapshot_scope": "full_physical_roots",
             "handoff_scope": "ecosystem/ qualified objects and matching .metadata/ecosystem sidecars",
         }
         atomic_json(receipt_path, receipt)
     else:
-        backup_objects = receipt.get("backup_objects")
-        primary_objects = receipt.get("primary_objects")
-        backup_physical = receipt.get("backup_physical")
-        primary_physical = receipt.get("primary_physical")
-        if (not isinstance(backup_objects, list)
-                or not isinstance(primary_objects, list)
-                or not isinstance(backup_physical, dict)
-                or not isinstance(primary_physical, dict)):
-            fail("checkpoint receipt inventories are invalid")
+        backup_objects, primary_objects, backup_physical, primary_physical = (
+            load_checkpoint_evidence(receipt))
         if [item.get("path") for item in backup_objects] != backup_paths:
             fail("backup qualified namespace no longer matches the interrupted checkpoint")
         if [item.get("path") for item in primary_objects] != primary_paths:
@@ -691,10 +760,8 @@ receipt = load_receipt()
 if receipt.get("status") == "complete" and phase != "finalize":
     emit(receipt)
     raise SystemExit(0)
-backup_objects = receipt.get("backup_objects")
-primary_objects = receipt.get("primary_objects")
-if not isinstance(backup_objects, list) or not isinstance(primary_objects, list):
-    fail("checkpoint receipt has no complete object inventories")
+backup_objects, primary_objects, backup_physical, primary_physical = (
+    load_checkpoint_evidence(receipt))
 validate_complete_inventory(backup_snapshot, backup_objects, "backup checkpoint")
 validate_complete_inventory(primary_snapshot, primary_objects, "primary checkpoint")
 if phase == "record-lifecycle-decisions":
@@ -702,27 +769,31 @@ if phase == "record-lifecycle-decisions":
             "checkpoint_ready", "applying", "data_committed_pending_activation",
             "activation_effects_armed", "rollback_effects_armed"):
         fail("lifecycle decisions require an immutable checkpoint before runtime activation")
-    try:
-        decisions = json.loads(fence_payload)
-    except Exception as error:
-        fail("typed lifecycle decisions are invalid: " + str(error))
+    decisions, decision_reference = immutable_json_file(
+        lifecycle_decisions_path, "typed lifecycle decisions")
     if not isinstance(decisions, list):
         fail("typed lifecycle decisions are not a list")
-    encoded_decisions = json.dumps(decisions, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    decision_sha256 = hashlib.sha256(encoded_decisions).hexdigest()
-    existing_decisions = receipt.get("lifecycle_decisions")
+    existing_decisions = receipt.get("lifecycle_decisions_evidence")
     existing_validation = receipt.get("lifecycle_validation")
-    if existing_decisions is not None and existing_decisions != decisions:
+    if (existing_decisions is None) != (existing_validation is None):
+        fail("typed lifecycle decision reference and validation proof are incomplete")
+    if existing_decisions is not None and existing_decisions != decision_reference:
         fail("typed lifecycle decisions changed after their durable result")
     if existing_validation is not None and (
             existing_validation.get("engine") != "stado.typed-lifecycle-snapshot.v1"
-            or existing_validation.get("sha256") != decision_sha256):
+            or existing_validation.get("sha256") != decision_reference["sha256"]):
         fail("typed lifecycle validation proof changed after its durable result")
-    receipt["lifecycle_decisions"] = decisions
+    receipt["lifecycle_decisions_evidence"] = decision_reference
+    receipt["lifecycle_decision_counts"] = {
+        "queued_cancellation": sum(
+            1 for item in decisions if item.get("kind") == "queued_cancellation"),
+        "retained_outcome_cleanup": sum(
+            1 for item in decisions if item.get("kind") == "retained_outcome_cleanup"),
+    }
     if existing_validation is None:
         receipt["lifecycle_validation"] = {
             "engine": "stado.typed-lifecycle-snapshot.v1",
-            "sha256": decision_sha256,
+            "sha256": decision_reference["sha256"],
             "validated_at": time.time(),
         }
     atomic_json(receipt_path, receipt)
@@ -785,9 +856,6 @@ if phase == "arm-rollback":
             or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))):
         fail("rollback effects require every writer to remain stopped")
-    backup_physical = receipt.get("backup_physical")
-    if not isinstance(backup_physical, dict):
-        fail("rollback receipt omitted the frozen B physical inventory")
     validate_complete_inventory(backup, backup_objects, "live B before rollback")
     validate_physical_checkpoint(backup, backup_physical, "live physical B before rollback")
     receipt["status"] = "rollback_effects_armed"
@@ -815,10 +883,17 @@ if phase == "apply":
             or fence.get("rechecked_at", 0) < receipt.get("checkpointed_at", 0)):
         fail("lifecycle fence was not rechecked after checkpoint")
     validation = receipt.get("lifecycle_validation")
+    decision_reference = receipt.get("lifecycle_decisions_evidence")
     if (not isinstance(validation, dict)
-            or validation.get("engine") != "stado.typed-lifecycle-snapshot.v1"):
+            or validation.get("engine") != "stado.typed-lifecycle-snapshot.v1"
+            or not isinstance(decision_reference, dict)
+            or validation.get("sha256") != decision_reference.get("sha256")):
         fail("typed Rust lifecycle validation is absent")
-    blockers = [item for item in receipt.get("lifecycle_decisions", [])
+    decisions = load_immutable_json(
+        decision_reference, lifecycle_decisions_path, "typed lifecycle decisions")
+    if not isinstance(decisions, list):
+        fail("typed lifecycle decisions are not a list")
+    blockers = [item for item in decisions
                 if item.get("kind") == "block_unclassified_live"]
     if blockers:
         fail("A-only lifecycle state blocks activation: " +
@@ -897,7 +972,7 @@ if phase == "activate":
         fail("activated lifecycle fence cannot be read: " + str(error))
     active_path = os.path.expanduser("~/.stado/bin/stado")
     expected_digest = fence.get("activation_sha256")
-    if (fence.get("schema") != "stado.storage-root-fence.v3"
+    if (fence.get("schema") != "stado.storage-root-fence.v4"
             or fence.get("status") != "activated"
             or not fence.get("queue", {}).get("resumed")
             or not fence.get("restored_at")
@@ -920,28 +995,25 @@ if phase != "finalize":
     fail("unknown reconciliation phase: " + phase)
 if receipt.get("status") not in ("activated_pending_lifecycle", "complete"):
     fail("reconciliation is not awaiting typed lifecycle finalization: " + str(receipt.get("status")))
-try:
-    observations = json.loads(fence_payload)
-except Exception as error:
-    fail("typed final lifecycle observations are invalid: " + str(error))
+observations, observation_reference = immutable_json_file(
+    final_lifecycle_observations_path, "typed final lifecycle observations")
 if not isinstance(observations, list):
     fail("typed final lifecycle observations are not a list")
-encoded_observations = json.dumps(
-    observations, sort_keys=True, separators=(",", ":")).encode("utf-8")
-observation_sha256 = hashlib.sha256(encoded_observations).hexdigest()
-existing_observations = receipt.get("final_lifecycle_observations")
+existing_observations = receipt.get("final_lifecycle_observations_evidence")
 existing_validation = receipt.get("final_lifecycle_validation")
-if existing_observations is not None and existing_observations != observations:
+if (existing_observations is None) != (existing_validation is None):
+    fail("typed final observation reference and validation proof are incomplete")
+if existing_observations is not None and existing_observations != observation_reference:
     fail("typed final lifecycle observations changed after their durable result")
 if existing_validation is not None and (
         existing_validation.get("engine") != "stado.typed-lifecycle-final.v1"
-        or existing_validation.get("sha256") != observation_sha256):
+        or existing_validation.get("sha256") != observation_reference["sha256"]):
     fail("typed final lifecycle validation proof changed after its durable result")
-receipt["final_lifecycle_observations"] = observations
+receipt["final_lifecycle_observations_evidence"] = observation_reference
 if existing_validation is None:
     receipt["final_lifecycle_validation"] = {
         "engine": "stado.typed-lifecycle-final.v1",
-        "sha256": observation_sha256,
+        "sha256": observation_reference["sha256"],
         "validated_at": time.time(),
     }
 receipt["status"] = "complete"
@@ -952,9 +1024,12 @@ emit(receipt)
 STADO_RECONCILE_EOF
 "#;
 
-const FENCE_SCHEMA: &str = "stado.storage-root-fence.v3";
-const RECORD_FENCE: &str = "record-fence";
+const FENCE_SCHEMA: &str = "stado.storage-root-fence.v4";
 const READ_FENCE: &str = "read-fence";
+const PREFLIGHT_EVIDENCE_FILE: &str = "preflight.json";
+const CHECKPOINT_EVIDENCE_FILE: &str = "checkpoint-evidence.json";
+const LIFECYCLE_DECISIONS_FILE: &str = "lifecycle-decisions.json";
+const FINAL_LIFECYCLE_OBSERVATIONS_FILE: &str = "final-lifecycle-observations.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct FileSnapshot {
@@ -1053,16 +1128,24 @@ struct LeaseAcquisition {
     released_lease: Option<crate::autonomy::storage::PlacementLease>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ImmutableEvidenceReference {
+    path: String,
+    sha256: String,
+    bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LifecycleFence {
     schema: String,
     transaction: String,
+    resident_owner: Value,
     status: String,
     queue: QueueFence,
     writers: Vec<WriterFence>,
     transport_retained: Vec<Value>,
     staged_runtime: Option<super::host_release::StagedRelease>,
-    preflight: Value,
+    preflight_evidence: ImmutableEvidenceReference,
     #[serde(default)]
     lease_acquisitions: Vec<LeaseAcquisition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1077,11 +1160,11 @@ struct LifecycleFence {
     restored_at: Option<i64>,
 }
 
-fn bind_remote_script(phase: &str, transaction: &str, fence: &str) -> String {
+fn bind_remote_script(phase: &str, transaction: &str) -> String {
+    let transition_retired_state = crate::queue::storage::TRANSITION_RETIRED_STATE;
     REMOTE_SCRIPT
         .replace("@PHASE@", &shlex_quote(phase))
         .replace("@TRANSACTION@", &shlex_quote(transaction))
-        .replace("@FENCE@", &shlex_quote(fence))
         .replace(
             "@OWNER_TOKEN@",
             &shlex_quote(RESIDENT_OWNER_TOKEN.get().map(String::as_str).unwrap_or("")),
@@ -1092,7 +1175,7 @@ fn bind_remote_script(phase: &str, transaction: &str, fence: &str) -> String {
         )
         .replace(
             "@TRANSITION_RETIRED_STATE@",
-            &shlex_quote(crate::queue::storage::TRANSITION_RETIRED_STATE),
+            &shlex_quote(transition_retired_state),
         )
 }
 
@@ -1122,7 +1205,7 @@ async fn read_fence(
 ) -> Result<Option<LifecycleFence>, DeployError> {
     let output = host_channel::run_script_with_timeout(
         target,
-        &bind_remote_script(READ_FENCE, transaction, ""),
+        &bind_remote_script(READ_FENCE, transaction),
         TIMEOUT,
         runner,
     )
@@ -1140,20 +1223,39 @@ async fn write_fence(
     target: &crate::targets::ComputeTarget,
     transaction: &str,
     fence: &LifecycleFence,
+    _runner: &Runner,
+) -> Result<(), DeployError> {
+    if !host_channel::target_is_this_host(target) {
+        return Err(DeployError(
+            "lifecycle fence can only be written by the resident target worker".to_string(),
+        ));
+    }
+    if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
+        return Err(DeployError(
+            "lifecycle fence belongs to another transaction".to_string(),
+        ));
+    }
+    verify_resident_lock(transaction)?;
+    atomic_json_file(
+        &transaction_directory(transaction)?.join("lifecycle-fence.json"),
+        fence,
+        "lifecycle fence",
+    )
+}
+async fn refresh_resident_owner(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let encoded = serde_json::to_string(fence)
-        .map_err(|error| DeployError(format!("cannot encode lifecycle fence: {error}")))?;
-    let output = host_channel::run_script_with_timeout(
-        target,
-        &bind_remote_script(RECORD_FENCE, transaction, &encoded),
-        TIMEOUT,
-        runner,
-    )
-    .await?;
-    parse_remote_payload(&output)?;
+    let current = resident_owner_retention(transaction)?;
+    if fence.resident_owner != current {
+        fence.resident_owner = current;
+        write_fence(target, transaction, fence, runner).await?;
+    }
     Ok(())
 }
+
 async fn repository_runner_gate() -> Result<Option<Value>, DeployError> {
     if let Some(gate) = RESIDENT_RUNNER_GATE.get() {
         return Ok(Some(gate.clone()));
@@ -1443,12 +1545,50 @@ fn current_runner_candidate(
         || command_tokens(command).contains(&current_runner)
 }
 
+fn resident_owner_retention(transaction: &str) -> Result<Value, DeployError> {
+    verify_resident_lock(transaction)?;
+    let identity = RESIDENT_NATIVE_MANAGER.get().ok_or_else(|| {
+        DeployError("resident native manager identity was not initialized".to_string())
+    })?;
+    let expected_service = if cfg!(target_os = "linux") {
+        format!("com.wisent.stado-storage-root-reconcile.{transaction}.service")
+    } else {
+        format!("com.wisent.stado-storage-root-reconcile.{transaction}")
+    };
+    if identity.get("service").and_then(Value::as_str) != Some(expected_service.as_str())
+        || identity.get("pid").and_then(Value::as_u64) != Some(u64::from(std::process::id()))
+    {
+        return Err(DeployError(
+            "resident native manager identity does not bind this exact transaction process"
+                .to_string(),
+        ));
+    }
+    let lock_path = transaction_directory(transaction)?
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| DeployError("transaction directory has no authority root".to_string()))?
+        .join("storage-root-reconcile.lock");
+    let lock = std::fs::metadata(&lock_path)
+        .map_err(|error| DeployError(format!("cannot inspect resident lock identity: {error}")))?;
+    Ok(json!({
+        "role": "resident-transaction-owner",
+        "native_manager": identity,
+        "process_pid": std::process::id(),
+        "lock_device": lock.dev(),
+        "lock_inode": lock.ino(),
+    }))
+}
+
 async fn registry_services(
     storage_target: &crate::targets::ComputeTarget,
+    resident_owner_unit: &str,
     runner: &Runner,
 ) -> Result<Vec<ServiceCandidate>, DeployError> {
     let mut candidates = BTreeMap::<String, ServiceCandidate>::new();
     for declared in service::declared_services(storage_target) {
+        if declared.unit_id() == resident_owner_unit {
+            continue;
+        }
         candidates.insert(
             declared.unit_id().to_string(),
             ServiceCandidate {
@@ -1468,6 +1608,9 @@ async fn registry_services(
         }
         for unit in &product.units {
             let label = unit.label_for(&storage_target.name);
+            if label == resident_owner_unit {
+                continue;
+            }
             let Some(path) = unit.path_for(&storage_target.name) else {
                 continue;
             };
@@ -1482,8 +1625,20 @@ async fn registry_services(
                 });
         }
     }
+    let mut resident_owner_discovered = false;
     for native in service::loaded_units(storage_target, runner).await? {
         let label = native.label.clone();
+        if label == resident_owner_unit {
+            if native.pid.parse::<u32>().ok() != Some(std::process::id()) {
+                return Err(DeployError(
+                    "loaded-unit scan did not bind the exact resident owner service to this process"
+                        .to_string(),
+                ));
+            }
+            resident_owner_discovered = true;
+            candidates.remove(&label);
+            continue;
+        }
         let candidate = candidates.entry(label.clone()).or_insert_with(|| {
             let kind = if native.path.ends_with(".service") {
                 service::KIND_SYSTEMD
@@ -1506,6 +1661,11 @@ async fn registry_services(
         } else if candidate.observed_command.is_empty() {
             candidate.observed_command = native.program;
         }
+    }
+    if !resident_owner_discovered {
+        return Err(DeployError(
+            "loaded-unit scan omitted the exact resident transaction owner".to_string(),
+        ));
     }
     Ok(candidates.into_values().collect())
 }
@@ -2099,10 +2259,31 @@ async fn prepare_lifecycle_fence(
     let mut fence = match read_fence(storage_target, transaction, runner).await? {
         Some(existing) => existing,
         None => {
-            let services = registry_services(storage_target, runner).await?;
+            let resident_owner = resident_owner_retention(transaction)?;
+            let resident_owner_unit = resident_owner
+                .get("native_manager")
+                .and_then(|manager| manager.get("service"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    DeployError("resident owner evidence omitted its exact service".to_string())
+                })?
+                .to_string();
+            let services = registry_services(storage_target, &resident_owner_unit, runner).await?;
             let mut preflight =
                 remote_phase(storage_target, transaction, PREFLIGHT, runner).await?;
             let repository_runner_gate = repository_runner_gate().await?;
+            let staged_runtime = super::host_release::stage_declared_release(
+                &storage_target.name,
+                "stado",
+                storage_target
+                    .managed_versions
+                    .get("stado")
+                    .ok_or_else(|| {
+                        DeployError("target has no current declared Stado runtime".to_string())
+                    })?,
+                runner,
+            )
+            .await?;
             let current_runner = repository_runner_gate
                 .as_ref()
                 .and_then(|gate| gate.get("current_runner"))
@@ -2228,15 +2409,21 @@ async fn prepare_lifecycle_fence(
                 }
                 let was_loaded = state.loaded() || !candidate.loaded_domains.is_empty();
                 let was_runnable = state.pid.is_some();
+                let canonical_stado_recovery = state
+                    .process_executable
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("/.stado/bin/stado"))
+                    && staged_runtime.staged_sha256.len() == 64;
                 if was_runnable
                     && (state.process_started_at.is_none()
                         || state.process_executable.is_none()
                         || state.process_device.is_none()
                         || state.process_inode.is_none()
-                        || state.process_sha256.is_none())
+                        || (state.process_sha256.is_none() && !canonical_stado_recovery))
                 {
                     return Err(DeployError(format!(
-                        "{} cannot be fenced without a mapped-inode process identity",
+                        "{} cannot be fenced without a mapped-inode process identity or its \
+                         digest-verified canonical restoration plan",
                         candidate.declared.unit_id()
                     )));
                 }
@@ -2342,18 +2529,6 @@ async fn prepare_lifecycle_fence(
                 .as_object_mut()
                 .ok_or_else(|| DeployError("preflight report is not an object".to_string()))?
                 .insert("served_store".to_string(), correlation.clone());
-            let staged_runtime = super::host_release::stage_declared_release(
-                &storage_target.name,
-                "stado",
-                storage_target
-                    .managed_versions
-                    .get("stado")
-                    .ok_or_else(|| {
-                        DeployError("target has no current declared Stado runtime".to_string())
-                    })?,
-                runner,
-            )
-            .await?;
             let primary_root = correlation
                 .get("primary_root")
                 .and_then(Value::as_str)
@@ -2424,6 +2599,13 @@ async fn prepare_lifecycle_fence(
                 && correlation.get("object_authority").and_then(Value::as_str) == Some("A")
                 && object_runtime_matches;
             let staged_runtime = Some(staged_runtime);
+            let preflight_evidence = write_json_evidence(
+                transaction,
+                PREFLIGHT_EVIDENCE_FILE,
+                &preflight,
+                "preflight evidence",
+                true,
+            )?;
             let initial = LifecycleFence {
                 schema: FENCE_SCHEMA.to_string(),
                 transaction: transaction.to_string(),
@@ -2455,10 +2637,11 @@ async fn prepare_lifecycle_fence(
                     }),
                     restoration: None,
                 },
+                resident_owner,
                 writers,
                 transport_retained,
                 staged_runtime,
-                preflight,
+                preflight_evidence,
                 lease_acquisitions: Vec::new(),
                 repository_runner_gate,
                 prepared_at: Utc::now().timestamp(),
@@ -2476,6 +2659,7 @@ async fn prepare_lifecycle_fence(
             "durable lifecycle fence belongs to another transaction".to_string(),
         ));
     }
+    refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
     if fence.status == "already_reconciled" {
         return Ok(fence);
     }
@@ -2612,7 +2796,13 @@ async fn prepare_lifecycle_fence(
             && current.process_executable.as_deref() == writer.prior_executable.as_deref()
             && current.process_device == writer.prior_device
             && current.process_inode == writer.prior_inode
-            && current.process_sha256.as_deref() == writer.prior_sha256.as_deref()
+            && match writer.prior_sha256.as_deref() {
+                Some(expected) => current.process_sha256.as_deref() == Some(expected),
+                None => writer
+                    .prior_executable
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("/.stado/bin/stado")),
+            }
             && current.loaded_environment == writer.prior_loaded_environment;
         match writer.status.as_str() {
             "pending" if process_matches_prior && current_autostart == writer.autostart => {}
@@ -2722,6 +2912,7 @@ async fn recheck_lifecycle_fence(
             "durable lifecycle fence is not in the fenced/drained state".to_string(),
         ));
     }
+    fence.resident_owner = resident_owner_retention(transaction)?;
     for writer in &fence.writers {
         let state = super::service_label_print::print_label(
             storage_target,
@@ -2867,6 +3058,11 @@ fn object_recovery_script(
 }
 
 fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
+    let staged_runtime_digest = fence
+        .staged_runtime
+        .as_ref()
+        .map(|release| release.staged_sha256.as_str())
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     for writer in &fence.writers {
         if let Some(snapshot) = &writer.unit_snapshot {
             let body = base64::engine::general_purpose::STANDARD
@@ -2883,6 +3079,25 @@ fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
                     writer.label
                 )));
             }
+        }
+        if writer.was_runnable
+            && (writer.prior_pid.is_none()
+                || writer.prior_started_at.is_none()
+                || writer.prior_executable.is_none()
+                || writer.prior_device.is_none()
+                || writer.prior_inode.is_none()
+                || (writer.prior_sha256.is_none()
+                    && (staged_runtime_digest.is_none()
+                        || !writer
+                            .prior_executable
+                            .as_deref()
+                            .is_some_and(|path| path.ends_with("/.stado/bin/stado")))))
+        {
+            return Err(DeployError(format!(
+                "{} has no complete mapped-inode process identity or digest-verified canonical \
+                 restoration",
+                writer.label
+            )));
         }
         for script in [
             writer.forward_object_recovery.as_ref(),
@@ -3124,8 +3339,14 @@ async fn activate_lifecycle_fence(
         .await?
         .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
     validate_prepared_fence(&fence)?;
-    let served = fence
-        .preflight
+    refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
+    let preflight = read_json_evidence(
+        transaction,
+        PREFLIGHT_EVIDENCE_FILE,
+        &fence.preflight_evidence,
+        "preflight evidence",
+    )?;
+    let served = preflight
         .get("served_store")
         .and_then(Value::as_object)
         .ok_or_else(|| DeployError("fence has no physical/API correlation evidence".to_string()))?;
@@ -3344,8 +3565,7 @@ async fn activate_lifecycle_fence(
                 DeployError("object API listener port is absent from its fence".to_string())
             })?;
             let correlation =
-                correlate_served_store(storage_target, port, &fence.preflight, !rollback, runner)
-                    .await?;
+                correlate_served_store(storage_target, port, &preflight, !rollback, runner).await?;
             let authority = correlation
                 .get("object_authority")
                 .and_then(Value::as_str)
@@ -3448,7 +3668,7 @@ async fn remote_phase(
 ) -> Result<Value, DeployError> {
     let output = host_channel::run_script_with_timeout(
         target,
-        &bind_remote_script(phase, transaction, ""),
+        &bind_remote_script(phase, transaction),
         TIMEOUT,
         runner,
     )
@@ -3488,7 +3708,7 @@ fn read_transaction_receipt(transaction: &str) -> Result<Value, DeployError> {
             .map_err(|error| DeployError(format!("cannot read {}: {error}", path.display())))?,
     )
     .map_err(|error| DeployError(format!("transaction receipt is invalid: {error}")))?;
-    if receipt.get("schema").and_then(Value::as_str) != Some("stado.storage-root-reconcile.v1")
+    if receipt.get("schema").and_then(Value::as_str) != Some("stado.storage-root-reconcile.v2")
         || receipt.get("transaction").and_then(Value::as_str) != Some(transaction)
     {
         return Err(DeployError(
@@ -3498,19 +3718,49 @@ fn read_transaction_receipt(transaction: &str) -> Result<Value, DeployError> {
     Ok(receipt)
 }
 
+fn receipt_evidence_reference(
+    receipt: &Value,
+    field: &str,
+    label: &str,
+) -> Result<ImmutableEvidenceReference, DeployError> {
+    serde_json::from_value(
+        receipt
+            .get(field)
+            .cloned()
+            .ok_or_else(|| DeployError(format!("receipt omitted {label} reference")))?,
+    )
+    .map_err(|error| DeployError(format!("receipt {label} reference is invalid: {error}")))
+}
+
 async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, DeployError> {
     let receipt = read_transaction_receipt(transaction)?;
-    let backup_paths = receipt
+    let checkpoint_reference =
+        receipt_evidence_reference(&receipt, "checkpoint_evidence", "checkpoint evidence")?;
+    let checkpoint = read_json_evidence(
+        transaction,
+        CHECKPOINT_EVIDENCE_FILE,
+        &checkpoint_reference,
+        "checkpoint evidence",
+    )?;
+    if checkpoint.get("schema").and_then(Value::as_str)
+        != Some("stado.storage-root-checkpoint-evidence.v1")
+        || checkpoint.get("transaction").and_then(Value::as_str) != Some(transaction)
+    {
+        return Err(DeployError(
+            "checkpoint evidence belongs to another reconciliation".to_string(),
+        ));
+    }
+    let backup_paths = checkpoint
         .get("backup_objects")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("checkpoint receipt omitted backup objects".to_string()))?
+        .ok_or_else(|| DeployError("checkpoint evidence omitted backup objects".to_string()))?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let primary_only = receipt
+    let primary_only = checkpoint
         .get("primary_objects")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("checkpoint receipt omitted primary objects".to_string()))?
+        .ok_or_else(|| DeployError("checkpoint evidence omitted primary objects".to_string()))?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .filter(|path| !backup_paths.contains(path))
@@ -3546,12 +3796,22 @@ async fn record_typed_lifecycle_decisions(
     decisions: &[Value],
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let encoded = serde_json::to_string(decisions).map_err(|error| {
-        DeployError(format!("cannot encode typed lifecycle decisions: {error}"))
-    })?;
+    if !host_channel::target_is_this_host(target) {
+        return Err(DeployError(
+            "typed lifecycle decisions can only be recorded by the resident target worker"
+                .to_string(),
+        ));
+    }
+    write_json_evidence(
+        transaction,
+        LIFECYCLE_DECISIONS_FILE,
+        decisions,
+        "typed lifecycle decisions",
+        false,
+    )?;
     let output = host_channel::run_script_with_timeout(
         target,
-        &bind_remote_script(RECORD_LIFECYCLE_DECISIONS, transaction, &encoded),
+        &bind_remote_script(RECORD_LIFECYCLE_DECISIONS, transaction),
         TIMEOUT,
         runner,
     )
@@ -3563,10 +3823,20 @@ async fn typed_final_lifecycle_observations(
     fence: &LifecycleFence,
 ) -> Result<Vec<Value>, DeployError> {
     let receipt = read_transaction_receipt(transaction)?;
-    let decisions = receipt
-        .get("lifecycle_decisions")
-        .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("receipt omitted typed lifecycle decisions".to_string()))?;
+    let decision_reference = receipt_evidence_reference(
+        &receipt,
+        "lifecycle_decisions_evidence",
+        "typed lifecycle decisions",
+    )?;
+    let decisions_value = read_json_evidence(
+        transaction,
+        LIFECYCLE_DECISIONS_FILE,
+        &decision_reference,
+        "typed lifecycle decisions",
+    )?;
+    let decisions = decisions_value
+        .as_array()
+        .ok_or_else(|| DeployError("typed lifecycle decisions are not a list".to_string()))?;
     let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
     let backend = crate::queue::LocalBackend::open_existing(&snapshot)
         .map_err(|error| DeployError(format!("cannot open lifecycle checkpoint: {error}")))?;
@@ -3590,14 +3860,22 @@ async fn record_typed_final_lifecycle_observations(
     observations: &[Value],
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let encoded = serde_json::to_string(observations).map_err(|error| {
-        DeployError(format!(
-            "cannot encode typed final lifecycle observations: {error}"
-        ))
-    })?;
+    if !host_channel::target_is_this_host(target) {
+        return Err(DeployError(
+            "typed final lifecycle observations can only be recorded by the resident target worker"
+                .to_string(),
+        ));
+    }
+    write_json_evidence(
+        transaction,
+        FINAL_LIFECYCLE_OBSERVATIONS_FILE,
+        observations,
+        "typed final lifecycle observations",
+        false,
+    )?;
     let output = host_channel::run_script_with_timeout(
         target,
-        &bind_remote_script(FINALIZE, transaction, &encoded),
+        &bind_remote_script(FINALIZE, transaction),
         TIMEOUT,
         runner,
     )
@@ -3646,9 +3924,10 @@ async fn reconcile_host_inner(
         return report(target, transaction, phase, receipt, fence.as_ref());
     }
     if phase == FINALIZE {
-        let fence = read_fence(target, transaction, runner)
+        let mut fence = read_fence(target, transaction, runner)
             .await?
             .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+        refresh_resident_owner(target, transaction, &mut fence, runner).await?;
         if fence.status != "activated" {
             return Err(DeployError(format!(
                 "finalize observes lifecycle cleanup only after activation, not {}",
@@ -3704,10 +3983,10 @@ async fn reconcile_host_inner(
     };
     if fence.status == "already_reconciled" {
         let receipt = json!({
-            "schema": "stado.storage-root-reconcile.v1",
+            "schema": "stado.storage-root-reconcile.v2",
             "transaction": transaction,
             "status": "already_reconciled",
-            "preflight": fence.preflight.clone(),
+            "preflight_evidence": fence.preflight_evidence.clone(),
         });
         return report(target, transaction, phase, receipt, Some(&fence));
     }
@@ -3811,6 +4090,195 @@ fn transaction_directory(transaction: &str) -> Result<PathBuf, DeployError> {
     Ok(PathBuf::from(home)
         .join(".stado/recovery/storage-root-reconcile")
         .join(transaction))
+}
+
+fn encoded_json<T: Serialize + ?Sized>(value: &T, label: &str) -> Result<Vec<u8>, DeployError> {
+    let mut encoded = serde_json::to_vec(value)
+        .map_err(|error| DeployError(format!("cannot encode {label}: {error}")))?;
+    encoded.push(b'\n');
+    Ok(encoded)
+}
+
+fn atomic_bytes_file(path: &Path, encoded: &[u8], label: &str) -> Result<(), DeployError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| DeployError(format!("{label} has no parent directory")))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| DeployError(format!("cannot create {}: {error}", parent.display())))?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| DeployError(format!("cannot inspect {}: {error}", parent.display())))?;
+    if !parent_metadata.file_type().is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err(DeployError(format!(
+            "{label} parent is not a regular directory: {}",
+            parent.display()
+        )));
+    }
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| DeployError(format!("cannot protect {}: {error}", parent.display())))?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
+            return Err(DeployError(format!(
+                "{label} collides with a non-regular file: {}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(DeployError(format!(
+                "cannot inspect {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| DeployError(format!("{label} has an invalid file name")))?;
+    let temporary = parent.join(format!(".{file_name}.{}.new", uuid::Uuid::new_v4()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|error| DeployError(format!("cannot create {}: {error}", temporary.display())))?;
+    file.write_all(encoded)
+        .map_err(|error| DeployError(format!("cannot write {label}: {error}")))?;
+    file.sync_all()
+        .map_err(|error| DeployError(format!("cannot sync {label}: {error}")))?;
+    std::fs::rename(&temporary, path)
+        .map_err(|error| DeployError(format!("cannot publish {label}: {error}")))?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| DeployError(format!("cannot sync {}: {error}", parent.display())))?;
+    Ok(())
+}
+
+fn atomic_json_file<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+    label: &str,
+) -> Result<(), DeployError> {
+    atomic_bytes_file(path, &encoded_json(value, label)?, label)
+}
+
+fn evidence_reference(
+    path: &Path,
+    encoded: &[u8],
+    label: &str,
+) -> Result<ImmutableEvidenceReference, DeployError> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| DeployError(format!("{label} path is not valid UTF-8")))?
+        .to_string();
+    Ok(ImmutableEvidenceReference {
+        path,
+        sha256: hex::encode(Sha256::digest(encoded)),
+        bytes: encoded.len() as u64,
+    })
+}
+
+fn read_regular_file(path: &Path, label: &str) -> Result<Vec<u8>, DeployError> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| DeployError(format!("cannot inspect {}: {error}", path.display())))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(DeployError(format!(
+            "{label} is not a regular file: {}",
+            path.display()
+        )));
+    }
+    std::fs::read(path)
+        .map_err(|error| DeployError(format!("cannot read {}: {error}", path.display())))
+}
+
+fn write_json_evidence<T: Serialize + ?Sized>(
+    transaction: &str,
+    file_name: &str,
+    value: &T,
+    label: &str,
+    replace: bool,
+) -> Result<ImmutableEvidenceReference, DeployError> {
+    verify_resident_lock(transaction)?;
+    let path = transaction_directory(transaction)?.join(file_name);
+    let encoded = encoded_json(value, label)?;
+    if replace {
+        atomic_bytes_file(&path, &encoded, label)?;
+    } else {
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {
+                if read_regular_file(&path, label)? != encoded {
+                    return Err(DeployError(format!(
+                        "{label} changed after its immutable publication"
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                atomic_bytes_file(&path, &encoded, label)?;
+            }
+            Err(error) => {
+                return Err(DeployError(format!(
+                    "cannot inspect {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    evidence_reference(&path, &encoded, label)
+}
+
+fn read_json_evidence(
+    transaction: &str,
+    file_name: &str,
+    reference: &ImmutableEvidenceReference,
+    label: &str,
+) -> Result<Value, DeployError> {
+    verify_resident_lock(transaction)?;
+    let path = transaction_directory(transaction)?.join(file_name);
+    if path.to_str() != Some(reference.path.as_str()) {
+        return Err(DeployError(format!(
+            "{label} reference does not name its canonical transaction file"
+        )));
+    }
+    let canonical = std::fs::symlink_metadata(&path)
+        .map_err(|error| DeployError(format!("cannot inspect {}: {error}", path.display())))?;
+    if !canonical.file_type().is_file() || canonical.file_type().is_symlink() {
+        return Err(DeployError(format!(
+            "{label} is not a regular file: {}",
+            path.display()
+        )));
+    }
+    let mut file = std::fs::File::open(&path)
+        .map_err(|error| DeployError(format!("cannot open {}: {error}", path.display())))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| DeployError(format!("cannot inspect {}: {error}", path.display())))?;
+    if opened.dev() != canonical.dev() || opened.ino() != canonical.ino() {
+        return Err(DeployError(format!(
+            "{label} changed while its canonical file was opened"
+        )));
+    }
+    let mut hasher = Sha256::new();
+    let mut observed_bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| DeployError(format!("cannot hash {label}: {error}")))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        observed_bytes += count as u64;
+    }
+    if observed_bytes != reference.bytes || hex::encode(hasher.finalize()) != reference.sha256 {
+        return Err(DeployError(format!(
+            "{label} bytes differ from their durable reference"
+        )));
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| DeployError(format!("cannot rewind {label}: {error}")))?;
+    serde_json::from_reader(file)
+        .map_err(|error| DeployError(format!("{label} is invalid: {error}")))
 }
 
 fn sha256_file(path: &Path) -> Result<String, DeployError> {
@@ -4057,6 +4525,11 @@ pub async fn reconcile_host_worker(
             .map_err(|_| DeployError("resident runner gate was already initialized".to_string()))?;
     }
     let native_manager = resident_native_manager_identity(transaction)?;
+    RESIDENT_NATIVE_MANAGER
+        .set(native_manager.clone())
+        .map_err(|_| {
+            DeployError("resident native manager identity was already initialized".to_string())
+        })?;
     let owner_path = directory.join("operation-owner.json");
     let revision = std::fs::read(&owner_path)
         .ok()
