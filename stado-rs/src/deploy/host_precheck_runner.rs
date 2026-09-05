@@ -196,6 +196,10 @@ fn macos_installer(
     replace(
         &profile_template(MACOS_INSTALLER, profile),
         &[
+            (
+                "__MACOS_RUNTIME_FUNCTIONS__",
+                MACOS_RUNTIME_FUNCTIONS.to_string(),
+            ),
             ("__VERSION__", RUNNER_VERSION.to_string()),
             ("__SHA256__", MACOS_SHA256.to_string()),
             ("__TOKEN__", super::shlex_quote(registration_token)),
@@ -227,6 +231,68 @@ fn macos_installer(
             ),
         ],
     )
+}
+
+/// Restore the upstream apphosts of an adopted macOS GitHub runner in place.
+/// Its existing listener retry loop picks up the repaired files; no unit is cycled.
+pub async fn repair_runtime(
+    target: &ComputeTarget,
+    managed: &super::service::ManagedService,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    if Platform::for_target(target)? != Platform::DarwinArm64 {
+        return Err(DeployError(
+            "runner runtime repair requires a darwin-arm64 host".to_string(),
+        ));
+    }
+    let unit = super::service::fetch_unit_file(target, managed, runner).await?;
+    let program = super::service::parse_unit_program(&unit)?
+        .ok_or_else(|| DeployError("runner unit declares no executable".to_string()))?;
+    let path = std::path::Path::new(&program);
+    if !path.is_absolute() || path.file_name().is_none_or(|name| name != "runsvc.sh") {
+        return Err(DeployError(
+            "runner unit must directly declare GitHub's runsvc.sh".to_string(),
+        ));
+    }
+    let mut root = path
+        .parent()
+        .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
+    if root.file_name().is_some_and(|name| name == "bin") {
+        root = root
+            .parent()
+            .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
+    }
+    let script = replace(
+        MACOS_RUNTIME_REPAIR,
+        &[
+            (
+                "__RUNNER_ROOT__",
+                super::shlex_quote(&root.to_string_lossy()),
+            ),
+            (
+                "__MACOS_RUNTIME_FUNCTIONS__",
+                MACOS_RUNTIME_FUNCTIONS.to_string(),
+            ),
+        ],
+    );
+    let output =
+        host_channel::run_script_with_timeout(target, &script, Duration::from_secs(300), runner)
+            .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: runner runtime repair failed: {} {}",
+            target.name, output.stdout, output.stderr
+        )));
+    }
+    Ok(json!({
+        "target": target.name,
+        "unit": managed.unit_id(),
+        "runner_root": root,
+        "action": "repair-runtime",
+        "restarted": false,
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+    }))
 }
 
 async fn admin_credential(item: &str, field: &str) -> Result<String, DeployError> {
@@ -2133,8 +2199,65 @@ root touch "$runner_root/.service-reconciled"
 printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
+const MACOS_RUNTIME_FUNCTIONS: &str = r#"
+runner_signatures_valid() {
+  root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Listener" >/dev/null 2>&1 &&
+  root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Worker" >/dev/null 2>&1
+}
+fetch_runner_archive() {
+  curl --fail --silent --show-error --location --max-time 120 \
+    "https://github.com/actions/runner/releases/download/v$version/actions-runner-osx-arm64-$version.tar.gz" \
+    -o "$archive"
+  actual=$(shasum -a 256 "$archive" | cut -d' ' -f1)
+  [ "$actual" = "$expected" ] || { printf '%s\n' "runner checksum mismatch: $actual" >&2; exit 1; }
+}
+restore_runner_apphosts() {
+  signed_runtime="$staging/signed-runtime"
+  mkdir -p "$signed_runtime"
+  tar -xzf "$archive" -C "$signed_runtime" ./bin/Runner.Listener ./bin/Runner.Worker
+  for executable in Runner.Listener Runner.Worker; do
+    /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
+  done
+  for executable in Runner.Listener Runner.Worker; do
+    owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")
+    replacement=$(root mktemp "$runner_root/bin/.$executable.stado.XXXXXX")
+    root cp "$signed_runtime/bin/$executable" "$replacement"
+    root chown "$owner" "$replacement"
+    root chmod 0755 "$replacement"
+    root mv -f "$replacement" "$runner_root/bin/$executable"
+  done
+}
+"#;
+
+const MACOS_RUNTIME_REPAIR: &str = r#"set -euo pipefail
+root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+runner_root=__RUNNER_ROOT__
+__MACOS_RUNTIME_FUNCTIONS__
+[ -f "$runner_root/.runner" ] || { printf '%s\n' 'runner is not registered' >&2; exit 1; }
+if runner_signatures_valid; then
+  printf '%s\n' 'runner apphost signatures are intact; no files changed'
+  exit 0
+fi
+version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf '%s\n' 'runner version is malformed' >&2; exit 1; }
+mkdir -p "$HOME/.stado/work"
+staging=$(mktemp -d "$HOME/.stado/work/runner-runtime.XXXXXX")
+trap 'root rm -rf "$staging"' EXIT HUP INT TERM
+archive="$staging/runner.tar.gz"
+curl --fail --silent --show-error --location --max-time 60 \
+  "https://api.github.com/repos/actions/runner/releases/tags/v$version" -o "$staging/release.json"
+expected=$(jq -er --arg name "actions-runner-osx-arm64-$version.tar.gz" \
+  '.assets | map(select(.name == $name)) | if length == 1 then .[0].digest | strings | select(startswith("sha256:")) | ltrimstr("sha256:") else error("runner artifact is ambiguous") end' "$staging/release.json")
+[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release has no SHA-256 digest' >&2; exit 1; }
+fetch_runner_archive
+restore_runner_apphosts
+runner_signatures_valid
+printf 'restored upstream runner %s apphosts; archive sha256=%s; no service restarted\n' "$version" "$expected"
+"#;
+
 const MACOS_INSTALLER: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+__MACOS_RUNTIME_FUNCTIONS__
 version=__VERSION__
 expected=__SHA256__
 token=__TOKEN__
@@ -2178,17 +2301,23 @@ if dseditgroup -o checkmember -m "$runner_user" admin | grep -qi 'yes'; then
   exit 1
 fi
 
-if [ ! -f "$runner_root/.runner" ]; then
-  curl --fail --silent --show-error --location --max-time 120 \
-    "https://github.com/actions/runner/releases/download/v$version/actions-runner-osx-arm64-$version.tar.gz" \
-    -o "$archive"
-  actual=$(shasum -a 256 "$archive" | cut -d' ' -f1)
-  [ "$actual" = "$expected" ] || { printf '%s\n' "runner checksum mismatch: $actual" >&2; exit 1; }
+runner_registered=0
+if [ -f "$runner_root/.runner" ]; then runner_registered=1; fi
+# The verified GitHub artifact carries valid ad-hoc signatures. An older
+# installer stripped them, and current macOS kills the CoreCLR apphosts with
+# HRESULT 0x8007000C. Reconciliation repairs that installed state from the same
+# checksum-pinned artifact instead of manufacturing a replacement signature.
+runtime_repaired=0
+if [ "$runner_registered" -eq 1 ] && ! runner_signatures_valid; then
+  runtime_repaired=1
+fi
+if [ "$runner_registered" -eq 0 ] || [ "$runtime_repaired" -eq 1 ]; then
+  fetch_runner_archive
+fi
+if [ "$runner_registered" -eq 0 ]; then
   root rm -rf "$runner_root"
   root mkdir -p "$runner_root"
   root tar -xzf "$archive" -C "$runner_root"
-  root codesign --remove-signature "$runner_root/bin/Runner.Listener"
-  root codesign --remove-signature "$runner_root/bin/Runner.Worker"
   installer_user=$(id -un)
   installer_group=$(id -gn)
   root chown -R "$installer_user:$installer_group" "$runner_root"
@@ -2207,8 +2336,9 @@ if [ ! -f "$runner_root/.runner" ]; then
     exit 1
   fi
   token=
+elif [ "$runtime_repaired" -eq 1 ]; then
+  restore_runner_apphosts
 fi
-  root chown -R "$runner_user:$runner_user" "$runner_root"
 
 root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches" "$runner_root/.stado"
 root chown -R root:wheel "$runner_root"
@@ -2248,7 +2378,7 @@ root pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-prec
 root pfctl -E >/dev/null 2>&1 || true
 rm -f "$anchor"
 
-service_changed=0
+service_changed=$runtime_repaired
 if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
 
 launcher=$(mktemp "$staging/launcher.XXXXXX")
