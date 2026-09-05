@@ -110,7 +110,7 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 
 const REMOTE_PYTHON: &str = include_str!("host_storage_reconcile.py");
 
-const FENCE_SCHEMA: &str = "stado.storage-root-fence.v4";
+const FENCE_SCHEMA: &str = "stado.storage-root-fence.v5";
 const READ_FENCE: &str = "read-fence";
 const READ_OWNER: &str = "read-owner";
 const PREFLIGHT_EVIDENCE_FILE: &str = "preflight.json";
@@ -225,6 +225,23 @@ struct ImmutableEvidenceReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct StorageRoots {
+    primary: String,
+    backup: String,
+    prior_primary: String,
+    prior_backup: Option<String>,
+    runtime: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WriteFenceEffect {
+    status: String,
+    intent: Value,
+    acquired_at: Option<i64>,
+    released_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LifecycleFence {
     schema: String,
     transaction: String,
@@ -236,7 +253,14 @@ struct LifecycleFence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     non_storage_retained: Vec<Value>,
     staged_runtime: Option<super::host_release::StagedRelease>,
-    preflight_evidence: ImmutableEvidenceReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    roots: Option<StorageRoots>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    write_fence: Option<WriteFenceEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preflight_evidence: Option<ImmutableEvidenceReference>,
+    #[serde(default)]
+    rollback_preparation: bool,
     #[serde(default)]
     lease_acquisitions: Vec<LeaseAcquisition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -840,6 +864,13 @@ async fn renew_fence_leases(
     store: &crate::queue::JobStorage,
     fence: &mut LifecycleFence,
 ) -> Result<(), DeployError> {
+    if fence
+        .write_fence
+        .as_ref()
+        .is_some_and(|effect| matches!(effect.status.as_str(), "acquired" | "release_intent"))
+    {
+        return Ok(());
+    }
     const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
     for acquisition in &mut fence.lease_acquisitions {
         if matches!(
@@ -860,7 +891,7 @@ async fn renew_fence_leases(
                 acquisition.subject_id
             ))
         })?;
-        *lease = crate::autonomy::storage::renew_placement_lease(
+        let renewed = crate::autonomy::storage::renew_placement_lease(
             store,
             &lease.subject_id,
             &lease.token,
@@ -868,13 +899,31 @@ async fn renew_fence_leases(
             Utc::now(),
         )
         .await
-        .map_err(|error| DeployError(format!("cannot renew {}: {error}", lease.subject_id)))?
-        .ok_or_else(|| {
-            DeployError(format!(
-                "placement lease ownership changed for {}",
-                lease.subject_id
-            ))
-        })?;
+        .map_err(|error| DeployError(format!("cannot renew {}: {error}", lease.subject_id)))?;
+        *lease = match renewed {
+            Some(renewed) => renewed,
+            None => crate::autonomy::storage::acquire_placement_lease(
+                store,
+                &lease.subject_id,
+                &fence.transaction,
+                &lease.holder,
+                LEASE_TTL_SECONDS,
+                Utc::now(),
+            )
+            .await
+            .map_err(|error| {
+                DeployError(format!(
+                    "cannot recover lease {}: {error}",
+                    lease.subject_id
+                ))
+            })?
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "placement lease ownership changed for {}",
+                    lease.subject_id
+                ))
+            })?,
+        };
     }
     Ok(())
 }
@@ -1343,7 +1392,7 @@ for key in keys:
                 break
             digest.update(chunk)
             size += len(chunk)
-    served[key] = {{'sha256': digest.hexdigest(), 'size': size}}
+    served[key] = {{'sha256': digest.hexdigest(), 'bytes': size}}
 matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)
 matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)
 if not matches_primary and not matches_backup:
@@ -1398,10 +1447,322 @@ PY"#
                 .map_err(|error| DeployError(format!("object API correlation is invalid: {error}")))
         })
 }
+async fn observe_object_runtime(
+    target: &crate::targets::ComputeTarget,
+    port: u16,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let script = format!(
+        r#"python3 - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen('http://127.0.0.1:{port}/api/state.json', timeout=30) as response:
+    state = json.load(response)
+print('STADO_STORAGE_RECONCILE\t' + json.dumps(state, sort_keys=True))
+PY
+"#
+    );
+    let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
+    parse_remote_payload(&output)
+}
+
+fn capture_storage_roots(
+    transaction: &str,
+    runtime: Value,
+    writer: &WriterFence,
+    staged: &super::host_release::StagedRelease,
+) -> Result<StorageRoots, DeployError> {
+    let directory = transaction_directory(transaction)?;
+    let home = directory.ancestors().nth(3).ok_or_else(|| {
+        DeployError("transaction directory has no Stado data directory".to_string())
+    })?;
+    let primary = home.join("local-storage").to_string_lossy().into_owned();
+    let backup = home.join("local-backup").to_string_lossy().into_owned();
+    let storage = runtime.get("storage").ok_or_else(|| {
+        DeployError("object API state omitted its constructed storage handle".to_string())
+    })?;
+    let pid = storage.get("pid").and_then(Value::as_u64);
+    if pid != writer.prior_pid.as_deref().and_then(|pid| pid.parse().ok())
+        || writer.prior_sha256.as_deref() != Some(staged.staged_sha256.as_str())
+    {
+        return Err(DeployError(format!(
+            "object API identity differs from the captured process or staged declared runtime: \
+             API PID {pid:?}, captured PID {:?}, mapped SHA-256 {:?}, staged SHA-256 {}",
+            writer.prior_pid, writer.prior_sha256, staged.staged_sha256,
+        )));
+    }
+    if storage.get("backend").and_then(Value::as_str) != Some("local")
+        || storage
+            .pointer("/write_fence/protocol")
+            .and_then(Value::as_str)
+            != Some(crate::queue::LocalBackend::WRITE_FENCE_PROTOCOL)
+    {
+        return Err(DeployError(
+            "object API does not report the local storage write-fence protocol; \
+             the declared release must converge before a storage handoff"
+                .to_string(),
+        ));
+    }
+    let prior_primary = storage
+        .get("local_path")
+        .and_then(Value::as_str)
+        .filter(|path| *path == primary || *path == backup)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "object API constructed root {:?} is outside fixed roots {primary:?} and {backup:?}",
+                storage.get("local_path")
+            ))
+        })?
+        .to_string();
+    let prior_backup = match storage.get("backup").filter(|value| !value.is_null()) {
+        None => None,
+        Some(mirror) => {
+            let path = mirror
+                .get("local_path")
+                .and_then(Value::as_str)
+                .filter(|path| *path == primary || *path == backup);
+            if mirror.get("backend").and_then(Value::as_str) != Some("local")
+                || path.is_none()
+                || path == Some(prior_primary.as_str())
+            {
+                return Err(DeployError(format!(
+                    "object API constructed mirror is outside the distinct fixed A/B roots: {mirror}"
+                )));
+            }
+            path.map(str::to_string)
+        }
+    };
+    Ok(StorageRoots {
+        primary,
+        backup,
+        prior_primary,
+        prior_backup,
+        runtime,
+    })
+}
+
+async fn acquire_storage_write_fence(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
+    guard: &mut Option<std::fs::File>,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    use crate::queue::LocalBackend;
+    let roots = fence.roots.as_ref().ok_or_else(|| {
+        DeployError("lifecycle fence omitted its observed storage roots".to_string())
+    })?;
+    let root = PathBuf::from(&roots.primary);
+    let paths = LocalBackend::write_fence_paths(&root)
+        .ok_or_else(|| DeployError("primary root has no storage write-fence path".to_string()))?;
+    if LocalBackend::write_fence_paths(Path::new(&roots.backup)) != Some(paths.clone()) {
+        return Err(DeployError(
+            "A and B do not share the same storage write fence".to_string(),
+        ));
+    }
+    if fence.write_fence.is_none() {
+        fence.write_fence = Some(WriteFenceEffect {
+            status: "acquire_intent".to_string(),
+            intent: json!({
+                "schema": LocalBackend::WRITE_FENCE_PROTOCOL,
+                "transaction": transaction,
+                "primary_root": roots.primary,
+                "backup_root": roots.backup,
+                "prepared_at": Utc::now().timestamp(),
+            }),
+            acquired_at: None,
+            released_at: None,
+        });
+        write_fence(target, transaction, fence, runner).await?;
+    }
+    let effect = fence
+        .write_fence
+        .as_ref()
+        .expect("write intent was recorded");
+    if effect.status == "released" {
+        return Ok(());
+    }
+    if guard.is_none() {
+        let file = LocalBackend::open_write_fence_lock(&root)
+            .map_err(|error| DeployError(error.to_string()))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match fs2::FileExt::try_lock_exclusive(&file) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(DeployError(
+                            "in-flight local storage writes did not finish within 30 seconds; \
+                             the recorded handoff remains resumable"
+                                .to_string(),
+                        ));
+                    }
+                    sleep(Duration::from_millis(25)).await;
+                }
+                Err(error) => {
+                    return Err(DeployError(format!(
+                        "cannot acquire storage write fence {}: {error}",
+                        paths.0.display()
+                    )))
+                }
+            }
+        }
+        *guard = Some(file);
+    }
+    let state =
+        LocalBackend::write_fence_state(&root).map_err(|error| DeployError(error.to_string()))?;
+    match state.get("intent").filter(|value| !value.is_null()) {
+        Some(intent) if intent == &effect.intent => {}
+        Some(intent) => {
+            return Err(DeployError(format!(
+                "storage write fence belongs to a different recorded intent: {intent}"
+            )))
+        }
+        None if effect.status == "acquire_intent" => {
+            atomic_json_file(&paths.1, &effect.intent, "storage write-fence intent")?;
+        }
+        None if effect.status == "release_intent" => return Ok(()),
+        None => {
+            return Err(DeployError(
+                "acquired storage write-fence intent disappeared; refusing to reconstruct it"
+                    .to_string(),
+            ))
+        }
+    }
+    if fence.write_fence.as_ref().unwrap().status == "acquire_intent" {
+        let effect = fence.write_fence.as_mut().unwrap();
+        effect.status = "acquired".to_string();
+        effect.acquired_at = Some(Utc::now().timestamp());
+        write_fence(target, transaction, fence, runner).await?;
+    }
+    Ok(())
+}
+
+async fn release_storage_write_fence(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
+    guard: &mut Option<std::fs::File>,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    use crate::queue::LocalBackend;
+    if fence.write_fence.is_none() {
+        return Ok(());
+    }
+    acquire_storage_write_fence(target, transaction, fence, guard, runner).await?;
+    if fence.write_fence.as_ref().unwrap().status == "released" {
+        return Ok(());
+    }
+    fence.write_fence.as_mut().unwrap().status = "release_intent".to_string();
+    write_fence(target, transaction, fence, runner).await?;
+    let root = Path::new(&fence.roots.as_ref().unwrap().primary);
+    let (_, intent_path) = LocalBackend::write_fence_paths(root).unwrap();
+    let state =
+        LocalBackend::write_fence_state(root).map_err(|error| DeployError(error.to_string()))?;
+    if let Some(intent) = state.get("intent").filter(|value| !value.is_null()) {
+        if intent != &fence.write_fence.as_ref().unwrap().intent {
+            return Err(DeployError(
+                "storage write-fence intent changed before release".to_string(),
+            ));
+        }
+        std::fs::remove_file(&intent_path).map_err(|error| {
+            DeployError(format!("cannot release {}: {error}", intent_path.display()))
+        })?;
+        std::fs::File::open(intent_path.parent().unwrap())
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| DeployError(format!("cannot sync write-fence release: {error}")))?;
+    }
+    let effect = fence.write_fence.as_mut().unwrap();
+    effect.status = "released".to_string();
+    effect.released_at = Some(Utc::now().timestamp());
+    write_fence(target, transaction, fence, runner).await?;
+    *guard = None;
+    Ok(())
+}
+
+async fn capture_fenced_preflight(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    if fence.preflight_evidence.is_some() {
+        return Ok(());
+    }
+    let mut preflight = remote_phase(target, transaction, PREFLIGHT, runner).await?;
+    let writer = fence
+        .writers
+        .iter()
+        .find(|writer| writer.role == "object-api")
+        .ok_or_else(|| DeployError("fence omitted its object API".to_string()))?;
+    let correlation = correlate_served_store(
+        target,
+        writer
+            .listener_port
+            .ok_or_else(|| DeployError("object API port is absent".to_string()))?,
+        &preflight,
+        false,
+        runner,
+    )
+    .await?;
+    let authority = correlation
+        .get("object_authority")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DeployError("fenced API proof omitted its authority".to_string()))?;
+    let roots = fence.roots.as_ref().unwrap();
+    if qualified_copy_required(&preflight)? && roots.prior_primary != roots.backup {
+        return Err(DeployError(
+            "object API's constructed authority is A and B differs; refusing a B-winning copy"
+                .to_string(),
+        ));
+    }
+    let prior_root = if roots.prior_primary == roots.primary {
+        "A"
+    } else {
+        "B"
+    };
+    if !matches!(authority, "identical") && authority != prior_root {
+        return Err(DeployError(
+            "fenced API bytes disagree with its constructed storage root".to_string(),
+        ));
+    }
+    let inventory = if prior_root == "A" {
+        "primary_physical"
+    } else {
+        "backup_physical"
+    };
+    let configuration = json!({
+        "object_api": {
+            "runtime": roots.runtime,
+            "observed_loaded_environment": writer.prior_loaded_environment,
+            "unit_declaration": writer.unit_declared_environment,
+            "registry_declaration": writer.registry_declared_environment,
+        },
+        "dashboard_registry_store": {
+            "backend": "local", "namespace": Value::Null, "key": "registry.json",
+            "physical_root": prior_root,
+            "identity": physical_file_identity(&preflight, inventory, "registry.json"),
+        },
+    });
+    let report = preflight
+        .as_object_mut()
+        .ok_or_else(|| DeployError("fenced preflight report is not an object".to_string()))?;
+    report.insert("served_store".to_string(), correlation);
+    report.insert("effective_configuration".to_string(), configuration);
+    fence.preflight_evidence = Some(write_json_evidence(
+        transaction,
+        PREFLIGHT_EVIDENCE_FILE,
+        &preflight,
+        "fenced preflight evidence",
+        true,
+    )?);
+    write_fence(target, transaction, fence, runner).await
+}
+
 async fn prepare_lifecycle_fence(
     storage_target: &crate::targets::ComputeTarget,
     transaction: &str,
     runner: &Runner,
+    write_guard: &mut Option<std::fs::File>,
 ) -> Result<LifecycleFence, DeployError> {
     let mut fence = match read_fence(storage_target, transaction, runner).await? {
         Some(existing) => existing,
@@ -1416,8 +1777,6 @@ async fn prepare_lifecycle_fence(
                 })?
                 .to_string();
             let services = registry_services(storage_target, &resident_owner_unit, runner).await?;
-            let mut preflight =
-                remote_phase(storage_target, transaction, PREFLIGHT, runner).await?;
             let repository_runner_gate = repository_runner_gate().await?;
             let staged_runtime = super::host_release::stage_declared_release(
                 &storage_target.name,
@@ -1450,7 +1809,6 @@ async fn prepare_lifecycle_fence(
             )?;
             let mut writers = Vec::new();
             let mut transport_retained = Vec::new();
-            let mut api_already_forward = false;
             let mut owning_runner_found = false;
             let mut non_storage_retained = Vec::new();
             let mut object_port = None;
@@ -1530,15 +1888,6 @@ async fn prepare_lifecycle_fence(
                             candidate.declared.unit_id()
                         )));
                     }
-                    api_already_forward = loaded_routing_observed
-                        && state
-                            .loaded_environment
-                            .get("WC_LOCAL_STORAGE_PATH")
-                            .is_some_and(|path| path.ends_with("/.stado/local-storage"))
-                        && backup_backend.map(String::as_str) == Some("local")
-                        && backup_path
-                            .map(String::as_str)
-                            .is_some_and(|path| path.ends_with("/.stado/local-backup"));
                     object_port = command_u16_option(command, "--port");
                 }
                 if matches!(role.as_str(), "transport" | "current-runner") {
@@ -1664,121 +2013,32 @@ async fn prepare_lifecycle_fence(
                     "runner gate did not map its owning native runner service".to_string(),
                 ));
             }
-            let correlation = correlate_served_store(
+            let runtime = observe_object_runtime(
                 storage_target,
-                object_port.ok_or_else(|| {
-                    DeployError(
-                        "object API listener port is absent from its loaded argv".to_string(),
-                    )
-                })?,
-                &preflight,
-                false,
+                object_port.ok_or_else(|| DeployError("object API port is absent".to_string()))?,
                 runner,
             )
             .await?;
-            let copy_required = qualified_copy_required(&preflight)?;
-            let served_authority = correlation
-                .get("object_authority")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    DeployError("fresh served-store proof omitted its authority".to_string())
-                })?;
-            if copy_required && !matches!(served_authority, "B" | "identical") {
-                return Err(DeployError(format!(
-                    "fresh object API proof serves authority {served_authority:?}; refusing a \
-                     B-winning copy derived from older evidence"
-                )));
-            }
-            preflight
-                .as_object_mut()
-                .ok_or_else(|| DeployError("preflight report is not an object".to_string()))?
-                .insert("served_store".to_string(), correlation.clone());
-            let primary_root = correlation
-                .get("primary_root")
-                .and_then(Value::as_str)
-                .ok_or_else(|| DeployError("served-store evidence omitted A root".to_string()))?;
-            let backup_root = correlation
-                .get("backup_root")
-                .and_then(Value::as_str)
-                .ok_or_else(|| DeployError("served-store evidence omitted B root".to_string()))?;
             let object_writer = writers
                 .iter_mut()
                 .find(|writer| writer.role == "object-api")
                 .expect("canonical object API writer was required above");
+            let roots =
+                capture_storage_roots(transaction, runtime, object_writer, &staged_runtime)?;
             object_writer.forward_object_recovery = Some(object_recovery_script(
                 object_writer,
-                primary_root,
-                Some(backup_root),
+                &roots.primary,
+                Some(&roots.backup),
             )?);
-            object_writer.rollback_object_recovery =
-                Some(object_recovery_script(object_writer, backup_root, None)?);
-            let raw_registry_identity =
-                physical_file_identity(&preflight, "primary_physical", "registry.json").cloned();
-            let configuration_evidence = json!({
-                "object_api": {
-                    "loaded_environment_status": if object_writer
-                        .prior_loaded_environment
-                        .contains_key("WC_STORAGE_BACKEND")
-                    {
-                        "observed"
-                    } else {
-                        "unavailable"
-                    },
-                    "observed_loaded_environment": object_writer.prior_loaded_environment.clone(),
-                    "unit_declaration": object_writer.unit_declared_environment.clone(),
-                    "registry_declaration":
-                        object_writer.registry_declared_environment.clone(),
-                },
-                "dashboard_registry_store": {
-                    "backend": if api_already_forward { Value::from("local") } else { Value::Null },
-                    "namespace": Value::Null,
-                    "key": "registry.json",
-                    "physical_root": if api_already_forward { Value::from("A") } else { Value::Null },
-                    "identity": raw_registry_identity,
-                },
-                "remote_registry_store_mapping": {
-                    "backend": "stado-object",
-                    "namespace": Value::Null,
-                    "key": "registry.json",
-                    "physical_path": Value::Null,
-                    "observation": "client namespace was not observed",
-                },
-            });
-            preflight
-                .as_object_mut()
-                .expect("preflight report was validated as an object")
-                .insert(
-                    "effective_configuration".to_string(),
-                    configuration_evidence,
-                );
-            let object_runtime_matches = writers
-                .iter()
-                .find(|writer| writer.role == "object-api")
-                .and_then(|writer| writer.prior_sha256.as_deref())
-                == Some(staged_runtime.staged_sha256.as_str());
-            let already_reconciled = !copy_required
-                && api_already_forward
-                && physical_file_identity(&preflight, "primary_physical", "registry.json")
-                    .is_some()
-                && correlation.get("object_authority").and_then(Value::as_str) == Some("A")
-                && object_runtime_matches;
-            let staged_runtime = Some(staged_runtime);
-            let preflight_evidence = write_json_evidence(
-                transaction,
-                PREFLIGHT_EVIDENCE_FILE,
-                &preflight,
-                "preflight evidence",
-                true,
-            )?;
+            object_writer.rollback_object_recovery = Some(object_recovery_script(
+                object_writer,
+                &roots.prior_primary,
+                roots.prior_backup.as_deref(),
+            )?);
             let initial = LifecycleFence {
                 schema: FENCE_SCHEMA.to_string(),
                 transaction: transaction.to_string(),
-                status: if already_reconciled {
-                    "already_reconciled"
-                } else {
-                    "preparing"
-                }
-                .to_string(),
+                status: "preparing".to_string(),
                 queue: QueueFence {
                     was_paused: prior.paused,
                     drained: false,
@@ -1805,8 +2065,11 @@ async fn prepare_lifecycle_fence(
                 writers,
                 transport_retained,
                 non_storage_retained,
-                staged_runtime,
-                preflight_evidence,
+                staged_runtime: Some(staged_runtime),
+                roots: Some(roots),
+                write_fence: None,
+                preflight_evidence: None,
+                rollback_preparation: false,
                 lease_acquisitions: Vec::new(),
                 repository_runner_gate,
                 prepared_at: Utc::now().timestamp(),
@@ -1825,10 +2088,9 @@ async fn prepare_lifecycle_fence(
         ));
     }
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
-    if fence.status == "already_reconciled" {
-        return Ok(fence);
-    }
     if fence.status == "fenced" {
+        acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
+            .await?;
         return recheck_lifecycle_fence(storage_target, transaction, runner).await;
     }
     if fence.status != "preparing" {
@@ -1838,111 +2100,131 @@ async fn prepare_lifecycle_fence(
         )));
     }
 
-    let store = crate::queue::JobStorage::new()
-        .await
-        .map_err(|error| DeployError(format!("cannot open queue for fencing: {error}")))?;
-    const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
-    let subjects = fence
-        .writers
-        .iter()
-        .map(|writer| format!("service:{}:{}", writer.target, writer.label))
-        .collect::<Vec<_>>();
-    for subject in subjects {
-        let index = match fence
-            .lease_acquisitions
-            .iter()
-            .position(|entry| entry.subject_id == subject)
+    let store = if fence.write_fence.is_some() {
+        if !fence.queue.drained
+            || fence
+                .lease_acquisitions
+                .iter()
+                .any(|entry| entry.lease.is_none())
         {
-            Some(index) => index,
-            None => {
-                fence.lease_acquisitions.push(LeaseAcquisition {
-                    subject_id: subject.clone(),
-                    status: "acquire_intent".to_string(),
-                    lease: None,
-                    released_lease: None,
-                });
-                write_fence(storage_target, transaction, &fence, runner).await?;
-                fence.lease_acquisitions.len() - 1
-            }
-        };
-        if fence.lease_acquisitions[index].lease.is_none() {
-            let lease = crate::autonomy::storage::acquire_placement_lease(
-                &store,
-                &subject,
-                transaction,
-                "stado storage-root-reconcile",
-                LEASE_TTL_SECONDS,
-                Utc::now(),
-            )
-            .await
-            .map_err(|error| DeployError(format!("cannot acquire {subject}: {error}")))?
-            .ok_or_else(|| DeployError(format!("active placement lease blocks {subject}")))?;
-            fence.lease_acquisitions[index].lease = Some(lease);
-            fence.lease_acquisitions[index].status = "acquired".to_string();
-            write_fence(storage_target, transaction, &fence, runner).await?;
-        }
-    }
-    renew_fence_leases(&store, &mut fence).await?;
-    write_fence(storage_target, transaction, &fence, runner).await?;
-
-    if !fence.queue.drained {
-        if let Some(pause) = fence.queue.pause.as_ref() {
-            if pause.status != "applied" {
-                if pause.status != "pause_intent" {
-                    return Err(DeployError(format!(
-                        "queue pause has invalid state {:?}",
-                        pause.status
-                    )));
-                }
-                match execute_queue_effect(&store, pause).await? {
-                    QueueEffectOutcome::Applied => {
-                        fence
-                            .queue
-                            .pause
-                            .as_mut()
-                            .expect("queue pause was initialized")
-                            .status = "applied".to_string();
-                        write_fence(storage_target, transaction, &fence, runner).await?;
-                    }
-                    QueueEffectOutcome::Superseded(current) => {
-                        fence
-                            .queue
-                            .pause
-                            .as_mut()
-                            .expect("queue pause was initialized")
-                            .superseding = Some(current);
-                        return Err(DeployError(
-                            "queue control changed after the exact pause intent was recorded"
-                                .to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-        let current = crate::queue::control::read(&store)
-            .await
-            .map_err(|error| DeployError(format!("cannot recheck queue fence: {error}")))?;
-        if !current.paused {
             return Err(DeployError(
-                "queue is not paused after its durable fencing transition".to_string(),
+                "storage write fence preceded queue draining or lease acquisition".to_string(),
             ));
         }
-        let deadline =
-            Instant::now() + Duration::from_secs(crate::queue::control::default_drain_timeout_s());
-        while !crate::queue::control::is_drained(&store)
-            .await
-            .map_err(|error| DeployError(format!("cannot prove queue drained: {error}")))?
-        {
-            if Instant::now() >= deadline {
+        acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
+            .await?;
+        None
+    } else {
+        Some(
+            crate::queue::JobStorage::new()
+                .await
+                .map_err(|error| DeployError(format!("cannot open queue for fencing: {error}")))?,
+        )
+    };
+    if let Some(store) = &store {
+        const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
+        let subjects = fence
+            .writers
+            .iter()
+            .map(|writer| format!("service:{}:{}", writer.target, writer.label))
+            .collect::<Vec<_>>();
+        for subject in subjects {
+            let index = match fence
+                .lease_acquisitions
+                .iter()
+                .position(|entry| entry.subject_id == subject)
+            {
+                Some(index) => index,
+                None => {
+                    fence.lease_acquisitions.push(LeaseAcquisition {
+                        subject_id: subject.clone(),
+                        status: "acquire_intent".to_string(),
+                        lease: None,
+                        released_lease: None,
+                    });
+                    write_fence(storage_target, transaction, &fence, runner).await?;
+                    fence.lease_acquisitions.len() - 1
+                }
+            };
+            if fence.lease_acquisitions[index].lease.is_none() {
+                let lease = crate::autonomy::storage::acquire_placement_lease(
+                    store,
+                    &subject,
+                    transaction,
+                    "stado storage-root-reconcile",
+                    LEASE_TTL_SECONDS,
+                    Utc::now(),
+                )
+                .await
+                .map_err(|error| DeployError(format!("cannot acquire {subject}: {error}")))?
+                .ok_or_else(|| DeployError(format!("active placement lease blocks {subject}")))?;
+                fence.lease_acquisitions[index].lease = Some(lease);
+                fence.lease_acquisitions[index].status = "acquired".to_string();
+                write_fence(storage_target, transaction, &fence, runner).await?;
+            }
+        }
+        renew_fence_leases(store, &mut fence).await?;
+        write_fence(storage_target, transaction, &fence, runner).await?;
+
+        if !fence.queue.drained {
+            if let Some(pause) = fence.queue.pause.as_ref() {
+                if pause.status != "applied" {
+                    if pause.status != "pause_intent" {
+                        return Err(DeployError(format!(
+                            "queue pause has invalid state {:?}",
+                            pause.status
+                        )));
+                    }
+                    match execute_queue_effect(store, pause).await? {
+                        QueueEffectOutcome::Applied => {
+                            fence
+                                .queue
+                                .pause
+                                .as_mut()
+                                .expect("queue pause was initialized")
+                                .status = "applied".to_string();
+                            write_fence(storage_target, transaction, &fence, runner).await?;
+                        }
+                        QueueEffectOutcome::Superseded(current) => {
+                            fence
+                                .queue
+                                .pause
+                                .as_mut()
+                                .expect("queue pause was initialized")
+                                .superseding = Some(current);
+                            return Err(DeployError(
+                                "queue control changed after the exact pause intent was recorded"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+            let current = crate::queue::control::read(store)
+                .await
+                .map_err(|error| DeployError(format!("cannot recheck queue fence: {error}")))?;
+            if !current.paused {
                 return Err(DeployError(
-                    "queue remained active until the canonical drain deadline; fence retained"
-                        .to_string(),
+                    "queue is not paused after its durable fencing transition".to_string(),
                 ));
             }
-            sleep(Duration::from_secs(5)).await;
+            let deadline = Instant::now()
+                + Duration::from_secs(crate::queue::control::default_drain_timeout_s());
+            while !crate::queue::control::is_drained(store)
+                .await
+                .map_err(|error| DeployError(format!("cannot prove queue drained: {error}")))?
+            {
+                if Instant::now() >= deadline {
+                    return Err(DeployError(
+                        "queue remained active until the canonical drain deadline; fence retained"
+                            .to_string(),
+                    ));
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+            fence.queue.drained = true;
+            write_fence(storage_target, transaction, &fence, runner).await?;
         }
-        fence.queue.drained = true;
-        write_fence(storage_target, transaction, &fence, runner).await?;
     }
     for index in 0..fence.writers.len() {
         let writer = &fence.writers[index];
@@ -2004,11 +2286,24 @@ async fn prepare_lifecycle_fence(
         if fence.writers[index].status == "stopped" {
             continue;
         }
+        if fence.writers[index].role == "object-api" {
+            acquire_storage_write_fence(
+                storage_target,
+                transaction,
+                &mut fence,
+                write_guard,
+                runner,
+            )
+            .await?;
+            capture_fenced_preflight(storage_target, transaction, &mut fence, runner).await?;
+        }
         if fence.writers[index].status == "pending" {
             fence.writers[index].status = "stop_intent".to_string();
             write_fence(storage_target, transaction, &fence, runner).await?;
         }
-        renew_fence_leases(&store, &mut fence).await?;
+        if let Some(store) = &store {
+            renew_fence_leases(store, &mut fence).await?;
+        }
         write_fence(storage_target, transaction, &fence, runner).await?;
         let label = fence.writers[index].label.clone();
         for (scope, enabled) in fence.writers[index].autostart.clone() {
@@ -2223,6 +2518,19 @@ fn object_recovery_script(
 }
 
 fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
+    if fence.roots.is_none() {
+        return Err(DeployError(
+            "lifecycle fence omitted its constructed storage roots".to_string(),
+        ));
+    }
+    if fence.status != "preparing"
+        && !fence.rollback_preparation
+        && fence.preflight_evidence.is_none()
+    {
+        return Err(DeployError(
+            "lifecycle fence omitted its frozen preflight evidence".to_string(),
+        ));
+    }
     let staged_runtime_digest = fence
         .staged_runtime
         .as_ref()
@@ -2283,7 +2591,7 @@ fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
                 || writer.rollback_object_recovery.is_none())
         {
             return Err(DeployError(
-                "object API has no immutable forward and B-only rollback configurations"
+                "object API has no immutable forward and captured-prior rollback configurations"
                     .to_string(),
             ));
         }
@@ -2316,18 +2624,6 @@ fn recovered_object_store(fence: &LifecycleFence) -> Result<crate::queue::JobSto
     Ok(crate::queue::JobStorage::with_backend(
         std::sync::Arc::new(backend),
         "recovered-stado-object",
-    ))
-}
-
-fn committed_local_store(root: &str) -> Result<crate::queue::JobStorage, DeployError> {
-    let backend = crate::queue::LocalBackend::open_existing(Path::new(root)).map_err(|error| {
-        DeployError(format!(
-            "cannot bind lease protection to committed local authority {root}: {error}"
-        ))
-    })?;
-    Ok(crate::queue::JobStorage::with_backend(
-        std::sync::Arc::new(backend),
-        "committed-local-authority",
     ))
 }
 
@@ -2410,8 +2706,7 @@ fn restored_state_matches(
     state: &super::service_label_print::LabelState,
     autostart: &BTreeMap<String, bool>,
     active_sha256: &str,
-    forward_primary: &str,
-    forward_backup: &str,
+    roots: &StorageRoots,
     rollback: bool,
 ) -> bool {
     if autostart != &writer.autostart {
@@ -2472,22 +2767,22 @@ fn restored_state_matches(
     {
         return false;
     }
-    if rollback {
-        loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(forward_backup)
-            && loaded
-                .get("WC_BACKUP_STORAGE_BACKEND")
-                .is_none_or(String::is_empty)
-            && loaded
-                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-                .is_none_or(String::is_empty)
+    let (primary, backup) = if rollback {
+        (roots.prior_primary.as_str(), roots.prior_backup.as_deref())
     } else {
-        loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(forward_primary)
-            && loaded.get("WC_BACKUP_STORAGE_BACKEND").map(String::as_str) == Some("local")
-            && loaded
-                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-                .map(String::as_str)
-                == Some(forward_backup)
-    }
+        (roots.primary.as_str(), Some(roots.backup.as_str()))
+    };
+    loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(primary)
+        && loaded
+            .get("WC_BACKUP_STORAGE_BACKEND")
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            == backup.map(|_| "local")
+        && loaded
+            .get("WC_BACKUP_LOCAL_STORAGE_PATH")
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            == backup
 }
 
 fn durable_restored_state_matches(
@@ -2508,32 +2803,28 @@ async fn activate_lifecycle_fence(
     transaction: &str,
     runner: &Runner,
     rollback: bool,
+    write_guard: &mut Option<std::fs::File>,
 ) -> Result<LifecycleFence, DeployError> {
     let mut fence = read_fence(storage_target, transaction, runner)
         .await?
         .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
     validate_prepared_fence(&fence)?;
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
-    let preflight = read_json_evidence(
-        transaction,
-        PREFLIGHT_EVIDENCE_FILE,
-        &fence.preflight_evidence,
-        "preflight evidence",
-    )?;
-    let served = preflight
-        .get("served_store")
-        .and_then(Value::as_object)
-        .ok_or_else(|| DeployError("fence has no physical/API correlation evidence".to_string()))?;
-    let forward_primary = served
-        .get("primary_root")
-        .and_then(Value::as_str)
-        .ok_or_else(|| DeployError("served-store evidence omitted A root".to_string()))?
-        .to_string();
-    let forward_backup = served
-        .get("backup_root")
-        .and_then(Value::as_str)
-        .ok_or_else(|| DeployError("served-store evidence omitted B root".to_string()))?
-        .to_string();
+    let preflight = if fence.rollback_preparation {
+        None
+    } else {
+        Some(read_json_evidence(
+            transaction,
+            PREFLIGHT_EVIDENCE_FILE,
+            fence.preflight_evidence.as_ref().ok_or_else(|| {
+                DeployError("lifecycle fence omitted frozen preflight evidence".to_string())
+            })?,
+            "preflight evidence",
+        )?)
+    };
+    let roots = fence.roots.clone().ok_or_else(|| {
+        DeployError("lifecycle fence omitted its observed storage roots".to_string())
+    })?;
     let final_status = if rollback { "rolled_back" } else { "activated" };
     let admissible = if rollback {
         matches!(
@@ -2566,6 +2857,10 @@ async fn activate_lifecycle_fence(
         write_fence(storage_target, transaction, &fence, runner).await?;
     }
 
+    if fence.write_fence.is_some() {
+        acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
+            .await?;
+    }
     let staged_runtime = fence
         .staged_runtime
         .clone()
@@ -2587,14 +2882,6 @@ async fn activate_lifecycle_fence(
         .activated_at
         .get_or_insert_with(|| Utc::now().timestamp());
     fence.status = "restoring".to_string();
-    write_fence(storage_target, transaction, &fence, runner).await?;
-    let committed_root = if rollback {
-        &forward_backup
-    } else {
-        &forward_primary
-    };
-    let committed_store = committed_local_store(committed_root)?;
-    renew_fence_leases(&committed_store, &mut fence).await?;
     write_fence(storage_target, transaction, &fence, runner).await?;
 
     let mut order = (0..fence.writers.len()).collect::<Vec<_>>();
@@ -2623,8 +2910,7 @@ async fn activate_lifecycle_fence(
                 &state,
                 &autostart,
                 &active_sha256,
-                &forward_primary,
-                &forward_backup,
+                &roots,
                 rollback,
             )
             && (!was_durably_restored
@@ -2713,8 +2999,7 @@ async fn activate_lifecycle_fence(
                 &state,
                 &autostart,
                 &active_sha256,
-                &forward_primary,
-                &forward_backup,
+                &roots,
                 rollback,
             ) {
                 return Err(DeployError(format!(
@@ -2738,21 +3023,72 @@ async fn activate_lifecycle_fence(
             let port = fence.writers[index].listener_port.ok_or_else(|| {
                 DeployError("object API listener port is absent from its fence".to_string())
             })?;
-            let correlation =
-                correlate_served_store(storage_target, port, &preflight, !rollback, runner).await?;
+            let runtime = observe_object_runtime(storage_target, port, runner).await?;
+            let storage = runtime.get("storage").ok_or_else(|| {
+                DeployError("restored object API omitted its constructed storage".to_string())
+            })?;
+            let (expected_root, expected_backup) = if rollback {
+                (roots.prior_primary.as_str(), roots.prior_backup.as_deref())
+            } else {
+                (roots.primary.as_str(), Some(roots.backup.as_str()))
+            };
+            let mirror_matches = match expected_backup {
+                Some(path) => {
+                    storage.pointer("/backup/backend").and_then(Value::as_str) == Some("local")
+                        && storage
+                            .pointer("/backup/local_path")
+                            .and_then(Value::as_str)
+                            == Some(path)
+                }
+                None => storage.get("backup").is_none_or(Value::is_null),
+            };
+            if storage.get("backend").and_then(Value::as_str) != Some("local")
+                || storage.get("local_path").and_then(Value::as_str) != Some(expected_root)
+                || storage.get("pid").and_then(Value::as_u64)
+                    != state.pid.as_deref().and_then(|pid| pid.parse().ok())
+                || storage
+                    .pointer("/write_fence/protocol")
+                    .and_then(Value::as_str)
+                    != Some(crate::queue::LocalBackend::WRITE_FENCE_PROTOCOL)
+                || !mirror_matches
+            {
+                return Err(DeployError(format!(
+                    "{label} constructed storage does not match its recorded recovery route: {storage}"
+                )));
+            }
+            let mut correlation = if let Some(preflight) = preflight.as_ref() {
+                correlate_served_store(storage_target, port, preflight, !rollback, runner).await?
+            } else {
+                json!({
+                    "endpoint": format!("http://127.0.0.1:{port}"),
+                    "object_authority": if expected_root == roots.primary { "A" } else { "B" },
+                    "evidence": "constructed-runtime-without-data-mutation",
+                })
+            };
+            correlation["runtime"] = runtime;
             let authority = correlation
                 .get("object_authority")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let accepted = if rollback {
-                matches!(authority, "B" | "identical")
+                matches!(authority, "identical")
+                    || authority
+                        == if roots.prior_primary == roots.primary {
+                            "A"
+                        } else {
+                            "B"
+                        }
             } else {
                 matches!(authority, "A" | "identical")
             };
             if !accepted {
                 return Err(DeployError(format!(
                     "{label} serves {authority:?} after {} recovery",
-                    if rollback { "B-only" } else { "forward A+B" }
+                    if rollback {
+                        "captured-prior"
+                    } else {
+                        "forward A+B"
+                    }
                 )));
             }
             let prepared_sha256 = if rollback {
@@ -2789,6 +3125,14 @@ async fn activate_lifecycle_fence(
         fence.writers[index].status = "restored".to_string();
         write_fence(storage_target, transaction, &fence, runner).await?;
         if fence.writers[index].role == "object-api" {
+            release_storage_write_fence(
+                storage_target,
+                transaction,
+                &mut fence,
+                write_guard,
+                runner,
+            )
+            .await?;
             let store = recovered_object_store(&fence)?;
             renew_fence_leases(&store, &mut fence).await?;
             write_fence(storage_target, transaction, &fence, runner).await?;
@@ -3080,6 +3424,7 @@ async fn reconcile_host_inner(
         let fence = read_fence(target, transaction, runner).await?;
         return report(target, transaction, phase, receipt, fence.as_ref());
     }
+    let mut write_guard = None;
     let existing = read_fence(target, transaction, runner).await?;
     // The captured target keeps the host reachable across the outage. Its
     // managed version is not a release declaration: a remote caller may have
@@ -3145,12 +3490,52 @@ async fn reconcile_host_inner(
                 .await?;
         return report(target, transaction, phase, receipt, Some(&fence));
     }
-    if phase == ROLLBACK {
+    if phase == ROLLBACK
+        || existing
+            .as_ref()
+            .is_some_and(|fence| fence.rollback_preparation)
+    {
         let receipt = remote_phase(target, transaction, STATUS, runner).await?;
         let receipt_status = receipt
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let mut rollback_fence = existing
+            .ok_or_else(|| DeployError("rollback has no recorded lifecycle fence".to_string()))?;
+        if receipt_status == "absent" {
+            if !rollback_fence.rollback_preparation
+                && (rollback_fence.status != "preparing"
+                    || !rollback_fence.queue.drained
+                    || rollback_fence.lease_acquisitions.len() != rollback_fence.writers.len()
+                    || rollback_fence
+                        .lease_acquisitions
+                        .iter()
+                        .any(|entry| entry.status != "acquired" || entry.lease.is_none()))
+            {
+                return Err(DeployError(
+                    "preparation rollback requires the recorded drained queue and complete \
+                     placement leases"
+                        .to_string(),
+                ));
+            }
+            rollback_fence.rollback_preparation = true;
+            write_fence(target, transaction, &rollback_fence, runner).await?;
+            let fence =
+                activate_lifecycle_fence(target, transaction, runner, true, &mut write_guard)
+                    .await?;
+            return report(
+                target,
+                transaction,
+                phase,
+                json!({
+                    "schema": "stado.storage-root-reconcile.v2",
+                    "transaction": transaction,
+                    "status": "preparation_rolled_back",
+                    "data_mutated": false,
+                }),
+                Some(&fence),
+            );
+        }
         if !matches!(
             receipt_status,
             "checkpoint_ready" | "applying" | "rollback_effects_armed"
@@ -3160,8 +3545,17 @@ async fn reconcile_host_inner(
             )));
         }
         verify_resident_lock(transaction)?;
+        acquire_storage_write_fence(
+            target,
+            transaction,
+            &mut rollback_fence,
+            &mut write_guard,
+            runner,
+        )
+        .await?;
         let receipt = remote_phase(target, transaction, ARM_ROLLBACK, runner).await?;
-        let fence = activate_lifecycle_fence(target, transaction, runner, true).await?;
+        let fence =
+            activate_lifecycle_fence(target, transaction, runner, true, &mut write_guard).await?;
         return report(target, transaction, phase, receipt, Some(&fence));
     }
 
@@ -3183,17 +3577,8 @@ async fn reconcile_host_inner(
         {
             fence
         }
-        _ => prepare_lifecycle_fence(target, transaction, runner).await?,
+        _ => prepare_lifecycle_fence(target, transaction, runner, &mut write_guard).await?,
     };
-    if fence.status == "already_reconciled" {
-        let receipt = json!({
-            "schema": "stado.storage-root-reconcile.v2",
-            "transaction": transaction,
-            "status": "already_reconciled",
-            "preflight_evidence": fence.preflight_evidence.clone(),
-        });
-        return report(target, transaction, phase, receipt, Some(&fence));
-    }
     if fence.status == "fenced" {
         remote_phase(target, transaction, CHECKPOINT, runner).await?;
         let checkpoint_decisions = typed_lifecycle_decisions(transaction).await?;
@@ -3238,7 +3623,8 @@ async fn reconcile_host_inner(
         }
         verify_resident_lock(transaction)?;
         validate_prepared_fence(&fence)?;
-        fence = activate_lifecycle_fence(target, transaction, runner, false).await?;
+        fence =
+            activate_lifecycle_fence(target, transaction, runner, false, &mut write_guard).await?;
     } else if fence.status != "activated" {
         let receipt = read_transaction_receipt(transaction)?;
         if receipt.get("status").and_then(Value::as_str) != Some("activation_effects_armed") {
@@ -3250,7 +3636,8 @@ async fn reconcile_host_inner(
         record_typed_lifecycle_decisions(target, transaction, &decisions, runner).await?;
         verify_resident_lock(transaction)?;
         validate_prepared_fence(&fence)?;
-        fence = activate_lifecycle_fence(target, transaction, runner, false).await?;
+        fence =
+            activate_lifecycle_fence(target, transaction, runner, false, &mut write_guard).await?;
     }
     let receipt = remote_phase(target, transaction, ACTIVATE, runner).await?;
     report(target, transaction, phase, receipt, Some(&fence))
