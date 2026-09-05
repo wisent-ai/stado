@@ -124,15 +124,16 @@ impl StadoObjectBackend {
                 "Stado storage token file is empty or malformed".to_string(),
             ));
         }
+        let client = Self::shared_client(&host, ca_file)?;
         Ok(Self {
             base_url,
             namespace: namespace.to_string(),
             token,
-            client: Self::shared_client(ca_file)?,
+            client,
         })
     }
 
-    /// One pooled client per CA configuration, for the life of the process.
+    /// One pooled client per origin host and CA configuration.
     ///
     /// `reqwest::Client` owns the connection pool, and this backend used to
     /// build a fresh one in every constructor. Nothing here constructs once:
@@ -145,21 +146,21 @@ impl StadoObjectBackend {
     /// that takes 639 s, which is the latency that starves the agent loop.
     ///
     /// Cloning a `Client` shares its pool, so every backend built in this
-    /// process now reuses connections. Keyed by CA file because that is the
-    /// only input to [`Self::client`]; the token is a per-request header and
-    /// the base URL is per-request too, so neither belongs to the pool.
-    fn shared_client(ca_file: &str) -> Result<Client, StorageError> {
+    /// process now reuses connections. The CA and origin host select the
+    /// client's certificate trust and tailnet address pin. Tokens remain
+    /// per-request headers and never belong to the pool key.
+    fn shared_client(host: &str, ca_file: &str) -> Result<Client, StorageError> {
         static CLIENTS: std::sync::LazyLock<
             std::sync::Mutex<std::collections::HashMap<String, Client>>,
         > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-        let key = ca_file.trim().to_string();
+        let key = format!("{}|{host}", ca_file.trim());
         let mut clients = CLIENTS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(client) = clients.get(&key) {
             return Ok(client.clone());
         }
-        let client = Self::client(&key)?;
+        let client = Self::client(host, ca_file)?;
         clients.insert(key, client.clone());
         Ok(client)
     }
@@ -178,7 +179,7 @@ impl StadoObjectBackend {
     ///
     /// The certificate is added, never substituted: publicly signed endpoints keep
     /// working, and this cannot become a way to disable verification.
-    fn client(ca_file: &str) -> Result<Client, StorageError> {
+    fn client(host: &str, ca_file: &str) -> Result<Client, StorageError> {
         // Bounded like `fleet_https_client`, and for the same incident: a
         // release submit's queue write to the fleet store held one ESTABLISHED
         // connection for eight minutes with no error and no progress, because
@@ -186,7 +187,7 @@ impl StadoObjectBackend {
         // same machine; five minutes covers a multi-megabyte artifact there, and
         // a hang converted into a named error reaches callers that already
         // handle storage failures.
-        let builder = Client::builder()
+        let mut builder = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .timeout(std::time::Duration::from_secs(300))
             // Sharing the client is what makes a pool possible; these three
@@ -208,6 +209,11 @@ impl StadoObjectBackend {
             // when a request is written into it, which surfaces as an
             // occasional failed object operation rather than a clean re-dial.
             .tcp_keepalive(std::time::Duration::from_secs(60));
+        if let Some(address) = crate::tailnet::address_of(host) {
+            // Use the same tailnet map as the artifact client. The hostname
+            // remains unchanged for SNI and certificate verification.
+            builder = builder.resolve(host, std::net::SocketAddr::new(address, 0));
+        }
         let ca_file = ca_file.trim();
         if ca_file.is_empty() {
             return builder.build().map_err(|error| {
