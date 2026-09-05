@@ -678,13 +678,20 @@ async fn recycle_launchd(
                 unit.loaded_domains.len()
             ));
         }
-        let service = format!("{}/{}", unit.loaded_domains[0], unit.label);
-        if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
-            .await
-            .is_none()
-        {
+        let service = crate::deploy::service::kickstart_local_unit(&unit.label, &unit.path)
+            .map_err(|error| {
+                format!(
+                    "{context}: {} was executing the replaced {program} and could not be \
+                     restarted through its declared unit {}: {error}",
+                    unit.label, unit.path
+                )
+            })?;
+        let observed_service = format!("{}/{}", unit.loaded_domains[0], unit.label);
+        if service != observed_service {
             return Err(format!(
-                "{context}: {service} was executing the replaced {program} and could not be restarted"
+                "{context}: {} restarted as {service}, but the observed owner was \
+                 {observed_service}; refusing a cross-domain lifecycle result",
+                unit.label
             ));
         }
         let after = crate::deploy::service::loaded_units(target, &runner)
