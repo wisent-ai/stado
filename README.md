@@ -726,6 +726,15 @@ already-current root and reader images running, and fails unless every stale
 private image is installed and proved. The queue agent continues to defer its
 own recycle through the installed-release handshake.
 
+On a required-delivery retry, `install-local` compares the already-verified
+payload with the installed root. Byte-identical root bytes are not renamed or
+recycled; the endpoint repairs their attestation and release-version handshake,
+then starts private updates through the explicit installed
+`$HOME/.stado/bin/stado` path. Failed child JSON, stdout, and stderr remain in
+the `stado-readers.detail` receipt. The Desktop Services action runs the same
+host-wide or selected-binary CLI apply, preserves its decoded report plus
+actual exit status, and never re-derives the gate.
+
 Partial-state reader resume requires the target's global receiver to run Stado
 0.16.23 or newer, which owns the retained-archive arguments. An older receiver
 rejects that hidden command contract and the apply remains failed; first
