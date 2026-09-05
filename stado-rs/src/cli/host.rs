@@ -7211,7 +7211,7 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
-    remote_skarbiec_json_at(target, arguments, None).await
+    remote_skarbiec_json_at(target, arguments, None, None).await
 }
 
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
@@ -7235,6 +7235,7 @@ async fn remote_skarbiec_json_at(
     target: &str,
     arguments: &[String],
     vault_relative: Option<&str>,
+    token_source: Option<(&str, &str)>,
 ) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
         .first()
@@ -7283,12 +7284,23 @@ async fn remote_skarbiec_json_at(
         tool_path.as_str(),
         gnupg_environment.as_str(),
         vault_environment.as_str(),
-        skarbiec.as_str(),
     ];
-    invocation.extend(arguments.iter().map(String::as_str));
-    let output = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+    let output = if let Some((item, field)) = token_source {
+        invocation.extend(["/usr/bin/python3", "-", skarbiec.as_str(), item, field]);
+        invocation.extend(arguments.iter().map(String::as_str));
+        crate::deploy::host_channel::run_program_with_stdin(
+            &resolved,
+            &invocation,
+            include_str!("../../../scripts/vault-token-from-item.py"),
+            &runner,
+        )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    } else {
+        invocation.push(skarbiec.as_str());
+        invocation.extend(arguments.iter().map(String::as_str));
+        crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
+    }
+    .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec {command} failed: {}",
@@ -7364,7 +7376,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     let list = vec![String::from("list")];
     let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
     let (_, mirror_report) =
-        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE)).await?;
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None).await?;
     let live = mirror_items(&live_report)?;
     let mirror = mirror_items(&mirror_report)?;
 
@@ -7514,10 +7526,10 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
     Ok(())
 }
 
-/// Mint a least-privilege bearer inside TARGET's live Skarbiec vault.
+/// Mint a bounded bearer, or register an existing owner-vault field on TARGET.
 ///
-/// Metadata is the default output. `raw_token` exists only for a direct pipe
-/// into another secret store; Stado never writes that bearer to disk or argv.
+/// Existing-bearer bytes stay on the target and never enter argv or the report.
+/// `raw_token` only exposes a newly generated bearer for a direct secret-store pipe.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -7526,11 +7538,22 @@ pub async fn vault_token_mint(
     audience: &str,
     ttl_seconds: u64,
     replace_capabilities: bool,
+    token_item: Option<&str>,
+    token_field: &str,
     raw_token: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
     vault_word("audience", audience)?;
+    if let Some(item) = token_item {
+        vault_word("token item", item)?;
+        vault_word("token field", token_field)?;
+        if raw_token {
+            return Err(CmdError::usage(
+                "--raw-token cannot be used with an existing --token-item",
+            ));
+        }
+    }
     if raw_token && json_output {
         return Err(CmdError::usage(
             "--raw-token and --json cannot be used together",
@@ -7558,37 +7581,42 @@ pub async fn vault_token_mint(
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }
-    let (resolved, mut report) = remote_skarbiec_json(target, &arguments).await?;
-    let token = report
-        .get("token")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: Skarbiec token-mint returned no bearer",
-                resolved.name
-            ))
-        })?
-        .to_string();
-    if raw_token {
-        println!("{token}");
-        return Ok(());
+    let token_source = token_item.map(|item| (item, token_field));
+    let (resolved, mut report) =
+        remote_skarbiec_json_at(target, &arguments, None, token_source).await?;
+    if token_source.is_none() {
+        let token = report
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: Skarbiec token-mint returned no bearer",
+                    resolved.name
+                ))
+            })?;
+        if raw_token {
+            println!("{token}");
+            return Ok(());
+        }
     }
     if let Some(object) = report.as_object_mut() {
         object.remove("token");
     }
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "status": "token_minted",
-                "skarbiec": report,
-            }))?
-        );
+        let mut metadata = json!({
+            "target": resolved.name,
+            "status": if token_source.is_some() { "token_registered" } else { "token_minted" },
+            "skarbiec": report,
+        });
+        if let Some((item, field)) = token_source {
+            metadata["token_source"] = json!({ "item": item, "field": field });
+        }
+        println!("{}", serde_json::to_string_pretty(&metadata)?);
     } else {
+        let operation = if token_source.is_some() { "registered" } else { "minted" };
         println!(
-            "{}: token minted for {consumer} with audience {audience}",
+            "{}: token {operation} for {consumer} with audience {audience}",
             resolved.name
         );
     }

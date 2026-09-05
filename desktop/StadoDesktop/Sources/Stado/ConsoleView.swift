@@ -22,6 +22,7 @@ struct ConsoleView: View {
     @StateObject private var gatesStore = HostGatesStore()
     @StateObject private var inventoryStore = HostInventoryStore()
     @StateObject private var retireFileStore = HostRetireFileStore()
+    @StateObject private var vaultBearerStore = HostVaultBearerStore()
     @StateObject private var linkStore = HostLinkStore()
     @StateObject private var connectionPathStore = HostConnectionPathStore()
     @StateObject private var serviceStore = ServiceTruthStore()
@@ -362,6 +363,7 @@ struct ConsoleView: View {
                     gatesStore: gatesStore,
                     inventoryStore: inventoryStore,
                     retireFileStore: retireFileStore,
+                    vaultBearerStore: vaultBearerStore,
                     linkStore: linkStore,
                     connectionPathStore: connectionPathStore,
                     enrollmentStore: enrollmentStore,

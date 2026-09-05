@@ -24,6 +24,13 @@ private struct HostReclaimTarget: Identifiable {
     var id: String { host }
 }
 
+/// The selected registry host whose live vault will mint or register a bearer.
+private struct HostVaultBearerTarget: Identifiable {
+    let host: String
+
+    var id: String { host }
+}
+
 /// The registry host whose ordered control routes are being edited.
 private struct HostConnectionPathsTarget: Identifiable {
     let host: String
@@ -44,6 +51,7 @@ struct HostsView: View {
     @ObservedObject var gatesStore: HostGatesStore
     @ObservedObject var inventoryStore: HostInventoryStore
     @ObservedObject var retireFileStore: HostRetireFileStore
+    @ObservedObject var vaultBearerStore: HostVaultBearerStore
     @ObservedObject var linkStore: HostLinkStore
     @ObservedObject var connectionPathStore: HostConnectionPathStore
     @ObservedObject var enrollmentStore: MachineEnrollmentStore
@@ -68,6 +76,7 @@ struct HostsView: View {
     @State private var showsEnrollment = false
     @State private var showsFileRetirement = false
     @State private var reclaimTarget: HostReclaimTarget?
+    @State private var vaultBearerTarget: HostVaultBearerTarget?
 
     @State private var connectionPathsTarget: HostConnectionPathsTarget?
     @State private var reconciliationTarget: StorageReconciliationTarget?
@@ -153,6 +162,12 @@ struct HostsView: View {
                 store: retireFileStore,
                 hosts: gateHostNames,
                 dismiss: { showsFileRetirement = false }
+            )
+        }
+        .sheet(item: $vaultBearerTarget) { target in
+            HostVaultBearerSheet(
+                host: target.host,
+                store: vaultBearerStore
             )
         }
         .sheet(item: $reclaimTarget) { target in
@@ -502,6 +517,19 @@ struct HostsView: View {
                 WisentField(label: "Last capacity report", value: ConsoleFormat.age(host.ageSeconds))
                 if host.status == .live {
                     WisentField(label: "Availability", value: host.availabilityReason)
+                }
+                if host.declared {
+                    WisentActionButton(
+                        action: WisentAction(
+                            "Bounded vault bearer…",
+                            symbol: "key.horizontal",
+                            kind: .primary
+                        ) {
+                            vaultBearerTarget = HostVaultBearerTarget(
+                                host: host.targetName ?? host.displayName
+                            )
+                        }
+                    )
                 }
                 policySection(for: host)
                 WisentActionButton(
@@ -1526,6 +1554,381 @@ struct HostsView: View {
             ram = "RAM not reported"
         }
         return "\(admission) · \(running) · \(cpu) · \(ram)"
+    }
+}
+
+private enum HostVaultBearerMode: String, CaseIterable, Identifiable {
+    case mint
+    case stored
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .mint: "Mint a new bearer"
+        case .stored: "Register a stored bearer"
+        }
+    }
+}
+
+/// The selected host's bounded bearer operation. Metadata mode is the default;
+/// an explicit reveal option uses the CLI's generated-bearer `--raw-token`
+/// surface and the existing secret copy presentation.
+private struct HostVaultBearerSheet: View {
+    let host: String
+    @ObservedObject var store: HostVaultBearerStore
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var mode: HostVaultBearerMode = .mint
+    @State private var consumer = ""
+    @State private var capabilities = ""
+    @State private var audience = ""
+    @State private var ttlSeconds = "31536000"
+    @State private var replaceCapabilities = false
+    @State private var showGeneratedBearer = false
+    @State private var tokenItem = ""
+    @State private var tokenField = "token"
+    @State private var reviewing = false
+
+    private var cleanConsumer: String {
+        consumer.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanCapabilities: String {
+        capabilities.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanAudience: String {
+        audience.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanTTL: String {
+        ttlSeconds.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanTokenItem: String {
+        tokenItem.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanTokenField: String {
+        tokenField.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var parsedTTL: UInt64? {
+        cleanTTL.isEmpty ? nil : UInt64(cleanTTL)
+    }
+
+    private var ttlIsValid: Bool {
+        cleanTTL.isEmpty || parsedTTL.map { $0 > 0 } == true
+    }
+
+    private var request: HostVaultBearerRequest? {
+        guard !cleanConsumer.isEmpty,
+              !cleanCapabilities.isEmpty,
+              !cleanAudience.isEmpty,
+              ttlIsValid
+        else { return nil }
+        if mode == .stored, cleanTokenItem.isEmpty || cleanTokenField.isEmpty {
+            return nil
+        }
+        return HostVaultBearerRequest(
+            host: host,
+            consumer: cleanConsumer,
+            capabilities: cleanCapabilities,
+            audience: cleanAudience,
+            ttlSeconds: parsedTTL,
+            replaceCapabilities: replaceCapabilities,
+            tokenItem: mode == .stored ? cleanTokenItem : nil,
+            tokenField: cleanTokenField,
+            showGeneratedBearer: mode == .mint && showGeneratedBearer
+        )
+    }
+
+    var body: some View {
+        Group {
+            if reviewing, let request {
+                confirmation(request)
+            } else {
+                form
+            }
+        }
+        .onAppear { store.clear() }
+        .onDisappear { store.clear() }
+        .onChange(of: request) { _, _ in
+            if !reviewing { store.clear() }
+        }
+        .onChange(of: mode) { _, value in
+            if value == .stored { showGeneratedBearer = false }
+        }
+    }
+
+    private var form: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                    Text("Bounded vault bearer for \(host)")
+                        .font(WisentTypography.heading(17))
+                        .foregroundStyle(WisentDesign.ink)
+                    Text("Mint a new least-privilege bearer in this host's live Skarbiec vault, or register bearer bytes already stored in one owner-vault item field. Metadata is the default; generated bearer output requires an explicit opt-in.")
+                        .font(WisentTypeScale.body())
+                        .foregroundStyle(WisentDesign.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                field(
+                    title: "Operation",
+                    hint: mode == .mint
+                        ? "Skarbiec generates a new bearer for this grant."
+                        : "Stado reuses one existing owner-vault field without putting its value in argv or output."
+                ) {
+                    Picker("Operation", selection: $mode) {
+                        ForEach(HostVaultBearerMode.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if mode == .mint {
+                    Toggle(isOn: $showGeneratedBearer) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show generated bearer")
+                                .font(WisentTypeScale.bodyStrong())
+                                .foregroundStyle(WisentDesign.ink)
+                            Text(showGeneratedBearer
+                                ? "The command returns the new plaintext bearer once so it can be copied. Skarbiec stores only its hash."
+                                : "Off by default. The command returns non-secret grant metadata and discards its generated plaintext output.")
+                                .font(WisentTypeScale.caption())
+                                .foregroundStyle(WisentDesign.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+
+                field(title: "Consumer", hint: "The exact consumer identity this bearer authenticates.") {
+                    TextField("stado-object-api", text: $consumer)
+                        .textFieldStyle(.roundedBorder)
+                }
+                field(
+                    title: "Capabilities",
+                    hint: "Comma-separated exact action:item[#field] values, for example read:release-manifest#value."
+                ) {
+                    TextField("read:item#field", text: $capabilities)
+                        .textFieldStyle(.roundedBorder)
+                }
+                field(title: "Audience", hint: "The exact service audience bound into the grant.") {
+                    TextField("stado-object-api", text: $audience)
+                        .textFieldStyle(.roundedBorder)
+                }
+                field(
+                    title: "Lifetime in seconds",
+                    hint: "Optional. Blank uses the installed CLI's default; the prefilled value is one year."
+                ) {
+                    TextField("31536000", text: $ttlSeconds)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 160)
+                }
+                if !ttlIsValid {
+                    Text("Lifetime must be a positive whole number of seconds or blank.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentTone.warning.color)
+                }
+
+                if mode == .stored {
+                    WisentSectionBox(
+                        title: "Existing owner-vault source",
+                        detail: "Only this coordinate crosses the host channel. The field value remains inside the target's vault."
+                    ) {
+                        VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                            field(title: "Item", hint: "The exact existing Skarbiec item on \(host).") {
+                                TextField("service-bearer", text: $tokenItem)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            field(title: "Field", hint: "Defaults to token.") {
+                                TextField("token", text: $tokenField)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                        }
+                    }
+                }
+
+                Toggle(isOn: $replaceCapabilities) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Replace an existing capability set")
+                            .font(WisentTypeScale.bodyStrong())
+                            .foregroundStyle(WisentDesign.ink)
+                        Text("Without this, Stado refuses when the named consumer already has different capabilities.")
+                            .font(WisentTypeScale.caption())
+                            .foregroundStyle(WisentDesign.muted)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                if let request {
+                    Text(verbatim: StadoCLI.commandLine(HostVaultBearerStore.arguments(request)))
+                        .font(WisentTypeScale.identifierSmall())
+                        .foregroundStyle(WisentDesign.muted)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let rawBearer = store.rawBearer, let request {
+                    rawBearerSection(rawBearer, request: request)
+                }
+                if let receipt = store.receipt {
+                    receiptSection(receipt)
+                }
+                WisentMutationBar(outcome: store.mutation) { store.clear() }
+
+                HStack(spacing: WisentDesign.Space.x2) {
+                    Spacer(minLength: 0)
+                    WisentActionButton(
+                        action: WisentAction("Close", kind: .secondary) { dismiss() }
+                    )
+                    WisentActionButton(
+                        action: WisentAction(
+                            "Review operation",
+                            symbol: "arrow.right",
+                            kind: .primary,
+                            isEnabled: request != nil && !store.mutation.isWorking
+                        ) {
+                            reviewing = true
+                        }
+                    )
+                }
+            }
+            .padding(WisentDesign.Space.x6)
+        }
+        .frame(width: 620, height: 720)
+        .background(WisentDesign.canvas)
+    }
+
+    private func field<Content: View>(
+        title: String,
+        hint: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+            Text(title)
+                .font(WisentTypeScale.bodyStrong())
+                .foregroundStyle(WisentDesign.ink)
+            content()
+                .font(WisentTypeScale.body())
+            Text(hint)
+                .font(WisentTypeScale.caption())
+                .foregroundStyle(WisentDesign.muted)
+        }
+    }
+    private func rawBearerSection(
+        _ bearer: String,
+        request: HostVaultBearerRequest
+    ) -> some View {
+        WisentSectionBox(
+            title: "Generated bearer",
+            detail: "Shown because Show generated bearer was enabled. This plaintext is returned once; Skarbiec stores only its hash.",
+            trailing: "Sensitive"
+        ) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                EnrollmentCopyBlock(
+                    text: bearer,
+                    caption: "Copy it to its intended secret store before closing this sheet. Closing clears Desktop's displayed copy.",
+                    isSecret: true
+                )
+                WisentField(label: "Target", value: request.host)
+                WisentField(label: "Consumer", value: request.consumer)
+                WisentField(label: "Audience", value: request.audience)
+                WisentField(label: "Requested capabilities", value: request.capabilities)
+            }
+        }
+    }
+
+
+    private func receiptSection(_ receipt: HostVaultBearerReceipt) -> some View {
+        WisentSectionBox(
+            title: receiptTitle(receipt),
+            detail: "Non-secret metadata returned by Stado. No bearer value is included.",
+            trailing: receipt.status.humanizedIdentifier
+        ) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                WisentField(label: "Target", value: receipt.target)
+                WisentField(label: "Status", value: receipt.status)
+                WisentField(label: "Consumer", value: receipt.skarbiec.consumer)
+                WisentField(label: "Audience", value: receipt.skarbiec.audience)
+                WisentField(
+                    label: "Capabilities",
+                    value: receipt.skarbiec.capabilities.isEmpty
+                        ? "Not reported"
+                        : receipt.skarbiec.capabilities.map(\.displayValue).joined(separator: "\n")
+                )
+                WisentField(label: "Expires", value: expiry(receipt.skarbiec.expiresAt))
+                WisentField(
+                    label: "Workload binding",
+                    value: receipt.skarbiec.workloadBound ? "Workload-bound" : "Bearer-bound"
+                )
+                if let source = receipt.tokenSource {
+                    WisentField(label: "Token source", value: "\(source.item)#\(source.field)")
+                }
+                if let detail = receipt.detail, !detail.isEmpty {
+                    WisentField(label: "Detail", value: detail, tone: receipt.succeeded ? .neutral : .danger)
+                }
+            }
+        }
+    }
+
+    private func receiptTitle(_ receipt: HostVaultBearerReceipt) -> String {
+        switch receipt.status {
+        case "token_registered": "Stored bearer registered"
+        case "token_minted": "Bearer minted"
+        default: "Bearer operation answer"
+        }
+    }
+
+    private func expiry(_ epoch: UInt64?) -> String {
+        guard let epoch else { return "Not reported" }
+        return Date(timeIntervalSince1970: TimeInterval(epoch))
+            .formatted(date: .abbreviated, time: .standard)
+    }
+
+    private func confirmation(_ request: HostVaultBearerRequest) -> WisentDecisionDialog {
+        let stored = request.tokenItem != nil
+        var lines = [
+            stored
+                ? "Register the existing \(request.tokenItem ?? "")#\(request.tokenField) value for \(request.consumer)."
+                : "Mint a new bearer for \(request.consumer).",
+            "Grant \(request.capabilities) for audience \(request.audience).",
+            request.showGeneratedBearer
+                ? "Return the newly generated plaintext bearer once for display and copy; Skarbiec stores only its hash."
+                : "Return non-secret target, status, and grant metadata without bearer bytes.",
+        ]
+        if request.replaceCapabilities {
+            lines.append("Replace the consumer's existing capability set.")
+        } else {
+            lines.append("Refuse rather than change a different existing capability set.")
+        }
+        return WisentDecisionDialog(
+            tone: request.replaceCapabilities ? .danger : .warning,
+            title: "\(stored ? "Register stored" : "Mint") bearer on \(host)?",
+            lines: lines,
+            listing: [StadoCLI.commandLine(HostVaultBearerStore.arguments(request))],
+            footnote: stored
+                ? "The owner-vault field stays on the target and is not returned to Desktop."
+                : request.showGeneratedBearer
+                    ? "The generated bearer is shown after success because Show generated bearer is enabled."
+                    : "The generated plaintext is discarded; only its hash and grant remain in the target vault.",
+            actions: [
+                WisentAction("Back to form", kind: .secondary) { reviewing = false },
+                WisentAction(
+                    stored ? "Register bearer" : "Mint bearer",
+                    symbol: "key.horizontal",
+                    kind: .primary
+                ) {
+                    Task {
+                        await store.submit(request)
+                        reviewing = false
+                    }
+                },
+            ]
+        )
     }
 }
 
