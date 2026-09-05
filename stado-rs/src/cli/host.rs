@@ -7345,8 +7345,12 @@ async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdErro
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout =
-        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Show,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
             "object_verifier_reconcile_host_declaration_unreadable: {error}"
@@ -7442,8 +7446,12 @@ pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Resu
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout =
-        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Show,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
             "release_verifier_reconcile_host_declaration_unreadable: {error}"
@@ -11291,7 +11299,7 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
 /// Read the effective configuration on a fleet host using the same installed
 /// Stado binary and config path its services consume.
 pub async fn config_show(target: &str) -> Result<(), CmdError> {
-    remote_config(target, None).await
+    remote_config(target, RemoteConfigAction::Show).await
 }
 
 /// Persist one configuration field on a fleet host. Values travel base64
@@ -11314,16 +11322,11 @@ pub async fn config_set(
     // closes the host's release publication boundary the moment the unit
     // reloads, and the cheapest place to say so is here.
     refuse_unminted_publisher(target, key, value).await?;
-    remote_config(target, Some((key, value))).await?;
+    remote_config(target, RemoteConfigAction::Set { key, value }).await?;
     warn_unbacked_object_namespace(target, key, value);
     warn_unbacked_verifier_item(target, key, value);
     if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(
-            service,
-            target,
-            &format!("managed configuration {key} changed"),
-        )
-        .await?;
+        super::service::reconcile_after_config_change(service, target).await?;
     }
     Ok(())
 }
@@ -11380,12 +11383,7 @@ pub async fn config_unset(
     }
     print!("{}", output.stdout);
     if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(
-            service,
-            &resolved.name,
-            &format!("managed configuration {key} retracted"),
-        )
-        .await?;
+        super::service::reconcile_after_config_change(service, &resolved.name).await?;
     }
     Ok(())
 }
@@ -11585,16 +11583,21 @@ fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {
     );
 }
 
-async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {
+pub(crate) enum RemoteConfigAction<'a> {
+    Show,
+    Set { key: &'a str, value: &'a str },
+}
+
+async fn remote_config(target: &str, action: RemoteConfigAction<'_>) -> Result<(), CmdError> {
     let target = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout = remote_config_output(&target, update, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(&target, action, &crate::deploy::production_runner()).await?;
     print!("{stdout}");
     Ok(())
 }
 
-/// One `stado config show` on a fleet host — the effective configuration its
+/// One Stado configuration action on a fleet host — the effective configuration its
 /// own installed binary resolves, from its own `STADO_CONFIG` — returned
 /// instead of printed.
 ///
@@ -11613,14 +11616,15 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
 /// the whole time; nothing that judged the host asked it.
 pub(crate) async fn remote_config_output(
     target: &ComputeTarget,
-    update: Option<(&str, &str)>,
+    action: RemoteConfigAction<'_>,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
-    let action = match update {
-        None => "\"$binary\" config show".to_string(),
-        Some((key, value)) => format!(
+    let action = match action {
+        RemoteConfigAction::Show => "\"$binary\" config show".to_string(),
+        RemoteConfigAction::Set { key, value } => format!(
             "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             \"$binary\" config migrate\n\
              \"$binary\" config set \"$key\" \"$value\"\n\
              \"$binary\" config show",
             STANDARD.encode(key.as_bytes()),
@@ -11682,16 +11686,37 @@ root="$HOME/.stado/work"
 /bin/mkdir -p "$root"
 work=$(/usr/bin/mktemp -d "$root/release-platform.XXXXXX")
 trap '/bin/rm -rf "$work"' EXIT HUP INT TERM
+export TMPDIR="$work/tmp"
+/bin/mkdir -p "$TMPDIR"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
 /usr/bin/git -C "$work" init -q source
 /usr/bin/git -C "$work/source" remote add origin {repo}
 /usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
 /usr/bin/git -C "$work/source" checkout -q --detach FETCH_HEAD
-/usr/bin/git clone -q --depth 1 https://github.com/wisent-ai/skarbiec.git "$work/skarbiec"
-cargo build --release --manifest-path "$work/skarbiec/Cargo.toml"
-export SKARBIEC_TEST_BIN="$work/skarbiec/target/release/skarbiec"
+case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
+  Darwin:arm64)
+    platform=darwin-arm64
+    digest=70c925dfe22be3f3c1879f94901977c583fa03b6f367583b4c93815e4ec8bde4
+    ;;
+  Linux:x86_64)
+    platform=linux-amd64
+    digest=4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68
+    ;;
+  *) printf 'unsupported native verification platform\n' >&2; exit 1 ;;
+esac
+/usr/bin/curl -fsSLo "$work/skarbiec.tar.gz" "https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-$platform.tar.gz"
+if [ "$platform" = darwin-arm64 ]; then
+  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/shasum -a 256 -c -
+else
+  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/sha256sum -c -
+fi
+/bin/mkdir "$work/skarbiec"
+/usr/bin/tar -xzf "$work/skarbiec.tar.gz" -C "$work/skarbiec"
+export SKARBIEC_TEST_BIN="$work/skarbiec/skarbiec"
 cd "$work/source/stado-rs"
-cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1
-cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1
+cargo test --locked --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1
 "#
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
@@ -11703,11 +11728,10 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
-        let detail = format!("{}\n{}", output.stdout, output.stderr);
-        let tail = detail.lines().rev().take(80).collect::<Vec<_>>();
+        eprint!("{}", output.stderr);
         return Err(CmdError::click(format!(
             "{target}: platform verification failed:\n{}",
-            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            output.stdout
         )));
     }
     if json_output {
@@ -11718,6 +11742,7 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
                 "revision": revision.trim_matches('\''),
                 "verified": true,
                 "output": output.stdout,
+                "stderr": output.stderr,
             }))?
         );
     } else {

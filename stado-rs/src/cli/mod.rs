@@ -536,7 +536,7 @@ enum Commands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect or change stado configuration: show | validate | init | set | unset.
+    /// Inspect or change stado configuration: show | validate | init | migrate | set | unset.
     Config {
         #[arg(default_value = "show")]
         sub: String,

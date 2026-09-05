@@ -1828,6 +1828,14 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+fn delivery_job_command(product: &str) -> &'static str {
+    if product == "stado" {
+        crate::constants::RELEASE_DELIVERY_JOB_COMMAND
+    } else {
+        crate::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
+    }
+}
+
 async fn run_deliveries(
     run: &mut ReleaseRun,
     m: &ReleasePipelineManifest,
@@ -1915,7 +1923,7 @@ async fn run_deliveries(
                 secret_env: secret_refs(&d.secret_env),
                 ..Default::default()
             };
-            let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
+            let command = delivery_job_command(&run.product).to_string();
             let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
             let job = jobs
                 .pop()
@@ -2427,7 +2435,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
     }
 
     if transaction.stage == RedeliveryStage::RunReopened {
-        let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
+        let command = delivery_job_command(&run.product).to_string();
         let job = submit_batch(std::slice::from_ref(&command), &options)
             .await?
             .pop()

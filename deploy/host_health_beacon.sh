@@ -71,6 +71,9 @@ service = doc.get("service_directory", {}).get("services", {}).get("skarbiec", {
 print(service.get("endpoints", {}).get(host, {}).get("url", ""))'
 if [ -n "$STADO_BIN" ]; then
     export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$("$PYTHON_BIN" -c "$READ_STORE_URL")}"
+fi
+
+if [ -n "$STADO_BIN" ] && [ -z "${STADO_HOST_HEALTH_API_TOKEN_FILE:-}" ]; then
     declared_skarbiec=$("$STADO_BIN" registry pull 2>/dev/null \
         | "$PYTHON_BIN" -c "$READ_SKARBIEC" "$HOST_SLUG" || true)
     export STADO_HOST_HEALTH_SKARBIEC_URL="${declared_skarbiec:-${STADO_HOST_HEALTH_SKARBIEC_URL:-}}"
@@ -84,7 +87,7 @@ fi
 # and the beacon is lost -- while the relay on the always-on Mac is standing by
 # to hand it in. Collect in that case rather than failing: an unpublished
 # beacon printed on stdout is exactly what the relay consumes.
-if [ -z "$collect_only" ]; then
+if [ -z "$collect_only" ] && [ -z "${STADO_HOST_HEALTH_API_TOKEN_FILE:-}" ]; then
     grant_file="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-}"
     if [ -z "${STADO_HOST_HEALTH_API_URL:-}" ] || [ -z "${STADO_HOST_HEALTH_SKARBIEC_URL:-}" ] \
         || [ ! -f "$grant_file" ]; then
@@ -251,7 +254,9 @@ case "$inference_json" in
 esac
 
 
-tmpfile=$(/usr/bin/mktemp)
+payload_dir="${HOME}/.stado/work/host-health-beacon"
+/usr/bin/install -d -m 700 "$payload_dir"
+tmpfile=$(/usr/bin/mktemp "$payload_dir/beacon.XXXXXXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
 cat > "$tmpfile" <<EOF
 {

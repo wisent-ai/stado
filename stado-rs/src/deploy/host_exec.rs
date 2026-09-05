@@ -1502,6 +1502,35 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               never loaded appears only here, and that is exactly the shape an undeclared \
               queue agent takes. Read-only, every selector fixed, and it takes no unit name",
     },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "show",
+            "stado-host-beacon.service",
+            "-p",
+            "NeedDaemonReload",
+            "-p",
+            "Type",
+            "-p",
+            "TriggeredBy",
+            "-p",
+            "Result",
+            "-p",
+            "ExecMainStartTimestamp",
+            "-p",
+            "ExecMainStatus",
+            "-p",
+            "FragmentPath",
+            "-p",
+            "DropInPaths",
+            "-p",
+            "EnvironmentFiles",
+        ],
+        why: "reads the loaded beacon definition, its source and override paths, and its \
+              last publication result. This distinguishes a stale manager definition from \
+              a later environment override without restarting anything. The unit and \
+              properties are fixed and credential values are not read",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.

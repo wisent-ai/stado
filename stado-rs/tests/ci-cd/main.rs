@@ -17,6 +17,79 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+fn executable_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+fn real_skarbiec_binary() -> PathBuf {
+    if let Some(configured) = std::env::var_os("SKARBIEC_TEST_BIN") {
+        let configured = PathBuf::from(configured);
+        assert!(
+            executable_file(&configured),
+            "SKARBIEC_TEST_BIN is not an executable file: {}",
+            configured.display()
+        );
+        return configured;
+    }
+
+    let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+    let installed = home.join(".stado/bin/skarbiec");
+    if executable_file(&installed) {
+        return installed;
+    }
+
+    let (platform, asset, expected_sha256) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => (
+            "darwin-arm64",
+            "skarbiec-v0.2.37-darwin-arm64.tar.gz",
+            "d113acc0d831bbefdce0308dbd311e5a6d14c8f9581c962abf380b3c2343743b",
+        ),
+        ("linux", "x86_64") => (
+            "linux-amd64",
+            "skarbiec-v0.2.37-linux-amd64.tar.gz",
+            "45dc3869f869c347038cc97f3d454bf40f889219152c92862652c0c9e1166c89",
+        ),
+        (os, arch) => panic!("no real Skarbiec release is pinned for {os}-{arch}"),
+    };
+    let cache = home.join(".cache/probierz/skarbiec/v0.2.37").join(platform);
+    let binary = cache.join("skarbiec");
+    if executable_file(&binary) {
+        return binary;
+    }
+    fs::create_dir_all(&cache).unwrap();
+
+    let url = format!("https://github.com/wisent-ai/skarbiec/releases/download/v0.2.37/{asset}");
+    let bytes = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        reqwest::get(&url)
+            .await
+            .unwrap_or_else(|error| panic!("downloading real Skarbiec failed: {error}"))
+            .error_for_status()
+            .unwrap_or_else(|error| panic!("downloading real Skarbiec failed: {error}"))
+            .bytes()
+            .await
+            .unwrap_or_else(|error| panic!("reading real Skarbiec archive failed: {error}"))
+    });
+    assert_eq!(
+        hex::encode(Sha256::digest(&bytes)),
+        expected_sha256,
+        "downloaded real Skarbiec archive has the wrong digest"
+    );
+
+    let mut archive = tempfile::NamedTempFile::new_in(&cache).unwrap();
+    archive.write_all(&bytes).unwrap();
+    let decoder = flate2::read::GzDecoder::new(File::open(archive.path()).unwrap());
+    tar::Archive::new(decoder).unpack(&cache).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        executable_file(&binary),
+        "real Skarbiec archive contains no executable"
+    );
+    binary
+}
+
 fn release_platform() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "darwin-arm64",
@@ -36,11 +109,7 @@ impl SkarbiecFixture {
     fn start(home: &Path, private_key: &Path) -> Self {
         use base64::Engine;
 
-        let binary = PathBuf::from(
-            std::env::var("SKARBIEC_TEST_BIN")
-                .expect("SKARBIEC_TEST_BIN must name the real Skarbiec executable"),
-        );
-        assert!(binary.is_file(), "SKARBIEC_TEST_BIN names no file");
+        let binary = real_skarbiec_binary();
         let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/work");
         fs::create_dir_all(&scratch).unwrap();
         let gnupg = tempfile::Builder::new()
@@ -468,11 +537,14 @@ fn wait_for_claimable_capacity(storage: &Path, home: &Path, agent: &mut Child) {
                 fs::read_to_string(home.join("agent.err")).unwrap_or_default()
             );
         }
-        assert!(
-            Instant::now() < deadline,
-            "agent accepted no work within 300 seconds\nstore:{}",
-            store_snapshot(storage)
-        );
+        if Instant::now() >= deadline {
+            let _ = agent.kill();
+            let _ = agent.wait();
+            panic!(
+                "agent accepted no work within 300 seconds\nstore:{}",
+                store_snapshot(storage)
+            );
+        }
         thread::sleep(Duration::from_millis(250));
     }
 }
@@ -522,7 +594,7 @@ fn wait_for_recovery_delivery(
                 let Ok(job) = serde_json::from_slice::<Value>(&bytes) else {
                     continue;
                 };
-                if job["command"] == stado::constants::RELEASE_DELIVERY_JOB_COMMAND
+                if job["command"] == stado::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
                     && job["pinned_host"] == consumer
                 {
                     return job;
@@ -654,7 +726,7 @@ fn wait_for_submit(
 }
 
 #[test]
-#[ignore = "Probierz supplies the real Skarbiec executable"]
+#[ignore = "runs the real Skarbiec-backed release journey"]
 fn a_real_release_builds_publishes_and_installs_its_binary() {
     let platform = release_platform();
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
@@ -754,7 +826,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
 }
 
 #[test]
-#[ignore = "Probierz supplies the real Skarbiec executable"]
+#[ignore = "runs the real Skarbiec-backed release journey"]
 fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     let platform = release_platform();
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
@@ -842,7 +914,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     assert_eq!(delivery["priority"], stado::constants::RELEASE_JOB_PRIORITY);
     assert_eq!(
         delivery["command"],
-        stado::constants::RELEASE_DELIVERY_JOB_COMMAND
+        stado::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
     );
     assert!(
         delivery["output_uri"]
@@ -853,7 +925,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
 }
 
 #[test]
-#[ignore = "Probierz supplies the real Skarbiec executable"]
+#[ignore = "runs the real Skarbiec-backed release journey"]
 fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let platform = release_platform();
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
@@ -991,9 +1063,12 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let _ = agent.wait();
     assert!(
         result.status.success(),
-        "retried release submit failed:\nstdout:\n{}\nstderr:\n{}",
+        "retried release submit failed:\nstdout:\n{}\nstderr:\n{}\nagent stdout:\n{}\nagent stderr:\n{}\nstore:{}",
         String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
+        String::from_utf8_lossy(&result.stderr),
+        fs::read_to_string(home.path().join("agent.out")).unwrap_or_default(),
+        fs::read_to_string(home.path().join("agent.err")).unwrap_or_default(),
+        store_snapshot(&storage)
     );
     let release: Value = serde_json::from_slice(&result.stdout).unwrap();
     let retry_job_id = release["platforms"][platform]["job_id"].as_str().unwrap();
@@ -1017,5 +1092,8 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
         "ci-release-probe 1.0.0"
+    );
+    println!(
+        "verified cancelled release retry platform={platform}; first_job={first_job_id}; retry_job={retry_job_id}; installed=ci-release-probe 1.0.0"
     );
 }

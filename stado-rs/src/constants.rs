@@ -30,6 +30,11 @@ pub const STALE_TRAINING_MAX_AGE_S: u64 = 3600;
 /// the agent binary that owns cleanup and admission.
 pub const RELEASE_DELIVERY_JOB_COMMAND: &str =
     "/usr/bin/tar -xzf release.tar.gz && exec ./bin/stado release delivery-worker --request delivery-request.json";
+/// Exact queue command for delivering any product other than Stado. The
+/// installed Stado worker verifies and applies the product archive; product
+/// archives do not carry a second copy of Stado.
+pub const PRODUCT_RELEASE_DELIVERY_JOB_COMMAND: &str =
+    "exec $HOME/.stado/bin/stado release delivery-worker --request delivery-request.json";
 /// Release qualification and delivery unblock declared fleet versions, so
 /// routine batch work must not leave them at the zero-priority FIFO tail.
 pub const RELEASE_JOB_PRIORITY: i64 = 90_000_000;

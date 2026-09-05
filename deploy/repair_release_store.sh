@@ -1,172 +1,103 @@
 #!/usr/bin/env bash
-# Repair one product's local release-catalog coordinate after an ownership fault.
-#
-# Release submission creates immutable revision claims and a source object before
-# it mutates `stado://system/release-catalog/<product>.json`. When those creates
-# persist but no durable run appears, this catalog object is the next candidate
-# in source order. This helper records the real owners before deciding whether
-# that diagnosis is true. It accepts only a canonical product segment, validates
-# every parent component before any mutation, and changes only root-owned paths
-# in this one object/metadata/lock chain. It never walks or recursively chowns the
-# store.
+# Repair one release-catalog coordinate in the authority's local stores.
+# Validate every primary and backup path before changing ownership; never walk
+# the store or recursively chown it. A successful primary write can still fail
+# when the configured backup cannot create its catalog object or metadata.
 set -euo pipefail
 
-product="${STADO_RELEASE_STORE_PRODUCT:-}"
-if ! /usr/bin/python3 - "$product" <<'PY'
-import re, sys
-raise SystemExit(0 if re.fullmatch(r"[A-Za-z0-9._-]+", sys.argv[1] or "") else 1)
+exec /usr/bin/python3 - "${STADO_CONFIG:-$HOME/.config/stado/config.json}" "${STADO_RELEASE_STORE_PRODUCT:-}" <<'PY'
+import grp
+import hashlib
+import json
+import os
+import pwd
+import re
+import stat
+import subprocess
+import sys
+
+config, product = sys.argv[1:]
+if not re.fullmatch(r"[A-Za-z0-9._-]+", product):
+    raise SystemExit(f"invalid_product {product}")
+with open(config, encoding="utf-8") as handle:
+    storage = json.load(handle).get("storage") or {}
+backup = storage.get("backup") or {}
+primary_path = os.environ.get("WC_LOCAL_STORAGE_PATH") or (storage.get("local") or {}).get("path")
+if not primary_path:
+    raise SystemExit("store_root unresolved; nothing repaired")
+paths = [primary_path]
+if (os.environ.get("WC_BACKUP_STORAGE_BACKEND") or backup.get("backend")) == "local":
+    backup_path = os.environ.get("WC_BACKUP_LOCAL_STORAGE_PATH") or (backup.get("local") or {}).get("path")
+    if not backup_path:
+        raise SystemExit("backup_store_root unresolved; nothing repaired")
+    paths.append(backup_path)
+
+uid = os.geteuid()
+account = pwd.getpwuid(uid).pw_name
+group = grp.getgrgid(os.getegid()).gr_name
+managed_home = os.path.join(os.path.expanduser("~"), ".stado")
+key = f"ecosystem/system/release-catalog/{product}.json"
+lock_name = hashlib.sha256(key.encode()).hexdigest()
+roots = []
+nodes = {}
+print(f"release_catalog_uri stado://system/release-catalog/{product}.json", flush=True)
+for raw in paths:
+    root = os.path.abspath(os.path.expanduser(raw))
+    if root in roots:
+        continue
+    if os.path.commonpath([managed_home, root]) != managed_home or root == managed_home:
+        raise SystemExit(f"store_root outside managed home: {root}; nothing repaired")
+    if os.path.realpath(root) != root:
+        raise SystemExit(f"store_root has a symlinked component: {root}; nothing repaired")
+    if not os.path.isdir(root):
+        raise SystemExit(f"store_root unresolved: {root}; nothing repaired")
+    roots.append(root)
+    files = [key, f".metadata/{key}", f".locks/{lock_name}"]
+    for label, relative in zip(("physical_object", "physical_metadata", "physical_lock"), files):
+        print(f"{label} {os.path.join(root, relative)}", flush=True)
+        nodes[root] = True
+        components = relative.split("/")
+        for index in range(1, len(components) + 1):
+            nodes[os.path.join(root, *components[:index])] = index < len(components)
+
+
+def inspect(path, directory):
+    try:
+        observed = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(observed.st_mode):
+        raise SystemExit(f"refused_symlink {path}")
+    expected = stat.S_ISDIR if directory else stat.S_ISREG
+    if not expected(observed.st_mode):
+        raise SystemExit(f"refused_wrong_type {path}")
+    if observed.st_uid not in (0, uid):
+        raise SystemExit(f"refused_foreign_owner uid={observed.st_uid} {path}")
+    return observed
+
+
+# No mutation until the complete, bounded set in both stores is known.
+for path, directory in nodes.items():
+    observed = inspect(path, directory)
+    owner = f"uid={observed.st_uid} gid={observed.st_gid}" if observed else "absent"
+    print(f"observed {owner} {path}", flush=True)
+
+repaired = 0
+for path, directory in nodes.items():
+    observed = inspect(path, directory)
+    if observed is None or observed.st_uid == uid:
+        continue
+    subprocess.run(["/usr/bin/sudo", "-n", "/usr/sbin/chown", "-h", f"{account}:{group}", path], check=True)
+    print(f"repaired root -> {account}:{group} {path}", flush=True)
+    repaired += 1
+
+for path, directory in nodes.items():
+    observed = inspect(path, directory)
+    if observed is None:
+        continue
+    required = os.W_OK | (os.X_OK if directory else os.R_OK)
+    if observed.st_uid != uid or not os.access(path, required):
+        raise SystemExit(f"postcondition_failed owner_uid={observed.st_uid} {path}")
+
+print(f"release_store_repaired product={product} account={account} changed={repaired} stores={len(roots)} bounded_paths={len(nodes)}")
 PY
-then
-  printf 'invalid_product %s\n' "$product" >&2
-  exit 64
-fi
-
-config="${STADO_CONFIG:-$HOME/.config/stado/config.json}"
-root=$(
-  /usr/bin/python3 - "$config" <<'PY'
-import json, os, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    data = json.load(handle)
-path = ((data.get("storage") or {}).get("local") or {}).get("path") or ""
-root = os.path.abspath(os.path.expanduser(path)) if path else ""
-if root and os.path.realpath(root) != root:
-    raise SystemExit(f"store_root has a symlinked component: {root}; nothing repaired")
-print(root)
-PY
-)
-if [ -z "$root" ] || [ ! -d "$root" ]; then
-  printf 'store_root unresolved; nothing repaired\n' >&2
-  exit 1
-fi
-case "$root" in
-  "$HOME"/.stado/*) ;;
-  *)
-    printf 'store_root outside managed home: %s; nothing repaired\n' "$root" >&2
-    exit 1
-    ;;
-esac
-
-account=$(/usr/bin/id -un)
-account_uid=$(/usr/bin/id -u)
-group=$(/usr/bin/id -gn)
-storage_key="ecosystem/system/release-catalog/$product.json"
-catalog_file="$root/$storage_key"
-metadata_file="$root/.metadata/$storage_key"
-lock_name=$(
-  /usr/bin/python3 - "$storage_key" <<'PY'
-import hashlib, sys
-print(hashlib.sha256(sys.argv[1].encode()).hexdigest())
-PY
-)
-lock_file="$root/.locks/$lock_name"
-
-printf 'release_catalog_uri stado://system/release-catalog/%s.json\n' "$product"
-printf 'physical_object %s\n' "$catalog_file"
-printf 'physical_metadata %s\n' "$metadata_file"
-printf 'physical_lock %s\n' "$lock_file"
-
-# First pass: establish the complete bounded source state. No ownership changes
-# happen until every existing component has proven to be the expected type, not
-# a symlink, and owned either by this service account or by root.
-for path in \
-  "$root" \
-  "$root/ecosystem" \
-  "$root/ecosystem/system" \
-  "$root/ecosystem/system/release-catalog" \
-  "$catalog_file" \
-  "$root/.metadata" \
-  "$root/.metadata/ecosystem" \
-  "$root/.metadata/ecosystem/system" \
-  "$root/.metadata/ecosystem/system/release-catalog" \
-  "$metadata_file" \
-  "$root/.locks" \
-  "$lock_file"
-do
-  if [ -L "$path" ]; then
-    printf 'refused_symlink %s\n' "$path" >&2
-    exit 1
-  fi
-  if [ ! -e "$path" ]; then
-    printf 'observed absent %s\n' "$path"
-    continue
-  fi
-  case "$path" in
-    "$catalog_file"|"$metadata_file"|"$lock_file")
-      if [ ! -f "$path" ]; then
-        printf 'refused_non_file %s\n' "$path" >&2
-        exit 1
-      fi
-      ;;
-    *)
-      if [ ! -d "$path" ]; then
-        printf 'refused_non_directory %s\n' "$path" >&2
-        exit 1
-      fi
-      ;;
-  esac
-  owner_uid=$(/usr/bin/stat -f '%u' "$path")
-  before=$(/usr/bin/stat -f '%Su:%Sg' "$path")
-  if [ "$owner_uid" != "$account_uid" ] && [ "$owner_uid" != 0 ]; then
-    printf 'refused_foreign_owner %s %s\n' "$before" "$path" >&2
-    exit 1
-  fi
-  printf 'observed %s %s\n' "$before" "$path"
-done
-
-# Second pass: every possible source path is now validated. An absent component
-# is left for LocalBackend to create under its now-account-owned parent.
-repaired=0
-for path in \
-  "$root" \
-  "$root/ecosystem" \
-  "$root/ecosystem/system" \
-  "$root/ecosystem/system/release-catalog" \
-  "$catalog_file" \
-  "$root/.metadata" \
-  "$root/.metadata/ecosystem" \
-  "$root/.metadata/ecosystem/system" \
-  "$root/.metadata/ecosystem/system/release-catalog" \
-  "$metadata_file" \
-  "$root/.locks" \
-  "$lock_file"
-do
-  [ ! -e "$path" ] && continue
-  if [ -L "$path" ]; then
-    printf 'refused_symlink %s\n' "$path" >&2
-    exit 1
-  fi
-  owner_uid=$(/usr/bin/stat -f '%u' "$path")
-  [ "$owner_uid" = "$account_uid" ] && continue
-  if [ "$owner_uid" != 0 ]; then
-    printf 'refused_foreign_owner uid=%s %s\n' "$owner_uid" "$path" >&2
-    exit 1
-  fi
-  /usr/bin/sudo -n /usr/sbin/chown -h "$account:$group" "$path"
-  after=$(/usr/bin/stat -f '%Su:%Sg' "$path")
-  printf 'repaired %s -> %s %s\n' root "$after" "$path"
-  repaired=$((repaired + 1))
-done
-
-for directory in \
-  "$root" \
-  "$root/ecosystem" \
-  "$root/ecosystem/system" \
-  "$root/ecosystem/system/release-catalog" \
-  "$root/.metadata" \
-  "$root/.metadata/ecosystem" \
-  "$root/.metadata/ecosystem/system" \
-  "$root/.metadata/ecosystem/system/release-catalog" \
-  "$root/.locks"
-do
-  [ ! -e "$directory" ] && continue
-  owner_uid=$(/usr/bin/stat -f '%u' "$directory")
-  if [ "$owner_uid" != "$account_uid" ] || [ ! -w "$directory" ] || [ ! -x "$directory" ]; then
-    printf 'postcondition_failed %s owner_uid=%s writable=%s searchable=%s\n' \
-      "$directory" "$owner_uid" "$([ -w "$directory" ] && printf yes || printf no)" \
-      "$([ -x "$directory" ] && printf yes || printf no)" >&2
-    exit 1
-  fi
-done
-
-printf 'release_store_repaired product=%s account=%s changed=%s bounded_paths=12\n' \
-  "$product" "$account" "$repaired"

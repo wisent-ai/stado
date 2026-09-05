@@ -2916,6 +2916,7 @@ impl RemoteObjectApi {
         bearer: Option<&str>,
     ) -> CmdError {
         let status = response.status();
+        let endpoint = response.url().clone();
         let declared_length = response.content_length();
         let max_body = max_object_api_error_body();
         let mut body = Vec::new();
@@ -2927,7 +2928,7 @@ impl RemoteObjectApi {
                 Err(error) => {
                     let detail = response_body_detail(&body, self.generic_bearer(), bearer);
                     return CmdError::click(format!(
-                        "Stado object API returned HTTP {status}; partial response body: \
+                        "Stado object API returned HTTP {status} from {endpoint}; partial response body: \
                          {detail}; body read failed: {error}"
                     ));
                 }
@@ -2954,7 +2955,7 @@ impl RemoteObjectApi {
             ""
         };
         CmdError::click(format!(
-            "Stado object API returned HTTP {status}: {detail}{suffix}"
+            "Stado object API returned HTTP {status} from {endpoint}: {detail}{suffix}"
         ))
     }
 }
