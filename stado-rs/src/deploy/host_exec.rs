@@ -604,8 +604,7 @@ const BRAMA_RUNNER_APPHOST_SIGNATURE: &[&str] = &[
 ];
 const BRAMA_RUNNER_CORECLR_SIGNATURE: &[&str] = &[
     "/usr/bin/codesign",
-    "-dv",
-    "--verbose=4",
+    "-dvvvv",
     ".stado/actions-runner-brama/bin/libcoreclr.dylib",
 ];
 
@@ -1629,6 +1628,12 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
         why: "reads the same runner's CoreCLR library signing identity so a loader failure can \
               be compared with its apphost rather than guessed from the HRESULT. The fixed \
               display-only invocation neither loads the library nor modifies it",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/csrutil", "status"],
+        why: "reads macOS System Integrity Protection status while diagnosing a CoreCLR \
+              memory-access refusal. This status-only invocation changes no boot setting, \
+              opens no consent window, and never reboots the host",
     },
 ];
 
