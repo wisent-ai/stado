@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.12
+
+- **Canonical queue reachability:** the queue's HTTP client now uses the same Tailscale name-to-address map as artifact delivery. A broken system MagicDNS resolver no longer prevents submission, status, or cleanup from reaching the configured queue.
+- **Connection reuse:** pooled clients are keyed by origin host and CA configuration, so a connection pool cannot carry another origin's address pin. Bearers remain per-request headers; TLS hostname and certificate verification are unchanged.
+- **Migration and rollback:** no configuration or stored data changes. Rolling back restores dependence on the system resolver for queue operations.
+- **Platforms and evidence:** the existing native Probierz qualification covers `darwin-arm64` and `linux-amd64`; release evidence must name this exact source revision.
+
 ## 0.16.11
 
 - **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.
