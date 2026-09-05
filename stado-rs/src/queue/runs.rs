@@ -99,9 +99,25 @@ pub async fn read_run(
     };
     let value: Value = serde_json::from_str(&versioned.content)?;
     let value = if value.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v2") {
-        crate::queue::submit::migrate_v2_run_manifest(store, run_id)
-            .await
-            .map_err(|error| StorageError::Other(error.to_string()))?
+        match crate::queue::submit::migrate_v2_run_manifest(store, run_id).await {
+            Ok(migrated) => migrated,
+            Err(error) => {
+                // Migration performs its own versioned read. A manifest can be
+                // retired after the read above and before that read; absence
+                // means this run no longer exists, not that the whole queue is
+                // corrupt. Re-read only to distinguish that race. A present
+                // object, an unreadable store, or malformed content preserves
+                // the migration error.
+                if store
+                    .read_text_versioned(&format!("{RUN_PREFIX}/{run_id}.json"))
+                    .await?
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                return Err(StorageError::Other(error.to_string()));
+            }
+        }
     } else {
         value
     };
