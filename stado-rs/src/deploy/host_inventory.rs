@@ -314,7 +314,7 @@ emit_filesystem_metadata() {
   elif [ -e "$metadata_path" ]; then
     metadata_kind=other
   else
-    metadata_kind=missing
+    metadata_kind=uninspected
   fi
 
   metadata_complete=true
@@ -324,44 +324,52 @@ emit_filesystem_metadata() {
   metadata_uid=null
   metadata_gid=null
   metadata_modified_epoch=null
-  if [ "$metadata_kind" = missing ]; then
-    metadata_state=missing
+  # A failed -e check also means denied traversal; only stat's ENOENT
+  # diagnosis proves absence. LC_ALL=C above fixes both stat error dialects.
+  metadata_facts_read=false
+  if [ "$kernel" = Darwin ]; then
+    if metadata_facts=$(/usr/bin/stat -f '%z %Lp %u %g %m' "$metadata_path" 2>&1); then
+      metadata_facts_read=true
+    fi
   else
-    metadata_facts_read=false
-    if metadata_facts=$(/usr/bin/stat -f '%z %Lp %u %g %m' "$metadata_path" 2>/dev/null); then
+    if metadata_facts=$(/usr/bin/stat -c '%s %a %u %g %Y' "$metadata_path" 2>&1); then
       metadata_facts_read=true
-    elif metadata_facts=$(/usr/bin/stat -c '%s %a %u %g %Y' "$metadata_path" 2>/dev/null); then
-      metadata_facts_read=true
-    else
-      metadata_facts=""
     fi
-    if [ "$metadata_facts_read" = true ]; then
-      metadata_state=malformed
-      # stat's five fields are whitespace-free numbers. Function-local
-      # positional parameters keep the split out of the caller's state.
-      set -- $metadata_facts
-      if [ "$#" -eq 5 ]; then
-        case "$1:$3:$4:$5" in
-          *[!0-9:]*) ;;
-          *)
-            case "$2" in
-              ''|*[!0-7]*) ;;
-              *)
-                metadata_state=read
-                metadata_bytes=$1
-                metadata_mode=$2
-                metadata_uid=$3
-                metadata_gid=$4
-                metadata_modified_epoch=$5
-                ;;
-            esac
-            ;;
-        esac
-      fi
+  fi
+  if [ "$metadata_facts_read" = true ]; then
+    metadata_state=malformed
+    # Function-local positional parameters keep the split out of the caller's
+    # state. A modification epoch may precede 1970; ownership and size may not.
+    set -- $metadata_facts
+    if [ "$#" -eq 5 ] && [ -n "${5#-}" ]; then
+      case "$1:$3:$4:${5#-}" in
+        *[!0-9:]*) ;;
+        *)
+          case "$2" in
+            ''|*[!0-7]*) ;;
+            *)
+              metadata_state=read
+              metadata_bytes=$1
+              metadata_mode=$2
+              metadata_uid=$3
+              metadata_gid=$4
+              metadata_modified_epoch=$5
+              ;;
+          esac
+          ;;
+      esac
     fi
-    if [ "$metadata_state" != read ]; then
-      metadata_complete=false
-    fi
+  else
+    case "$metadata_facts" in
+      *': No such file or directory')
+        metadata_kind=missing
+        metadata_state=missing
+        ;;
+    esac
+  fi
+  if [ "$metadata_kind" = uninspected ] || \
+     { [ "$metadata_state" != read ] && [ "$metadata_state" != missing ]; }; then
+    metadata_complete=false
   fi
 
   metadata_symlink_target=""
@@ -1244,8 +1252,9 @@ fn clamp_filesystem_metadata(metadata: &mut FilesystemMetadata) -> bool {
 }
 
 fn clamp_cargo_inventory(cargo: &mut CargoInventory) {
-    let mut complete =
-        clamp_filesystem_metadata(&mut cargo.home) && clamp_filesystem_metadata(&mut cargo.bin);
+    let home_exact = clamp_filesystem_metadata(&mut cargo.home);
+    let bin_exact = clamp_filesystem_metadata(&mut cargo.bin);
+    let mut complete = home_exact && bin_exact;
     clamp(&mut cargo.entries_state);
     cargo.entries.sort_by(|left, right| left.name.cmp(&right.name));
     cargo.entries_seen = cargo.entries_seen.max(cargo.entries.len() as u64);
