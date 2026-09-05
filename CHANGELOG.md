@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.8
+## 0.16.9
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
 - **Host disk diagnostics:** `stado host disk` now attributes Linux pressure inside the managed home, `/home`, `/mnt`, `/var`, and `/opt` instead of returning an empty inventory after a depth-two root report only named its parent directories.
@@ -11,6 +11,13 @@
 - **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
 - **Platform regression evidence:** the existing fleet journey now uses current durable job identities, retains its complete remote job reports, and exercises the cancelled-build retry on both native platforms.
+
+## 0.16.8
+
+- **Guarded handoff delivery:** carries the complete interruption-safe release-control handoff from 0.16.5 together with the newer installed fleet functionality already merged through 0.16.7. Matching prepared receipts can refresh a stale expected generation only after the same intent, exact runtime files, and still-managed lifecycle are re-proved; a registry-committed resume skips the successful CAS, reacquires the service lease, verifies the exact active release, and finishes the reconciler fence.
+- **Release correction:** the immutable 0.16.5 tag remains attached to its original source, whose declared Clippy gate rejected an eight-argument internal helper before publication. This coordinate groups the three legacy identities into one fixed array without changing the checks, uses the first unoccupied version after the already-owned 0.16.6 and 0.16.7 coordinates, and does not move or overwrite either tag.
+- **Migration and rollback:** no stored data changes. Install a compatible release on every registry reader before handoff; rolling back below 0.15.24 makes the external placement shape unreadable, while rolling back below this release removes interruption-safe completion.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; formatting, locked compilation, and Clippy cover the corrected source, while immutable release publication supplies signed manifests, artifacts, source identity, and delivery receipts.
 
 ## 0.16.7
 
@@ -29,7 +36,7 @@
 
 ## 0.16.5
 
-- **Atomic handoff fencing:** `service handoff-release-control` now refuses a placement profile already owned by an active move transaction before it contacts the host. Runtime checks and the sole registry compare-and-swap run under the existing per-unit service lifecycle lease. Before that CAS, the command durably writes the exact cleanup identities and intended handoff as a `prepared` product work receipt; after it, the receipt advances immediately to `registry_committed`, then records a post-CAS reconciler-report baseline, waits for a newer report, and rechecks both the unloaded legacy label and absence of old-executable callers. Reinvocation validates a matching receipt, exact release, and targeted registry state, skips an already successful CAS, reacquires the same lease, and finishes the fence.
+- **Atomic handoff fencing:** `service handoff-release-control` now refuses a placement profile already owned by an active move transaction before it contacts the host. Runtime checks and the sole registry compare-and-swap run under the existing per-unit service lifecycle lease. Before that CAS, the command durably writes the exact cleanup identities and intended handoff as a `prepared` product work receipt; after it, the receipt advances immediately to `registry_committed`, then records a post-CAS reconciler-report baseline, waits for a newer report, and rechecks both the unloaded legacy label and absence of old-executable callers. Reinvocation validates a matching receipt, exact release, and targeted registry state, skips an already successful CAS, reacquires the same lease, records the observed recovery generation without inventing a lost CAS generation, and finishes the shared fence path. A still-managed retry whose CAS lost to an unrelated registry write refreshes only the prepared generation after repeating the exact checks and preserving its original cleanup tokens.
 - **Migration:** no persisted-state rewrite is required. Install this release on every registry reader before performing a release-control handoff.
 - **Rollback boundary:** rolling back restores the race in which an already-claimed placement move or stale generic service reconciliation can act on the legacy lifecycle while handoff removes it, and removes the write-ahead cleanup receipt, interruption-safe resume path, and post-CAS reconciler-report fence.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; locked compilation covers the source change, while release publication supplies signed platform manifests and delivery receipts.

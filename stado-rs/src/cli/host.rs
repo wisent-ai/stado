@@ -1960,12 +1960,26 @@ const LINK_DEGRADED: &str = "degraded";
 /// know how this host is reachable" is the answer that sends an operator to
 /// look, and a guess is the answer that does not.
 const PATH_KIND_UNKNOWN: &str = "unknown";
-const HOST_HEALTH_BEACON_UNIT: &str = "com.wisent.host-health-beacon";
+const HOST_HEALTH_BEACON_UNIT_MACOS: &str = "com.wisent.host-health-beacon";
+const HOST_HEALTH_BEACON_UNIT_LINUX: &str = "stado-host-beacon.service";
 const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
 const HOST_HEALTH_LOG_LINES: u32 = 80;
 const OBJECT_API_SERVICE: &str = "stado-object-api";
 const LINK_REPAIR_WAIT_SECONDS: u64 = 90;
 const LINK_REPAIR_POLL_SECONDS: u64 = 5;
+/// The publisher unit this target actually runs.
+///
+/// Linux and macOS do not share a service namespace. Treating the launchd
+/// label as universal made a reachable Linux host's stale beacon diagnose as
+/// "no unit file" while systemd was recording the publisher's exit on every
+/// timer tick.
+fn host_health_beacon_unit(target: &ComputeTarget) -> &'static str {
+    if target.release_platform.starts_with("linux-") {
+        HOST_HEALTH_BEACON_UNIT_LINUX
+    } else {
+        HOST_HEALTH_BEACON_UNIT_MACOS
+    }
+}
 
 /// The beacon publisher's newest outcome, read from the managed unit's own
 /// declared log. A later successful host-name line supersedes an older error;
@@ -1973,7 +1987,11 @@ const LINK_REPAIR_POLL_SECONDS: u64 = 5;
 /// old cause forever.
 fn host_health_publisher_diagnosis(report: &UnitLogReport) -> Value {
     let lines = report.log.lines().collect::<Vec<_>>();
-    let last_success = lines.iter().rposition(|line| line.trim() == report.target);
+    let journal_success = format!(": {}", report.target);
+    let last_success = lines.iter().rposition(|line| {
+        let line = line.trim();
+        line == report.target || line.ends_with(&journal_success)
+    });
     let last_error = lines
         .iter()
         .rposition(|line| line.contains("Error:") || line.contains(HOST_HEALTH_AUTH_UNAVAILABLE));
@@ -2151,17 +2169,11 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // carries the cause an operator previously had to discover with a second
     // command.
     let beacon_publisher = if stale && ssh_reachable {
-        match collect_unit_log(
-            resolved,
-            HOST_HEALTH_BEACON_UNIT,
-            HOST_HEALTH_LOG_LINES,
-            &runner,
-        )
-        .await
-        {
+        let publisher_unit = host_health_beacon_unit(resolved);
+        match collect_unit_log(resolved, publisher_unit, HOST_HEALTH_LOG_LINES, &runner).await {
             Ok(report) => Some(host_health_publisher_diagnosis(&report)),
             Err(error) => Some(json!({
-                "unit": HOST_HEALTH_BEACON_UNIT,
+                "unit": publisher_unit,
                 "code": "diagnostic_unavailable",
                 "detail": error.to_string(),
                 "repairable": false,
@@ -2548,7 +2560,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
     let runner = crate::deploy::production_runner();
     let publisher_log = collect_unit_log(
         &resolved,
-        HOST_HEALTH_BEACON_UNIT,
+        host_health_beacon_unit(&resolved),
         HOST_HEALTH_LOG_LINES,
         &runner,
     )
@@ -8129,6 +8141,65 @@ pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), C
     Ok(())
 }
 
+/// Repair the release-catalog ownership fault on the object API authority.
+///
+/// This is a separate operation from [`recover_object_api`]: the listener is
+/// healthy and authorized, but its local backend cannot replace one existing
+/// catalog object because root created that coordinate's directories. The
+/// fixed helper validates each source owner before changing it and has no
+/// operator-supplied path, so the repair cannot widen into a recursive chown of
+/// the store.
+pub async fn repair_release_store(
+    target: &str,
+    product: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if !crate::release_control::identifier(product) {
+        return Err(CmdError::usage(
+            "product must be a canonical release identifier",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!(
+        "export STADO_RELEASE_STORE_PRODUCT={}\n{}",
+        crate::deploy::shlex_quote(product),
+        include_str!("../../../deploy/repair_release_store.sh")
+    );
+    let repaired = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !repaired.ok() {
+        return Err(CmdError::click(format!(
+            "{}: release store repair failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&repaired, "remote command failed")
+        )));
+    }
+    let detail = repaired.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "repaired",
+                "scope": format!("stado://system/release-catalog/{product}.json"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// Authorize TARGET's service resolver on the service-directory authority.
 pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(), CmdError> {
     let report = crate::deploy::host_resolver_key::authorize(target)
@@ -8147,27 +8218,6 @@ pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(
         );
     }
     Ok(())
-}
-
-/// One declared log path out of a unit plist: `StandardOutPath` or
-/// `StandardErrorPath`, or nothing when the plist does not declare it.
-/// PlistBuddy writes its "does not exist" to stderr and prints nothing, so a
-/// failed read is simply no path.
-async fn unit_log_path(
-    resolved: &ComputeTarget,
-    key: &str,
-    plist: &str,
-    runner: &crate::deploy::Runner,
-) -> Result<Option<String>, CmdError> {
-    let output = crate::deploy::host_channel::run_program(
-        resolved,
-        &["/usr/libexec/PlistBuddy", "-c", key, plist],
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    let declared = output.stdout.trim();
-    Ok((output.ok() && !declared.is_empty()).then(|| declared.to_string()))
 }
 
 /// One collected managed-unit log, before the CLI or a higher-level
@@ -8192,98 +8242,40 @@ impl UnitLogReport {
     }
 }
 
-/// Collect a managed unit's declared logs without rendering them.
+/// Collect a managed unit's logs through the service subsystem's shared
+/// platform reader.
 ///
-/// `host unit-log` and higher-level diagnostics share this collector so the
-/// first one never knows a failure sentence the second one cannot see.
+/// `service logs`, `host unit-log`, and higher-level diagnostics must resolve
+/// launchd files and systemd scopes identically. The old implementation was a
+/// second, Darwin-only reader: on Linux it searched three `Library`
+/// directories and never reached the journal that held the failure.
 async fn collect_unit_log(
     resolved: &ComputeTarget,
     unit: &str,
     lines: u32,
     runner: &crate::deploy::Runner,
 ) -> Result<UnitLogReport, CmdError> {
-    let home = crate::deploy::host_channel::remote_home(resolved, runner)
+    let tail = crate::deploy::service::tail_unit_logs(resolved, unit, "", lines as usize, runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    // The unit file is found, never guessed: the daemon directory first, then
-    // both agent directories, exactly the retired reader's search order.
-    let mut plist = None;
-    for candidate in [
-        format!("/Library/LaunchDaemons/{unit}.plist"),
-        format!("{home}/Library/LaunchAgents/{unit}.plist"),
-        format!("/Library/LaunchAgents/{unit}.plist"),
-    ] {
-        if crate::deploy::host_channel::remote_test(
-            resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
-            runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            plist = Some(candidate);
-            break;
-        }
-    }
-    let Some(plist) = plist else {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
-             directories",
-            resolved.name
-        )));
-    };
-
-    let mut sources = vec![json!({"kind": "plist", "path": plist})];
-    let mut body = String::new();
-
-    // One reader for both keys: a unit that sends stdout and stderr to the
-    // same file must not be tailed twice, and a unit that separates them must
-    // not have half of its account silently dropped.
-    let out_path = unit_log_path(resolved, "Print :StandardOutPath", &plist, runner).await?;
-    let err_path = unit_log_path(resolved, "Print :StandardErrorPath", &plist, runner).await?;
-    let mut declared: Vec<String> = Vec::new();
-    if let Some(path) = &out_path {
-        declared.push(path.clone());
-    }
-    if let Some(path) = &err_path {
-        if out_path.as_ref() != Some(path) {
-            declared.push(path.clone());
-        }
-    }
-    if declared.is_empty() {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: {unit} declares no log path",
-            resolved.name
-        )));
-    }
-
-    for log in &declared {
-        if crate::deploy::host_channel::remote_test(
-            resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(log)),
-            runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            sources.push(json!({"kind": "file", "path": log}));
-            body.push_str(&format!("=== {log} (last {lines} lines)\n"));
-            let tail = crate::deploy::host_channel::run_program(
-                resolved,
-                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
-                runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-            if tail.ok() {
-                body.push_str(&tail.stdout);
-            } else {
-                body.push_str("    unreadable\n");
-            }
+    let source = |origin: &str| {
+        let kind = if origin.starts_with("journalctl ") {
+            "journal"
         } else {
-            sources.push(json!({"kind": "absent", "path": log}));
-            body.push_str(&format!("=== {log} (absent)\n"));
+            "file"
+        };
+        json!({"kind": kind, "path": origin})
+    };
+    let mut declared = vec![source(&tail.origin)];
+    let mut log = tail.body;
+    if let Some(error_origin) = tail.error_origin {
+        declared.push(source(&error_origin));
+        if !tail.error_body.is_empty() {
+            if !log.is_empty() && !log.ends_with('\n') {
+                log.push('\n');
+            }
+            log.push_str(&tail.error_body);
         }
     }
 
@@ -8291,13 +8283,13 @@ async fn collect_unit_log(
         target: resolved.name.clone(),
         unit: unit.to_string(),
         lines,
-        declared: sources,
-        log: body.trim_end().to_string(),
+        declared,
+        log: log.trim_end().to_string(),
     })
 }
 
-/// The tail of one managed unit's own log, from the paths its unit file
-/// declares.
+/// The tail of one managed unit's own log, through the same platform reader as
+/// `stado service logs`.
 ///
 /// A unit that crash-loops states why in its log and nowhere else: the health
 /// beacon reports `failed` with an empty `last_log`, `service status` reports
@@ -8311,8 +8303,8 @@ pub async fn unit_log(
     lines: Option<u32>,
     json: bool,
 ) -> Result<(), CmdError> {
-    // A unit label is a reverse-DNS name; it names the plist files this reads,
-    // so it is checked before it gets there.
+    // The unit id becomes a fixed word in the shared launchd/systemd reader,
+    // so reject anything that is not a single safe unit name first.
     vault_word("unit label", unit)?;
     let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
     let resolved = crate::deploy::host_channel::canonical_target(target)

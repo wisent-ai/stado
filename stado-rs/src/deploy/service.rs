@@ -3014,13 +3014,10 @@ fi
 ///   `/Library/LaunchDaemons` on an ssh login with no Aqua session, which is
 ///   the case `deploy` fails on with `Could not switch to audit session ...
 ///   Operation not permitted`, having installed nothing.
-/// - It never unloads. `deploy` boots the label out before bootstrapping;
-///   that is the sequence that took the always-on host down when launchd
-///   still held children of the old job and the bootstrap back failed
-///   (see [`RESTART_BODY`]). A loaded job is kicked in place, and a loaded
-///   job whose definition names another program is REFUSED rather than
-///   silently overwritten: launchd holds the definition it bootstrapped, so
-///   a rewritten plist under a live job changes nothing an operator can see.
+/// - It leaves a matching loaded job alone. A changed environment requires
+///   reloading launchd's cached definition, so that path preserves the prior
+///   unit and restores it if activation fails. A changed program remains a
+///   conflict rather than silently replacing the running service.
 ///
 /// There is deliberately no fallback to `launchctl submit` or to a bare
 /// background process. Those two are how a host comes to run a program no
@@ -3096,24 +3093,20 @@ if [ \"$serves\" = no ]; then
       ;;
   esac
 fi
-# Render the unit so we can check for content drift (environment changes, etc)
-# beyond just the argv. On non-Darwin or when no unit exists, we'll proceed
-# with the normal create/update path. On Darwin with an existing unit, we'll
-# compare to see if content has drifted even when argv matches.
-# Render the unit whenever a unit file exists, not only when the job is
-# loaded. A declaration whose program matches but whose job is not loaded is
-# bootstrapped from the file as it stands, so without rendering here a stale
-# file -- one missing an environment the declaration now carries -- would be
-# bootstrapped unchanged forever.
+# Compare the whole unit, including its environment, on both init systems.
+# A kickstart reuses launchd's cached definition; only bootstrap reads new env.
 rendered=''
-if [ \"$os\" = \"Darwin\" ] && [ -f \"$unit_path\" ]; then
-  staged=\"$HOME/.stado/$unit.plist.$$\"
-  if [ \"$domain\" = system ]; then
+if [ -f \"$unit_path\" ]; then
+  staged=\"$HOME/.stado/$unit.ensure.$$\"
+  if [ \"$os\" = Linux ]; then
+    /bin/cat > \"$staged\" <<'@HEREDOC@'
+@LINUX_UNIT@
+@HEREDOC@
+  elif [ \"$domain\" = system ]; then
     /bin/cat > \"$staged\" <<'@HEREDOC@'
 @DARWIN_DAEMON_UNIT@
 @HEREDOC@
   else
-    /bin/mkdir -p \"$HOME/Library/LaunchAgents\" >/dev/null 2>&1 || bail 'cannot create LaunchAgents'
     /bin/cat > \"$staged\" <<'@HEREDOC@'
 @DARWIN_UNIT@
 @HEREDOC@
@@ -3123,71 +3116,91 @@ if [ \"$os\" = \"Darwin\" ] && [ -f \"$unit_path\" ]; then
   /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
   rendered=\"$staged.rendered\"
 fi
-if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
-  # argv matches and process serves - check for content drift
-  if [ -n \"$rendered\" ]; then
-    if /bin/cmp -s \"$rendered\" \"$unit_path\"; then
-      # File is identical - nothing to do
-      /bin/rm -f \"$staged\" \"$rendered\"
-      printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
-      say 'already_correct' \"$domain/$unit pid $pid\"
-      exit 0
-    fi
-    # File has drifted - install new version and converge in place with kickstart -k
-    if [ \"$domain\" = system ]; then
-      /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$rendered\" \"$unit_path\" || bail \"sudo -n install $unit_path was refused\"
-    else
-      /bin/cp \"$rendered\" \"$unit_path\" || bail \"cannot write $unit_path\"
-      /bin/chmod u=rw,go= \"$unit_path\" || bail \"cannot protect $unit_path\"
-    fi
-    /bin/rm -f \"$staged\" \"$rendered\"
-    # Unit was installed, now kickstart it in place
-    action=converged
-    detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
-    rc=$?
-    if [ \"$rc\" -ne 0 ]; then
-      say \"${action}_failed\" \"$rc $detail\"
-      exit 0
-    fi
-    /bin/sleep 1
-    stado_launchd_state
-    if [ \"$pc_loaded\" = no ]; then
-      say 'not_loaded' \"${detail:-launchctl reported success and left no job}\"
-      exit 0
-    fi
-    pid=\"$pc_pid\"
-    printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
-    say \"$action\" \"$unit_path\"
-    exit 0
+stado_install_unit() {
+  if [ \"$os\" = Darwin ] && [ \"$domain\" = system ]; then
+    /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$1\" \"$unit_path.stado-ensure.$$\" \
+      && /usr/bin/sudo -n /bin/mv -f \"$unit_path.stado-ensure.$$\" \"$unit_path\"
+  elif [ \"$os\" = Linux ] && [ \"$scope\" = system ]; then
+    stado_root /usr/bin/install -m 644 -o root -g root \"$1\" \"$unit_path.stado-ensure.$$\" \
+      && stado_root /bin/mv -f \"$unit_path.stado-ensure.$$\" \"$unit_path\"
+  else
+    /bin/cp \"$1\" \"$unit_path.stado-ensure.$$\" \
+      && /bin/chmod u=rw,go= \"$unit_path.stado-ensure.$$\" \
+      && /bin/mv -f \"$unit_path.stado-ensure.$$\" \"$unit_path\"
   fi
-  # Non-Darwin or no existing unit - nothing to do
+}
+stado_activate_definition() {
+  if [ \"$os\" = Darwin ]; then
+    stado_launchd_state
+    if [ \"$pc_loaded\" = yes ]; then
+      $launch bootout \"$domain/$unit\" || return 1
+      attempts=0
+      while $launch print \"$domain/$unit\" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        [ \"$attempts\" -lt 150 ] || return 1
+        /bin/sleep 0.1
+      done
+    fi
+    $launch bootstrap \"$domain\" \"$unit_path\" || return 1
+  else
+    stado_systemctl daemon-reload && stado_systemctl restart \"$unit\" || return 1
+  fi
+  attempts=0
+  while [ \"$attempts\" -lt 150 ]; do
+    if [ \"$os\" = Darwin ]; then
+      stado_launchd_state
+      pid=\"$pc_pid\"
+    else
+      pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)
+    fi
+    if [ -n \"$pid\" ] && [ \"$pid\" != 0 ] && /bin/kill -0 \"$pid\" 2>/dev/null; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    /bin/sleep 0.1
+  done
+  return 1
+}
+if [ \"$declared_argv\" = \"$argv\" ] && [ -n \"$rendered\" ] \
+  && ! /bin/cmp -s \"$rendered\" \"$unit_path\"; then
+  previous=\"$staged.previous\"
+  /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
+  /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
+  if ! stado_install_unit \"$rendered\"; then
+    stado_install_unit \"$previous\" || bail \"unit write failed; rollback failed; prior unit is $previous\"
+    /bin/rm -f \"$previous\"
+    bail 'unit write failed; prior unit restored'
+  fi
+  if ! stado_activate_definition; then
+    if stado_install_unit \"$previous\" && stado_activate_definition; then
+      /bin/rm -f \"$previous\"
+      bail 'new unit did not start; prior unit restored and running'
+    fi
+    bail \"new unit did not start; rollback failed; prior unit is $previous\"
+  fi
+  /bin/rm -f \"$previous\" \"$staged\" \"$rendered\"
+  printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
+  say 'converged' \"$unit_path reloaded and running\"
+  exit 0
+fi
+if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
+  /bin/rm -f \"$staged\" \"$rendered\"
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
   say 'already_correct' \"$domain/$unit pid $pid\"
   exit 0
 fi
-
-if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = no ]; then
-  # argv matches and nothing is loaded: bootstrap below reads the file as it
-  # stands, so a drifted unit file must be installed first or the job comes
-  # up with the old content. This is the drift branch's repair for a unit
-  # launchd does not hold: same comparison, bootstrap instead of kickstart.
-  if [ -n \"$rendered\" ] && ! /bin/cmp -s \"$rendered\" \"$unit_path\"; then
-    if [ \"$domain\" = system ]; then
-      /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$rendered\" \"$unit_path\" || bail \"sudo -n install $unit_path was refused\"
-    else
-      /bin/cp \"$rendered\" \"$unit_path\" || bail \"cannot write $unit_path\"
-      /bin/chmod u=rw,go= \"$unit_path\" || bail \"cannot protect $unit_path\"
-    fi
-  fi
+if [ \"$declared_argv\" = \"$argv\" ]; then
   /bin/rm -f \"$staged\" \"$rendered\"
   rendered=''
 fi
 if [ \"$declared_argv\" != \"$argv\" ]; then
   if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
+    /bin/rm -f \"$staged\" \"$rendered\"
     say 'conflict' \"$domain/$unit is loaded running [$declared_argv] and the declaration says [$argv]; launchd holds its own copy of the argv and an in-place kick re-execs that copy, so neither restart nor ensure can carry this change: run 'stado service stop' then 'stado service ensure' to unload the job and bootstrap it from the file\"
     exit 0
   fi
   if [ \"$os\" = \"Darwin\" ]; then
+    /bin/rm -f \"$staged\" \"$rendered\"
     /bin/mkdir -p \"$HOME/.stado/logs\" >/dev/null 2>&1 || bail 'cannot create the log directory'
     /bin/chmod u=rwx,go= \"$HOME/.stado/logs\" || bail 'cannot protect the log directory'
     log=\"$HOME/.stado/logs/$unit.log\"
@@ -3215,6 +3228,7 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
     fi
     /bin/rm -f \"$staged\" \"$staged.rendered\"
   else
+    /bin/rm -f \"$staged\" \"$rendered\"
     /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || bail 'cannot create the systemd user directory'
     /bin/cat > \"$unit_path\" <<'@HEREDOC@'
 @LINUX_UNIT@

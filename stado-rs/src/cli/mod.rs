@@ -1415,6 +1415,21 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Repair the bounded local-store ownership fault blocking release catalog writes.
+    ///
+    /// The checked-in helper runs on TARGET through Stado's fixed-script channel.
+    /// It considers only the named release-catalog object, its metadata sidecar,
+    /// its exact CAS lock, and the directories those writes require; foreign
+    /// owners and symlinks are refused.
+    #[command(name = "repair-release-store")]
+    RepairReleaseStore {
+        target: String,
+        /// Product whose one release-catalog coordinate is blocked.
+        product: String,
+        /// Emit the repair report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Authorize TARGET's service resolver to read the registry from the
     /// service-directory authority.
     ///
@@ -3057,6 +3072,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RecoverObjectApi { target, json } => {
                 host::recover_object_api(&target, json).await
             }
+            HostCommands::RepairReleaseStore {
+                target,
+                product,
+                json,
+            } => host::repair_release_store(&target, &product, json).await,
             HostCommands::ResolverKey { target, json } => {
                 host::authorize_resolver_key(&target, json).await
             }
