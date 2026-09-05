@@ -2327,6 +2327,19 @@ async fn prepare_lifecycle_fence(
                 runner,
             )
             .await?;
+            let copy_required = qualified_copy_required(&preflight)?;
+            let served_authority = correlation
+                .get("object_authority")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    DeployError("fresh served-store proof omitted its authority".to_string())
+                })?;
+            if copy_required && !matches!(served_authority, "B" | "identical") {
+                return Err(DeployError(format!(
+                    "fresh object API proof serves authority {served_authority:?}; refusing a \
+                     B-winning copy derived from older evidence"
+                )));
+            }
             preflight
                 .as_object_mut()
                 .ok_or_else(|| DeployError("preflight report is not an object".to_string()))?
@@ -2406,7 +2419,7 @@ async fn prepare_lifecycle_fence(
                 .find(|writer| writer.role == "object-api")
                 .and_then(|writer| writer.prior_sha256.as_deref())
                 == Some(staged_runtime.staged_sha256.as_str());
-            let already_reconciled = !qualified_copy_required(&preflight)?
+            let already_reconciled = !copy_required
                 && api_already_forward
                 && physical_file_identity(&preflight, "primary_physical", "registry.json")
                     .is_some()
