@@ -3098,7 +3098,33 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         let answer = crate::deploy::fleet_vaults::collect_from(&resolved, &runner).await;
-        hosts.push(crate::deploy::fleet_vaults::attribute(name, answer));
+        let mut host = crate::deploy::fleet_vaults::attribute(name, answer);
+        // What the host itself declares, read from the host: the operator's
+        // laptop config is not the answer for a machine the operator is
+        // asking about. `None` means the field was not in the answer at all,
+        // which a release older than the key produces.
+        let declared = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
+            .await
+            .ok()
+            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok())
+            .and_then(|document| {
+                document
+                    .pointer("/resolved/skarbiec_vault_file")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if let Some(object) = host.as_object_mut() {
+            let list = object
+                .get("vaults")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            object.insert(
+                "authority".to_string(),
+                crate::credential_store::owner::authority(declared.as_deref(), &list),
+            );
+        }
+        hosts.push(host);
     }
     let summary = crate::deploy::fleet_vaults::summarize(&hosts);
     if json {
@@ -3120,10 +3146,26 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let authority = host.get("authority");
+        let chosen = authority
+            .and_then(|verdict| verdict.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         println!("{name}: {} vault(s)", list.len());
         for vault in list {
+            let path = vault.get("path").and_then(Value::as_str).unwrap_or("");
+            // The marked line is the one every owner write and authoritative
+            // read on that host goes through. Reading a count without it told
+            // an operator how much is held and nothing about which store
+            // answers.
+            let marker = if !chosen.is_empty() && path == chosen {
+                "*"
+            } else {
+                " "
+            };
             println!(
-                "  {:>5} items  {} recipients  {}",
+                "{marker} {:>5} items  {} recipients  {}",
                 vault
                     .get("items")
                     .and_then(Value::as_u64)
@@ -3132,7 +3174,17 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                     .get("recipients")
                     .and_then(Value::as_u64)
                     .unwrap_or_default(),
-                vault.get("path").and_then(Value::as_str).unwrap_or("")
+                path
+            );
+        }
+        if let Some(verdict) = authority {
+            println!(
+                "  authority: {} — {}",
+                verdict
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                verdict.get("detail").and_then(Value::as_str).unwrap_or("")
             );
         }
     }

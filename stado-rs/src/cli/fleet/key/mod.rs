@@ -150,11 +150,13 @@ pub(crate) async fn settle_readable(
             Ok(stored) if stored.as_deref().map(str::trim) == Some(expected.trim()) => continue,
             Ok(Some(_)) => "a different value".to_string(),
             Ok(None) => "nothing".to_string(),
-            Err(crate::skarbiec::SkarbiecError::Response { status, detail })
-                if status == reqwest::StatusCode::FORBIDDEN.as_u16()
-                    || status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
+            Err(error)
+                if error.status().is_some_and(|status| {
+                    status == reqwest::StatusCode::FORBIDDEN.as_u16()
+                        || status == reqwest::StatusCode::NOT_FOUND.as_u16()
+                }) =>
             {
-                format!("HTTP {status}: {}", detail.trim())
+                error.to_string()
             }
             Err(error) => return Err(error.to_string()),
         };

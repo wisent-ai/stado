@@ -192,6 +192,12 @@ impl Client {
     /// there is no reason to prefer the whole-item read where the caller
     /// already knows the field it wants.
     pub async fn read_field(&self, id: &str, field: &str) -> Result<Value, SkarbiecError> {
+        self.read_field_inner(id, field)
+            .await
+            .map_err(|error| error.naming(&self.consumer, id, field))
+    }
+
+    async fn read_field_inner(&self, id: &str, field: &str) -> Result<Value, SkarbiecError> {
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?
             .json(&json!({"id": id, "field": field}))
@@ -260,6 +266,16 @@ impl Client {
 
     /// Resolve one optional string field through this client's scoped grant.
     pub async fn read_string(
+        &self,
+        id: &str,
+        field: &str,
+    ) -> Result<Option<String>, SkarbiecError> {
+        self.read_string_inner(id, field)
+            .await
+            .map_err(|error| error.naming(&self.consumer, id, field))
+    }
+
+    async fn read_string_inner(
         &self,
         id: &str,
         field: &str,
