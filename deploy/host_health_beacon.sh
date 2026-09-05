@@ -71,13 +71,14 @@ service = doc.get("service_directory", {}).get("services", {}).get("skarbiec", {
 print(service.get("endpoints", {}).get(host, {}).get("url", ""))'
 if [ -n "$STADO_BIN" ]; then
     export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$("$PYTHON_BIN" -c "$READ_STORE_URL")}"
-    if [ -z "${STADO_HOST_HEALTH_API_TOKEN_FILE:-}" ]; then
+fi
+
+if [ -n "$STADO_BIN" ] && [ -z "${STADO_HOST_HEALTH_API_TOKEN_FILE:-}" ]; then
     declared_skarbiec=$("$STADO_BIN" registry pull 2>/dev/null \
         | "$PYTHON_BIN" -c "$READ_SKARBIEC" "$HOST_SLUG" || true)
     export STADO_HOST_HEALTH_SKARBIEC_URL="${declared_skarbiec:-${STADO_HOST_HEALTH_SKARBIEC_URL:-}}"
     export STADO_HOST_HEALTH_SKARBIEC_CONSUMER="${STADO_HOST_HEALTH_SKARBIEC_CONSUMER:-stado-host-health-beacon}"
     export STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-$HOME/.stado/host-health-beacon-skarbiec-token}"
-    fi
 fi
 
 # Having the binary is not the same as being able to publish. This host reaches
