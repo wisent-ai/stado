@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
 # Restore the Stado object API without trusting a successful read alone.
 #
-# launchd's loaded job and its plist are separate facts. Recovery therefore
-# proves the loaded storage route, fences a serving old root before using the
-# canonical metadata-preserving storage copier, and retains both the previous
-# definition and a clone/copy of the destination until the corrected root is
-# serving authenticated reads.
+# launchd's loaded job and its plist are separate facts. Recovery proves the
+# loaded storage route and authenticated reads before reporting readiness.
+# A different authority requires `host storage-root-reconcile`, which owns the
+# snapshots, writer fence, namespace-qualified copy, and rollback. This helper
+# repairs only the same-root listener using the host's canonical delivered Stado.
 set -euo pipefail
 
 label="com.wisent.always-on.stado-object-api"
 plist="/Library/LaunchDaemons/$label.plist"
-program="$HOME/.stado/services/$label/current/darwin-arm/stado"
+program="$HOME/.stado/bin/stado"
 config="${STADO_CONFIG:-$HOME/.config/stado/config.json}"
 work="$HOME/.stado/work/object-api-recovery"
 log="$HOME/.stado/logs/$label.log"
-copy_program="${STADO_RECOVERY_COPIER:-$HOME/.stado/bin/stado}"
-case "$copy_program" in
-  \$HOME/*) copy_program="$HOME/${copy_program#\$HOME/}" ;;
-esac
-copier_ready=0
-copier_digest=-
-copier_version=-
 
 if [ "$(/usr/bin/uname -s)" != "Darwin" ]; then
   printf 'unsupported_os %s\n' "$(/usr/bin/uname -s)" >&2
@@ -824,413 +817,35 @@ if /usr/bin/sudo -n /bin/test -f "$plist"; then
     declared_state declared_explicit_backend declared_explicit_root \
     <<< "$declared_route"
 fi
-declared_correct=0
-if [ "$declared_explicit_backend" = local ] &&
-  [ "$declared_explicit_root" = "$store" ]; then
-  declared_correct=1
-fi
 
-active_record="$work/$label.transition-active.json"
-transition_id=-
-transition_started=-
-transition_kind=-
-source_root=-
-destination_root="$store"
-destination_snapshot=-
-rollback_plist=-
-definition_backup=-
-copy_log=-
-destination_exposed=0
-snapshot_ready=0
-transition_phase=-
-rollback_needed=0
-
-persist_record() {
-  transition_phase=$1
-  transition_detail=$2
-  /usr/bin/python3 - "$active_record" "$transition_id" "$transition_started" \
-    "$transition_phase" "$transition_kind" "$source_root" "$destination_root" \
-    "$destination_snapshot" "$rollback_plist" "$definition_backup" "$copy_log" \
-    "$destination_exposed" "$snapshot_ready" "$transition_detail" \
-    "$copy_program" "$copier_digest" "$copier_version" <<'PY'
-import datetime, json, os, sys
-
-(path, transition_id, started_at, phase, kind, source_root, destination_root,
- destination_snapshot, rollback_plist, definition_backup, copy_log,
- destination_exposed, snapshot_ready, detail, copier, copier_digest, copier_version) = sys.argv[1:]
-document = {
-    "schema": "stado.object-api-storage-transition.v1",
-    "transition_id": transition_id,
-    "started_at": started_at,
-    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    "phase": phase,
-    "kind": kind,
-    "source_root": source_root,
-    "destination_root": destination_root,
-    "destination_snapshot": None if destination_snapshot == "-" else destination_snapshot,
-    "rollback_plist": rollback_plist,
-    "definition_backup": None if definition_backup == "-" else definition_backup,
-    "copy_log": copy_log,
-    "destination_exposed": destination_exposed == "1",
-    "snapshot_ready": snapshot_ready == "1",
-    "detail": detail,
-    "copier": {
-        "path": copier,
-        "sha256": None if copier_digest == "-" else copier_digest,
-        "version": None if copier_version == "-" else copier_version,
-    },
-}
-temporary = f"{path}.tmp-{os.getpid()}"
-with open(temporary, "w", encoding="utf-8") as handle:
-    json.dump(document, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-    handle.flush()
-    os.fsync(handle.fileno())
-os.replace(temporary, path)
-directory = os.open(os.path.dirname(path), os.O_RDONLY)
-try:
-    os.fsync(directory)
-finally:
-    os.close(directory)
-PY
-  /bin/chmod 600 "$active_record"
-}
-
-load_record() {
-  record_fields=$(/usr/bin/python3 - "$active_record" "$work" "$label" <<'PY'
-import json, os, re, sys
-path, work, label = sys.argv[1:]
-work = os.path.realpath(work)
-with open(path, encoding="utf-8") as handle:
-    document = json.load(handle)
-if document.get("schema") != "stado.object-api-storage-transition.v1":
-    raise SystemExit("object API recovery refused: unknown active transition record")
-required = (
-    "transition_id",
-    "started_at",
-    "phase",
-    "kind",
-    "source_root",
-    "destination_root",
-    "rollback_plist",
-    "copy_log",
-)
-if any(not isinstance(document.get(field), str) or not document[field] for field in required):
-    raise SystemExit("object API recovery refused: incomplete active transition record")
-transition_id = document["transition_id"]
-if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9]+", transition_id):
-    raise SystemExit("object API recovery refused: invalid active transition identity")
-if document["kind"] not in ("reload", "backing-root"):
-    raise SystemExit("object API recovery refused: invalid active transition kind")
-
-def managed_path(value, basename):
-    if value is None:
-        return "-"
-    if not isinstance(value, str):
-        raise SystemExit("object API recovery refused: invalid managed recovery path")
-    resolved = os.path.realpath(value)
-    if os.path.dirname(resolved) != work or os.path.basename(resolved) != basename:
-        raise SystemExit("object API recovery refused: managed recovery path escaped work directory")
-    return resolved
-
-snapshot = managed_path(
-    document.get("destination_snapshot"),
-    f"local-store.before-{transition_id}",
-)
-rollback = managed_path(
-    document["rollback_plist"],
-    f"{label}.plist.rollback-{transition_id}",
-)
-definition = managed_path(
-    document.get("definition_backup"),
-    f"{label}.plist.before-{transition_id}",
-)
-copy_log = managed_path(
-    document["copy_log"],
-    f"{label}.copy-{transition_id}.log",
-)
-fields = (
-    transition_id,
-    document["started_at"],
-    document["phase"],
-    document["kind"],
-    os.path.realpath(document["source_root"]),
-    os.path.realpath(document["destination_root"]),
-    snapshot,
-    rollback,
-    definition,
-    copy_log,
-    "1" if document.get("destination_exposed") is True else "0",
-    "1" if document.get("snapshot_ready") is True else "0",
-)
-for field in fields:
-    if any(character in field for character in "\t\r\n"):
-        raise SystemExit("object API recovery refused: active transition contains control characters")
-print("\t".join(fields))
-PY
-  )
-  IFS=$'\t' read -r transition_id transition_started transition_phase \
-    transition_kind source_root destination_root destination_snapshot \
-    rollback_plist definition_backup copy_log destination_exposed snapshot_ready \
-    <<< "$record_fields"
-}
-
-fence_loaded_job() {
-  capture_loaded_route
-  fenced_pid=$loaded_pid
-  if [ "$loaded" -eq 1 ]; then
-    /usr/bin/sudo -n /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
-  fi
-  fence_deadline=$((SECONDS + 30))
-  while [ "$SECONDS" -lt "$fence_deadline" ]; do
-    still_loaded=0
-    if /usr/bin/sudo -n /bin/launchctl print "system/$label" \
-      >/dev/null 2>&1; then
-      still_loaded=1
-    fi
-    pid_alive=0
-    if [[ "$fenced_pid" =~ ^[0-9]+$ ]] &&
-      /bin/kill -0 "$fenced_pid" >/dev/null 2>&1; then
-      pid_alive=1
-    fi
-    listeners=$(
-      /usr/bin/sudo -n /usr/sbin/lsof -nP -a -iTCP:8765 -sTCP:LISTEN -t \
-        2>/dev/null || true
-    )
-    if [ "$still_loaded" -eq 0 ] && [ "$pid_alive" -eq 0 ] &&
-      [ -z "$listeners" ]; then
-      return 0
-    fi
-    /bin/sleep 1
-  done
-  return 1
-}
-
-start_definition() {
-  definition=$1
-  expected_root=$2
-  require_expected_environment=$3
-  /usr/bin/sudo -n /bin/launchctl enable "system/$label" >/dev/null 2>&1 || true
-  /usr/bin/sudo -n /bin/launchctl bootstrap system "$definition" \
-    >/dev/null 2>&1 || return 1
-  ready_deadline=$((SECONDS + 180))
-  while [ "$SECONDS" -lt "$ready_deadline" ]; do
-    if loaded_ready_for_root "$expected_root" "$require_expected_environment"; then
-      return 0
-    fi
-    /bin/sleep 1
-  done
-  return 1
-}
-
-snapshot_destination() {
-  if ! /usr/bin/python3 - "$destination_root" "$destination_snapshot" "$work" <<'PY'
-import os, sys
-root, snapshot, work = map(os.path.realpath, sys.argv[1:])
-def inside(path, parent):
-    try:
-        return os.path.commonpath((path, parent)) == parent
-    except ValueError:
-        return False
-if root == snapshot or inside(snapshot, root) or inside(work, root):
-    raise SystemExit(1)
-PY
-  then
-    persist_record preparation_failed \
-      "recovery work or snapshot path is inside the destination root"
-    printf 'unsafe_snapshot_location destination=%s snapshot=%s work=%s\n' \
-      "$destination_root" "$destination_snapshot" "$work" >&2
-    return 1
-  fi
-  snapshot_partial="$destination_snapshot.partial"
-  persist_record snapshotting "preserving the pre-transition destination"
-  /usr/bin/sudo -n /bin/rm -rf "$snapshot_partial"
-  snapshot_mode=clone
-  if ! /usr/bin/sudo -n /bin/cp -cRp "$destination_root" "$snapshot_partial"; then
-    snapshot_mode=copy
-    /usr/bin/sudo -n /bin/rm -rf "$snapshot_partial"
-    if ! /usr/bin/sudo -n /bin/cp -Rp "$destination_root" "$snapshot_partial"; then
-      persist_record preparation_failed \
-        "destination clone and full-copy fallback both failed"
-      printf 'destination_snapshot_failed %s\n' "$destination_snapshot" >&2
-      return 1
-    fi
-  fi
-  /usr/bin/sudo -n /bin/mv "$snapshot_partial" "$destination_snapshot"
-  /bin/sync
-  snapshot_ready=1
-  persist_record prepared \
-    "durable pre-transition destination snapshot mode=$snapshot_mode"
-}
-
-prepare_copy_program() {
-  [ "$copier_ready" -eq 0 ] || return 0
-  copier_identity=$(/usr/bin/python3 - "$copy_program" \
-    "${STADO_RECOVERY_COPIER_SHA256:-}" <<'PY'
-import hashlib, os, re, stat, struct, subprocess, sys
-path, expected = sys.argv[1:]
-metadata = os.stat(path)
-if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK):
-    raise SystemExit("recovery copier is not an executable file")
-if expected and (
-    metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700
-):
-    raise SystemExit("staged recovery copier must be owned by this account with mode 0700")
-with open(path, "rb") as handle:
-    header = handle.read(8)
-    if len(header) != 8:
-        raise SystemExit("recovery copier has no native executable header")
-    magic, cpu = struct.unpack("<II", header)
-    if magic == 0xFEEDFACF:
-        architectures = [cpu]
-    else:
-        magic, count = struct.unpack(">II", header)
-        if magic not in (0xCAFEBABE, 0xCAFEBABF) or count > 64:
-            raise SystemExit("recovery copier is not a Mach-O executable")
-        entry_size = 20 if magic == 0xCAFEBABE else 32
-        architectures = []
-        for _ in range(count):
-            entry = handle.read(entry_size)
-            if len(entry) != entry_size:
-                raise SystemExit("recovery copier has an incomplete architecture table")
-            architectures.append(struct.unpack(">I", entry[:4])[0])
-    wanted = {"arm64": 0x0100000C, "x86_64": 0x01000007}.get(os.uname().machine)
-    if wanted not in architectures:
-        raise SystemExit("recovery copier does not carry this host's native architecture")
-    handle.seek(0)
-    digest = hashlib.sha256()
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(block)
-actual = digest.hexdigest()
-if expected and actual != expected:
-    raise SystemExit("recovery copier digest differs from the invoking Stado binary")
-result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10, check=True)
-match = re.search(r"(\d+)\.(\d+)\.(\d+)", result.stdout)
-if not match or tuple(map(int, match.groups())) < (0, 16, 5):
-    raise SystemExit("storage recovery requires Stado 0.16.5 or newer for byte-exact copying")
-print(f"{match.group(0)}\t{actual}")
-PY
-  ) || return 1
-  IFS=$'\t' read -r copier_version copier_digest <<< "$copier_identity"
-  copier_ready=1
-}
-
-copy_store() {
-  from_root=$1
-  to_root=$2
-  output=$3
-  # A prior interrupted run may resume after its last clean prefix. Finish that
-  # suffix, then run once more from the exhausted cursor so writes accepted by
-  # a restored source before this fence cannot hide in an earlier prefix.
-  "$copy_program" storage copy --source-offline --concurrency 1 \
-    --from local --from-path "$from_root" \
-    --to local --to-path "$to_root" > "$output" 2>&1 &&
-    "$copy_program" storage copy --source-offline --concurrency 1 \
-      --from local --from-path "$from_root" \
-      --to local --to-path "$to_root" >> "$output" 2>&1
-}
-
-rollback_to_source() {
-  reason=$1
-  rollback_needed=0
-  reverse_ok=1
-  persist_record rollback_started "$reason" || true
-  if ! /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \
-    "$rollback_plist" "$plist"; then
-    persist_record rollback_failed "could not install rollback definition" || true
-    return 1
-  fi
-  if ! fence_loaded_job; then
-    persist_record rollback_failed "could not fence destination API" || true
-    return 1
-  fi
-  if [ "$destination_exposed" -eq 1 ] && [ "$source_root" != "$destination_root" ]; then
-    reverse_log="$work/$label.reverse-$transition_id.log"
-    persist_record reverse_copying \
-      "merging any destination writes back into the old root" || true
-    if copy_store "$destination_root" "$source_root" "$reverse_log"; then
-      destination_exposed=0
-      persist_record reverse_copied "destination writes merged into old root" || true
-    else
-      reverse_ok=0
-      persist_record reverse_copy_failed \
-        "destination retained; reverse copy is resumable before the next transition" || true
-    fi
-  fi
-  if start_definition "$plist" "$source_root" no; then
-    if [ "$reverse_ok" -eq 1 ]; then
-      persist_record rollback_serving "old root restored and authenticated" || true
-      return 0
-    fi
-    persist_record rollback_serving_pending_reverse \
-      "old root restored; durable destination may contain writes pending reverse copy" || true
-    return 1
-  fi
-  persist_record rollback_failed "old root did not become ready within 180 seconds" || true
-  return 1
-}
-
-cleanup() {
-  rc=$?
-  trap - EXIT HUP INT TERM
-  if [ "$rollback_needed" -eq 1 ]; then
-    rollback_to_source "interrupted recovery exit=$rc" || true
-  fi
-  /bin/rm -f "$staged"
-  exit "$rc"
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
+# Root movement is a different operation from listener recovery. In particular,
+# copying a whole backup over the primary can restore stale queue and registry
+# state. The resident transaction qualifies the namespace and captures writers;
+# this helper must neither duplicate it nor re-enable a listener during it.
 reconcile_skarbiec_bootstrap
-has_active_record=0
-if [ -f "$active_record" ]; then
-  load_record
-  has_active_record=1
-  if [ "$transition_kind" = backing-root ]; then
-    prepare_copy_program || exit 73
-  fi
-  if [ "$destination_root" != "$store" ]; then
-    printf 'active_transition_destination_mismatch recorded=%s declared=%s\n' \
-      "$destination_root" "$store" >&2
-    exit 70
-  fi
+capture_loaded_route
+source_backend=local
+source_root=$store
+source_legacy=no
+if [ "$loaded" -eq 1 ]; then
+  source_backend=$loaded_served_backend
+  source_root=$loaded_served_root
+  source_legacy=$loaded_legacy
+elif [ "$declared_served_backend" != "-" ]; then
+  source_backend=$declared_served_backend
+  source_root=$declared_served_root
+  source_legacy=$declared_legacy
+fi
+if [ "$source_backend" != local ] || [ "$source_root" != "$store" ] ||
+  [ "$source_legacy" != no ]; then
+  printf 'storage_root_handoff_required backend=%s source=%s declared=%s; use stado host storage-root-reconcile for the authority transaction\n' \
+    "$source_backend" "$source_root" "$store" >&2
+  exit 70
 fi
 
-# A completed read is acceptable only when launchd's loaded process owns the
-# listener and its loaded route explicitly names the declared local root. If an
-# interrupted copy had already restored the old root, an external reload of the
-# destination does not prove the old root's later writes crossed the fence:
-# reverse it first, then resume the recorded transition.
-runtime_correct=0
 if loaded_ready_for_root "$store" yes; then
-  runtime_correct=1
-fi
-if [ "$runtime_correct" -eq 1 ] && [ "$has_active_record" -eq 1 ] &&
-  [ "$transition_kind" = backing-root ] && [ "$destination_exposed" -eq 0 ]; then
-  destination_exposed=1
-  rollback_needed=1
-  persist_record externally_exposed_destination \
-    "correct root was reloaded before the recorded copy committed"
-  if ! rollback_to_source "externally exposed destination needs recorded copy resumed"; then
-    printf 'rollback_incomplete record=%s\n' "$active_record" >&2
-    exit 71
-  fi
-  runtime_correct=0
-fi
-if [ "$runtime_correct" -eq 1 ]; then
-  if [ "$same" -eq 0 ] || [ "$declared_correct" -eq 0 ]; then
+  if [ "$same" -eq 0 ]; then
     /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
-    same=1
-  fi
-  if [ "$has_active_record" -eq 1 ]; then
-    destination_exposed=0
-    persist_record committed \
-      "corrected root already served when interrupted recovery resumed"
-    completed_record="$work/$label.transition-$transition_id.completed.json"
-    /bin/mv "$active_record" "$completed_record"
   fi
   reconcile_ingress
   printf 'already_healthy %s backend=local store=%s loaded_environment=matched\n' \
@@ -1238,183 +853,48 @@ if [ "$runtime_correct" -eq 1 ]; then
   exit 0
 fi
 
-resuming=0
-if [ "$has_active_record" -eq 1 ]; then
-  resuming=1
-  if [ ! -f "$rollback_plist" ]; then
-    printf 'active_transition_rollback_missing %s\n' "$rollback_plist" >&2
-    exit 70
-  fi
-  if [ "$destination_exposed" -eq 1 ]; then
-    rollback_needed=1
-    if ! rollback_to_source "resuming an interrupted exposed destination"; then
-      printf 'rollback_incomplete record=%s\n' "$active_record" >&2
-      exit 71
-    fi
-  fi
+healthy=0
+if loaded_ready_for_root "$store" no; then healthy=1; fi
+stamp=$(/bin/date -u +%Y%m%dT%H%M%SZ)
+backup="$work/$label.plist.before-$stamp"
+if /usr/bin/sudo -n /bin/test -f "$plist"; then
+  /usr/bin/sudo -n /bin/cp "$plist" "$backup"
+  /usr/bin/sudo -n /usr/sbin/chown "$account" "$backup"
+  /bin/chmod 600 "$backup"
+  printf 'backup %s\n' "$backup"
+fi
+if [ "$healthy" -eq 1 ]; then
+  /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
+  reconcile_ingress
+  printf 'persisted_while_healthy %s store=%s backup=%s loaded_job=unchanged\n' \
+    "$label" "$store" "${backup:-none}"
+  exit 0
+fi
+
+# Preserve the corrected definition before unload so an interrupted invocation
+# can bootstrap the same root on its next run.
+if [ "$same" -eq 1 ] && [ "$loaded" -eq 1 ]; then
+  /usr/bin/sudo -n /bin/launchctl kickstart -k "system/$label"
+  action=kickstarted
 else
-  capture_loaded_route
+  /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
   if [ "$loaded" -eq 1 ]; then
-    source_backend=$loaded_served_backend
-    source_root=$loaded_served_root
-    source_legacy=$loaded_legacy
-  elif [ "$declared_served_backend" != "-" ]; then
-    source_backend=$declared_served_backend
-    source_root=$declared_served_root
-    source_legacy=$declared_legacy
-  else
-    source_backend=local
-    source_root=$store
-    source_legacy=no
+    /usr/bin/sudo -n /bin/launchctl bootout "system/$label"
   fi
-  if [ "$source_backend" != local ] || [ "$source_root" = "-" ] ||
-    [ -z "$source_root" ]; then
-    printf 'source_route_unsupported backend=%s root=%s legacy=%s\n' \
-      "$source_backend" "$source_root" "$source_legacy" >&2
-    exit 72
-  fi
-  source_root=$(
-    /usr/bin/python3 - "$source_root" <<'PY'
-import os, sys
-print(os.path.realpath(os.path.abspath(sys.argv[1])))
-PY
-  )
-  transition_id="$(/bin/date -u +%Y%m%dT%H%M%SZ)-$$"
-  transition_started=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)
-  copy_log="$work/$label.copy-$transition_id.log"
-  rollback_plist="$work/$label.plist.rollback-$transition_id"
-  definition_backup="$work/$label.plist.before-$transition_id"
-  transition_kind=reload
-  if [ "$source_root" != "$destination_root" ]; then
-    transition_kind=backing-root
-    destination_snapshot="$work/local-store.before-$transition_id"
-  fi
-
-  /usr/bin/python3 - "$staged" "$rollback_plist" "$source_root" <<'PY'
-import os, plistlib, sys
-source, destination, root = sys.argv[1:]
-with open(source, "rb") as handle:
-    document = plistlib.load(handle)
-environment = document["EnvironmentVariables"]
-environment["WC_STORAGE_BACKEND"] = "local"
-environment["WC_LOCAL_STORAGE_PATH"] = root
-with open(destination, "wb") as handle:
-    plistlib.dump(document, handle, fmt=plistlib.FMT_XML, sort_keys=False)
-    handle.flush()
-    os.fsync(handle.fileno())
-PY
-  /bin/chmod 600 "$rollback_plist"
-  if /usr/bin/sudo -n /bin/test -f "$plist"; then
-    /usr/bin/sudo -n /bin/cp -p "$plist" "$definition_backup"
-    /usr/bin/sudo -n /usr/sbin/chown "$account" "$definition_backup"
-    /bin/chmod 600 "$definition_backup"
-  else
-    definition_backup=-
-  fi
-
-  persist_record preparing \
-    "loaded_backend=$source_backend loaded_root=$source_root legacy_implicit_backup=$source_legacy"
-  if [ "$transition_kind" = reload ]; then
-    persist_record prepared "no backing-root change; storage copy not required"
-  fi
+  /usr/bin/sudo -n /bin/launchctl enable "system/$label" >/dev/null 2>&1 || true
+  /usr/bin/sudo -n /bin/launchctl bootstrap system "$plist"
+  action=reinstalled
 fi
 
-if [ "$transition_kind" = backing-root ]; then
-  prepare_copy_program || exit 73
-  if [ ! -d "$source_root" ] || [ ! -r "$source_root/registry.json" ]; then
-    persist_record preparation_failed "source root or registry is unreadable"
-    rollback_to_source "source root or registry is unreadable" || true
-    printf 'transition_source_missing %s record=%s\n' \
-      "$source_root" "$active_record" >&2
-    exit 73
+deadline=$((SECONDS + 180))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  if loaded_ready_for_root "$store" yes; then
+    reconcile_ingress
+    printf '%s %s store=%s backup=%s\n' "$action" "$label" "$store" "${backup:-none}"
+    exit 0
   fi
-  if ! /usr/bin/python3 - "$source_root" "$destination_root" <<'PY'
-import os, sys
-source, destination = map(os.path.realpath, sys.argv[1:])
-try:
-    overlap = (
-        os.path.commonpath((source, destination)) == source
-        or os.path.commonpath((source, destination)) == destination
-    )
-except ValueError:
-    overlap = False
-raise SystemExit(1 if overlap else 0)
-PY
-  then
-    persist_record preparation_failed \
-      "source and destination roots overlap physically"
-    rollback_to_source "source and destination roots overlap physically" || true
-    printf 'transition_roots_overlap source=%s destination=%s record=%s\n' \
-      "$source_root" "$destination_root" "$active_record" >&2
-    exit 73
-  fi
-  if [ ! -d "$destination_snapshot" ]; then
-    if [ "$snapshot_ready" -eq 1 ]; then
-      persist_record preparation_failed \
-        "completed pre-transition destination snapshot is missing"
-      rollback_to_source "completed destination snapshot is missing" || true
-      printf 'active_transition_snapshot_missing %s phase=%s record=%s\n' \
-        "$destination_snapshot" "$transition_phase" "$active_record" >&2
-      exit 75
-    fi
-    if ! snapshot_destination; then
-      rollback_to_source "destination snapshot failed before transition" || true
-      exit 74
-    fi
-  fi
-fi
-
-# Persist the corrected definition before unloading. A crash after this point
-# leaves either the old loaded job plus a corrected next definition, or the
-# durable transition record needed to resume the fenced copy.
-rollback_needed=1
-persist_record installing_corrected "corrected plist will be installed before unload"
-if ! /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"; then
-  rollback_to_source "corrected plist installation failed" || true
-  printf 'corrected_definition_install_failed record=%s\n' "$active_record" >&2
-  exit 76
-fi
-persist_record corrected_installed "corrected plist persisted before source fence"
-if ! fence_loaded_job; then
-  rollback_to_source "source API did not fence within 30 seconds" || true
-  printf 'source_fence_timeout record=%s\n' "$active_record" >&2
-  exit 77
-fi
-persist_record source_fenced "loaded source API and port 8765 are stopped"
-
-if [ "$transition_kind" = backing-root ]; then
-  # Repair only the selected product store. The snapshot above preserves its
-  # prior ownership and contents; no parent or unrelated host path is touched.
-  if ! /usr/bin/sudo -n /usr/sbin/chown -Rh "$account" "$destination_root" ||
-    ! /usr/bin/sudo -n /bin/chmod -R u+rwX "$destination_root"; then
-    rollback_to_source "destination ownership repair failed" || true
-    printf 'destination_ownership_repair_failed %s\n' "$destination_root" >&2
-    exit 78
-  fi
-  persist_record copying \
-    "metadata-preserving non-deleting copy from old root to declared root"
-  if ! copy_store "$source_root" "$destination_root" "$copy_log"; then
-    rollback_to_source "storage copy failed; destination retained for resume" || true
-    printf 'storage_copy_failed record=%s log=%s\n' "$active_record" "$copy_log" >&2
-    exit 79
-  fi
-  persist_record copied "old-root writes copied and verified by stado storage copy"
-  destination_exposed=1
-  persist_record starting_destination \
-    "destination may accept writes; rollback must reverse-copy before restoring source"
-fi
-
-if ! start_definition "$plist" "$destination_root" yes; then
-  rollback_to_source "corrected root did not become ready within 180 seconds" || true
-  printf 'corrected_root_not_ready record=%s\n' "$active_record" >&2
-  exit 80
-fi
-rollback_needed=0
-destination_exposed=0
-persist_record committed "corrected local root serves authenticated reads"
-completed_record="$work/$label.transition-$transition_id.completed.json"
-/bin/mv "$active_record" "$completed_record"
-reconcile_ingress
-printf 'recovered %s backend=local store=%s prior_root=%s kind=%s record=%s snapshot=%s\n' \
-  "$label" "$destination_root" "$source_root" "$transition_kind" \
-  "$completed_record" "$destination_snapshot"
+  /bin/sleep 1
+done
+printf 'authorization_timeout %s declared root did not serve authenticated reads after 180 seconds; backup=%s\n' \
+  "$label" "${backup:-none}" >&2
+exit 69

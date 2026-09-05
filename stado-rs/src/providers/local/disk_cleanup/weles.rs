@@ -11,6 +11,7 @@
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -181,6 +182,7 @@ pub fn scan_weles(
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
+    deadline: Instant,
     report: &mut CleanupReport,
 ) {
     let Some(configured) = policy.cleaners.get("weles_recordings") else {
@@ -214,6 +216,11 @@ pub fn scan_weles(
         {
             let entries = std::fs::read_dir(&root)?;
             for entry in entries {
+                if Instant::now() >= deadline {
+                    report.caps.deadline = true;
+                    report.skip_weles("scan_deadline", 1);
+                    break;
+                }
                 let entry = entry?;
                 ordered.push((entry.file_name(), entry.path()));
                 if ordered.len() as i64 >= remaining_scan {
@@ -225,6 +232,11 @@ pub fn scan_weles(
         let home_device = std::fs::metadata(home)?.dev();
         let mut deleted_bytes = 0i64;
         for (name, path) in ordered {
+            if Instant::now() >= deadline {
+                report.caps.deadline = true;
+                report.skip_weles("scan_deadline", 1);
+                break;
+            }
             report.weles.scanned_items += 1;
             if name == "local" || name.to_string_lossy().starts_with('.') {
                 report.skip_weles("reserved_or_hidden", 1);

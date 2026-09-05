@@ -23,7 +23,7 @@ pub mod release_store;
 pub mod safefs;
 pub mod weles;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -58,6 +58,10 @@ const STATE_DIR_PARTS: [&str; 2] = [".cache", "wisent-compute"];
 const LOCK_NAME: &str = "disk-cleanup.lock";
 /// Python `_STATE_NAME`.
 const STATE_NAME: &str = "disk-cleanup-state.json";
+/// Serializes the read/merge/rename state transaction. The run lock cannot
+/// serve this purpose because prevented writers intentionally persist while
+/// another process holds it.
+const STATE_LOCK_NAME: &str = "disk-cleanup-state.lock";
 /// Python `_DEADLINE_SECONDS`.
 const DEADLINE_SECONDS: f64 = 30.0;
 /// Python `_MAX_ERRORS`.
@@ -411,10 +415,11 @@ pub struct CleanupReport {
     /// registry is read by every release at once, and a name a newer release
     /// knows is not a reason to run none of the ones this release knows.
     pub unknown_cleaners: Vec<String>,
-    /// Where the build-cache walk stopped, relative to its scan root, or
-    /// `None` when it crossed the whole tree. Carried across passes through
-    /// the state file: see [`build_caches::scan_build_caches`].
+    /// Human-readable position of the next build-cache visit. New passes
+    /// derive this from `builds_cursor`; legacy reports retain it for display.
     pub builds_resume_from: Option<String>,
+    /// The authoritative checkpoint, including all unvisited directories.
+    builds_cursor: Option<build_caches::BuildCachesCursor>,
     pub errors: Vec<String>,
 }
 
@@ -453,6 +458,7 @@ impl CleanupReport {
             unscanned_cleaners: Vec::new(),
             unknown_cleaners: Vec::new(),
             builds_resume_from: None,
+            builds_cursor: None,
             errors: Vec::new(),
         }
     }
@@ -574,6 +580,7 @@ impl CleanupReport {
             "active_job_count": self.active_job_count,
             "last_success_at": self.last_success_at,
             "build_caches_resume_from": self.builds_resume_from,
+            "build_caches_pending_directories": self.builds_cursor.as_ref().map_or(0, build_caches::BuildCachesCursor::pending_directories),
             "errors": self.errors,
         })
     }
@@ -1196,11 +1203,54 @@ fn writer_last_attempt(state: &Value, writer: &str) -> Option<f64> {
         .and_then(|stamps| stamps.get(writer))
         .and_then(Value::as_f64)
 }
+/// Policy identity of unfinished reclaim work. The report fallback migrates a
+/// pre-intent `cap_reached` state without treating arbitrary stale cursors as
+/// resumable.
+fn reclaim_intent_digest(state: &Value) -> Option<&str> {
+    state
+        .get("reclaim_intent")
+        .and_then(|intent| intent.get("policy_digest"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            let report = state.get("report")?;
+            (report.get("outcome").and_then(Value::as_str) == Some("cap_reached")
+                && report.get("pressure_active").and_then(Value::as_bool) == Some(true))
+            .then(|| report.get("policy_digest").and_then(Value::as_str))
+            .flatten()
+        })
+}
+fn reclaim_intent_outcome(state: &Value) -> Option<&str> {
+    state
+        .get("reclaim_intent")
+        .and_then(|intent| intent.get("outcome"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            let report = state.get("report")?;
+            (report.get("outcome").and_then(Value::as_str) == Some("cap_reached")
+                && report.get("pressure_active").and_then(Value::as_bool) == Some(true))
+            .then_some("cap_reached")
+        })
+}
+#[derive(Debug, Clone, Copy)]
+enum ControlUpdateAuthority {
+    /// This report is from the process admitted by the exclusive run lock.
+    Owner,
+    /// This report is diagnostic-only and must not mutate scan control.
+    Preserve,
+}
 
 /// Python `_write_state`: lstat the destination (refuse symlink / foreign
 /// owner), write to a sibling tempfile (O_EXCL, 0600), fsync, atomic
 /// rename, fsync the directory.
-fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<(), JanitorError> {
+fn write_state(
+    state_dir: &Path,
+    report: &Value,
+    cursor: Option<&build_caches::BuildCachesCursor>,
+    attempted_at: f64,
+    control_update: ControlUpdateAuthority,
+) -> Result<(), JanitorError> {
+    let state_lock = open_lock_at(&state_dir.join(STATE_LOCK_NAME))?;
+    fs2::FileExt::lock_exclusive(&state_lock)?;
     let destination = state_dir.join(STATE_NAME);
     match std::fs::symlink_metadata(&destination) {
         Ok(existing) => {
@@ -1212,10 +1262,14 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
         Err(exc) if exc.kind() == io::ErrorKind::NotFound => {}
         Err(exc) => return Err(exc.into()),
     }
+    // Merge while holding the state lock: a prevented writer may publish its
+    // truthful observation concurrently with the run-lock owner, but must not
+    // replace that owner's newer control checkpoint with the copy it read
+    // before the owner finished.
+    //
     // Every writer's stamp is carried forward and only this one is updated.
     // The interval gate reads the stamp belonging to the writer about to run,
-    // so dropping the others here would restore the starvation this exists to
-    // end: one process's pass would clear the record another gates on.
+    // so dropping the others here would restore cross-writer starvation.
     let previous = read_state(state_dir).unwrap_or_else(|_| Value::Object(Map::new()));
     let mut by_writer = previous
         .get(WRITER_ATTEMPTS)
@@ -1248,12 +1302,26 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
     // them left a trace, and `host gates` turned `claiming` off on a host with
     // 17.3 GiB free, a 15 GiB watermark and `disk_pressure_unresolved: false`.
     //
+    // A live workload takes only the kernel's shared hold; it does not write
+    // the exclusive janitor holder record. Its expected answer is therefore
+    // `lock_busy_unattributed`, not `lock_busy`. That unattributed answer is
+    // known to be a legitimate prevention only when this agent also reports
+    // one of its own slots live. Without that positive evidence it stays
+    // unknown: a legacy or foreign holder must not make a silent janitor look
+    // healthy indefinitely.
+    //
     // Only the time is recorded here, not the holder: a `flock` owner cannot be
     // named from the process that failed to take it, and the one thing in this
     // product that can name it -- `host disk`'s `cleanup_lock.holders` --
     // already does. What the arithmetic needs is prevented-since-a-known-time,
     // and that is what this is.
-    let prevented_now = report.get("outcome").and_then(Value::as_str) == Some("lock_busy");
+    let outcome = report.get("outcome").and_then(Value::as_str);
+    let prevented_now = outcome == Some("lock_busy")
+        || (outcome == Some("lock_busy_unattributed")
+            && report
+                .get("active_job_count")
+                .and_then(Value::as_i64)
+                .is_some_and(|count| count > 0));
     let last_prevented_at = previous
         .get("last_prevented_at")
         .and_then(Value::as_f64)
@@ -1267,23 +1335,31 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
                 })
             },
         );
-    // A prevented pass returns before the lock is held, so it never reached the
-    // carry-forward in `run_with_lock` and its report says `last_success_at:
-    // null`. Writing that verbatim would erase the one timestamp the stall
-    // arithmetic is measured from — recording the prevented pass would then be
-    // worse than dropping it. The last success belongs to the host, not to a
-    // pass, so it is carried here for every writer and every outcome.
+    // Success belongs to the host, not to the observing pass. Since a busy
+    // writer can finish after the owner whose report it copied, retain the
+    // later valid RFC 3339 timestamp rather than trusting write order.
     let mut report = report.clone();
-    if report.get("last_success_at").is_none_or(Value::is_null) {
-        if let Some(recorded) = previous
-            .get("report")
-            .and_then(|previous| previous.get("last_success_at"))
-            .filter(|stamp| !stamp.is_null())
-        {
-            if let Some(object) = report.as_object_mut() {
-                object.insert("last_success_at".to_string(), recorded.clone());
-            }
-        }
+    let incoming_success = report
+        .get("last_success_at")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let recorded_success = previous
+        .get("report")
+        .and_then(|previous| previous.get("last_success_at"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let parsed =
+        |stamp: &str| chrono::DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok();
+    let last_success_at = match (incoming_success, recorded_success) {
+        (Some(incoming), Some(recorded)) => match (parsed(&incoming), parsed(&recorded)) {
+            (Some(incoming_at), Some(recorded_at)) if recorded_at > incoming_at => Some(recorded),
+            (None, Some(_)) => Some(recorded),
+            _ => Some(incoming),
+        },
+        (incoming, recorded) => incoming.or(recorded),
+    };
+    if let (Some(object), Some(stamp)) = (report.as_object_mut(), last_success_at) {
+        object.insert("last_success_at".to_string(), Value::String(stamp));
     }
     let mut state = Map::new();
     state.insert("version".to_string(), serde_json::json!(STATE_VERSION));
@@ -1295,7 +1371,64 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
         state.insert("last_prevented_at".to_string(), serde_json::json!(stamp));
     }
     state.insert(WRITER_ATTEMPTS.to_string(), Value::Object(by_writer));
-    state.insert("report".to_string(), report);
+    state.insert("report".to_string(), report.clone());
+
+    // Observation and control are deliberately separate. `report` remains the
+    // last truthful event. Only the process admitted by the run lock may
+    // replace or retire the policy-bound intent/checkpoint; every diagnostic
+    // writer preserves the control state found inside this serialized merge.
+    let outcome = report.get("outcome").and_then(Value::as_str);
+    let policy_digest = report.get("policy_digest").and_then(Value::as_str);
+    let scanned = report.get("cleaners").is_some_and(|value| !value.is_null());
+    let enforce = report.get("mode").and_then(Value::as_str) == Some("enforce");
+    let incomplete_scan = enforce
+        && matches!(
+            outcome,
+            Some("cap_reached" | "partial_error" | "blocked_running_jobs")
+        );
+    let reached_target = match (
+        report.get("free_bytes_after").and_then(Value::as_i64),
+        report.get("target_bytes").and_then(Value::as_i64),
+    ) {
+        (Some(free), Some(target)) => free >= target,
+        _ => false,
+    };
+    let previous_intent_digest = reclaim_intent_digest(&previous);
+    let previous_intent = previous.get("reclaim_intent").cloned().or_else(|| {
+        previous_intent_digest
+            .map(|digest| serde_json::json!({ "policy_digest": digest, "outcome": "cap_reached" }))
+    });
+    let reclaim_intent = match control_update {
+        ControlUpdateAuthority::Preserve => previous_intent,
+        ControlUpdateAuthority::Owner if reached_target => None,
+        ControlUpdateAuthority::Owner if scanned && incomplete_scan => policy_digest
+            .map(|digest| serde_json::json!({ "policy_digest": digest, "outcome": outcome })),
+        ControlUpdateAuthority::Owner if scanned => {
+            // A real owner completed a scan under a resolved policy. That
+            // either completed this intent or deliberately adopted a
+            // different policy.
+            None
+        }
+        ControlUpdateAuthority::Owner => previous_intent,
+    };
+    if let Some(intent) = reclaim_intent {
+        state.insert("reclaim_intent".to_string(), intent);
+    }
+
+    let checkpoint = match control_update {
+        ControlUpdateAuthority::Preserve => previous
+            .get("build_caches_cursor")
+            .cloned()
+            .unwrap_or(Value::Null),
+        ControlUpdateAuthority::Owner if scanned => {
+            serde_json::to_value(cursor).map_err(|error| JanitorError::os(&error.to_string()))?
+        }
+        ControlUpdateAuthority::Owner => previous
+            .get("build_caches_cursor")
+            .cloned()
+            .unwrap_or(Value::Null),
+    };
+    state.insert("build_caches_cursor".to_string(), checkpoint);
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()
@@ -1728,21 +1861,22 @@ fn rotate_service_logs(home: &Path, log_fn: &mut dyn FnMut(&str)) {
 // canonical policy resolution
 // ---------------------------------------------------------------------------
 
-/// Fetch the canonical object directly; destructive checks never use
-/// fallback/cache. Generation-pinned via the store's versioned read (reload +
-/// pinned download, with the same 412-retry the Python SDK path relies on).
+/// Fetch the canonical registry through this process's configured primary;
+/// destructive checks never use fallback/cache. Generation-pinned via the
+/// store's versioned read (reload + pinned download, with the same 412-retry
+/// the Python SDK path relies on).
 ///
 /// The registry remains fail-closed: malformed, incomplete, or unreadable
-/// policy never authorizes deletion. When this host is configured as a client
-/// of its own Stado object API, however, cleanup uses the server's explicitly
-/// declared direct backing store. Otherwise disk exhaustion could make the
-/// listener unavailable and thereby disable the janitor needed to recover it.
+/// policy never authorizes deletion. A client configured with the Stado object
+/// adapter must read that authority. Its separately configured backup is not a
+/// substitute: it may be intentionally distinct, stale, or unable to represent
+/// the primary namespace at all.
 ///
 /// DEVIATION from Python, matching `targets::download_registry_blob`: the
 /// object is resolved by [`targets::RegistryStore`] instead of a hardcoded GCS
-/// bucket. The direct-server constructor preserves that adapter choice.
+/// bucket.
 async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
-    let store = targets::RegistryStore::open_for_server().await?;
+    let store = targets::RegistryStore::open().await?;
     let text = store
         .read_versioned()
         .await?
@@ -1884,6 +2018,7 @@ fn finish(
     home: Option<&Path>,
     state_dir: Option<&Path>,
     attempted_at: f64,
+    control_update: ControlUpdateAuthority,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     if let Some(home) = home {
@@ -1894,7 +2029,13 @@ fn finish(
     report.duration_ms = (started.elapsed().as_secs_f64() * 1000.0).max(0.0) as i64;
     if let Some(state_dir) = state_dir {
         let value = report.to_value();
-        if let Err(exc) = write_state(state_dir, &value, attempted_at) {
+        if let Err(exc) = write_state(
+            state_dir,
+            &value,
+            report.builds_cursor.as_ref(),
+            attempted_at,
+            control_update,
+        ) {
             report.add_error("state_write", &exc);
             if report.outcome != "lock_busy" && report.outcome != "invalid_or_unavailable_policy" {
                 report.outcome = "partial_error".to_string();
@@ -1909,82 +2050,99 @@ fn finish(
     value
 }
 
-/// Every job id currently in `queue` or `running` from an already-open store,
-/// or `None` when the keep-list could not be built inside `budget`.
+/// Every job id named by `queue` or `running`, without downloading job
+/// documents. Transition sentinels stay on this conservative set.
+async fn listed_live_job_ids(store: &crate::queue::JobStorage) -> Option<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    for state in ["queue", "running"] {
+        ids.extend(store.list_job_ids(state).await.ok()?);
+    }
+    Some(ids)
+}
+
+/// Build the conservative listing-only keep set inside `budget`.
 ///
-/// The keep-list for [`queue_workdirs`]. Read best-effort so an unreadable
-/// store cannot turn a disk repair into an outage. A partial read is discarded
-/// rather than narrowed, because a keep-list missing the running job's id
-/// authorizes deleting the tree that job is writing into. `host reclaim`
-/// deliberately delegates these directories to this locked path and does not
-/// maintain another keep-list.
-///
-/// [`crate::queue::JobStorage::list_job_ids`] and NOT `list_jobs`: this wants
-/// ids, the ids are in the object names, and downloading every job document to
-/// read a field out of it is what cost charless-mac-mini 818 seconds — see
-/// that function for the measurement. The `budget` is the same defect's other
-/// half: the read had no bound at all, so however long the transport took was
-/// how long the pass took.
-///
-/// Public as the test seam for both properties; `fetch_live_job_ids` is this
-/// at the real store with [`KEEP_LIST_BUDGET`].
+/// Public as the existing seam that proves no queue document is downloaded.
 pub async fn live_job_ids_within(
     store: &crate::queue::JobStorage,
     budget: Duration,
 ) -> Option<Vec<String>> {
+    tokio::time::timeout(budget, listed_live_job_ids(store))
+        .await
+        .ok()
+        .flatten()
+        .map(BTreeSet::into_iter)
+        .map(Iterator::collect)
+}
+
+/// Refine the listing-only keep set for the bounded workdir population.
+///
+/// Only ids that exist on disk and whose names occur in both a live and a
+/// terminal prefix cost authoritative document reads. The typed storage query
+/// accepts only a retired transition with its matching terminal destination
+/// and no live or in-flight source. Any failed list/read or timeout makes the
+/// whole keep-list unavailable, so the workdir cleaner deletes nothing.
+async fn live_job_ids_for_candidates_within(
+    store: &crate::queue::JobStorage,
+    candidates: &BTreeSet<String>,
+    budget: Duration,
+) -> Option<Vec<String>> {
     let read = async {
-        let mut ids = Vec::new();
-        for state in ["queue", "running"] {
-            ids.extend(store.list_job_ids(state).await.ok()?);
+        let mut live = listed_live_job_ids(store).await?;
+        let mut terminal_names = BTreeSet::new();
+        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+            terminal_names.extend(store.list_job_ids(prefix).await.ok()?);
         }
-        Some(ids)
+        for job_id in candidates {
+            if !live.contains(job_id) || !terminal_names.contains(job_id) {
+                continue;
+            }
+            match store.workdir_job_state(job_id).await.ok()? {
+                crate::queue::storage::WorkdirJobState::Terminal => {
+                    live.remove(job_id);
+                }
+                crate::queue::storage::WorkdirJobState::Live
+                | crate::queue::storage::WorkdirJobState::Unknown => {}
+            }
+        }
+        Some(live.into_iter().collect())
     };
     tokio::time::timeout(budget, read).await.ok().flatten()
 }
 
-/// [`live_job_ids_within`] against the queue's authoritative backing store.
-///
-/// An agent normally reaches a `stado` primary through the local object API.
-/// Cleanup cannot depend on that listener while disk exhaustion is the reason
-/// it is unavailable: use the same explicitly configured direct backup that
-/// backs the server itself. Other primary adapters remain unchanged.
-async fn fetch_live_job_ids() -> Option<Vec<String>> {
-    let store = if crate::config::wc_storage_backend() == "stado" {
-        crate::queue::JobStorage::for_server().await
-    } else {
-        crate::queue::JobStorage::new().await
-    }
-    .ok()?;
-    live_job_ids_within(&store, KEEP_LIST_BUDGET).await
+/// Build the refined keep-list against this process's configured authoritative
+/// primary. Construction and layout validation are part of the same budget as
+/// every listing and versioned read.
+async fn fetch_live_job_ids(
+    candidates: &BTreeSet<String>,
+    budget: Duration,
+) -> Option<Vec<String>> {
+    let read = async {
+        let store = crate::queue::JobStorage::for_primary_reads().await.ok()?;
+        live_job_ids_for_candidates_within(&store, candidates, budget).await
+    };
+    tokio::time::timeout(budget, read).await.ok().flatten()
 }
 
 /// The post-lock half of `run_cleanup_once` (policy resolution through
-/// outcome selection). Split out so tests can inject the canonical
-/// registry document and a fabricated home without touching GCS or the
-/// real `$HOME`. `_lock` holds the exclusive run lock until return
-/// (Python's `finally: flock(LOCK_UN)`).
+/// outcome selection). Split out so tests can inject the canonical registry
+/// document and a fabricated home without touching GCS or the real `$HOME`.
+/// `_lock` holds the exclusive run lock through candidate enumeration,
+/// authoritative state reads, and deletion.
 #[allow(clippy::too_many_arguments)]
-fn run_with_lock(
+async fn run_with_lock(
     home: &Path,
     state_dir: &Path,
     _lock: ExclusiveLock,
     registry: Result<Value, JanitorError>,
-    // Every job id in `queue` or `running`: the keep-list the
-    // `queue_workdirs` cleaner judges a workdir's job against. `None` means
-    // the queue store could not be read this pass, and that cleaner then
-    // removes nothing rather than deleting a live job's tree.
-    live_jobs: Option<Vec<String>>,
     mut report: CleanupReport,
     started: Instant,
     attempted_at: f64,
     force: bool,
+    requested_target: bool,
     // Plan only: pin an `enforce` policy down to the janitor's own `report`
     // mode and persist nothing. See `preview_cleanup_once`.
     preview: bool,
-    // A predecessor lock inode is still live, or was replaced during this
-    // pass. Scan and persist diagnostics, but never delete until every
-    // predecessor kernel lock has actually been released.
-    lock_recovery: bool,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     // A preview leaves no trace. The state file is the janitor's record of
@@ -1992,12 +2150,30 @@ fn run_with_lock(
     // operator asking what a cleanup WOULD delete would have silently
     // delayed the cleanup that does.
     let persist = if preview { None } else { Some(state_dir) };
+    // Which release versions the fleet DECLARES, taken from the same document
+    // this pass resolves its policy from, before that document is consumed.
+    // The registry is the only place a version another host needs is written
+    // down, and the release-store cleaner runs on whichever host carries the
+    // store — usually not the host that runs the binary.
+    let declared_release_versions = registry
+        .as_ref()
+        .ok()
+        .map(release_store::declared_versions)
+        .unwrap_or_default();
     let (target, mut policy, digest, policy_defaulted) =
         match registry.and_then(|data| resolve_canonical_policy(&data, &report.hostname)) {
             Ok(value) => value,
             Err(exc) => {
                 report.add_error("policy", &exc);
-                return finish(report, started, Some(home), persist, attempted_at, log_fn);
+                return finish(
+                    report,
+                    started,
+                    Some(home),
+                    persist,
+                    attempted_at,
+                    ControlUpdateAuthority::Owner,
+                    log_fn,
+                );
             }
         };
     // `enforce` is the only mode that deletes. The janitor's own `report`
@@ -2008,7 +2184,7 @@ fn run_with_lock(
     // not second implementations of the policy.
     //
     // `off` and `report` policies are left exactly as the registry states.
-    if (preview || lock_recovery) && policy.mode == "enforce" {
+    if preview && policy.mode == "enforce" {
         policy.mode = "report".to_string();
     }
     report.target_name = Some(target.name);
@@ -2023,7 +2199,15 @@ fn run_with_lock(
         Ok(value) => value,
         Err(exc) => {
             report.add_error("state_read", &exc);
-            return finish(report, started, Some(home), persist, attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(home),
+                persist,
+                attempted_at,
+                ControlUpdateAuthority::Owner,
+                log_fn,
+            );
         }
     };
     let previous_report = previous.get("report").filter(|r| r.is_object()).cloned();
@@ -2031,16 +2215,22 @@ fn run_with_lock(
         .as_ref()
         .and_then(|r| r.get("last_success_at"))
         .and_then(|v| v.as_str().map(str::to_string));
-    // Where the previous pass's build-cache walk stopped. Without this the
-    // walk restarts at its root every pass and a tree larger than one pass's
-    // budget is never crossed: on 2026-09-01 `lukasz-macbook` held 879,559
-    // directories under the declared root against a `max_scan_items` ceiling
-    // of 100,000, so the same first eleven percent was scanned hourly and the
-    // caches in the rest were unreachable by construction.
-    report.builds_resume_from = previous_report
-        .as_ref()
-        .and_then(|r| r.get("build_caches_resume_from"))
-        .and_then(|v| v.as_str().map(str::to_string));
+    let reclaim_digest = reclaim_intent_digest(&previous);
+    let same_reclaim_policy = reclaim_digest == Some(digest.as_str());
+    // A legacy position alone cannot resume without replaying prior levels.
+    // The next actual scan migrates it to a durable unvisited frontier, but a
+    // checkpoint belonging to another policy must never be attached here.
+    report.builds_resume_from = same_reclaim_policy
+        .then(|| {
+            previous_report
+                .as_ref()
+                .and_then(|r| r.get("build_caches_resume_from"))
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .flatten();
+    report.builds_cursor = same_reclaim_policy
+        .then(|| build_caches::BuildCachesCursor::from_state(&previous))
+        .flatten();
     let before = match free_bytes(home) {
         Ok(free) => free,
         Err(exc) => {
@@ -2052,23 +2242,20 @@ fn run_with_lock(
                 Some(home),
                 Some(state_dir),
                 attempted_at,
+                ControlUpdateAuthority::Owner,
                 log_fn,
             );
         }
     };
     report.free_bytes_before = Some(before);
     report.free_bytes_after = Some(before);
-    let continuing_reclaim = previous_report
-        .as_ref()
-        .is_some_and(|r| r.get("policy_digest").and_then(Value::as_str) == Some(digest.as_str()))
-        && previous_report
-            .as_ref()
-            .is_some_and(|r| r.get("outcome").and_then(Value::as_str) == Some("cap_reached"))
-        && previous_report
-            .as_ref()
-            .is_some_and(|r| r.get("pressure_active") == Some(&Value::Bool(true)))
-        && before < policy.target_free_gb * GIB;
-    report.pressure_active = Some(before < policy.low_free_gb * GIB || continuing_reclaim);
+    let requested_reclaim = requested_target && before < policy.target_free_gb * GIB;
+    let continuing_reclaim =
+        requested_reclaim || (same_reclaim_policy && before < policy.target_free_gb * GIB);
+    let immediate_reclaim = continuing_reclaim
+        && (requested_reclaim || reclaim_intent_outcome(&previous) == Some("cap_reached"));
+    let below_low = before < policy.low_free_gb * GIB;
+    report.pressure_active = Some(below_low || continuing_reclaim);
     // THIS writer's last attempt, not the file's.
     //
     // This read used to be `previous["last_attempt_at"]` - the last attempt by
@@ -2089,24 +2276,18 @@ fn run_with_lock(
     // is a supported operator command that writes the same file, so one manual
     // run would otherwise silence the agent's janitor for a full interval on
     // any host.
+    // The interval normally paces observations above the low watermark.
+    // Capped work is a bounded frontier and continues immediately; a
+    // blocked/error pass retains its intent but waits for the writer's normal
+    // interval so an unchanged external blocker cannot create a tight loop.
+    // Below low, cleanup remains immediate. Concurrency is mediated by the
+    // lock below rather than by this stamp.
     let last_attempt = writer_last_attempt(&previous, report.writer);
-    // The interval paces a healthy host; it must not pace a host that is
-    // already under its own declared low watermark. Measuring free space
-    // above this gate is what makes that possible, and it is also what makes
-    // an `interval_noop` report readable: the gate used to return before the
-    // first measurement, so the report said `pressure_active: null` while the
-    // same agent's log line said `disk-pressure-active`. On 2026-09-02
-    // `lukasz-macbook` sat at 9.3 GB free against a 100 GB watermark and its
-    // janitor answered `interval_noop` every pass, hourly, while the release
-    // pipeline kept writing. `cap_reached` plus `continuing_reclaim` already
-    // model a reclaim that must be resumed - and this gate was what refused
-    // to resume it. Concurrency is mediated by the lock below, never by this
-    // stamp: the lock makes two janitors take turns, the stamp made the
-    // working one never try.
     if !force
-        && report.pressure_active != Some(true)
+        && !below_low
+        && !immediate_reclaim
         && last_attempt.is_some()
-        && attempted_at - last_attempt.unwrap_or(0.0) < policy.check_interval_seconds as f64
+        && attempted_at - last_attempt.unwrap_or_default() < policy.check_interval_seconds as f64
     {
         report.outcome = "interval_noop".to_string();
         return finish(
@@ -2115,6 +2296,7 @@ fn run_with_lock(
             Some(home),
             persist,
             last_attempt.unwrap_or(attempted_at),
+            ControlUpdateAuthority::Owner,
             log_fn,
         );
     }
@@ -2124,7 +2306,15 @@ fn run_with_lock(
     if policy.mode == "off" || report.pressure_active != Some(true) {
         report.outcome = "healthy_noop".to_string();
         report.last_success_at = Some(utc_now());
-        return finish(report, started, Some(home), persist, attempted_at, log_fn);
+        return finish(
+            report,
+            started,
+            Some(home),
+            persist,
+            attempted_at,
+            ControlUpdateAuthority::Owner,
+            log_fn,
+        );
     }
 
     // The host's declared pass budget, or this module's own 30 seconds when it
@@ -2157,9 +2347,20 @@ fn run_with_lock(
     // more for the rest, and the last declared cleaner is handed whatever
     // remains. No cleaner is ever handed zero while it is declared, which is
     // the property that was missing.
-    let declared_after = |names: &[&str]| -> i64 {
-        names
+    const CLEANER_ORDER: [&str; 7] = [
+        "huggingface_cache",
+        "weles_recordings",
+        "build_caches",
+        chromium_clones::CLEANER,
+        queue_workdirs::CLEANER,
+        backup_twins::CLEANER,
+        release_store::CLEANER,
+    ];
+    let declared_after = |current: &str| -> i64 {
+        CLEANER_ORDER
             .iter()
+            .skip_while(|name| **name != current)
+            .skip(1)
             .filter(|name| policy.cleaners.contains_key(**name))
             .count() as i64
     };
@@ -2169,6 +2370,17 @@ fn run_with_lock(
         } else {
             (remaining / (behind + 1)).max(1).min(remaining)
         }
+    };
+    // Item shares alone do not make the fixed order fair: a cleaner can spend
+    // the whole wall-clock allowance while staying inside its item share. Give
+    // each declared cleaner an equal slice of the time that remains at the
+    // instant it starts. Any unused slice stays inside the single global
+    // deadline and is therefore rolled into the next cleaner's calculation.
+    let time_share = |current: &str| -> Instant {
+        let now = Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        let slots = declared_after(current).saturating_add(1) as u32;
+        now + remaining / slots
     };
     // Past every early return: from here the cleaner table is a measurement
     // this pass actually made, so the report may carry one.
@@ -2181,22 +2393,21 @@ fn run_with_lock(
         &policy,
         report.active_job_count,
         attempted_at,
-        share(
-            policy.max_scan_items,
-            declared_after(&[
-                "weles_recordings",
-                "build_caches",
-                chromium_clones::CLEANER,
-                queue_workdirs::CLEANER,
-                backup_twins::CLEANER,
-            ]),
-        ),
-        deadline,
+        share(policy.max_scan_items, declared_after("huggingface_cache")),
+        time_share("huggingface_cache"),
         &mut report,
     ) {
         report.add_error("runtime", &exc);
         report.outcome = "invalid_or_unavailable_policy".to_string();
-        return finish(report, started, Some(home), persist, attempted_at, log_fn);
+        return finish(
+            report,
+            started,
+            Some(home),
+            persist,
+            attempted_at,
+            ControlUpdateAuthority::Owner,
+            log_fn,
+        );
     }
     let scanned = report.hf.scanned_items;
     let remaining_scan = (policy.max_scan_items - scanned).max(0);
@@ -2207,15 +2418,8 @@ fn run_with_lock(
         home,
         &policy,
         attempted_at,
-        share(
-            remaining_scan,
-            declared_after(&[
-                "build_caches",
-                chromium_clones::CLEANER,
-                queue_workdirs::CLEANER,
-                backup_twins::CLEANER,
-            ]),
-        ),
+        share(remaining_scan, declared_after("weles_recordings")),
+        time_share("weles_recordings"),
         &mut report,
     );
     let remaining_after_weles =
@@ -2224,24 +2428,17 @@ fn run_with_lock(
         report.caps.scan = true;
     }
     // The build-cache scan is the only one whose root can be the whole of
-    // `$HOME`: it walks with its share of whatever the fixed-layout cleaners
-    // left, and with the same pass deadline the HF scan honours. It is also
-    // the only one that cannot finish in one pass on a large tree, so it
-    // resumes from where the last pass stopped instead of restarting.
+    // `$HOME`: it walks with its item and time shares of what the fixed-layout
+    // cleaners left. It is also the only one that cannot finish in one pass on
+    // a large tree, so it resumes from where the last pass stopped instead of
+    // restarting.
     build_caches::scan_build_caches(
         home,
         &policy,
         attempted_at,
-        share(
-            remaining_after_weles,
-            declared_after(&[
-                chromium_clones::CLEANER,
-                queue_workdirs::CLEANER,
-                backup_twins::CLEANER,
-            ]),
-        ),
+        share(remaining_after_weles, declared_after("build_caches")),
         deadline,
-        report.builds_resume_from.clone(),
+        report.builds_cursor.take(),
         &mut report,
     );
     let remaining_after_builds = (policy.max_scan_items
@@ -2252,19 +2449,18 @@ fn run_with_lock(
     if remaining_after_builds == 0 && policy.cleaners.contains_key(chromium_clones::CLEANER) {
         report.caps.scan = true;
     }
-    // Last, and the only cleaner whose root is outside this account's home:
-    // macOS puts the clones in the per-user temporary container, and what it
-    // keeps there is nobody's working set — so it is scanned after every root
-    // the fleet's own software writes to, on the budget those leave.
+    // The only cleaner whose root is outside this account's home: macOS puts
+    // the clones in the per-user temporary container. Its unused item and time
+    // shares roll forward to the lifecycle cleaners behind it.
     chromium_clones::scan_chromium_clones(
         home,
         &policy,
         attempted_at,
         share(
             remaining_after_builds,
-            declared_after(&[queue_workdirs::CLEANER, backup_twins::CLEANER]),
+            declared_after(chromium_clones::CLEANER),
         ),
-        deadline,
+        time_share(chromium_clones::CLEANER),
         &mut report,
     );
     let remaining_after_clones = (policy.max_scan_items
@@ -2276,19 +2472,43 @@ fn run_with_lock(
     if remaining_after_clones == 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
         report.caps.scan = true;
     }
-    // The queue's own per-job trees, scanned last on the budget the rest leave.
-    // They live under the persistent agent-owned work root and are judged by
-    // their job's state rather than by age, so nothing about the order above
-    // changes what this pass may take — only how much of it.
+    // The queue's own per-job trees, after rebuildable caches.
+    // Candidate names are captured under this same janitor lock. The queue
+    // authority then downloads bodies only for candidates whose names overlap
+    // live and terminal prefixes; everything unreadable remains on the keep
+    // set, and any store failure disables this cleaner for the whole pass.
+    let workdir_budget = share(
+        remaining_after_clones,
+        declared_after(queue_workdirs::CLEANER),
+    );
+    let workdir_deadline = time_share(queue_workdirs::CLEANER);
+    let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
+        match queue_workdirs::candidate_job_ids(home, workdir_budget, workdir_deadline) {
+            Ok(candidates) => {
+                let budget = workdir_deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(KEEP_LIST_BUDGET);
+                let wait = Instant::now();
+                let ids = fetch_live_job_ids(&candidates, budget).await;
+                report.store_wait_ms = report
+                    .store_wait_ms
+                    .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
+                ids
+            }
+            Err(error) => {
+                report.add_error(queue_workdirs::CLEANER, &error);
+                None
+            }
+        }
+    } else {
+        Some(Vec::new())
+    };
     queue_workdirs::scan_queue_workdirs(
         home,
         &policy,
         attempted_at,
-        share(
-            remaining_after_clones,
-            declared_after(&[backup_twins::CLEANER]),
-        ),
-        deadline,
+        workdir_budget,
+        workdir_deadline,
         live_jobs.as_deref(),
         &mut report,
     );
@@ -2302,17 +2522,20 @@ fn run_with_lock(
     if remaining_after_workdirs == 0 && policy.cleaners.contains_key(backup_twins::CLEANER) {
         report.caps.scan = true;
     }
-    // The disaster-recovery replica's proven duplicates, scanned last because
-    // it is the only cleaner here that has to READ the bytes it deletes: every
-    // object it removes is hashed against the primary in this same pass, so it
-    // spends the budget the fixed-layout cleaners leave and stops on the shared
-    // deadline with whatever it has proven.
+    // The disaster-recovery replica's proven duplicates. It is the only
+    // cleaner here that has to READ the bytes it deletes: every object it
+    // removes is hashed against the primary in this same pass. Release-store
+    // cleanup remains behind it and receives its own item/time share.
+    let twins_budget = share(
+        remaining_after_workdirs,
+        declared_after(backup_twins::CLEANER),
+    );
     backup_twins::scan_backup_twins(
         home,
         &policy,
         crate::config::wc_stado_storage_namespace(),
-        remaining_after_workdirs,
-        deadline,
+        twins_budget,
+        time_share(backup_twins::CLEANER),
         &mut report,
     );
     let remaining_after_twins = (policy.max_scan_items
@@ -2331,7 +2554,14 @@ fn run_with_lock(
     // share and only after every cleaner that reclaims scratch has had its
     // turn — a release is the one class here that costs a rebuild to get
     // back.
-    release_store::scan_release_store(home, &policy, remaining_after_twins, deadline, &mut report);
+    release_store::scan_release_store(
+        home,
+        &policy,
+        &declared_release_versions,
+        remaining_after_twins,
+        deadline,
+        &mut report,
+    );
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
@@ -2371,19 +2601,10 @@ fn run_with_lock(
     .filter(|(name, cleaner)| policy.cleaners.contains_key(*name) && budget_stopped(cleaner))
     .map(|(name, _)| name.to_string())
     .collect();
-    const IMPLEMENTED: [&str; 7] = [
-        "huggingface_cache",
-        "weles_recordings",
-        "build_caches",
-        chromium_clones::CLEANER,
-        queue_workdirs::CLEANER,
-        backup_twins::CLEANER,
-        release_store::CLEANER,
-    ];
     report.unknown_cleaners = policy
         .cleaners
         .keys()
-        .filter(|name| !IMPLEMENTED.contains(&name.as_str()))
+        .filter(|name| !CLEANER_ORDER.contains(&name.as_str()))
         .cloned()
         .collect();
 
@@ -2392,7 +2613,15 @@ fn run_with_lock(
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, Some(home), persist, attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(home),
+                persist,
+                attempted_at,
+                ControlUpdateAuthority::Owner,
+                log_fn,
+            );
         }
     };
     report.free_bytes_after = Some(after);
@@ -2405,28 +2634,18 @@ fn run_with_lock(
         + report.builds.deleted_items
         + report.clones.deleted_items
         + report.backup_twins.deleted_items;
-    // An incomplete scan is named before anything else a complete pass could
-    // have concluded. `cap_reached` is the report's existing word for "a
-    // budget stopped me", and it has to win here: a pass that spent its scan
-    // cap without reaching a candidate used to publish `report_only` (or, in
-    // `enforce`, `no_eligible_items` once the caps happened to be clear),
-    // and both of those read as a finished look at the disk. On
-    // `lukasz-macbook` that was the whole difference between "there is
-    // nothing to delete" and "I got 7,297 directories into one repository's
-    // `node_modules` and ran out of time", with 174 tagged build caches and
-    // a 62 GiB `target/` unexamined behind it.
-    if lock_recovery {
-        report.outcome = "lock_recovery_report_only".to_string();
-    } else if report.caps.any() && deleted == 0 && after < policy.target_free_gb * GIB {
+    // An incomplete scan is named before any complete-pass verdict. In
+    // particular, running jobs may block one cleaner while a later cleaner
+    // makes progress and exhausts the pass budget; that is still unfinished
+    // work which must continue to the target on the next admitted pass.
+    if report.caps.any() && after < policy.target_free_gb * GIB {
         report.outcome = "cap_reached".to_string();
     } else if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
-    } else if report.active_job_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
-        report.outcome = "blocked_running_jobs".to_string();
     } else if after >= policy.target_free_gb * GIB {
         report.outcome = "reclaimed_target".to_string();
-    } else if report.caps.any() {
-        report.outcome = "cap_reached".to_string();
+    } else if report.active_job_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
+        report.outcome = "blocked_running_jobs".to_string();
     } else if !report.errors.is_empty() {
         report.outcome = "partial_error".to_string();
     } else if deleted == 0 {
@@ -2437,7 +2656,15 @@ fn run_with_lock(
     if report.errors.is_empty() {
         report.last_success_at = Some(utc_now());
     }
-    finish(report, started, Some(home), persist, attempted_at, log_fn)
+    finish(
+        report,
+        started,
+        Some(home),
+        persist,
+        attempted_at,
+        ControlUpdateAuthority::Owner,
+        log_fn,
+    )
 }
 
 /// Which process made a pass.
@@ -2489,7 +2716,19 @@ pub async fn run_cleanup_once(
     writer: CleanupWriter,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
-    cleanup_once(active_job_count, force, false, writer, log_fn).await
+    cleanup_once(active_job_count, force, false, false, writer, log_fn).await
+}
+
+/// Execute one bounded enforcing pass toward the policy's declared target,
+/// even when free space is already above its low watermark and no older
+/// continuation intent survived. The normal policy caps and durable frontier
+/// still bound the pass; this only supplies the explicit missing goal.
+pub async fn run_cleanup_to_target_once(
+    active_job_count: i64,
+    writer: CleanupWriter,
+    log_fn: &mut dyn FnMut(&str),
+) -> Value {
+    cleanup_once(active_job_count, true, false, true, writer, log_fn).await
 }
 
 /// Resolve canonical policy, plan one bounded pass, and delete NOTHING.
@@ -2514,7 +2753,66 @@ pub async fn run_cleanup_once(
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
-    cleanup_once(i64::default(), true, true, CleanupWriter::Cli, log_fn).await
+    cleanup_once(
+        i64::default(),
+        true,
+        true,
+        false,
+        CleanupWriter::Cli,
+        log_fn,
+    )
+    .await
+}
+
+fn preserve_previous_report(state_dir: &Path, report: &mut CleanupReport) {
+    let Ok(previous) = read_state(state_dir) else {
+        return;
+    };
+    report.builds_cursor = build_caches::BuildCachesCursor::from_state(&previous);
+    let Some(previous) = previous.get("report").and_then(Value::as_object) else {
+        return;
+    };
+    report.last_success_at = previous
+        .get("last_success_at")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.target_name = previous
+        .get("target_name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.policy_digest = previous
+        .get("policy_digest")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.policy_defaulted = previous
+        .get("policy_defaulted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    report.mode = previous
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.check_interval_seconds = previous
+        .get("check_interval_seconds")
+        .and_then(Value::as_i64);
+    report.low_bytes = previous.get("low_bytes").and_then(Value::as_i64);
+    report.target_bytes = previous.get("target_bytes").and_then(Value::as_i64);
+    report.pressure_active = previous.get("pressure_active").and_then(Value::as_bool);
+    report.builds_resume_from = previous
+        .get("build_caches_resume_from")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    report.unscanned_cleaners = previous
+        .get("unscanned_cleaners")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
 }
 
 /// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
@@ -2522,6 +2820,7 @@ async fn cleanup_once(
     active_job_count: i64,
     force: bool,
     preview: bool,
+    requested_target: bool,
     writer: CleanupWriter,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
@@ -2539,7 +2838,15 @@ async fn cleanup_once(
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, None, None, attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                None,
+                None,
+                attempted_at,
+                ControlUpdateAuthority::Preserve,
+                log_fn,
+            );
         }
     };
     let state_dir = match ensure_state_dir(&home) {
@@ -2547,7 +2854,15 @@ async fn cleanup_once(
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, Some(&home), None, attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(&home),
+                None,
+                attempted_at,
+                ControlUpdateAuthority::Preserve,
+                log_fn,
+            );
         }
     };
     let persist = if preview {
@@ -2555,32 +2870,14 @@ async fn cleanup_once(
     } else {
         Some(state_dir.as_path())
     };
-    // Registry and queue reads are network operations and have no filesystem
-    // side effects. Resolve them before taking the exclusive janitor lock: one
-    // stalled store request must not prevent every other agent and cleanup
-    // process on this host from reading policy or reclaiming disk.
+    // Resolve the canonical policy before taking the exclusive janitor lock.
+    // It has no filesystem side effects, and an unavailable authority fails
+    // closed before blocking another cleanup process.
     //
-    // And bound them, because moving them off the lock was only half the
-    // problem. This pass no longer runs inside the agent tick (see
-    // `super::super::agent_janitor`), so an unbounded read here can no longer
-    // hold a capacity broadcast directly -- but it still wedges the only pass
-    // that reclaims disk on this host, for as long as the store takes, while
-    // holding the cross-process janitor lock; and disk pressure is what
-    // closes claiming. Measured at 639 s and 2,178 s on 2026-09-03 against a
-    // slow object-store route. A janitor input is not worth a host's ability
-    // to reclaim its own disk.
-    //
-    // Both timeouts degrade the way this pass already degrades when a store
-    // answers badly, so nothing new can be deleted because of one: an
-    // unresolved registry yields `invalid_or_unavailable_policy` and no
-    // cleaner runs, and `live_jobs: None` makes `queue_workdirs` remove
-    // nothing rather than risk a live job's tree.
-    //
-    // Timed as well as bounded, and the total recorded on the report: these
-    // two reads are the only thing a pass waits on before it has decided
-    // whether to do anything, so they are the only way a `healthy_noop` can
-    // cost 818 seconds. The budget stops that from happening; the measurement
-    // is what proves it stopped. See [`CleanupReport::store_wait_ms`].
+    // The workdir keep-list is different: its candidate names must be captured
+    // under the same lock that protects deletion. `run_with_lock` performs that
+    // candidate-bounded authority read immediately before the workdir cleaner,
+    // inside both the store-read budget and the pass deadline.
     let store_wait = Instant::now();
     let input_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
     let registry = match tokio::time::timeout(input_budget, fetch_canonical_registry()).await {
@@ -2590,9 +2887,6 @@ async fn cleanup_once(
             constants::AGENT_STORE_READ_TIMEOUT_S
         ))),
     };
-    let live_jobs = tokio::time::timeout(input_budget, fetch_live_job_ids())
-        .await
-        .unwrap_or_default();
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
     // The lock is taken with a stated deadline, and a hold past its own
     // deadline is answered rather than waited out. `lock_busy` used to be the
@@ -2669,58 +2963,12 @@ async fn cleanup_once(
                 }
             }
             // A busy observation must not erase the state the holder is
-            // continuing. `continuing_reclaim` below relies on the previous
-            // policy digest plus `pressure_active`, and the build-cache walker
-            // relies on its resume cursor. Replacing those with null made the
-            // next writer stop at the low watermark instead of finishing at
-            // the declared target, and made every interrupted scan restart at
-            // the root.
-            if let Ok(previous) = read_state(&state_dir) {
-                if let Some(previous) = previous.get("report").and_then(Value::as_object) {
-                    report.last_success_at = previous
-                        .get("last_success_at")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.target_name = previous
-                        .get("target_name")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.policy_digest = previous
-                        .get("policy_digest")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.policy_defaulted = previous
-                        .get("policy_defaulted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    report.mode = previous
-                        .get("mode")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.check_interval_seconds = previous
-                        .get("check_interval_seconds")
-                        .and_then(Value::as_i64);
-                    report.low_bytes = previous.get("low_bytes").and_then(Value::as_i64);
-                    report.target_bytes = previous.get("target_bytes").and_then(Value::as_i64);
-                    report.pressure_active =
-                        previous.get("pressure_active").and_then(Value::as_bool);
-                    report.builds_resume_from = previous
-                        .get("build_caches_resume_from")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    report.unscanned_cleaners = previous
-                        .get("unscanned_cleaners")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_string)
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                }
-            }
+            // continuing. The policy-bound reclaim intent decides whether the
+            // next pass continues to target, and the build-cache walker relies
+            // on its resume cursor. Replacing either with this observation
+            // made the next writer stop at the low watermark and restart the
+            // interrupted scan at the root.
+            preserve_previous_report(&state_dir, &mut report);
             if let Ok(free) = free_bytes(&home) {
                 report.free_bytes_before = Some(free);
                 report.free_bytes_after = Some(free);
@@ -2730,12 +2978,28 @@ async fn cleanup_once(
             // prevented passes and forty passes that never ran leave an
             // identical, empty record. Kept from origin/main's change to this
             // same branch of the function.
-            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(&home),
+                persist,
+                attempted_at,
+                ControlUpdateAuthority::Preserve,
+                log_fn,
+            );
         }
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(&home),
+                persist,
+                attempted_at,
+                ControlUpdateAuthority::Preserve,
+                log_fn,
+            );
         }
     };
     let predecessor_active = match retired_locks_active(&state_dir, &lock.file) {
@@ -2747,26 +3011,42 @@ async fn cleanup_once(
     };
     if predecessor_active {
         let detail =
-            "a retired cleanup lock inode is still held; this pass scans and persists diagnostics but deletes nothing";
+            "a retired cleanup lock inode is still held; this pass persists diagnostics without scanning or deleting";
         log_fn(&format!("disk cleanup: {detail}"));
         report.add_error("lock_predecessor_active", &JanitorError::os(detail));
     }
-    let lock_recovery = taken_over || predecessor_active;
+    if taken_over || predecessor_active {
+        report.outcome = "lock_recovery_report_only".to_string();
+        preserve_previous_report(&state_dir, &mut report);
+        if let Ok(free) = free_bytes(&home) {
+            report.free_bytes_before = Some(free);
+            report.free_bytes_after = Some(free);
+        }
+        return finish(
+            report,
+            started,
+            Some(&home),
+            persist,
+            attempted_at,
+            ControlUpdateAuthority::Preserve,
+            log_fn,
+        );
+    }
 
     run_with_lock(
         &home,
         &state_dir,
         lock,
         registry,
-        live_jobs,
         report,
         started,
         attempted_at,
         force,
+        requested_target,
         preview,
-        lock_recovery,
         log_fn,
     )
+    .await
 }
 
 // ---------------------------------------------------------------------------

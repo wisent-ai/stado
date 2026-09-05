@@ -352,7 +352,21 @@ pub async fn run_program(
     program: &[&str],
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    run_program_with_connection(target, program, runner)
+    run_program_with_timeout(target, program, remote_timeout(), runner).await
+}
+
+/// Run one fixed program with an operation-specific wall-clock bound.
+///
+/// The ordinary channel timeout is deliberately large enough for recovery.
+/// Small read-only probes use this form so a program that does not implement
+/// the requested CLI verb cannot occupy that entire recovery budget.
+pub async fn run_program_with_timeout(
+    target: &ComputeTarget,
+    program: &[&str],
+    timeout: Duration,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    run_program_with_timeout_and_connection(target, program, timeout, runner)
         .await
         .map(|(output, _)| output)
 }
@@ -364,11 +378,20 @@ pub async fn run_program_with_connection<'a>(
     program: &[&str],
     runner: &Runner,
 ) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
+    run_program_with_timeout_and_connection(target, program, remote_timeout(), runner).await
+}
+
+async fn run_program_with_timeout_and_connection<'a>(
+    target: &'a ComputeTarget,
+    program: &[&str],
+    timeout: Duration,
+    runner: &Runner,
+) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
     if target_is_this_host(target) {
         let output = runner(CommandSpec {
             argv: program.iter().map(|word| word.to_string()).collect(),
             stdin: None,
-            timeout: Some(remote_timeout()),
+            timeout: Some(timeout),
         })
         .await
         .map_err(DeployError)?;
@@ -381,7 +404,7 @@ pub async fn run_program_with_connection<'a>(
     let output = runner(CommandSpec {
         argv,
         stdin: None,
-        timeout: Some(remote_timeout()),
+        timeout: Some(timeout),
     })
     .await
     .map_err(DeployError)?;

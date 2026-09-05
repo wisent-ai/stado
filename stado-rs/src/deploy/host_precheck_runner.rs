@@ -151,6 +151,7 @@ fn linux_installer(
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
+    restart_registered: bool,
     profile: RunnerProfile,
 ) -> String {
     let runner_name = format!("{}-{}", profile.slug, target.name);
@@ -163,6 +164,10 @@ fn linux_installer(
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
             ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
             ("__RUNNER_LABELS__", profile.labels.to_string()),
+            (
+                "__RESTART_REGISTERED__",
+                u8::from(restart_registered).to_string(),
+            ),
             (
                 "__ORGANIZATION_URL__",
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
@@ -184,6 +189,7 @@ fn macos_installer(
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
+    restart_registered: bool,
     profile: RunnerProfile,
 ) -> String {
     let runner_name = format!("{}-{}", profile.slug, target.name);
@@ -196,6 +202,10 @@ fn macos_installer(
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
             ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
             ("__RUNNER_LABELS__", profile.labels.to_string()),
+            (
+                "__RESTART_REGISTERED__",
+                u8::from(restart_registered).to_string(),
+            ),
             (
                 "__ORGANIZATION_URL__",
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
@@ -282,7 +292,7 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
     Ok(expanded)
 }
 
-async fn github_credential() -> Result<String, DeployError> {
+pub(crate) async fn github_credential() -> Result<String, DeployError> {
     admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
 }
 
@@ -1362,6 +1372,35 @@ async fn github_json(
     })
 }
 
+async fn github_runner_is_online(runner_name: &str) -> Result<bool, DeployError> {
+    let credential = github_credential().await?;
+    let endpoint =
+        format!("https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runners?per_page=100");
+    let document = github_json(reqwest::Method::GET, &endpoint, &credential, None).await?;
+    let runners = document
+        .get("runners")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("GitHub runner response has no runners array".to_string()))?;
+    let runner = runners
+        .iter()
+        .find(|runner| runner.get("name").and_then(Value::as_str) == Some(runner_name))
+        .ok_or_else(|| {
+            DeployError(format!(
+                "GitHub has no registered runner named {runner_name}; refusing to cycle a locally registered runner"
+            ))
+        })?;
+    match runner.get("status").and_then(Value::as_str) {
+        Some("online") => Ok(true),
+        Some("offline") => Ok(false),
+        Some(status) => Err(DeployError(format!(
+            "GitHub runner {runner_name} has unknown status {status:?}"
+        ))),
+        None => Err(DeployError(format!(
+            "GitHub runner {runner_name} has no status"
+        ))),
+    }
+}
+
 fn repository_name(repository: &str) -> Result<&str, DeployError> {
     let repository = repository.trim();
     if repository.is_empty()
@@ -1751,9 +1790,27 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
     } else {
         github_runner_token("registration").await?
     };
+    let runner_name = format!("{}-{}", profile.slug, target.name);
+    let restart_registered = already_registered
+        && profile.kind == PUBLISHER.kind
+        && !github_runner_is_online(&runner_name).await?;
     let script = match platform {
-        Platform::LinuxAmd64 => linux_installer(&target, &token, &brama_url, brama_port, profile),
-        Platform::DarwinArm64 => macos_installer(&target, &token, &brama_url, brama_port, profile),
+        Platform::LinuxAmd64 => linux_installer(
+            &target,
+            &token,
+            &brama_url,
+            brama_port,
+            restart_registered,
+            profile,
+        ),
+        Platform::DarwinArm64 => macos_installer(
+            &target,
+            &token,
+            &brama_url,
+            brama_port,
+            restart_registered,
+            profile,
+        ),
     };
     let output = host_channel::run_script_with_timeout(
         &target,
@@ -1922,12 +1979,15 @@ version=__VERSION__
 expected=__SHA256__
 token=__TOKEN__
 runner_name=__RUNNER_NAME__
+restart_registered=__RESTART_REGISTERED__
 runner_group=__RUNNER_GROUP__
 runner_user=stado-precheck
 runner_root=/opt/wisent/stado-precheck-runner
-archive=$(mktemp)
-token_file=$(mktemp)
-cleanup() { root rm -f "$archive" "$token_file"; }
+mkdir -p "$HOME/.stado/work"
+staging=$(mktemp -d "$HOME/.stado/work/runner-install.XXXXXX")
+archive=$(mktemp "$staging/archive.XXXXXX")
+token_file=$(mktemp "$staging/token.XXXXXX")
+cleanup() { root rm -f "$archive" "$token_file"; root rm -rf "$staging"; }
 trap cleanup EXIT HUP INT TERM
 
 if ! getent group "$runner_user" >/dev/null; then root /usr/sbin/groupadd --system "$runner_user"; fi
@@ -1986,7 +2046,7 @@ root chmod 555 "$runner_root/routes"
 root chmod 444 "$runner_root/routes/brama.url"
 root chmod 444 "$runner_root/routes/kronika-agent-id"
 
-hook=$(mktemp)
+hook=$(mktemp "$staging/hook.XXXXXX")
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
@@ -1995,7 +2055,7 @@ HOOK
 root install -o root -g root -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
 
-rules=$(mktemp)
+rules=$(mktemp "$staging/rules.XXXXXX")
 cat > "$rules" <<RULES
 table inet stado_precheck {
   chain output {
@@ -2019,7 +2079,7 @@ fi
 root systemctl enable nftables.service >/dev/null
 rm -f "$rules"
 
-unit=$(mktemp)
+unit=$(mktemp "$staging/unit.XXXXXX")
 cat > "$unit" <<UNIT
 [Unit]
 Description=Wisent isolated GitHub pre-check runner
@@ -2062,7 +2122,9 @@ root install -o root -g root -m 0644 "$unit" /etc/systemd/system/wisent-stado-pr
 rm -f "$unit"
 root systemctl daemon-reload
 if root systemctl is-active --quiet wisent-stado-precheck-runner.service; then
-  if [ "$service_changed" -eq 1 ]; then root systemctl restart wisent-stado-precheck-runner.service; fi
+  if [ "$service_changed" -eq 1 ] || [ "$restart_registered" -eq 1 ]; then
+    root systemctl restart wisent-stado-precheck-runner.service
+  fi
 else
   root systemctl enable --now wisent-stado-precheck-runner.service >/dev/null
 fi
@@ -2078,11 +2140,14 @@ expected=__SHA256__
 token=__TOKEN__
 runner_name=__RUNNER_NAME__
 runner_group=__RUNNER_GROUP__
+restart_registered=__RESTART_REGISTERED__
 runner_user=stado-precheck
 runner_root=/Users/Shared/stado-precheck-runner
-archive=$(mktemp)
-token_file=$(mktemp)
-cleanup() { root rm -f "$archive" "$token_file"; }
+mkdir -p "$HOME/.stado/work"
+staging=$(mktemp -d "$HOME/.stado/work/runner-install.XXXXXX")
+archive=$(mktemp "$staging/archive.XXXXXX")
+token_file=$(mktemp "$staging/token.XXXXXX")
+cleanup() { root rm -f "$archive" "$token_file"; root rm -rf "$staging"; }
 trap cleanup EXIT HUP INT TERM
 
 if ! dscl . -read /Groups/$runner_user >/dev/null 2>&1; then
@@ -2164,7 +2229,7 @@ root chmod 555 "$runner_root/routes"
 root chmod 444 "$runner_root/routes/brama.url"
 root chmod 444 "$runner_root/routes/kronika-agent-id"
 
-hook=$(mktemp)
+hook=$(mktemp "$staging/hook.XXXXXX")
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
@@ -2173,7 +2238,7 @@ HOOK
 root install -o root -g wheel -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
 
-anchor=$(mktemp)
+anchor=$(mktemp "$staging/anchor.XXXXXX")
 cat > "$anchor" <<RULES
 pass out quick proto tcp from any to 127.0.0.1 port __BRAMA_PORT__ user $runner_user
 block return out quick proto { tcp udp } from any to { __BLOCKED_NETWORKS__ } user $runner_user
@@ -2186,7 +2251,7 @@ rm -f "$anchor"
 service_changed=0
 if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
 
-launcher=$(mktemp)
+launcher=$(mktemp "$staging/launcher.XXXXXX")
 cat > "$launcher" <<LAUNCHER
 #!/bin/sh
 set -eu
@@ -2200,7 +2265,7 @@ fi
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"
 
-plist=$(mktemp)
+plist=$(mktemp "$staging/plist.XXXXXX")
 cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -2223,11 +2288,12 @@ root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent
 rm -f "$plist"
 if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
   if [ "$service_changed" -eq 1 ] ||
+     [ "$restart_registered" -eq 1 ] ||
      ! root launchctl print system/com.wisent.stado-precheck-runner |
        grep -F 'state = running' >/dev/null; then
-    # KeepAlive jobs can stop after repeated upstream failures while remaining
-    # loaded. Reconciliation must recover that state without requiring a
-    # separate manual service cycle.
+    # GitHub, rather than launchd's outer RunnerService process, is the
+    # authoritative listener health signal. Only a registered publisher that
+    # GitHub reported offline reaches this branch.
     root launchctl kickstart -k system/com.wisent.stado-precheck-runner
   fi
 else

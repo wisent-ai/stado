@@ -69,6 +69,9 @@ pub enum ReleaseCommands {
     /// Install a delivered release archive's binary on this very host.
     #[command(name = "install-local")]
     InstallLocal(ReleaseInstallLocalArgs),
+    /// Reconcile live readers of an already-installed native binary.
+    #[command(name = "converge-local-readers", hide = true)]
+    ConvergeLocalReaders(ReleaseConvergeLocalReadersArgs),
     /// Bind one immutable coordinate to exactly one source revision before
     /// anything is published into it.
     #[command(name = "claim-coordinate")]
@@ -117,6 +120,12 @@ pub struct ReleaseInstallLocalArgs {
     /// Installed name under $HOME/.stado/bin; defaults to the member's
     /// basename.
     #[arg(long, default_value = "")]
+    name: String,
+}
+
+#[derive(Args)]
+pub struct ReleaseConvergeLocalReadersArgs {
+    #[arg(long, default_value = "stado")]
     name: String,
 }
 
@@ -1359,6 +1368,93 @@ async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Install the same verified Stado archive into every registry-declared
+/// service-local Stado reader on this host.
+///
+/// `install-local` historically replaced only `$HOME/.stado/bin/stado`.
+/// Services such as the mini's coordinator execute an independently installed
+/// `.../.stado/services/<service>/current/darwin-arm/stado`, so the native
+/// delivery could report success while that long-running reader kept parsing
+/// the registry with an older schema. Invoke the existing `service update`
+/// operation with this delivery's exact archive rather than duplicating its
+/// checked install, relink, declared lifecycle, and kernel-image verification.
+async fn converge_service_local_stado_readers(archive: &str) -> Result<(), CmdError> {
+    let registry = super::registry::read_registry().await?;
+    let hostname = crate::providers::vast::system_hostname();
+    let target = registry
+        .lookup_self(&hostname)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release install-local: no registry target names this machine ({hostname})"
+            ))
+        })?;
+    let mut readers: Vec<String> = crate::deploy::service::declared_services(target)
+        .into_iter()
+        .filter(|service| service.source == crate::deploy::service::SOURCE_REGISTRY)
+        .filter(|service| {
+            service.program.contains("/.stado/services/") && service.program.ends_with("/stado")
+        })
+        .map(|service| service.name)
+        .collect();
+    readers.sort();
+    for pair in readers.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(CmdError::click(format!(
+                "release install-local: registry target {} declares service-local Stado reader {} more than once",
+                target.name, pair[0]
+            )));
+        }
+    }
+    let executable = std::env::current_exe().map_err(|error| {
+        CmdError::click(format!(
+            "release install-local: cannot resolve the candidate Stado executable: {error}"
+        ))
+    })?;
+    for reader in readers {
+        println!(
+            "release install-local: converging service-local Stado reader {} on {}",
+            reader, target.name
+        );
+        let output = tokio::process::Command::new(&executable)
+            .args([
+                "service",
+                "update",
+                &reader,
+                "--host",
+                &target.name,
+                "--from-archive",
+                archive,
+                "--refresh-image",
+                "--json",
+            ])
+            .output()
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "release install-local: cannot start service-local reader convergence for {reader}: {error}"
+                ))
+            })?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        if !output.status.success() {
+            let detail = stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .or_else(|| stdout.lines().rev().find(|line| !line.trim().is_empty()))
+                .unwrap_or("service update returned no detail");
+            return Err(CmdError::click(format!(
+                "release install-local: service-local Stado reader {reader} on {} did not converge: {detail}",
+                target.name
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Verify the delivered archive against the delivery contract's digest,
 /// extract one member, and install it under `$HOME/.stado/bin` by rename —
 /// Linux refuses to write into a running executable (ETXTBSY) but allows
@@ -1545,14 +1641,32 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         std::slice::from_ref(&name),
         &mut recycle_log,
     )
-    .await;
+    .await
+    .map_err(CmdError::click)?;
+    if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
+        converge_service_local_stado_readers(&archive).await?;
+    }
     println!(
         "installed {} from the delivered release archive",
         destination.display()
     );
     Ok(())
 }
-/// Claim one coordinate from the command line and report what was found.
+/// Reconcile every live reader of one already-installed native binary.
+async fn converge_local_readers(args: &ReleaseConvergeLocalReadersArgs) -> Result<(), CmdError> {
+    let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
+    let mut log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release converge-local-readers",
+        &directory,
+        std::slice::from_ref(&args.name),
+        &mut log,
+    )
+    .await
+    .map_err(CmdError::click)
+}
+
+/// Claim an immutable release coordinate before publication.
 async fn claim_coordinate(args: &ReleaseClaimCoordinateArgs) -> Result<(), CmdError> {
     let outcome = claim_release_coordinate(
         &args.product,
@@ -1613,6 +1727,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
+        ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
     }
 }

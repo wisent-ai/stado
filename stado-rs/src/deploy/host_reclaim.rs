@@ -186,9 +186,10 @@ const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
 const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
 const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
-/// Queue workdirs historically lived in `/tmp`; current macOS agents may use
-/// the per-user temporary container. Both roots carry the same proof policy.
-pub const DEFAULT_WORK_ROOTS: &str = "/tmp \"${TMPDIR:-}\"";
+/// Current agents retain queue workdirs under `$HOME/.stado/work/jobs`; older
+/// agents used `/tmp` or the per-user temporary container. All three roots
+/// carry the same queue-authority and process-liveness proof policy.
+pub const DEFAULT_WORK_ROOTS: &str = "\"$HOME/.stado/work/jobs\" /tmp \"${TMPDIR:-}\"";
 const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
 const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
 const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";
@@ -355,7 +356,7 @@ else
   # Queue workdirs are policy-owned by this pass. Its exclusive janitor lock
   # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
-    plan=$("$wc_bin" disk-cleanup --once)
+    plan=$("$wc_bin" disk-cleanup --once --to-target)
   else
     plan=$("$wc_bin" disk-cleanup --once --dry-run)
   fi
@@ -551,6 +552,24 @@ for entry in "$HOME/.cargo/git/checkouts"/*; do
   fi
   reclaim "$entry" rebuildable_caches
 done
+# The old platform-matrix runner kept Cargo output outside its queue workdir.
+# Its exact product-owned cache is disposable; arbitrary untagged directories
+# are not. Keep active, young, linked, or unrecognizable trees.
+entry="$HOME/.stado/work/platform-matrix-cargo-target"
+if [ -d "$entry" ] && [ ! -L "$HOME/.stado" ] &&
+   [ ! -L "$HOME/.stado/work" ] && [ ! -L "$entry" ]; then
+  if [ ! -f "$entry/.rustc_info.json" ] ||
+     { [ ! -f "$entry/debug/.cargo-lock" ] && [ ! -f "$entry/release/.cargo-lock" ]; }; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache has no Cargo identity'
+  elif ! stale_minutes "$entry"; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is too young'
+  elif ! process_absent "$entry"; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is held or process ownership is unavailable'
+  elif [ "$apply" != 1 ] || [ "$target_free_kb" -le 0 ] ||
+       [ "$(free_kb)" -lt "$target_free_kb" ]; then
+    reclaim "$entry" rebuildable_caches
+  fi
+fi
 printf 'STADO_RECLAIM_STAGE\trebuildable_caches\t%s\t%s\n' "$before" "$(free_kb)"
 before=$(free_kb)
 
@@ -659,24 +678,38 @@ fn superseded_words() -> String {
         .join(" ")
 }
 
-/// The remote program for one mode, with every substitution in place.
+/// The remote-target program for one mode, with every substitution in place.
 ///
-/// The Stado candidates are quoted exactly the way
-/// [`crate::deploy::host_recovery::remote_script`] quotes them, so `$HOME`
-/// still expands on the remote side while the word stays one word. When the
-/// queue authority is readable it supplies the keep-list; otherwise each
-/// workdir must earn deletion from the two-pass local proof.
+/// Installed authoritative Stado candidates are quoted so `$HOME` expands on
+/// the target while each value stays one word. When the queue authority is
+/// readable it supplies the keep-list; otherwise each workdir must earn
+/// deletion from the two-pass local proof.
 pub fn remote_script(
     apply: bool,
     live_jobs: Option<&[String]>,
     work_roots: &str,
     target_free_gb: Option<i64>,
 ) -> String {
-    let wc_words = WC_CANDIDATES
-        .iter()
-        .map(|value| format!("\"{value}\""))
-        .collect::<Vec<String>>()
-        .join(" ");
+    remote_script_with_stado(apply, live_jobs, work_roots, target_free_gb, None)
+}
+
+fn remote_script_with_stado(
+    apply: bool,
+    live_jobs: Option<&[String]>,
+    work_roots: &str,
+    target_free_gb: Option<i64>,
+    current_stado: Option<&str>,
+) -> String {
+    let wc_words = current_stado.map_or_else(
+        || {
+            WC_CANDIDATES
+                .iter()
+                .map(|value| format!("\"{value}\""))
+                .collect::<Vec<String>>()
+                .join(" ")
+        },
+        shlex_quote,
+    );
     let live_words = live_jobs
         .unwrap_or_default()
         .iter()
@@ -1087,18 +1120,33 @@ pub async fn reclaim_host(
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.target_free_gb);
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &remote_script(
+    let script = if host_channel::target_is_this_host(&target) {
+        // A local reclaim must use the binary that owns this invocation.
+        // Release capacity builds the corrected tree before installation;
+        // selecting the older installed janitor would make that correction
+        // unreachable.
+        let current_stado = std::env::current_exe()
+            .map_err(|error| DeployError(format!("cannot identify current Stado: {error}")))?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| DeployError("current Stado path is not valid UTF-8".to_string()))?;
+        remote_script_with_stado(
             apply,
             live_jobs.as_deref(),
             DEFAULT_WORK_ROOTS,
             target_free_gb,
-        ),
-        RECLAIM_TIMEOUT,
-        runner,
-    )
-    .await?;
+            Some(&current_stado),
+        )
+    } else {
+        remote_script(
+            apply,
+            live_jobs.as_deref(),
+            DEFAULT_WORK_ROOTS,
+            target_free_gb,
+        )
+    };
+    let output =
+        host_channel::run_script_with_timeout(&target, &script, RECLAIM_TIMEOUT, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,

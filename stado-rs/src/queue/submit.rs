@@ -656,7 +656,7 @@ pub(crate) async fn migrate_v2_run_manifest(
         let versioned = store
             .read_text_versioned(&path)
             .await?
-            .ok_or_else(|| SubmitError::Validation(format!("run manifest {run_id} disappeared")))?;
+            .ok_or_else(|| StorageError::NotFound(path.clone()))?;
         let mut manifest: Value = serde_json::from_str(&versioned.content)
             .map_err(|error| SubmitError::Validation(format!("invalid run manifest: {error}")))?;
         let schema = manifest.get("schema").and_then(Value::as_str);

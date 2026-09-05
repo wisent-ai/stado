@@ -8,12 +8,15 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
-const test = 'coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry';
+const tests = [
+  'coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry',
+  'coordinator_preserves_settled_history_and_refuses_missing_unretired_history',
+];
 let stdout;
 let stderr;
 try {
   ({ stdout, stderr } = await exec('cargo', [
-    'test', '--test', 'run_history', test,
+    'test', '--test', 'run_history',
     '--', '--ignored', '--nocapture', '--test-threads=1',
   ], {
     cwd: crate,
@@ -27,8 +30,8 @@ try {
   throw new Error(`run-retention journey failed with exit code ${error.code ?? 'unknown'}`);
 }
 assert.equal(stderr.includes('FAILED'), false, stderr);
-assert.match(stdout, new RegExp(`${test} \\.\\.\\.`));
-assert.ok(stdout.includes('test result: ok. 1 passed; 0 failed'));
+for (const test of tests) assert.match(stdout, new RegExp(`${test} \\.\\.\\.`));
+assert.ok(stdout.includes(`test result: ok. ${tests.length} passed; 0 failed`));
 process.stdout.write(stdout);
 
 const artifacts = process.env.PROBIERZ_ARTIFACTS;
@@ -52,11 +55,13 @@ await writeFile(tracePath, `${JSON.stringify({
     revision: revision.trim(),
     dirty: status.trim().length > 0,
   },
-  test,
+  tests,
   productionMutations: 'none: the product binary used an isolated local Stado store',
   contracts: [
     'the coordinator retains the exact legacy terminal job named by its manifest entry',
     'the lifecycle blob is reaped only after its outcome is retained',
+    'settled cancellation history is not reopened after its run manifest is removed',
+    'an unretired transition still refuses a missing run manifest',
   ],
   redaction: {
     status: 'verified_redacted',

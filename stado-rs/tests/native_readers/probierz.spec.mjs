@@ -7,13 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
-const tests = [
-  'host_gates_use_live_resources_and_never_fixed_slots',
-  'registry_policy_rewrite_removes_legacy_fixed_capacity_declarations',
-  'live_resources_admit_two_jobs_despite_legacy_single_worker_limits',
-];
+const tests = ['convergence_reloads_a_cached_private_stado_definition_once'];
 const args = [
-  'test', '--locked', '--test', 'host_dynamic_capacity', '--test', 'capacity',
+  'test', '--locked', '--test', 'native_readers',
   '--', '--ignored', '--nocapture', '--test-threads=1',
 ];
 
@@ -33,6 +29,11 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+assert.equal(
+  process.platform,
+  'darwin',
+  'native-readers requires the dedicated macOS host selected by Stado',
+);
 const artifacts = process.env.PROBIERZ_ARTIFACTS;
 const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;
 assert.ok(artifacts, 'PROBIERZ_ARTIFACTS is required');
@@ -46,16 +47,16 @@ const result = await run('cargo', args, {
     CARGO_INCREMENTAL: '0',
   },
   encoding: 'utf8',
-  timeout: 10 * 60 * 1000,
+  timeout: 15 * 60 * 1000,
   maxBuffer: 8 * 1024 * 1024,
 });
 const exitCode = result.error
   ? (Number.isInteger(result.error.code) ? result.error.code : null)
   : 0;
 const signal = result.error?.signal || null;
-const stdoutPath = join(artifacts, 'stado-host-dynamic-capacity.stdout.log');
-const stderrPath = join(artifacts, 'stado-host-dynamic-capacity.stderr.log');
-const tracePath = join(artifacts, 'stado-host-dynamic-capacity.trace.json');
+const stdoutPath = join(artifacts, 'stado-native-readers.stdout.log');
+const stderrPath = join(artifacts, 'stado-native-readers.stderr.log');
+const tracePath = join(artifacts, 'stado-native-readers.trace.json');
 await mkdir(artifacts, { recursive: true });
 await Promise.all([
   writeFile(stdoutPath, result.stdout, { mode: 0o600 }),
@@ -71,7 +72,7 @@ assert.equal(statusResult.error, null, statusResult.stderr);
 await writeFile(tracePath, `${JSON.stringify({
   schemaVersion: 1,
   kind: 'probierz-stado-cli-trace',
-  journey: 'host-dynamic-capacity',
+  journey: 'native-readers',
   runId: process.env.PROBIERZ_RUN_ID || null,
   status: exitCode === 0 ? 'completed' : 'failed',
   source: {
@@ -86,17 +87,24 @@ await writeFile(tracePath, `${JSON.stringify({
     exitCode,
     signal,
     killed: Boolean(result.error?.killed),
-    stdout: { file: stdoutPath, bytes: Buffer.byteLength(result.stdout), sha256: sha256(result.stdout) },
-    stderr: { file: stderrPath, bytes: Buffer.byteLength(result.stderr), sha256: sha256(result.stderr) },
+    stdout: {
+      file: stdoutPath,
+      bytes: Buffer.byteLength(result.stdout),
+      sha256: sha256(result.stdout),
+    },
+    stderr: {
+      file: stderrPath,
+      bytes: Buffer.byteLength(result.stderr),
+      sha256: sha256(result.stderr),
+    },
   },
   tests,
-  productionMutations: 'none: every story uses an isolated local Stado store and the worker runs only its submitted workloads',
+  productionMutations: 'one collision-resistant Probierz LaunchAgent in the selected macOS login domain; isolated HOME, storage, registry, port, logs, and binaries; removed through Stado service bootout and guarded host remove-file lifecycle commands',
   contracts: [
-    'host gates reports live CPU, RAM, VRAM, accelerator, and running-job capacity',
-    'the public JSON and human output contain no fixed slot count',
-    'a paused host is refused with its exact blocker sentence',
-    'a registry policy write removes retired fixed worker-cap declarations',
-    'a real worker runs both submitted workloads concurrently despite legacy caps of one and persists both completed job records',
+    'a real launchd unit can keep executing a private Stado file after its on-disk plist changes to the delivered root',
+    'release converge-local-readers reloads that changed definition through the exact launchd domain observed to own it',
+    'the public service label-print readback proves the replacement device, inode, executable path, and SHA-256 equal the delivered root file before convergence succeeds',
+    'repeating convergence leaves an already-correct process running under the same pid',
   ],
   redaction: {
     status: 'verified_redacted',
@@ -113,7 +121,11 @@ await writeFile(
 
 process.stdout.write(result.stdout);
 process.stderr.write(result.stderr);
-assert.equal(result.error, null, `host-dynamic-capacity journey failed with exit ${exitCode ?? 'unknown'}${signal ? ` (${signal})` : ''}`);
+assert.equal(
+  result.error,
+  null,
+  `native-readers journey failed with exit ${exitCode ?? 'unknown'}${signal ? ` (${signal})` : ''}`,
+);
 for (const test of tests) {
   assert.match(result.stdout, new RegExp(`test ${escapeRegExp(test)} \\.\\.\\. ok`));
 }

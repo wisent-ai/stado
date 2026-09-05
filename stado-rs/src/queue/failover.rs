@@ -1,10 +1,11 @@
-//! Single-writer storage with automatic read failover.
+//! Single-writer storage with configurable read authority.
 //!
 //! Mutations commit to the configured primary, then mirror to the read-only
 //! disaster-recovery backend. Replica errors are reported without turning an
-//! already-committed primary mutation into a false failure. A failed primary
-//! read may use the backup; a successful `absent` answer remains authoritative.
-//! The backup is never promoted to writer, preventing split brain.
+//! already-committed primary mutation into a false failure. Normal clients may
+//! use the backup after a failed primary read; authority-sensitive users retain
+//! the same write mirror but return the primary error. A successful `absent`
+//! answer is always authoritative. The backup is never promoted to writer.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,15 +15,29 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use super::{BlobBackend, BlobInfo, StorageError, VersionedText};
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReadMode {
+    Failover,
+    PrimaryOnly,
+}
 
 pub struct ReadFailoverBackend {
     primary: Arc<dyn BlobBackend>,
     backup: Arc<dyn BlobBackend>,
+    read_mode: ReadMode,
 }
 
 impl ReadFailoverBackend {
-    pub fn new(primary: Arc<dyn BlobBackend>, backup: Arc<dyn BlobBackend>) -> Self {
-        Self { primary, backup }
+    pub fn new(
+        primary: Arc<dyn BlobBackend>,
+        backup: Arc<dyn BlobBackend>,
+        read_mode: ReadMode,
+    ) -> Self {
+        Self {
+            primary,
+            backup,
+            read_mode,
+        }
     }
 
     fn report_replica_error(operation: &str, path: &str, error: &StorageError) {
@@ -67,6 +82,7 @@ impl BlobBackend for ReadFailoverBackend {
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
         match self.primary.download_text(path).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_text(path).await,
         }
     }
@@ -74,6 +90,7 @@ impl BlobBackend for ReadFailoverBackend {
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_bytes(path).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_bytes(path).await,
         }
     }
@@ -81,6 +98,7 @@ impl BlobBackend for ReadFailoverBackend {
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_release(uri).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_release(uri).await,
         }
     }
@@ -88,6 +106,7 @@ impl BlobBackend for ReadFailoverBackend {
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         match self.primary.download_to_filename(path, dest).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_to_filename(path, dest).await,
         }
     }
@@ -130,6 +149,7 @@ impl BlobBackend for ReadFailoverBackend {
     ) -> Result<Option<VersionedText>, StorageError> {
         match self.primary.download_text_versioned(path).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_text_versioned(path).await,
         }
     }
@@ -162,6 +182,7 @@ impl BlobBackend for ReadFailoverBackend {
         let exact = |blobs: Vec<BlobInfo>| blobs.into_iter().any(|blob| blob.name == path);
         match self.primary.list_blobs_with_meta(path).await {
             Ok(blobs) => Ok(exact(blobs)),
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_blobs_with_meta(path).await.map(exact),
         }
     }
@@ -173,6 +194,7 @@ impl BlobBackend for ReadFailoverBackend {
     ) -> Result<Vec<String>, StorageError> {
         match self.primary.list_paths(prefix, oldest_first).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_paths(prefix, oldest_first).await,
         }
     }
@@ -180,11 +202,9 @@ impl BlobBackend for ReadFailoverBackend {
     /// Delegated rather than inherited, because inheriting the trait default
     /// would erase the delegation: the default reaches for `list_paths` on
     /// THIS backend, so a primary with a server-side paged listing would have
-    /// its page request degraded into a whole-prefix fetch plus a local cut,
-    /// purely because the read was routed through failover. Forwarding keeps
-    /// whatever paging the primary (or backup) natively has, and the failover
-    /// rule is the read rule used everywhere else here: a primary error may
-    /// consult the backup, a successful answer is authoritative.
+    /// its page request degraded into a whole-prefix fetch plus a local cut.
+    /// Forwarding keeps native paging and applies the selected read-authority
+    /// rule to the primary result.
     async fn list_page(
         &self,
         prefix: &str,
@@ -193,6 +213,7 @@ impl BlobBackend for ReadFailoverBackend {
     ) -> Result<Vec<String>, StorageError> {
         match self.primary.list_page(prefix, start_after, limit).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_page(prefix, start_after, limit).await,
         }
     }
@@ -206,6 +227,7 @@ impl BlobBackend for ReadFailoverBackend {
         };
         match self.primary.list_blobs_with_meta(path).await {
             Ok(blobs) => Ok(exact(blobs)),
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_blobs_with_meta(path).await.map(exact),
         }
     }
@@ -225,6 +247,7 @@ impl BlobBackend for ReadFailoverBackend {
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
         match self.primary.list_blobs_with_meta(prefix).await {
             answer @ Ok(_) => answer,
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_blobs_with_meta(prefix).await,
         }
     }
