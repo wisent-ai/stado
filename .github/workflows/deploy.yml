@@ -810,6 +810,7 @@ jobs:
             --version "$STADO_NATIVE_RELEASE_VERSION" \
             --json
           "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
+
       - name: Reconcile public release ingress
         run: |
           "$HOME/.stado/bin/stado" host recover-object-api \
