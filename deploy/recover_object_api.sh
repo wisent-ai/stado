@@ -1122,10 +1122,10 @@ copy_store() {
   # A prior interrupted run may resume after its last clean prefix. Finish that
   # suffix, then run once more from the exhausted cursor so writes accepted by
   # a restored source before this fence cannot hide in an earlier prefix.
-  "$copy_program" storage copy --source-offline \
+  "$copy_program" storage copy --source-offline --concurrency 1 \
     --from local --from-path "$from_root" \
     --to local --to-path "$to_root" > "$output" 2>&1 &&
-    "$copy_program" storage copy --source-offline \
+    "$copy_program" storage copy --source-offline --concurrency 1 \
       --from local --from-path "$from_root" \
       --to local --to-path "$to_root" >> "$output" 2>&1
 }
