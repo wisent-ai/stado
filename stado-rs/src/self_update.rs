@@ -519,9 +519,9 @@ pub(crate) fn stage_for_attestation(
 /// which the job does not exist. The unload-and-bootstrap sequence took the
 /// always-on host down once already and is deliberately not reached from here.
 ///
-/// Best effort by construction. The binaries are installed and fsynced before
-/// this runs, so a unit that cannot be restarted must not fail the update that
-/// already succeeded; it is named in the log and left holding the old image.
+/// A failed reader refresh fails delivery even though the binary has already
+/// been installed. Retrying delivery must finish the runtime half rather than
+/// reporting success merely because the installed pathname is current.
 ///
 /// The queue agent is deliberately left alone. `cli::release_cmd::install_local`
 /// writes `~/.stado/bin/stado.release-version`, and
@@ -719,6 +719,36 @@ async fn recycle_launchd(
     Ok(restarted)
 }
 
+async fn systemctl_stdout(user: bool, args: &[&str]) -> Result<String, String> {
+    let mut command = tokio::process::Command::new("systemctl");
+    if user {
+        // A system-scoped queue worker does not inherit a login's user-bus
+        // environment. Address the same owner and runtime as service verbs.
+        // SAFETY: geteuid has no arguments or memory preconditions.
+        let uid = unsafe { nix::libc::geteuid() };
+        let runtime = format!("/run/user/{uid}");
+        command.arg("--user").env("XDG_RUNTIME_DIR", &runtime).env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={runtime}/bus"),
+        );
+    }
+    let output = command
+        .args(args)
+        .output()
+        .await
+        .map_err(|error| format!("cannot execute systemctl: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "systemctl {} exited {}: {}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("systemctl returned invalid UTF-8: {error}"))
+}
+
 async fn recycle_systemd(
     context: &str,
     paths: &[String],
@@ -727,37 +757,31 @@ async fn recycle_systemd(
 ) -> Result<usize, String> {
     let mut restarted = 0usize;
     for user in [false, true] {
-        let mut list_args = Vec::new();
-        if user {
-            list_args.push("--user");
-        }
-        list_args.extend([
-            "list-units",
-            "--type=service",
-            "--state=running",
-            "--no-legend",
-            "--plain",
-        ]);
-        let listing = command_stdout("systemctl", &list_args)
-            .await
-            .ok_or_else(|| {
-                format!(
-                    "{context}: {} systemd manager did not enumerate running services",
-                    if user { "user" } else { "system" }
-                )
-            })?;
+        let listing = systemctl_stdout(
+            user,
+            &[
+                "list-units",
+                "--type=service",
+                "--state=running",
+                "--no-legend",
+                "--plain",
+            ],
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "{context}: {} systemd manager did not enumerate running services: {error}",
+                if user { "user" } else { "system" }
+            )
+        })?;
         for line in listing.lines() {
             let Some(unit) = line.split_whitespace().next() else {
                 continue;
             };
-            let mut show_args = Vec::new();
-            if user {
-                show_args.push("--user");
-            }
-            show_args.extend(["show", "-p", "MainPID", "--value", unit]);
-            let main_pid = command_stdout("systemctl", &show_args)
+            let show_args = ["show", "-p", "MainPID", "--value", unit];
+            let main_pid = systemctl_stdout(user, &show_args)
                 .await
-                .ok_or_else(|| format!("{context}: {unit} did not report MainPID"))?
+                .map_err(|error| format!("{context}: {unit} did not report MainPID: {error}"))?
                 .trim()
                 .parse::<u32>()
                 .map_err(|error| format!("{context}: {unit} reported invalid MainPID: {error}"))?;
@@ -802,21 +826,19 @@ async fn recycle_systemd(
                 ));
                 continue;
             }
-            let mut restart_args = Vec::new();
-            if user {
-                restart_args.push("--user");
-            }
-            restart_args.extend(["try-restart", unit]);
-            if command_stdout("systemctl", &restart_args).await.is_none() {
-                return Err(format!(
-                    "{context}: {unit} pid {main_pid} could not be restarted onto the installed inode"
-                ));
-            }
+            systemctl_stdout(user, &["try-restart", unit])
+                .await
+                .map_err(|error| {
+                    format!(
+                        "{context}: {unit} pid {main_pid} could not be restarted onto the installed inode: {error}"
+                    )
+                })?;
             let mut replacement = None;
             for _ in 0..60 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let Some(new_pid) = command_stdout("systemctl", &show_args)
+                let Some(new_pid) = systemctl_stdout(user, &show_args)
                     .await
+                    .ok()
                     .and_then(|value| value.trim().parse::<u32>().ok())
                     .filter(|pid| *pid != 0)
                 else {

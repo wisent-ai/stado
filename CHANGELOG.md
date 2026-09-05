@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.18
+
+- **Linux release readers:** a system-scoped queue worker now addresses its owner's user systemd manager with the same runtime directory and bus address as service operations. Release installation can refresh the running user resolver instead of failing to enumerate it after replacing the binary.
+- **Failure reporting:** failed systemd reader operations retain the command's exit status and stderr; delivery still fails unless each replaced reader maps the installed executable.
+- **Migration and rollback:** no stored data changes. Rolling back restores dependence on inherited login-session variables during Linux release delivery.
+- **Platforms:** the existing signed `darwin-arm64` and `linux-amd64` build and delivery paths remain unchanged.
+
 ## 0.16.17
 
 - **Complete native delivery:** `release install-local` updates every registry-declared service-local Stado executable from the same verified archive and requires its existing image-convergence check to succeed. Archive validation reads the unit's actual executable, preserving quoted paths and launchd `Program` precedence instead of parsing presentation text.
