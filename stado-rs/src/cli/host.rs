@@ -30,13 +30,13 @@ pub(crate) async fn beacon_store() -> Result<crate::queue::JobStorage, CmdError>
     let gcs_backend = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
         == Some(crate::capabilities::StorageAdapter::Gcs);
     if !gcs_backend {
-        return Ok(crate::queue::JobStorage::new().await?);
+        return Ok(crate::queue::JobStorage::for_primary_reads().await?);
     }
     let bucket = crate::targets::GCS_REGISTRY_URI
         .split_once("//")
         .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
         .unwrap_or_default();
-    Ok(crate::queue::JobStorage::with_bucket(bucket).await?)
+    Ok(crate::queue::JobStorage::with_bucket_primary_reads(bucket).await?)
 }
 
 /// `stado host health TARGET [--json]` — show the latest Stado health
@@ -57,6 +57,88 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     }
     Ok(())
 }
+/// Reconcile a collector's non-active systemd samples with the manager state
+/// that exists at publication time.
+///
+/// A timer-triggered oneshot publishes while systemd calls it `activating`.
+/// The shell collector historically reduced that to `inactive`, so the
+/// publisher's own fresh heartbeat made `registry doctor` report the publisher
+/// as down. Only a successful, local manager read can promote a state; an
+/// unread unit keeps the collector's explicit non-active verdict.
+async fn refresh_locally_active_units(document: &mut Value, runner: &crate::deploy::Runner) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let pending: Vec<(String, String)> = document
+        .get("units")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|units| units.iter())
+        .filter_map(|(unit, entry)| {
+            let state = match entry {
+                Value::String(state) => Some(state.as_str()),
+                Value::Object(fields) => fields.get("state").and_then(Value::as_str),
+                _ => None,
+            }?;
+            (state != "active").then(|| (unit.clone(), state.to_string()))
+        })
+        .collect();
+
+    for (unit, collector_state) in pending {
+        let mut spec = crate::deploy::CommandSpec::new(vec![
+            "/usr/bin/systemctl".to_string(),
+            "show".to_string(),
+            "--property=LoadState,ActiveState".to_string(),
+            "--".to_string(),
+            unit.clone(),
+        ]);
+        spec.timeout = Some(std::time::Duration::from_secs(2));
+        let Ok(output) = runner(spec).await else {
+            continue;
+        };
+        if !output.ok() {
+            continue;
+        }
+        let property = |name: &str| {
+            output.stdout.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key == name).then_some(value)
+            })
+        };
+        let Some(manager_state @ ("active" | "activating" | "reloading")) =
+            property("ActiveState")
+        else {
+            continue;
+        };
+        if property("LoadState") != Some("loaded") {
+            continue;
+        }
+
+        let Some(entry) = document
+            .get_mut("units")
+            .and_then(Value::as_object_mut)
+            .and_then(|units| units.get_mut(&unit))
+        else {
+            continue;
+        };
+        match entry {
+            Value::Object(fields) => {
+                fields.insert("state".to_string(), json!("active"));
+                fields.insert("collector_state".to_string(), json!(collector_state));
+                fields.insert("manager_state".to_string(), json!(manager_state));
+            }
+            Value::String(_) => {
+                *entry = json!({
+                    "state": "active",
+                    "collector_state": collector_state,
+                    "manager_state": manager_state,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
 /// `stado host publish-beacon FILE [--print]` — publish a locally collected
 /// health document through the dedicated, route-scoped Stado control API.
 ///
@@ -118,8 +200,9 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     }
 
     if beacon_is_this_host(&host) {
-        let link =
-            crate::deploy::host_link::collect_link(&crate::deploy::production_runner()).await;
+        let runner = crate::deploy::production_runner();
+        refresh_locally_active_units(&mut document, &runner).await;
+        let link = crate::deploy::host_link::collect_link(&runner).await;
         if let Some(object) = document.as_object_mut() {
             object.insert("link".to_string(), serde_json::to_value(&link)?);
         }

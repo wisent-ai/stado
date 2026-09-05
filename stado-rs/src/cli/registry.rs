@@ -1275,15 +1275,30 @@ async fn load_beacons(store: &JobStorage) -> Result<BTreeMap<String, Beacon>, Cm
     Ok(beacons)
 }
 
-/// The beacon a target resolves to, by the same slug rule
+/// The newest beacon a target resolves to, by the same slug rule
 /// `monitor::host_health::load_host_health` resolves forward.
+fn beacon_for_slugs<'a>(
+    slugs: &[String],
+    beacons: &'a BTreeMap<String, Beacon>,
+) -> Option<&'a Beacon> {
+    let mut selected: Option<&Beacon> = None;
+    for slug in slugs {
+        let Some(candidate) = beacons.get(slug) else {
+            continue;
+        };
+        if selected.is_none_or(|current| candidate.observed_at() > current.observed_at()) {
+            selected = Some(candidate);
+        }
+    }
+    selected
+}
+
 fn beacon_for<'a>(
     target: &ComputeTarget,
     beacons: &'a BTreeMap<String, Beacon>,
 ) -> Option<&'a Beacon> {
-    host_health::beacon_slugs(target, &target.name)
-        .into_iter()
-        .find_map(|slug| beacons.get(&slug))
+    let slugs = host_health::beacon_slugs(target, &target.name);
+    beacon_for_slugs(&slugs, beacons)
 }
 
 /// One service a registry target declares it manages.
@@ -2186,7 +2201,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         {
             findings.push(Finding::new(skew.kind(), &target.name, skew.sentence()));
         }
-        let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
+        let Some(beacon) = beacon_for_slugs(&slugs, &beacons) else {
             findings.push(Finding::new(
                 "no-heartbeat",
                 &target.name,
@@ -2572,8 +2587,14 @@ pub(crate) fn human_age(age: TimeDelta) -> String {
 /// reporting is exactly what this table exists to surface, and a row that
 /// is absent surfaces nothing.
 pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
-    let registry = read_registry().await?;
-    let store = JobStorage::new().await?;
+    let (document, _) = fetch_versioned_document().await?;
+    let registry = targets::load_registry_from_value(&document).map_err(|error| {
+        CmdError::click(format!(
+            "invalid registry document at {}: {error}",
+            targets::registry_location()
+        ))
+    })?;
+    let store = JobStorage::for_primary_reads().await?;
     let beacons = load_beacons(&store).await?;
     let now = Utc::now();
 

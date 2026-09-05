@@ -270,6 +270,14 @@ impl JobStorage {
     pub(crate) async fn for_primary_reads() -> Result<Self, StorageError> {
         Self::with_bucket_read_mode(config::bucket(), super::failover::ReadMode::PrimaryOnly).await
     }
+    /// Like [`JobStorage::for_primary_reads`] with an explicit bucket.
+    ///
+    /// Host-health readers keep the registry bucket's historical spelling on
+    /// GCS, but liveness observations still must not fall back to a
+    /// disaster-recovery copy and turn an unread primary into live state.
+    pub(crate) async fn with_bucket_primary_reads(bucket: &str) -> Result<Self, StorageError> {
+        Self::with_bucket_read_mode(bucket, super::failover::ReadMode::PrimaryOnly).await
+    }
 
     /// Build the authoritative backing store used by the Stado API server.
     ///
