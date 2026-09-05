@@ -53,6 +53,10 @@ For an independently managed instance outside a release policy's target map,
 `registry doctor` accepts pinned environment only when both the registry record
 and the local unit file contain the product's exact required values. A remote
 unit that was not read is not treated as agreeing.
+The report distinguishes a missing delivery declaration (`untargeted-product-host`)
+from a pinned service whose native environment was not read
+(`unread-service-environment`) or disagrees (`service-environment-drift`).
+An unrelated product naming the host does not satisfy this product's target map.
 
 Run `stado host exec <target> -- stado registry doctor` to measure those
 host-local facts through Stado. The fixed read-only command uses the target's
@@ -215,6 +219,12 @@ The JSON receipt names the target, unit, runner root, output, and
 A launchd unit's process goes on executing the image it started with. Replacing the file the unit declares does not move it, and nothing on this fleet revisited a unit that was missed: `self_update::recycle_replaced_units` cycles units only inside the invocation that replaced their bytes, matches `argv[0]` by string equality, skips its own pid, defers any unit whose argv carries `agent`, and logs a failed `kickstart` without ever coming back to it. `com.wisent.compute.disk-cleanup.disk-cleanup` recorded `policy:ValueError` 8,348 times across thirteen days from a `--watch` process alive since 27 August, executing an inode its declared path no longer held; an unrelated restart is what ended it. The condition is not rare and not static — the installed binary went 0.13.50 to 0.14.8 inside one day, and measured hours apart on 2026-09-03 the stale set on `lukasz-macbook` lost `com.wisent.compute.agent.lukasz-macbook` to an unrelated restart and gained `com.wisent.stado-resolver` to a new release.
 
 `registry doctor` reports it as `stale-unit-image` when the running and declared files are different inodes, and `unread-unit-image` when the question could not be asked. The identity is `(st_dev, st_ino)` and never a path, because a path is exactly what does not change; `links: 0` distinguishes an unlinked image, where no copy of the running build survives to be diffed, from a replaced one that still exists somewhere. Both readings are local-only: which file a pid executes is answerable only on the machine holding that pid, so every other host gets an explicit unmeasured row rather than a silent pass. A replacement younger than `IMAGE_SETTLE_SECONDS` (300) is an installer mid-flight and is not a finding.
+
+On macOS, `/bin/sh` is a dispatcher, not necessarily the executable that remains
+running. The image reader observes the shell selected by a short-lived privileged
+`/bin/sh` process and compares that executable's installed identity. It does not
+assume Bash, duplicate Apple's selection defaults, or report normal dispatch to
+another shell as a replaced binary; an unreadable selection stays unknown.
 
 `stado service refresh-image <label>` is the operator verb: it refuses a unit that is not stale and names the identity it found, restarts through `launchctl kickstart -k`, then **re-reads the identity**. That second read is the whole discipline. On 2026-09-03 pid 49727 respawned under `KeepAlive` straight back onto the same unlinked inode it had just left, because launchd re-execs the declared PATH and the path was never the problem, so a restart that did not change the image exits non-zero rather than reporting success.
 

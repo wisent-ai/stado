@@ -7,6 +7,8 @@
 - **Signing diagnostics:** approved host reads expose the Brama runner's apphost entitlements, CoreCLR signing identity, and macOS protection status without modifying signatures, boot settings, or permissions.
 - **Migration and rollback:** no stored schema changes. Repair retains the registered runner's own version, including an upstream auto-update; rollback restores the earlier installer's signature stripping.
 - **Platforms:** apphost repair applies to `darwin-arm64`; Linux runner installation is unchanged.
+- **Native image diagnostics:** macOS shell dispatch is resolved from an observed process rather than comparing its selected shell with the `/bin/sh` dispatcher inode; aliases use the same identity check.
+- **Environment diagnostics:** service-owned pins retain the required native-unit comparison. Unread remote definitions and observed mismatches have separate findings, and another product's target entry no longer hides a missing delivery declaration.
 
 - **Cargo inventory:** `stado host inventory` reports fixed Cargo-root metadata and complete direct bin membership, including cache symlinks and hidden entries, with explicit partial-read states. Stado Desktop reads the same typed report through the authenticated host inventory API.
 - **Service convergence:** catalog lookup resolves both product names and native unit identities, so label-addressed repairs retain the full required environment. Object API recovery preserves unrelated installed unit fields rather than competing with the shared renderer.
