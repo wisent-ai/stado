@@ -1343,7 +1343,7 @@ for key in keys:
                 break
             digest.update(chunk)
             size += len(chunk)
-    served[key] = {{'sha256': digest.hexdigest(), 'size': size}}
+    served[key] = {{'sha256': digest.hexdigest(), 'bytes': size}}
 matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)
 matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)
 if not matches_primary and not matches_backup:
