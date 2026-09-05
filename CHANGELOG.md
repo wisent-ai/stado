@@ -1,11 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
 ## 0.16.17
 
 - **Fleet delivery completion:** the stable deployment iterates each discovered service-local Stado reader before invoking its archive update. An empty reader set still succeeds, while every declared reader receives the canonical platform archive and image refresh instead of the shell aborting on an unbound loop variable.
 - **Migration and rollback:** no stored data changes. Rolling back restores the incomplete fleet loop and leaves the already-published platform artifacts available for a later corrected delivery.
 - **Platforms:** the corrected fleet pass delivers the existing signed `darwin-arm64` and `linux-amd64` release paths.
-
 ## 0.16.16
 
 - **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.

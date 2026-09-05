@@ -22,9 +22,14 @@ use super::CmdError;
 use crate::providers::local::disk_cleanup;
 
 /// `disk-cleanup` command body (Python `disk_cleanup`).
-pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError> {
+pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Result<(), CmdError> {
     if once && watch {
         return Err(CmdError::usage("--once and --watch are mutually exclusive"));
+    }
+    if to_target && (watch || dry_run) {
+        return Err(CmdError::usage(
+            "--to-target requires one enforcing pass and cannot be combined with --watch or --dry-run",
+        ));
     }
     if dry_run && watch {
         // A preview is a single planning pass; there is nothing for a
@@ -45,13 +50,22 @@ pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError>
         return Ok(());
     }
     loop {
-        let report = disk_cleanup::run_cleanup_once(
-            0,
-            false,
-            disk_cleanup::CleanupWriter::Cli,
-            &mut |_message| {},
-        )
-        .await;
+        let report = if to_target {
+            disk_cleanup::run_cleanup_to_target_once(
+                0,
+                disk_cleanup::CleanupWriter::Cli,
+                &mut |_message| {},
+            )
+            .await
+        } else {
+            disk_cleanup::run_cleanup_once(
+                0,
+                false,
+                disk_cleanup::CleanupWriter::Cli,
+                &mut |_message| {},
+            )
+            .await
+        };
         println!("{}", disk_cleanup::canonical_json(&report));
         if !watch {
             return Ok(());

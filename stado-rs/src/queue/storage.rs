@@ -51,7 +51,7 @@ pub struct JobStorage {
 
 const TRANSITION_PREFIX: &str = "job-transitions";
 const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
-const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
+pub(crate) const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,8 +82,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn transition_path(job_id: &str) -> String {
+pub(crate) fn transition_path(job_id: &str) -> String {
     format!("{TRANSITION_PREFIX}/{}.json", sha256_hex(job_id.as_bytes()))
+}
+
+pub(crate) fn transition_is_retired(state: &str) -> bool {
+    state == TRANSITION_RETIRED_STATE
 }
 
 fn prefix_state(prefix: &str) -> &str {
@@ -114,6 +118,56 @@ fn cleaned_transition_id(state: &str) -> Option<&str> {
 
 pub(crate) fn is_transition_sentinel_state(state: &str) -> bool {
     state.starts_with(TRANSITION_FENCE_PREFIX) || state.starts_with(TRANSITION_CLEANED_PREFIX)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TransitionSnapshotProof {
+    pub job_id: String,
+    pub retired: bool,
+}
+
+/// Parse one immutable transition snapshot through the production transition
+/// type and prove that its object key is the canonical digest key for its job.
+pub(crate) fn validate_transition_snapshot(
+    path: &str,
+    content: &str,
+) -> Result<TransitionSnapshotProof, StorageError> {
+    let transition: JobTransition = serde_json::from_str(content)?;
+    if transition.schema != TRANSITION_SCHEMA || path != transition_path(&transition.job_id) {
+        return Err(StorageError::Other(format!(
+            "invalid durable transition snapshot {path}"
+        )));
+    }
+    Ok(TransitionSnapshotProof {
+        job_id: transition.job_id,
+        retired: transition.state == TRANSITION_RETIRED_STATE,
+    })
+}
+
+pub(crate) fn validate_cancellation_snapshot(
+    job_id: &str,
+    content: &str,
+) -> Result<(), StorageError> {
+    let request: serde_json::Value = serde_json::from_str(content)?;
+    if request.get("job_id").and_then(serde_json::Value::as_str) != Some(job_id) {
+        return Err(StorageError::Other(format!(
+            "cancellation marker does not belong to {job_id}"
+        )));
+    }
+    let requested_at = request
+        .get("requested_at")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            StorageError::Other(format!(
+                "cancellation marker for {job_id} has no requested_at"
+            ))
+        })?;
+    chrono::DateTime::parse_from_rfc3339(requested_at).map_err(|error| {
+        StorageError::Other(format!(
+            "cancellation marker for {job_id} has invalid requested_at: {error}"
+        ))
+    })?;
+    Ok(())
 }
 
 fn merge_transition_destination(
@@ -1272,6 +1326,63 @@ impl JobStorage {
             "job {} remained contended during lifecycle transition",
             requested.job_id
         )))
+    }
+
+    /// Finish durable cancellation requests for jobs that remain in `queue/`.
+    ///
+    /// The cancellation marker is written before the lifecycle move, so a
+    /// caller that exits between those writes leaves work for the next
+    /// coordinator tick. Claiming deliberately refuses a marked job, but a
+    /// refusal alone strands its queued projection forever. Enumerating the
+    /// active queue first keeps this work bounded by pending jobs: historical
+    /// markers for terminal or absent jobs are neither downloaded nor parsed.
+    ///
+    /// Each relevant job's prepared transition is recovered before its fresh,
+    /// versioned queue body is read. The normal CAS lifecycle transition then
+    /// creates the durable `cancelled/` projection and retires `queue/`; the
+    /// request marker and independent `runs/` provenance remain untouched.
+    pub async fn settle_queued_cancellations(&self) -> Result<usize, StorageError> {
+        let mut settled = 0;
+        for job_id in self.list_job_ids("queue").await? {
+            self.recover_job_transition(&job_id).await?;
+            let queue_path = format!("queue/{job_id}.json");
+            let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
+                continue;
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            if job.job_id != job_id || job.state != crate::models::job_state::QUEUED {
+                continue;
+            }
+
+            let marker_path = format!("cancellations/{job_id}.json");
+            let Some(raw_request) = self.backend.download_text(&marker_path).await? else {
+                continue;
+            };
+            let request: serde_json::Value = serde_json::from_str(&raw_request)?;
+            if request.get("job_id").and_then(serde_json::Value::as_str) != Some(job_id.as_str()) {
+                return Err(StorageError::Other(format!(
+                    "{marker_path} does not name its own job id"
+                )));
+            }
+            let requested_at = request
+                .get("requested_at")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| StorageError::Other(format!("{marker_path} has no requested_at")))?;
+            chrono::DateTime::parse_from_rfc3339(requested_at).map_err(|error| {
+                StorageError::Other(format!("{marker_path} has invalid requested_at: {error}"))
+            })?;
+
+            job.state = crate::models::job_state::CANCELLED.to_string();
+            job.completed_at = Some(requested_at.to_string());
+            job.error = Some("cancelled".to_string());
+            if self
+                .transition_job_if_version(&job, "queue", "cancelled", Some(&versioned.version))
+                .await?
+            {
+                settled += 1;
+            }
+        }
+        Ok(settled)
     }
 
     /// Claim through a durable transition record. The running job is derived

@@ -145,11 +145,12 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-  # One audited capacity pass runs before either platform reaches the sole
-  # control-plane runner. Keeping this as a dependency instead of duplicating
-  # it inside both jobs prevents two release siblings from reclaiming the same
-  # disk and gives the bounded host operation a retry after a transient scan
-  # timeout.
+  # One serialized capacity transaction runs before either platform reaches
+  # the sole control-plane runner. The installed product restores enough
+  # declared capacity to admit the corrected candidate build; that candidate
+  # then completes canonical reclamation and must reach the full declared
+  # target before any release coordinate is claimed. Keeping this as a
+  # dependency prevents two release siblings from competing for the same disk.
   release-capacity:
     needs: identity
     runs-on: [self-hosted, stado-control-plane]
@@ -157,44 +158,69 @@ jobs:
       STADO_VERSION: ${{ needs.identity.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-      # The tree being released judges its own capacity.
-      #
-      # This step used to run `$HOME/.stado/bin/stado`, which is by
-      # construction older than the revision under release — and on 2026-09-03
-      # that staleness cost the 0.13.50 train everything: a migration created
-      # `queue_priority/` beside `queue/`, the installed gateway answered
-      # `prefix=queue/` with both, the installed client could not build the
-      # terminal-workdir keep-list, and the job refused before a single object
-      # was published. The fix for that listing is in this tree; the installed
-      # binary cannot have it, and a release that cannot start until the fix
-      # is installed cannot install the fix.
-      # This job used to reclaim capacity only after compiling the binary
-      # that performs the reclaim. On a self-hosted runner, a failed build's
-      # target directory survives into the next attempt; 0.15.24 exhausted
-      # the disk twice at this exact boundary before any coordinate was
-      # claimed. Clear only Cargo's declared output before asking the runner
-      # to compile the capacity binary.
-      - name: Reclaim prior capacity Rust cache
+      # The 0.16.7 job already cleaned this exact Cargo target immediately
+      # before the identical locked build and still exhausted the volume. Its
+      # later `host reclaim` could never run because the binary it needed was
+      # the build that failed. Reclaim the runner's declared non-checkout roots
+      # with the installed product first; the bounded janitor substage may
+      # spend its own shared scan budget, but host reclaim then continues
+      # through its separately declared scratch, delivery, cache and clone
+      # stages.
+      - name: Reclaim declared runner capacity
+        run: |
+          "$HOME/.stado/bin/stado" host reclaim lukasz-macbook --apply \
+            --reason "stado $STADO_VERSION release build requires declared host capacity" \
+            --json
+      # Cargo output is checkout-relative, not the `.stado/build-work` tree
+      # owned by host reclaim. Clear that exact second source of scratch. The
+      # installed binary need only restore the declared low-watermark admission
+      # needed to compile its replacement: the corrected candidate must be
+      # allowed to run before the full target verdict is required.
+      - name: Reclaim declared release Rust scratch
         run: cargo clean --manifest-path stado-rs/Cargo.toml
+      - name: Require candidate build admission
+        run: |
+          set -euo pipefail
+          set +e
+          gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
+          set -e
+          GATES_JSON="$gates" python3 -c '
+          import json, os
+          report = json.loads(os.environ["GATES_JSON"])
+          free = report.get("free_gb")
+          low = report.get("low_watermark_gb")
+          if free is None or low is None:
+              raise SystemExit("host gates did not report free_gb and low_watermark_gb")
+          if free < low:
+              raise SystemExit(f"runner capacity remains below build admission: {free:.2f} < {low} GiB")
+          print(f"candidate build admitted: {free:.2f} >= {low} GiB")
+          '
       - name: Build the capacity binary from this revision
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
-      - name: Reclaim declared release capacity
+      - name: Reclaim declared capacity with candidate
         run: |
-          stado="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          reclaimed=false
-          for attempt in 1 2 3; do
-            if "$stado" host reclaim lukasz-macbook --apply \
-              --reason "stado $STADO_VERSION release build requires declared scratch capacity" \
-              --json; then
-              reclaimed=true
-              break
-            fi
-            sleep "$((attempt * 5))"
-          done
-          if [ "$reclaimed" != true ]; then
-            echo "::error::Declared release capacity could not be reclaimed after three attempts"
-            false
-          fi
+          "$GITHUB_WORKSPACE/stado-rs/target/release/stado" host reclaim \
+            lukasz-macbook --apply \
+            --reason "stado $STADO_VERSION candidate completes declared host reclamation" \
+            --json
+      - name: Require declared build capacity
+        run: |
+          set -euo pipefail
+          set +e
+          gates=$("$GITHUB_WORKSPACE/stado-rs/target/release/stado" host gates \
+            lukasz-macbook --json)
+          set -e
+          GATES_JSON="$gates" python3 -c '
+          import json, os
+          report = json.loads(os.environ["GATES_JSON"])
+          free = report.get("free_gb")
+          target = report.get("target_free_gb")
+          if free is None or target is None:
+              raise SystemExit("host gates did not report free_gb and target_free_gb")
+          if free < target:
+              raise SystemExit(f"runner capacity remains below target: {free:.2f} < {target} GiB")
+          print(f"runner capacity proved: {free:.2f} >= {target} GiB")
+          '
 
       # Every call below first claims one create-only record at version scope,
       # then its platform record. The shared version write is the arbitration
@@ -217,6 +243,22 @@ jobs:
       - name: Reclaim capacity Rust cache
         if: always()
         run: cargo clean --manifest-path stado-rs/Cargo.toml
+      - name: Require capacity after candidate scratch reset
+        if: always()
+        run: |
+          set -euo pipefail
+          set +e
+          gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
+          set -e
+          GATES_JSON="$gates" python3 -c '
+          import json, os
+          report = json.loads(os.environ["GATES_JSON"])
+          free = report.get("free_gb")
+          target = report.get("target_free_gb")
+          if free is None or target is None or free < target:
+              raise SystemExit(f"runner capacity below target after scratch reset: {free} < {target}")
+          print(f"runner capacity retained: {free:.2f} >= {target} GiB")
+          '
 
   # One platform, judged on its own. A failure here no longer decides whether
   # darwin ever publishes.
