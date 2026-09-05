@@ -735,11 +735,12 @@ the `stado-readers.detail` receipt. The Desktop Services action runs the same
 host-wide or selected-binary CLI apply, preserves its decoded report plus
 actual exit status, and never re-derives the gate.
 
-Partial-state reader resume requires the target's global receiver to run Stado
-0.16.25 or newer, which owns the retained-archive arguments. An older receiver
-rejects that hidden command contract and the apply remains failed; first
-deliver a new immutable Stado version through the normal root path. There is
-no compatibility shim and no success inferred from an old receiver.
+Partial-state reader resume requires the target's global receiver to come from
+a release containing the retained-archive arguments. A version banner alone
+does not establish that source identity. A receiver built without the hidden
+contract rejects the apply and leaves convergence failed; first deliver a
+release that contains this fix through the normal root path. There is no
+compatibility shim and no success inferred from an older source.
 
 The repository's `.github/workflows/deploy.yml` invokes that CLI convergence
 for the existing stable deployment workflow; it does not define a second
