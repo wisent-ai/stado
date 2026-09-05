@@ -1051,6 +1051,27 @@ pub const ALERT_SKARBIEC_TOKEN_FILE_CONFIG: ConfigField = ConfigField::scalar(
     "alerts.skarbiec.token_file",
 );
 
+/// Which vault on this machine holds the operator's own items.
+///
+/// Discovery answers this when a machine holds exactly one candidate vault,
+/// and refuses when two of them claim the same owner — `stado host vaults`
+/// on `lukasz-macbook` names eight, two of which are owned by the same
+/// identity with 660 and 626 items. Until this key existed the only way past
+/// that refusal was `SKARBIEC_VAULT_FILE` in one process's environment, which
+/// answers for that invocation and for nothing else: the next command, the
+/// next agent and every launchd unit each got their own answer, and six real
+/// `skarbiec set-json` writes went to a vault the release verifier does not
+/// read.
+///
+/// The environment variable still wins, because it is how a build is
+/// exercised before it is installed, but it is no longer the only durable
+/// answer.
+pub const SKARBIEC_VAULT_FILE_CONFIG: ConfigField = ConfigField::scalar(
+    "skarbiec-vault-file",
+    "SKARBIEC_VAULT_FILE",
+    "secrets.skarbiec.vault_file",
+);
+
 pub const DASHBOARD_BIND_CONFIG: ConfigField =
     ConfigField::scalar("dashboard-bind", "WC_DASHBOARD_BIND", "dashboard.bind");
 pub const DASHBOARD_PORT_CONFIG: ConfigField =
@@ -1241,6 +1262,7 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     SECRETS_SKARBIEC.url,
     SECRETS_SKARBIEC.consumer,
     SECRETS_SKARBIEC.token_file,
+    SKARBIEC_VAULT_FILE_CONFIG,
     AGENT_SKARBIEC.url,
     AGENT_SKARBIEC.consumer,
     AGENT_SKARBIEC.token_file,
