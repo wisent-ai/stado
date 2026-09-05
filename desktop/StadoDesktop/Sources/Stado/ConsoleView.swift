@@ -469,8 +469,6 @@ struct ConsoleView: View {
 
     private func configureAuthorization() {
         store.configureAuthorization(token: auth.session?.accessToken)
-        cleanupStore.configureAuthorization(token: auth.session?.accessToken)
-        inventoryStore.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
         groupStore.configureAuthorization(token: auth.session?.accessToken)

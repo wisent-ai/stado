@@ -199,8 +199,7 @@ actor OperationsClient {
 
     func fetchHostInventory(
         target: String,
-        from address: OperationsDashboardAddress,
-        authorizationToken: String? = nil
+        from address: OperationsDashboardAddress
     ) async throws -> HostInventoryReport {
         let url = try serviceURL(
             at: address.endpoint("api/host/inventory"),
@@ -209,7 +208,7 @@ actor OperationsClient {
         )
         let data = try await payload(
             from: url,
-            authorizationToken: authorizationToken,
+            authorizationToken: RegistryAPICredential.load().token(for: address),
             timeoutInterval: 120
         )
         do {

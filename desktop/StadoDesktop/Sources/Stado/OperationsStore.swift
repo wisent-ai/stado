@@ -662,6 +662,10 @@ final class FleetServicesStore: ObservableObject {
         ["service", "deploy", name, "--host", host, "--json"]
     }
 
+    nonisolated static func repairRunnerRuntimeArguments(name: String, host: String) -> [String] {
+        ["service", "repair-runner-runtime", name, "--host", host, "--json"]
+    }
+
     nonisolated static func convergeApplyArguments(host: String, binary: String?) -> [String] {
         var arguments = ["service", "converge", host]
         if let binary, !binary.isEmpty {
@@ -846,6 +850,21 @@ final class FleetServicesStore: ObservableObject {
         await refresh(hosts: lastHosts)
     }
 
+    func repairRunnerRuntime(_ entry: FleetServiceEntry) async {
+        mutation = .working("Repairing runner runtime on \(entry.host)")
+        do {
+            let report = try await cli.json(
+                ServiceRunnerRuntimeReport.self,
+                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host),
+                timeoutSeconds: 360
+            )
+            mutation = .succeeded(report.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh(hosts: lastHosts)
+    }
+
     func clearMutation() {
         guard !mutation.isWorking else { return }
         mutation = .idle
@@ -943,21 +962,10 @@ final class HostInventoryStore: ObservableObject {
 
     private let client: OperationsClient
     private var addressString = DashboardEndpointPreference.localURL
-    private var authorizationToken: String?
     private var requestGeneration = 0
 
     init(client: OperationsClient = OperationsClient()) {
         self.client = client
-    }
-
-    func configureAuthorization(token: String?) {
-        let next = token?.isEmpty == false ? token : nil
-        guard next != authorizationToken else { return }
-        requestGeneration &+= 1
-        authorizationToken = next
-        cargoByHost = [:]
-        failures = [:]
-        readingHosts = []
     }
 
     func configureEndpoint(_ endpoint: String?) {
@@ -998,8 +1006,7 @@ final class HostInventoryStore: ObservableObject {
         do {
             let report = try await client.fetchHostInventory(
                 target: host,
-                from: address,
-                authorizationToken: authorizationToken
+                from: address
             )
             guard requestGeneration == generation, !Task.isCancelled else { return }
             guard report.target == host else {

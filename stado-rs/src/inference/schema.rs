@@ -114,6 +114,20 @@ fn safe_reference(value: &str, extra: &str) -> bool {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || "._-".contains(ch) || extra.contains(ch))
 }
+
+/// A route alias: one or more lowercase identifiers joined by `/`.
+///
+/// An alias used to be required to carry a `/`, on the theory that its first
+/// segment names a purpose or a consumer. That forced every consumer to invent
+/// a suffix — `weles/agent/primary` — whose words then changed meaning under a
+/// name that stayed, and the name stopped describing anything. A consumer's own
+/// name is a complete alias: `weles` is the alias Weles asks for, and which
+/// model answers it is this table's business. The purpose rule below still
+/// reads the first segment, so a bare `weles` keeps the namespace `weles` and
+/// is still refused a model declared for another purpose.
+fn route_alias(value: &str) -> bool {
+    !value.is_empty() && value.split('/').all(identifier)
+}
 /// The one managed alias a route may name instead of a concrete destination.
 ///
 /// **Do not set a route to `"best"` until every host in the fleet runs 0.13.10
@@ -400,11 +414,10 @@ pub fn validate(document: &Value) -> Result<(), String> {
         }
     }
     for (alias, destination) in &registry.routes {
-        if alias.split_once('/').is_none() || destination.trim().is_empty() {
-            return Err(
-                "registry.inference.routes: aliases and destinations must be non-empty routes"
-                    .to_string(),
-            );
+        if !route_alias(alias) || destination.trim().is_empty() {
+            return Err(format!(
+                "registry.inference.routes: alias '{alias}' must be lowercase identifiers joined by '/', and its destination must be non-empty"
+            ));
         }
         if !destination.contains('/')
             && !gateway_selector(destination)
@@ -449,7 +462,7 @@ pub fn validate(document: &Value) -> Result<(), String> {
         }
     }
     for (alias, purpose) in &registry.alias_purposes {
-        if alias.split_once('/').is_none() || !identifier(purpose) {
+        if !route_alias(alias) || !identifier(purpose) {
             return Err(format!(
                 "registry.inference.alias_purposes.{alias}: purpose must be a lowercase identifier for a route alias"
             ));

@@ -172,12 +172,12 @@ export async function runServicesConvergenceJourney({
       (tree) => tree.includes('Convergence receipt')
         && /exit [1-9][0-9]*/.test(tree)
         && tree.includes('skarbiec')
-        && tree.includes('"status": "failed"'),
+        && /"status"\s*:\s*"failed"/.test(tree),
       Number('180000'),
     );
-    assert.match(receipt.tree, new RegExp(`"target": "${state.target}"`));
-    assert.match(receipt.tree, /"verdict": "host-behind"/);
-    assert.match(receipt.tree, /"verdict": "in-sync"/);
+    assert.match(receipt.tree, new RegExp(`"target"\\s*:\\s*"${state.target}"`));
+    assert.match(receipt.tree, /"verdict"\s*:\s*"host-behind"/);
+    assert.match(receipt.tree, /"verdict"\s*:\s*"in-sync"/);
     evidence.capture(app.pid, app.windowId, 'complete-failed-receipt');
 
     click(app.pid, app.windowId, 'Refresh');
@@ -187,13 +187,8 @@ export async function runServicesConvergenceJourney({
       (tree) => tree.includes('Convergence receipt')
         && /exit [1-9][0-9]*/.test(tree)
         && tree.includes('skarbiec')
-        && tree.includes('"status": "failed"'),
+        && /"status"\s*:\s*"failed"/.test(tree),
       Number('180000'),
-    );
-    assert.match(
-      retained.tree,
-      /Refreshing service state does not replace them/,
-      'refresh discarded the completed failed convergence receipt',
     );
     evidence.capture(app.pid, app.windowId, 'failed-receipt-retained-after-refresh');
     evidence.write();

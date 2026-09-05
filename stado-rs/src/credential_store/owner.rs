@@ -34,8 +34,14 @@ use crate::skarbiec::SkarbiecError;
 const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
 /// Envelope every owner write carries.
 const ITEM_SCHEMA: &str = "skarbiec.item.v2";
-/// Vault the fleet's operator items live in when nothing overrides it.
-const VAULT_CANDIDATE: &str = "$HOME/.stado/skarbiec.vault.json";
+/// Vaults the fleet's operator items may live in when nothing overrides it,
+/// in the order `skarbiec`'s own `vaults` command searches them, so Stado and
+/// Skarbiec cannot answer "which vault" differently.
+const VAULT_CANDIDATES: &[&str] = &[
+    "$HOME/.local/share/skarbiec/skarbiec.vault.json",
+    "$HOME/.stado/skarbiec.vault.json",
+    "$HOME/skarbiec.vault.json",
+];
 
 fn home() -> Result<String, SkarbiecError> {
     std::env::var("HOME").map_err(|_| SkarbiecError::Deployment("HOME is not set".to_string()))
@@ -74,6 +80,24 @@ pub fn binary() -> Result<PathBuf, SkarbiecError> {
 /// A machine that does not hold the vault cannot own a credential write, and
 /// saying so is the whole point: the alternative is a write that appears to
 /// succeed against a store no owner here can open.
+///
+/// The discovery order is Skarbiec's own — `$HOME/.local/share/skarbiec`,
+/// then `$HOME/.stado`, then `$HOME`, the list `skarbiec`'s `vaults` command
+/// searches. Stado used to name `$HOME/.stado/skarbiec.vault.json` alone,
+/// while the `skarbiec` CLI defaults to `.local/share/skarbiec`. Two tools on
+/// one machine, two answers, and no way for an operator to see the
+/// disagreement: on 2026-09-05 six `skarbiec set-json` writes went to
+/// `.local/share/skarbiec` and were simultaneously real, `active` on the
+/// host, and invisible to `stado host reconcile-release-verifier`, which read
+/// the other file. That closed the fleet's release publication boundary for
+/// every product until the declarations were retracted.
+///
+/// When two candidates carry the SAME owner identity the machine has no
+/// single authoritative vault, and picking either silently is exactly the
+/// failure above. That is refused, naming both paths and their item counts,
+/// because an operator who is told can set `SKARBIEC_VAULT_FILE` and a
+/// program that guesses cannot be corrected. The contents are never merged
+/// here: which items belong where is the operator's decision.
 pub fn vault() -> Result<PathBuf, SkarbiecError> {
     if let Ok(explicit) = std::env::var("SKARBIEC_VAULT_FILE") {
         if !explicit.trim().is_empty() {
@@ -87,16 +111,71 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
             return Ok(path);
         }
     }
-    let path = PathBuf::from(VAULT_CANDIDATE.replace("$HOME", &home()?));
-    if path.is_file() {
+    let home = home()?;
+    let candidates: Vec<PathBuf> = VAULT_CANDIDATES
+        .iter()
+        .map(|candidate| PathBuf::from(candidate.replace("$HOME", home.as_str())))
+        .collect::<Vec<_>>();
+    let present: Vec<(PathBuf, String, usize)> = candidates
+        .iter()
+        .filter(|path| path.is_file())
+        .filter_map(|path| vault_identity(path).map(|(owner, items)| (path.clone(), owner, items)))
+        .collect();
+    if present.len() > usize::from(true) {
+        let first_owner = &present[usize::default()].1;
+        if present.iter().all(|(_, owner, _)| owner == first_owner) {
+            let described = present
+                .iter()
+                .map(|(path, _, items)| format!("{} ({items} items)", path.display()))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            return Err(SkarbiecError::Deployment(format!(
+                "this machine holds {} vaults that all claim owner {first_owner}: {described}. \
+                 There is no single authoritative vault, so a credential write or an \
+                 authoritative read here would silently pick one — which is how six real items \
+                 became invisible to the release verifier. Name the one you mean with \
+                 SKARBIEC_VAULT_FILE, or reconcile them; nothing is merged for you.",
+                present.len()
+            )));
+        }
+    }
+    if let Some((path, _, _)) = present.into_iter().next() {
         return Ok(path);
     }
     Err(SkarbiecError::Deployment(format!(
-        "no owner vault at {}; this machine cannot write credential items. \
+        "no owner vault in {}; this machine cannot write credential items. \
          Set SKARBIEC_VAULT_FILE, or run the write on the host that holds the vault \
          (`stado host vaults` names them)",
-        path.display()
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     )))
+}
+
+/// One candidate's owner identity and item count, or `None` when it is not a
+/// vault at all — a backup or a half-written file is simply not a candidate.
+fn vault_identity(path: &std::path::Path) -> Option<(String, usize)> {
+    let document: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?)
+        .ok()
+        .filter(serde_json::Value::is_object)?;
+    let owner = document
+        .get("owner")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            document
+                .get("management")
+                .and_then(|management| management.get("controller"))
+                .and_then(serde_json::Value::as_str)
+        })?
+        .to_string();
+    let items = document
+        .get("items")
+        .and_then(serde_json::Value::as_object)
+        .map(serde_json::Map::len)
+        .unwrap_or_default();
+    Some((owner, items))
 }
 
 /// Write one item into an explicit vault through its owner.

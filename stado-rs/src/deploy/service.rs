@@ -940,19 +940,16 @@ pub enum EnvironmentGap {
         /// is on another host and was therefore not read.
         observed: Option<LocalUnitFile>,
     },
-    /// No product in `release_control` names this host in its `targets` map.
-    ///
-    /// `release_agent::spawn_release` is the only writer of a product's
-    /// declared `environment`, and the release agent reaches it only through
-    /// `policy.targets.get(host)` (`release_agent.rs:1878`). A host no
-    /// product target names is therefore a host the declaration cannot
-    /// reach by any path — and it is skipped by the same lookup in
-    /// [`products_without_declared_version`], which is why nothing said so.
+    /// This product has no release target for the host and its required
+    /// environment is not pinned in the managed service declaration.
     HostNamedByNoTarget {
         /// The hosts this product's `targets` map does name, so the row says
         /// where the declaration does land.
         named_hosts: Vec<String>,
     },
+    /// The service records the required values, but its native definition
+    /// either disagrees or could not be read on this host.
+    PinnedServiceEnvironment { observed: Option<LocalUnitFile> },
 }
 
 /// One product whose declared environment cannot reach the unit that serves
@@ -1006,6 +1003,12 @@ impl UnreachableProductEnvironment {
         match self.gap {
             EnvironmentGap::UnrecordedDeclaration { .. } => "unrecorded-service-environment",
             EnvironmentGap::HostNamedByNoTarget { .. } => "untargeted-product-host",
+            EnvironmentGap::PinnedServiceEnvironment { observed: Some(_) } => {
+                "service-environment-drift"
+            }
+            EnvironmentGap::PinnedServiceEnvironment { observed: None } => {
+                "unread-service-environment"
+            }
         }
     }
 
@@ -1103,10 +1106,50 @@ impl UnreachableProductEnvironment {
                 ));
                 sentence
             }
+            EnvironmentGap::PinnedServiceEnvironment { observed } => match observed {
+                Some(unit) => {
+                    let differences = self
+                        .declared
+                        .iter()
+                        .filter_map(|(name, expected)| {
+                            let actual = unit.env.get(name);
+                            (actual != Some(expected)).then(|| {
+                                format!(
+                                    "{name}: expected {expected}, observed {}",
+                                    actual.map(String::as_str).unwrap_or("<absent>")
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    format!(
+                        "{} pins {} in the service record for {}, but its native unit {} \
+                         differs: {}. Reconcile that service with `stado service ensure {} \
+                         --host {}`",
+                        self.host,
+                        self.declared_pairs(),
+                        self.unit,
+                        self.path,
+                        differences,
+                        self.unit,
+                        self.host
+                    )
+                }
+                None => format!(
+                    "{} pins {} in the service record for {}, so a delivery path exists, \
+                     but the native unit {} could not be read here. Its environment is \
+                     unverified; run `stado registry doctor` on {}",
+                    self.host,
+                    self.declared_pairs(),
+                    self.unit,
+                    self.path,
+                    self.host
+                ),
+            },
             EnvironmentGap::HostNamedByNoTarget { named_hosts } => {
                 let mut sentence = format!(
-                    "{} declares managed_versions.{} and runs {}, but no release_control \
-                     product names {} in its targets map",
+                    "{} declares managed_versions.{} and runs {}, but this product's \
+                     release_control target map does not name {}",
                     self.host, self.product, self.unit, self.host,
                 );
                 if named_hosts.is_empty() {
@@ -1159,6 +1202,14 @@ impl UnreachableProductEnvironment {
             EnvironmentGap::HostNamedByNoTarget { named_hosts } => json!({
                 "kind": "host-named-by-no-target",
                 "named_hosts": named_hosts,
+            }),
+            EnvironmentGap::PinnedServiceEnvironment { observed } => json!({
+                "kind": "pinned-service-environment",
+                "observed": observed.as_ref().map(|unit| {
+                    self.declared.iter().map(|(name, _)| {
+                        (name.clone(), json!(unit.env.get(name)))
+                    }).collect::<Map<String, Value>>()
+                }),
             }),
         };
         json!({
@@ -1236,14 +1287,6 @@ pub fn unreachable_product_environments(
     let Some(control) = control else {
         return Vec::new();
     };
-    // Whether ANY product names this host. This is the fleet-wide half and it
-    // is answerable from the document alone: it needs no host to be awake,
-    // which is the point, because the host being absent from every target map
-    // is precisely what stops it from ever being asked.
-    let named_anywhere = control
-        .products
-        .values()
-        .any(|policy| policy.targets.contains_key(&target.name));
     let readable_here = local_units == Some(target.name.as_str());
     let services = declared_services(target);
     let mut rows: Vec<UnreachableProductEnvironment> = Vec::new();
@@ -1263,15 +1306,12 @@ pub fn unreachable_product_environments(
         else {
             continue;
         };
-        // `{home}` as the release agent would expand it, and left as the
-        // template when there is nothing to expand it from: a host absent
-        // from every `targets` map declares no home, and substituting a
-        // guess here would print a path no declaration names.
+        // Use the same home expansion as the delivery path that owns the values.
         let home = policy
             .targets
             .get(&target.name)
             .map(|policy_target| policy_target.home.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| crate::deploy::service_catalog::home_for(target));
         let declared: Vec<(String, String)> = policy
             .environment
             .iter()
@@ -1292,19 +1332,27 @@ pub fn unreachable_product_environments(
             path: service.path.clone(),
             gap,
         };
-        let pinned_locally = readable_here
-            && local_unit_file(&service.path, &service.kind).is_some_and(|unit| {
-                let home = crate::deploy::service_catalog::home_for(target);
-                policy.environment.iter().all(|(name, value)| {
-                    let expected = value.replace("{home}", &home);
-                    service.env.get(name) == Some(&expected)
-                        && unit.env.get(name) == Some(&expected)
-                })
-            });
-        if !named_anywhere && !pinned_locally {
-            let mut named_hosts: Vec<String> = policy.targets.keys().cloned().collect();
-            named_hosts.sort();
-            rows.push(row(EnvironmentGap::HostNamedByNoTarget { named_hosts }));
+        if !policy.targets.contains_key(&target.name) {
+            let pinned_in_service = declared
+                .iter()
+                .all(|(name, value)| service.env.get(name) == Some(value));
+            if pinned_in_service {
+                let observed = readable_here
+                    .then(|| local_unit_file(&service.path, &service.kind))
+                    .flatten();
+                let agrees = observed.as_ref().is_some_and(|unit| {
+                    declared
+                        .iter()
+                        .all(|(name, value)| unit.env.get(name) == Some(value))
+                });
+                if !agrees {
+                    rows.push(row(EnvironmentGap::PinnedServiceEnvironment { observed }));
+                }
+            } else {
+                let mut named_hosts: Vec<String> = policy.targets.keys().cloned().collect();
+                named_hosts.sort();
+                rows.push(row(EnvironmentGap::HostNamedByNoTarget { named_hosts }));
+            }
         }
         // An adopted stub: the record names a path and declares nothing about
         // what runs there. Reported independently of the target question,
@@ -5845,6 +5893,45 @@ impl StaleUnitImage {
     }
 }
 
+/// Resolve Apple's `/bin/sh` dispatcher without duplicating its shell-selection
+/// policy. Privileged mode ignores user startup files; the readiness byte keeps
+/// the selected shell alive while the ordinary kernel image reader observes it.
+#[cfg(target_os = "macos")]
+fn selected_macos_shell() -> Result<PathBuf, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("/bin/sh")
+        .args(["-p", "-c", "printf R; read -r stado_image_continue"])
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not resolve macOS /bin/sh: {error}"))?;
+    let result = (|| {
+        let mut ready = [0_u8; 1];
+        child
+            .stdout
+            .as_mut()
+            .ok_or_else(|| "macOS /bin/sh has no readiness pipe".to_string())?
+            .read_exact(&mut ready)
+            .map_err(|error| format!("macOS /bin/sh did not become observable: {error}"))?;
+        if ready != *b"R" {
+            return Err("macOS /bin/sh returned an unexpected readiness byte".to_string());
+        }
+        running_images(&[child.id()])?
+            .remove(&child.id())
+            .map(|image| PathBuf::from(image.path))
+            .ok_or_else(|| "the shell selected by macOS /bin/sh has no readable image".to_string())
+    })();
+    // EOF releases the shell's read, including every failed observation.
+    drop(child.stdin.take());
+    child
+        .wait()
+        .map_err(|error| format!("could not reap the macOS shell image reader: {error}"))?;
+    result
+}
+
 /// The identity of the file at `path` right now, and when it was last written.
 ///
 /// Symlinks are followed, which is the point and not a convenience: a declared
@@ -5855,6 +5942,16 @@ impl StaleUnitImage {
 pub fn installed_image(path: &Path) -> Result<(ImageIdentity, i64), String> {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    let (path, metadata) = if std::fs::metadata("/bin/sh")
+        .is_ok_and(|shell| shell.dev() == metadata.dev() && shell.ino() == metadata.ino())
+    {
+        let selected = selected_macos_shell()?;
+        let selected_metadata = std::fs::metadata(&selected).map_err(|error| error.to_string())?;
+        (std::borrow::Cow::Owned(selected), selected_metadata)
+    } else {
+        (std::borrow::Cow::Borrowed(path), metadata)
+    };
     Ok((
         ImageIdentity {
             path: path.to_string_lossy().into_owned(),

@@ -37,7 +37,7 @@ struct SettingsView: View {
                     .font(WisentTypeScale.caption())
                     .foregroundStyle(WisentDesign.secondary)
                 if RegistryAPICredential.isEnvironmentConfigured {
-                    Text("The launch environment supplies these values.")
+                    Text("STADO_REGISTRY_API_URL or STADO_REGISTRY_API_TOKEN_FILE overrides these saved settings.")
                         .font(WisentTypeScale.caption())
                         .foregroundStyle(WisentDesign.secondary)
                 }
