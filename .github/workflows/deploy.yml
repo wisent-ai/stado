@@ -947,8 +947,6 @@ jobs:
                 end
             ' .wisent-release.json
           )"
-          registry="$RUNNER_TEMP/registry-for-stado-delivery.json"
-          "$stado_bin" registry pull >"$registry"
           while IFS= read -r target; do
             test -n "$target"
             "$stado_bin" host declare-version "$target" \
@@ -956,43 +954,4 @@ jobs:
               --version "$STADO_VERSION" \
               --json
             "$stado_bin" service converge "$target" stado --apply --json
-
-            readers="$(
-              jq -r --arg target "$target" '
-                [
-                  .targets[]
-                  | select(.name == $target)
-                  | .services[]?
-                  | select((.program? | type) == "string")
-                  | select(
-                      (.program | contains("/.stado/services/")) and
-                      (.program | endswith("/stado"))
-                    )
-                  | .name
-                ]
-                | if length == (unique | length)
-                  then .[]?
-                  else error("declared service-local Stado reader names must be unique")
-                  end
-              ' "$registry"
-            )"
-            test -n "$readers" || continue
-            platform="$(
-              jq -er --arg target "$target" '
-                .targets[]
-                | select(.name == $target)
-                | .release_platform
-              ' "$registry"
-            )"
-            archive="$RUNNER_TEMP/stado-v$STADO_VERSION-$platform-$target.tar.gz"
-            "$stado_bin" storage get \
-              "stado://releases/stado/$STADO_VERSION/$platform/stado-v$STADO_VERSION-$platform.tar.gz" \
-              "$archive"
-            while IFS= read -r reader; do
-              "$stado_bin" service update "$reader" \
-                --host "$target" \
-                --from-archive "$archive" \
-                --refresh-image \
-                --json
-            done <<<"$readers"
           done <<<"$targets"

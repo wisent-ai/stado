@@ -713,6 +713,25 @@ is the break-glass bootstrap for restoring Stado itself when the resolver or
 remote binary that normal delivery depends on is unavailable. Leaving
 `--release` out preserves the original recovery behavior.
 
+For Stado's native delivery, `release install-local` and
+`service converge --apply` share the verified archive retained under
+`$HOME/.stado/releases/stado/<version>/<platform>/`. Root delivery moves its
+already-downloaded archive there before activation; it does not restart
+registry units whose executable lives in an independently installed
+`$HOME/.stado/services/...` tree. Reader convergence then uses the existing
+idempotent `service update --from-archive --refresh-image` path for every such
+registry declaration. A resumed pass with an already-attested root fetches the
+exact archive only when the retained copy is absent or corrupt, leaves
+already-current root and reader images running, and fails unless every stale
+private image is installed and proved. The queue agent continues to defer its
+own recycle through the installed-release handshake.
+
+The repository's `.github/workflows/deploy.yml` invokes that CLI convergence
+for the existing stable deployment workflow; it does not define a second
+private-reader loop and is not the canonical source, qualification,
+publication, or promotion contract. Those remain owned by
+`stado release submit`; GitHub is an optional adapter.
+
 ### Observability and recovery
 
 `stado overview`, `stado doctor`, queue state, heartbeats, leases, provider

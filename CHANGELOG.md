@@ -3,6 +3,8 @@
 ## Unreleased
 
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
+- **Complete Stado reader delivery:** `release install-local` and `service converge --apply` share the catalog-verified archive retained in the version/platform release tree. Root activation excludes independently installed service-tree readers; convergence includes every registry-declared private Stado reader through the existing idempotent service-update and image-proof lifecycle. A partial-state resume can restore a missing retained archive without reinstalling or kicking an already-attested root, leaves already-current reader images running, preserves the queue-agent handshake, and reports any private install or process-image failure as a failed convergence.
+
 
 ## 0.16.22
 

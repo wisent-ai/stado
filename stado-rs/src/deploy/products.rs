@@ -48,8 +48,9 @@
 //!   `$HOME/weles` holds `recordings/`, `var/` and `.work/` that no release
 //!   produced and no release may take away.
 //! - **the owning units** ([`Unit`]) — Stado's resolver, coordinator, queue
-//!   agent and release agent all run the same installed binary, so a versioned
-//!   delivery restarts every declared owner instead of leaving stale processes.
+//!   agent and release agent declare the binary they execute. Root-installed
+//!   owners activate here; independently installed service-tree owners consume
+//!   the same verified archive through reader convergence before their restart.
 //! - **how the installed version is read back** ([`Readback`]) — running the
 //!   program for a program, one member of one JSON file inside the tree for a
 //!   tree. This is the field that decides whether a host is already at the
