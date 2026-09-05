@@ -1144,13 +1144,8 @@ pub async fn reclaim_host(
             target_free_gb,
         )
     };
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &script,
-        RECLAIM_TIMEOUT,
-        runner,
-    )
-    .await?;
+    let output =
+        host_channel::run_script_with_timeout(&target, &script, RECLAIM_TIMEOUT, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
