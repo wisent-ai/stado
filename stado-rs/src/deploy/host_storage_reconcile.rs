@@ -1135,7 +1135,6 @@ struct ImmutableEvidenceReference {
     bytes: u64,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LifecycleFence {
     schema: String,
@@ -1256,7 +1255,6 @@ async fn refresh_resident_owner(
     }
     Ok(())
 }
-
 
 async fn repository_runner_gate() -> Result<Option<Value>, DeployError> {
     if let Some(gate) = RESIDENT_RUNNER_GATE.get() {
@@ -1580,7 +1578,6 @@ fn resident_owner_retention(transaction: &str) -> Result<Value, DeployError> {
         "lock_inode": lock.ino(),
     }))
 }
-
 
 async fn registry_services(
     storage_target: &crate::targets::ComputeTarget,
@@ -2271,8 +2268,7 @@ async fn prepare_lifecycle_fence(
                     DeployError("resident owner evidence omitted its exact service".to_string())
                 })?
                 .to_string();
-            let services =
-                registry_services(storage_target, &resident_owner_unit, runner).await?;
+            let services = registry_services(storage_target, &resident_owner_unit, runner).await?;
             let mut preflight =
                 remote_phase(storage_target, transaction, PREFLIGHT, runner).await?;
             let repository_runner_gate = repository_runner_gate().await?;
@@ -3066,9 +3062,7 @@ fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
         .staged_runtime
         .as_ref()
         .map(|release| release.staged_sha256.as_str())
-        .filter(|digest| {
-            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-        });
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     for writer in &fence.writers {
         if let Some(snapshot) = &writer.unit_snapshot {
             let body = base64::engine::general_purpose::STANDARD
@@ -4098,10 +4092,7 @@ fn transaction_directory(transaction: &str) -> Result<PathBuf, DeployError> {
         .join(transaction))
 }
 
-fn encoded_json<T: Serialize + ?Sized>(
-    value: &T,
-    label: &str,
-) -> Result<Vec<u8>, DeployError> {
+fn encoded_json<T: Serialize + ?Sized>(value: &T, label: &str) -> Result<Vec<u8>, DeployError> {
     let mut encoded = serde_json::to_vec(value)
         .map_err(|error| DeployError(format!("cannot encode {label}: {error}")))?;
     encoded.push(b'\n');
@@ -4125,9 +4116,7 @@ fn atomic_bytes_file(path: &Path, encoded: &[u8], label: &str) -> Result<(), Dep
     std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
         .map_err(|error| DeployError(format!("cannot protect {}: {error}", parent.display())))?;
     match std::fs::symlink_metadata(path) {
-        Ok(metadata)
-            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() =>
-        {
+        Ok(metadata) if !metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
             return Err(DeployError(format!(
                 "{label} collides with a non-regular file: {}",
                 path.display()
@@ -4201,7 +4190,6 @@ fn read_regular_file(path: &Path, label: &str) -> Result<Vec<u8>, DeployError> {
     std::fs::read(path)
         .map_err(|error| DeployError(format!("cannot read {}: {error}", path.display())))
 }
-
 
 fn write_json_evidence<T: Serialize + ?Sized>(
     transaction: &str,
