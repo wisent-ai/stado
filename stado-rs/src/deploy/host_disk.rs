@@ -71,8 +71,8 @@ const LOCK_PATH_MARK: &str = "@LOCK_PATH@";
 /// keep, because there is only ever one text producing it.
 ///
 /// This exists because the cost is not evenly spread. [`INVENTORY_SECTION`]
-/// runs `du -xk -d 2 "$HOME"` and a depth-5 walk of `/private/var/folders`;
-/// the depth caps the OUTPUT, never the traversal, so it walks the whole
+/// walks the managed home and selected system roots deeply enough to attribute
+/// disk pressure; the depth caps the OUTPUT, never the traversal, so it walks the whole selected
 /// tree. Measured on `lukasz-macbook` on 2026-09-02: the three fields
 /// `host gates` reads take 0.8s together, while the full script had not
 /// finished after 180s and burned `user 7m27s` of CPU, so
@@ -159,10 +159,10 @@ fi
 
 /// The `du` inventory and the Chromium clone census — `inventory` and
 /// `clone_summaries`. Read only by `host disk`'s report, and the whole cost
-/// of this script: the depth caps the output, not the traversal, so
-/// `du -xk -d 2 "$HOME"` walks the entire home tree. One Darwin guard wraps
-/// both loops, so the section is self-contained and omitting it leaves a
-/// script that still parses to the same values for every other field.
+/// of this script: the depth caps the output, not the traversal. macOS needs
+/// its clone and application-state roots; Linux needs the managed home plus
+/// `/home`, `/mnt`, `/var`, and `/opt` because a depth-two root report only
+/// named `/root/.stado` while leaving the directory consuming the disk hidden.
 const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Darwin" ]; then
   for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/Library/Caches:3" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
     root=${spec%:*}
@@ -176,13 +176,26 @@ const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/un
         printf 'STADO_DISK_ITEM\t%s\t%s\n' "$blocks" "$path"
       done
   done
-for clone_root in /private/var/folders/*/*/X/org.chromium.Chromium.code_sign_clone; do
-  [ -d "$clone_root" ] || continue
-  total=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
-  day_old=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' -mtime +0 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
-  hour_old=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' -mmin +60 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
-  printf 'STADO_CLONE_SUMMARY\t%s\t%s\t%s\t%s\n' "$clone_root" "$total" "$hour_old" "$day_old"
-done
+  for clone_root in /private/var/folders/*/*/X/org.chromium.Chromium.code_sign_clone; do
+    [ -d "$clone_root" ] || continue
+    total=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    day_old=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' -mtime +0 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    hour_old=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' -mmin +60 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    printf 'STADO_CLONE_SUMMARY\t%s\t%s\t%s\t%s\n' "$clone_root" "$total" "$hour_old" "$day_old"
+  done
+else
+  for spec in "$HOME:3" "/home:3" "/mnt:3" "/var:3" "/opt:3"; do
+    root=${spec%:*}
+    depth=${spec##*:}
+    [ -d "$root" ] || continue
+    /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
+      /usr/bin/sort -nr |
+      /usr/bin/head -n 40 |
+      while IFS='	' read -r blocks path; do
+        [ -n "$blocks" ] && [ -n "$path" ] || continue
+        printf 'STADO_DISK_ITEM\t%s\t%s\n' "$blocks" "$path"
+      done
+  done
 fi
 "#;
 

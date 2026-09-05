@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.16.9
+
+- **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.
+- **Host disk diagnostics:** `stado host disk` now attributes Linux pressure inside the managed home, `/home`, `/mnt`, `/var`, and `/opt` instead of returning an empty inventory after a depth-two root report only named its parent directories.
+- **Build cache recovery:** platform-matrix Cargo output now belongs to its queue workdir and follows terminal-job cleanup. `host reclaim` can remove the former exact managed cache only after checking its Cargo identity, age, symlink boundaries, and absence of live users; `host build-caches` reports missing tags and scan failures instead of hiding them as an empty result.
+- **Migration:** no configuration or persisted-state migration is required.
+- **Remote profile migration:** `stado host config-set` migrates an older deployment profile through the installed binary before applying the field, preserving the exact prior profile without requiring a separate operator step.
+- **Configuration reload:** `host config-set --reload-service` and `host config-unset --reload-service` restart the existing managed unit in place. Adopted units no longer need a separate service build recipe just to read their changed configuration.
+- **Rollback boundary:** rolling back makes every non-Stado delivery fail before installation with exit 126 because the product archive does not contain a Stado executable.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; the cancelled-build retry journey builds, publishes, delivers, installs, and executes a real non-Stado product through the repaired path.
+- **Platform regression evidence:** the existing fleet journey now uses current durable job identities, retains its complete remote job reports, and exercises the cancelled-build retry on both native platforms.
+
+## 0.16.8
+
+- **Guarded handoff delivery:** carries the complete interruption-safe release-control handoff from 0.16.5 together with the newer installed fleet functionality already merged through 0.16.7. Matching prepared receipts can refresh a stale expected generation only after the same intent, exact runtime files, and still-managed lifecycle are re-proved; a registry-committed resume skips the successful CAS, reacquires the service lease, verifies the exact active release, and finishes the reconciler fence.
+- **Release correction:** the immutable 0.16.5 tag remains attached to its original source, whose declared Clippy gate rejected an eight-argument internal helper before publication. This coordinate groups the three legacy identities into one fixed array without changing the checks, uses the first unoccupied version after the already-owned 0.16.6 and 0.16.7 coordinates, and does not move or overwrite either tag.
+- **Migration and rollback:** no stored data changes. Install a compatible release on every registry reader before handoff; rolling back below 0.15.24 makes the external placement shape unreadable, while rolling back below this release removes interruption-safe completion.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; formatting, locked compilation, and Clippy cover the corrected source, while immutable release publication supplies signed manifests, artifacts, source identity, and delivery receipts.
+
 ## 0.16.7
 
 - **Exact storage-root evidence:** `stado host backup-audit TARGET --object STADO_URI` compares only the named existing object in the host's declared local primary and backup roots. The read-only report returns each side's state, byte count, and SHA-256 without returning object content or walking either store; repeat `--object` for additional coordinates.
@@ -73,6 +92,7 @@
 - **Migration:** install 0.15.24 on every registry reader and agent before publishing the external lifecycle shape. Perform the handoff once, then consume its receipts directly—without another dry-run—to retire the legacy plist first and convenience binary second as separately reported operations; routes, endpoints, consumers, profile state, and probes stay unchanged.
 - **Rollback boundary:** rollback before handoff is ordinary binary rollback. After handoff, an older reader cannot parse the external lifecycle and cannot safely own the service; restoring managed lifecycle requires a new generation-bound registry change plus restoring both archived files, and must not run alongside release-control.
 - **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; compilation, clippy, registry static validation, and shell static checks cover this release, while publication supplies its signed two-platform manifests and exact fleet delivery receipts.
+
 ## 0.15.23
 
 - **Run retention:** validation of an already-retained terminal outcome now uses the same legacy-linkage rule as the reaper that records it. A terminal job may omit all three submission-linkage fields only when its job id and remaining immutable projection exactly match the durable manifest entry; live and partially linked jobs still require exact submission identity.

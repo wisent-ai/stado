@@ -551,6 +551,24 @@ for entry in "$HOME/.cargo/git/checkouts"/*; do
   fi
   reclaim "$entry" rebuildable_caches
 done
+# The old platform-matrix runner kept Cargo output outside its queue workdir.
+# Its exact product-owned cache is disposable; arbitrary untagged directories
+# are not. Keep active, young, linked, or unrecognizable trees.
+entry="$HOME/.stado/work/platform-matrix-cargo-target"
+if [ -d "$entry" ] && [ ! -L "$HOME/.stado" ] &&
+   [ ! -L "$HOME/.stado/work" ] && [ ! -L "$entry" ]; then
+  if [ ! -f "$entry/.rustc_info.json" ] ||
+     { [ ! -f "$entry/debug/.cargo-lock" ] && [ ! -f "$entry/release/.cargo-lock" ]; }; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache has no Cargo identity'
+  elif ! stale_minutes "$entry"; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is too young'
+  elif ! process_absent "$entry"; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is held or process ownership is unavailable'
+  elif [ "$apply" != 1 ] || [ "$target_free_kb" -le 0 ] ||
+       [ "$(free_kb)" -lt "$target_free_kb" ]; then
+    reclaim "$entry" rebuildable_caches
+  fi
+fi
 printf 'STADO_RECLAIM_STAGE\trebuildable_caches\t%s\t%s\n' "$before" "$(free_kb)"
 before=$(free_kb)
 
