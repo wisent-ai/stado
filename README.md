@@ -375,10 +375,12 @@ See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exi
 
 The graphical equivalent for bounded host-vault bearer work is **Fleet › Hosts
 › selected host › Bounded vault bearer**. It can mint a new least-privilege
-bearer or register an existing owner-vault item field (default field `token`)
-without exposing bearer bytes. The sheet shows target, status, grant metadata,
-stored-source metadata, and Stado's refusal details. See
-[Channels](docs/channels.md#bounded-vault-bearers).
+bearer or register an existing owner-vault item field (default field `token`).
+Generated plaintext is hidden and discarded by default; **Show generated
+bearer** explicitly requests the one-time raw value and presents the existing
+sensitive copy control. Stored-item mode remains metadata-only. The sheet shows
+target, status, grant or stored-source metadata, and Stado's refusal details.
+See [Channels](docs/channels.md#bounded-vault-bearers).
 
 For a loaded launchd label or systemd unit that the registry does not declare,
 `stado service bootout <exact-unit> --host <target> --domain system|user`

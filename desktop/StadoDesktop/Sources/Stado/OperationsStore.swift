@@ -422,16 +422,18 @@ struct HostVaultBearerRequest: Equatable, Sendable {
     let replaceCapabilities: Bool
     let tokenItem: String?
     let tokenField: String
+    let showGeneratedBearer: Bool
 }
 
 /// One bounded bearer operation through the selected host's live vault.
 ///
-/// The request contains only grant metadata and, when reusing a bearer, its
-/// owner-vault coordinate. There is intentionally no way for Desktop to accept,
-/// retain, or display bearer bytes.
+/// A stored-bearer request contains only its owner-vault coordinate. A newly
+/// generated bearer is retained for reveal/copy only when the operator
+/// explicitly selects the CLI's `--raw-token` mode.
 @MainActor
 final class HostVaultBearerStore: ObservableObject {
     @Published private(set) var receipt: HostVaultBearerReceipt?
+    @Published private(set) var rawBearer: String?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
 
     private let cli: StadoCLI
@@ -455,18 +457,30 @@ final class HostVaultBearerStore: ObservableObject {
         if let tokenItem = request.tokenItem {
             arguments += ["--token-item", tokenItem, "--token-field", request.tokenField]
         }
-        arguments.append("--json")
+        arguments.append(request.showGeneratedBearer ? "--raw-token" : "--json")
         return arguments
     }
 
     func submit(_ request: HostVaultBearerRequest) async {
         guard !mutation.isWorking else { return }
         receipt = nil
+        rawBearer = nil
         mutation = .working(
             request.tokenItem == nil
                 ? "Minting a bounded bearer on \(request.host)"
                 : "Registering the stored bearer on \(request.host)"
         )
+        if request.showGeneratedBearer {
+            do {
+                rawBearer = try await cli.text(arguments: Self.arguments(request))
+                mutation = .succeeded(
+                    "\(request.host) minted a bounded bearer for \(request.consumer). This is the only displayed copy; the vault stores its hash."
+                )
+            } catch {
+                mutation = .failed(Self.message(for: error))
+            }
+            return
+        }
         do {
             let answer = try await cli.json(
                 HostVaultBearerReceipt.self,
@@ -491,6 +505,7 @@ final class HostVaultBearerStore: ObservableObject {
     }
 
     func clear() {
+        rawBearer = nil
         receipt = nil
         mutation = .idle
     }

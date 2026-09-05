@@ -1334,9 +1334,9 @@ private enum HostVaultBearerMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// The selected host's bounded bearer operation. It runs only the JSON CLI
-/// surface and never accepts `--raw-token`, so a bearer cannot enter this
-/// process's arguments, state, confirmation, result, or error presentation.
+/// The selected host's bounded bearer operation. Metadata mode is the default;
+/// an explicit reveal option uses the CLI's generated-bearer `--raw-token`
+/// surface and the existing secret copy presentation.
 private struct HostVaultBearerSheet: View {
     let host: String
     @ObservedObject var store: HostVaultBearerStore
@@ -1348,6 +1348,7 @@ private struct HostVaultBearerSheet: View {
     @State private var audience = ""
     @State private var ttlSeconds = "31536000"
     @State private var replaceCapabilities = false
+    @State private var showGeneratedBearer = false
     @State private var tokenItem = ""
     @State private var tokenField = "token"
     @State private var reviewing = false
@@ -1401,7 +1402,8 @@ private struct HostVaultBearerSheet: View {
             ttlSeconds: parsedTTL,
             replaceCapabilities: replaceCapabilities,
             tokenItem: mode == .stored ? cleanTokenItem : nil,
-            tokenField: cleanTokenField
+            tokenField: cleanTokenField,
+            showGeneratedBearer: mode == .mint && showGeneratedBearer
         )
     }
 
@@ -1414,8 +1416,12 @@ private struct HostVaultBearerSheet: View {
             }
         }
         .onAppear { store.clear() }
+        .onDisappear { store.clear() }
         .onChange(of: request) { _, _ in
             if !reviewing { store.clear() }
+        }
+        .onChange(of: mode) { _, value in
+            if value == .stored { showGeneratedBearer = false }
         }
     }
 
@@ -1426,7 +1432,7 @@ private struct HostVaultBearerSheet: View {
                     Text("Bounded vault bearer for \(host)")
                         .font(WisentTypography.heading(17))
                         .foregroundStyle(WisentDesign.ink)
-                    Text("Mint a new least-privilege bearer in this host's live Skarbiec vault, or register bearer bytes already stored in one owner-vault item field. Desktop never reads or prints the bearer.")
+                    Text("Mint a new least-privilege bearer in this host's live Skarbiec vault, or register bearer bytes already stored in one owner-vault item field. Metadata is the default; generated bearer output requires an explicit opt-in.")
                         .font(WisentTypeScale.body())
                         .foregroundStyle(WisentDesign.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1444,6 +1450,22 @@ private struct HostVaultBearerSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                }
+
+                if mode == .mint {
+                    Toggle(isOn: $showGeneratedBearer) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show generated bearer")
+                                .font(WisentTypeScale.bodyStrong())
+                                .foregroundStyle(WisentDesign.ink)
+                            Text(showGeneratedBearer
+                                ? "The command returns the new plaintext bearer once so it can be copied. Skarbiec stores only its hash."
+                                : "Off by default. The command returns non-secret grant metadata and discards its generated plaintext output.")
+                                .font(WisentTypeScale.caption())
+                                .foregroundStyle(WisentDesign.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
                 }
 
                 field(title: "Consumer", hint: "The exact consumer identity this bearer authenticates.") {
@@ -1513,6 +1535,9 @@ private struct HostVaultBearerSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if let rawBearer = store.rawBearer, let request {
+                    rawBearerSection(rawBearer, request: request)
+                }
                 if let receipt = store.receipt {
                     receiptSection(receipt)
                 }
@@ -1557,6 +1582,29 @@ private struct HostVaultBearerSheet: View {
                 .foregroundStyle(WisentDesign.muted)
         }
     }
+    private func rawBearerSection(
+        _ bearer: String,
+        request: HostVaultBearerRequest
+    ) -> some View {
+        WisentSectionBox(
+            title: "Generated bearer",
+            detail: "Shown because Show generated bearer was enabled. This plaintext is returned once; Skarbiec stores only its hash.",
+            trailing: "Sensitive"
+        ) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                EnrollmentCopyBlock(
+                    text: bearer,
+                    caption: "Copy it to its intended secret store before closing this sheet. Closing clears Desktop's displayed copy.",
+                    isSecret: true
+                )
+                WisentField(label: "Target", value: request.host)
+                WisentField(label: "Consumer", value: request.consumer)
+                WisentField(label: "Audience", value: request.audience)
+                WisentField(label: "Requested capabilities", value: request.capabilities)
+            }
+        }
+    }
+
 
     private func receiptSection(_ receipt: HostVaultBearerReceipt) -> some View {
         WisentSectionBox(
@@ -1611,7 +1659,9 @@ private struct HostVaultBearerSheet: View {
                 ? "Register the existing \(request.tokenItem ?? "")#\(request.tokenField) value for \(request.consumer)."
                 : "Mint a new bearer for \(request.consumer).",
             "Grant \(request.capabilities) for audience \(request.audience).",
-            "The result contains target, status, and grant metadata; it never contains bearer bytes.",
+            request.showGeneratedBearer
+                ? "Return the newly generated plaintext bearer once for display and copy; Skarbiec stores only its hash."
+                : "Return non-secret target, status, and grant metadata without bearer bytes.",
         ]
         if request.replaceCapabilities {
             lines.append("Replace the consumer's existing capability set.")
@@ -1625,7 +1675,9 @@ private struct HostVaultBearerSheet: View {
             listing: [StadoCLI.commandLine(HostVaultBearerStore.arguments(request))],
             footnote: stored
                 ? "The owner-vault field stays on the target and is not returned to Desktop."
-                : "The newly minted bearer stays on the target and is not returned to Desktop.",
+                : request.showGeneratedBearer
+                    ? "The generated bearer is shown after success because Show generated bearer is enabled."
+                    : "The generated plaintext is discarded; only its hash and grant remain in the target vault.",
             actions: [
                 WisentAction("Back to form", kind: .secondary) { reviewing = false },
                 WisentAction(
