@@ -110,11 +110,25 @@ staged=$(/usr/bin/mktemp "$work/$label.plist.XXXXXX")
 trap '/bin/rm -f "$staged"' EXIT HUP INT TERM
 account=$(/usr/bin/id -un)
 
-/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$backup_store" "$account" "$log" "$HOME" "$config" <<'PY'
+/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$backup_store" "$account" "$log" "$HOME" "$config" "$plist" <<'PY'
 import plistlib, sys
 
-path, label, program, store, backup_store, account, log, home, config = sys.argv[1:]
-document = {
+path, label, program, store, backup_store, account, log, home, config, installed = sys.argv[1:]
+# Recovery owns the executable and required environment, not every launchd
+# option. Preserve fields the shared service renderer installed, including
+# resource limits, instead of rewriting a healthy unit into a second shape.
+try:
+    with open(installed, "rb") as handle:
+        document = plistlib.load(handle)
+except (FileNotFoundError, plistlib.InvalidFileException):
+    document = {}
+if not isinstance(document, dict):
+    document = {}
+environment = document.get("EnvironmentVariables")
+if not isinstance(environment, dict):
+    environment = {}
+document.pop("Program", None)
+document.update({
     "Label": label,
     "ProgramArguments": [
         program,
@@ -125,6 +139,7 @@ document = {
         "8765",
     ],
     "EnvironmentVariables": {
+        **environment,
         "HOME": home,
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "STADO_CONFIG": config,
@@ -142,7 +157,7 @@ document = {
     "UserName": account,
     "StandardOutPath": log,
     "StandardErrorPath": log,
-}
+})
 with open(path, "wb") as handle:
     plistlib.dump(document, handle, fmt=plistlib.FMT_XML, sort_keys=False)
 PY

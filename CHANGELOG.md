@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Cargo inventory:** `stado host inventory` reports fixed Cargo-root metadata and complete direct bin membership, including cache symlinks and hidden entries, with explicit partial-read states. Stado Desktop reads the same typed report through the authenticated host inventory API.
+- **Service convergence:** catalog lookup resolves both product names and native unit identities, so label-addressed repairs retain the full required environment. Object API recovery preserves unrelated installed unit fields rather than competing with the shared renderer.
+- **Completion recording:** after a unit changes, `service ensure` waits up to 30 seconds for an authoritative registry read before recording completion. Only retryable reads are repeated; host actions and conditional writes are not. A later failure names the completed action, running PID, and original recording error.
+
 ## 0.16.25
 
 - **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
