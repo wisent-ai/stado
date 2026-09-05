@@ -6,6 +6,7 @@
 //! run, or fixture replaces the channel. The built Stado binary performs every
 //! network operation; the test then verifies and executes the bytes it fetched.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -79,8 +80,38 @@ fn manifest(path: &Path, version: &str, platform: &str) -> Value {
 }
 
 fn release_binary(archive: &Path, destination: &Path) -> PathBuf {
-    Archive::new(GzDecoder::new(
+    let members = Archive::new(GzDecoder::new(
         fs::File::open(archive).expect("release archive opens"),
+    ))
+    .entries()
+    .expect("release archive entries are readable")
+    .map(|entry| {
+        entry
+            .expect("release archive entry is readable")
+            .path()
+            .expect("release archive member path is valid")
+            .into_owned()
+    })
+    .collect::<BTreeSet<_>>();
+    let expected = [
+        "SHA256SUMS",
+        "stado",
+        "stado-coverage",
+        "stado-fix",
+        "stado-mcp",
+        "stado-watchdog",
+        "wc",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        members, expected,
+        "native release archive members match the tag train contract"
+    );
+
+    Archive::new(GzDecoder::new(
+        fs::File::open(archive).expect("release archive reopens"),
     ))
     .unpack(destination)
     .expect("verified release archive extracts");
