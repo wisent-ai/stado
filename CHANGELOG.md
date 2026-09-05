@@ -4,8 +4,10 @@
 
 - **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.
 - **Terminal cleanup:** the Linux matrix removes its own Cargo output on both success and failure, and keeps the downloaded signing tool in its ignored work directory instead of making the source checkout dirty.
-- **Migration and rollback:** no configuration or persisted-state migration is required. Rolling back restores the larger temporary build footprint and leaves Linux qualification caches until normal retention removes them.
-- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`.
+- **Coordinator archive delivery:** `service update --from-archive` now validates members against the layout it actually installs. Because the installer supplies the fixed `darwin-arm/` directory, a unit running `current/darwin-arm/stado` correctly accepts a root `stado` member instead of requiring an archive that would install as `darwin-arm/darwin-arm/stado`.
+- **Recovery:** this lets the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files or restarting the unit.
+- **Migration and rollback:** no stored data changes. Rolling back restores the larger temporary build footprint, leaves Linux qualification caches until normal retention removes them, and restores the contradictory archive preflight that prevents repair of a versioned managed service.
+- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`; immutable Stado publication and service-update receipts bind the coordinator repair's exact source and bytes.
 
 ## 0.16.10
 

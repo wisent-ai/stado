@@ -7624,13 +7624,16 @@ fn normalize_member(raw: &str) -> String {
         .to_string()
 }
 
-/// Refuse an archive that does not carry the file the unit executes.
+/// Refuse an archive that does not carry the file the unit executes after the
+/// installer adds its fixed `darwin-arm/` platform directory.
 ///
-/// The unit's program is an absolute path through `current`, so what the
-/// archive must hold is the part after it: a unit running
-/// `.../current/darwin-arm/stado` needs a member `darwin-arm/stado`. Both
-/// sides are named in the refusal, because the useful sentence is the
-/// mismatch, not the fact of one.
+/// The unit's program is an absolute path through `current`, while
+/// [`ARCHIVE_INSTALL_BODY`] extracts the archive inside
+/// `version_dir/darwin-arm`. A unit running
+/// `.../current/darwin-arm/stado` therefore needs a root archive member
+/// `stado`, not a second `darwin-arm/stado` nesting. Both sides are named in
+/// the refusal, because the useful sentence is the mismatch, not the fact of
+/// one.
 fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(), String> {
     let Some(relative) = program.split("/current/").nth(usize::from(true)) else {
         // A unit pinned to a version directory rather than `current` is a
@@ -7639,7 +7642,8 @@ fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(
         return Ok(());
     };
     let relative = normalize_member(relative);
-    if relative.is_empty() || members.iter().any(|member| member == &relative) {
+    let archive_relative = relative.strip_prefix("darwin-arm/").unwrap_or(&relative);
+    if archive_relative.is_empty() || members.iter().any(|member| member == archive_relative) {
         return Ok(());
     }
     let mut held: Vec<&str> = members
@@ -8054,8 +8058,8 @@ mod tests {
     }
 
     /// The exact 2026-09-04 outage: the object API unit runs
-    /// `current/darwin-arm/stado` and every published stado archive holds
-    /// `bin/stado`. The refusal must name both halves.
+    /// `current/darwin-arm/stado` but a product archive holds `bin/stado`.
+    /// The refusal must name both halves.
     #[test]
     fn an_archive_without_the_unit_program_is_refused_naming_both() {
         let members = vec!["bin/stado".to_string()];
@@ -8070,7 +8074,7 @@ mod tests {
 
     #[test]
     fn an_archive_carrying_the_unit_program_is_accepted() {
-        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
+        let members = vec!["stado".to_string(), "lib".to_string()];
         refuse_archive_without_program(
             "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
             &members,
