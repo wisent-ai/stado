@@ -585,10 +585,15 @@ fn service_role(label: &str, command: &str) -> &'static str {
     let executable = tokens
         .iter()
         .position(|token| executable_name(token) == "stado");
+    if executable.is_some_and(|index| {
+        tokens.get(index + 1).copied() == Some("release")
+            && tokens.get(index + 2).copied() == Some("agent")
+    }) {
+        return "release-agent";
+    }
     if let Some(index) = executable {
         return match tokens.get(index + 1).copied() {
             Some("resolver") => "transport",
-            Some("release-agent") => "release-agent",
             Some("coordinator" | "local-control-plane" | "cloud-control-plane") => "coordinator",
             Some("agent") => "agent",
             Some("disk-cleanup") => "disk-cleanup",
@@ -3160,8 +3165,7 @@ fn verify_resident_lock(transaction: &str) -> Result<(), DeployError> {
         })?;
     let descriptor_device = u64::try_from(descriptor_metadata.st_dev)
         .map_err(|_| DeployError("resident reconciliation lock has invalid device".to_string()))?;
-    if path_metadata.dev() != descriptor_device
-        || path_metadata.ino() != descriptor_metadata.st_ino
+    if path_metadata.dev() != descriptor_device || path_metadata.ino() != descriptor_metadata.st_ino
     {
         return Err(DeployError(
             "resident reconciliation lock no longer maps the canonical transaction lock"
