@@ -1819,7 +1819,7 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Mint one bounded Skarbiec bearer on TARGET's live vault.
+    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
     #[command(name = "vault-token-mint")]
     VaultTokenMint {
         target: String,
@@ -1836,8 +1836,14 @@ enum HostCommands {
         /// Replace an existing consumer's capability set.
         #[arg(long)]
         replace_capabilities: bool,
-        /// Print only the bearer, for piping directly into a secret store.
+        /// Reuse this owner-vault item's bearer instead of generating one.
         #[arg(long)]
+        token_item: Option<String>,
+        /// Field in --token-item; defaults to token.
+        #[arg(long, requires = "token_item")]
+        token_field: Option<String>,
+        /// Print only a newly generated bearer, for piping into a secret store.
+        #[arg(long, conflicts_with = "token_item")]
         raw_token: bool,
         /// Emit nonsecret bearer metadata as JSON.
         #[arg(long)]
@@ -3444,6 +3450,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 audience,
                 ttl_seconds,
                 replace_capabilities,
+                token_item,
+                token_field,
                 raw_token,
                 json,
             } => {
@@ -3454,6 +3462,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     &audience,
                     ttl_seconds,
                     replace_capabilities,
+                    token_item.as_deref(),
+                    token_field.as_deref().unwrap_or("token"),
                     raw_token,
                     json,
                 )
