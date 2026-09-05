@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.25
+
+- **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
+
 ## 0.16.24
 
 - **Stable proxy startup:** activation and rollback wait for the stable readiness endpoint using the product's declared readiness timeout. A live process or a fixed 200 ms delay no longer substitutes for a listening, forwarding proxy; an exited process still fails immediately, and an expired wait reports the last observed error.
@@ -10,7 +14,7 @@
 
 ## 0.16.23
 
-- **Release coordinate:** this coordinate remains bound to source `d38c960e82747fd94e954eeaba0fd202e5509a16`. The integrated authority, recovery, and archive changes above are delivered in 0.16.24 rather than overwriting that source identity.
+- **Release coordinate:** this coordinate remains bound to source `d38c960e82747fd94e954eeaba0fd202e5509a16`. The integrated authority, recovery, and archive changes use a new coordinate rather than overwriting that source identity.
 
 ## 0.16.22
 
