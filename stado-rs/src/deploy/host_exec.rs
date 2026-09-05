@@ -966,6 +966,12 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
         why: "prints the login user's uid, gid and groups; takes no argument and writes nothing",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/getent", "passwd", "root"],
+        why: "reads root's public account record, including its configured home and login shell, \
+              from the system account database; it does not read the shadow password database \
+              and every lookup word is fixed",
+    },
+    ApprovedCommand {
         argv: &["/bin/date", "-u"],
         why: "prints the current UTC clock; -u only selects the timezone. Clock skew is a real \
               cause of refused ssh keys and failed storage authentication, so it is worth \
@@ -1494,6 +1500,25 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               on macOS. `list-units` is systemd's read-only verb with every selector fixed \
               here; the mutating verbs (start, stop, restart, enable, daemon-reload) are \
               absent from this table and cannot be reached through it",
+    },
+    ApprovedCommand {
+        argv: &["/bin/cat", "/etc/ssh/sshd_config"],
+        why: "reads the Ubuntu OpenSSH server's fixed primary configuration file so a \
+              server-side command or session override can be attributed; the path is fixed, \
+              no included file or operator-supplied path is followed, and cat writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/journalctl",
+            "--unit",
+            "ssh.service",
+            "--lines",
+            "200",
+            "--no-pager",
+        ],
+        why: "reads the last 200 records owned by Ubuntu's active OpenSSH systemd unit, with \
+              a fixed unit and bound output; journalctl's read-only form neither changes the \
+              service nor follows future records",
     },
     ApprovedCommand {
         argv: &[
