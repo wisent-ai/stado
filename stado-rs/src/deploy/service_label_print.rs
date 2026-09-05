@@ -99,7 +99,7 @@ if [ \"$os\" = Darwin ]; then
         if [ -n \"$opened_device\" ] && [ -n \"$opened_inode\" ] &&
            [ \"$opened_device\" -eq \"$mapped_device_decimal\" ] &&
            [ \"$opened_inode\" -eq \"$mapped_inode\" ]; then
-          image_digest=$(/usr/bin/openssl dgst -sha256 -r /dev/fd/9 2>/dev/null)
+          image_digest=$(/usr/bin/openssl dgst -sha256 -r <&9 2>/dev/null)
           image_digest=${image_digest%% *}
           after_identity=$(/usr/bin/stat -f '%d %i' <&9 2>/dev/null || true)
           after_device=${after_identity%% *}
