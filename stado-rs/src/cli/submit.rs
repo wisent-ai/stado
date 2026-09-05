@@ -371,6 +371,27 @@ fn get_str_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+/// Turn an operator-facing registry target into the consumer id stored on a
+/// hard-pinned job. The configured registry is authoritative: the bundled
+/// snapshot may predate the target the running worker was started from.
+pub(super) async fn resolve_pinned_host(value: &str) -> Result<String, CmdError> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let Some(target) = registry.lookup(value) else {
+        return Ok(value.to_string());
+    };
+    let Some(hostname) = target.hostnames.first() else {
+        return Err(CmdError::click(format!(
+            "--pinned-host target '{value}' has no hostnames[] in the registry; \
+             cannot derive its consumer_id."
+        )));
+    };
+    Ok(format!("{}-{hostname}", target.kind))
+}
 
 pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     if args.yieldable && args.on_yield.trim().is_empty() {
@@ -457,20 +478,8 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         Some(parsed.to_rfc3339())
     };
 
-    let mut pinned_host = args.pinned_host.clone();
+    let pinned_host = resolve_pinned_host(&args.pinned_host).await?;
     if !pinned_host.is_empty() {
-        let registry = crate::targets::fetch_registry_remote()
-            .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?;
-        if let Some(target) = registry.lookup(&pinned_host) {
-            if target.hostnames.is_empty() {
-                return Err(CmdError::click(format!(
-                    "--pinned-host target '{pinned_host}' has no hostnames[] \
-                     in the registry; cannot derive its consumer_id."
-                )));
-            }
-            pinned_host = format!("{}-{}", target.kind, target.hostnames[0]);
-        }
         println!("Job pinned to consumer: {pinned_host}");
     }
 

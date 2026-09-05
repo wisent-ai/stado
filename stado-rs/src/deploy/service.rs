@@ -2015,6 +2015,7 @@ say() {
   if ! stado_domain_of \"$unit_path\"; then
 @NO_DOMAIN@
   fi
+@OBSERVED_DOMAIN@
 elif [ \"$os\" = \"Linux\" ]; then
   # The same search the Darwin branch above makes, for the same reason it was
   # widened: adoption looked only at this login's user units and reported a
@@ -2710,7 +2711,7 @@ say 'restart_failed' \"ended pid(s) $daemon_before and launchd started nothing i
 /// restart used is [`STATUS_NOT_LOADED`]: the domain, launchd's own words and
 /// the reason, and nothing started outside launchd.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
-  if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+  if [ \"${stado_reload_unit:-0}\" != 1 ] && $launch print \"$domain/$unit\" >/dev/null 2>&1; then
     # An in-place kick re-execs the argv launchd already holds. It cannot
     # apply a unit file whose program or arguments have changed, and it
     # reports success either way -- which is how two restarts and an ensure
@@ -3749,10 +3750,21 @@ fn prelude_with(
     linux_unit: &str,
     path: &str,
     no_domain: &str,
+    observed_domain: Option<&str>,
 ) -> Result<String, DeployError> {
     validate_unit_id(unit)?;
     Ok(REMOTE_PRELUDE
         .replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER)
+        .replace(
+            "@OBSERVED_DOMAIN@",
+            &observed_domain.map_or_else(String::new, |domain| {
+                format!(
+                    "  domain={}\n  domain_status={}\n  domain_reason='the exact loaded owner was observed before this lifecycle action'\n",
+                    shlex_quote(domain),
+                    if domain.starts_with("gui/") { "graphical" } else { "fallback" },
+                )
+            }),
+        )
         .replace("@UNIT_STATE@", UNIT_STATE)
         .replace("@UNIT@", &shlex_quote(unit))
         .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
@@ -3761,7 +3773,7 @@ fn prelude_with(
 }
 
 fn remote_prelude(unit: &str, linux_unit: &str, path: &str) -> Result<String, DeployError> {
-    prelude_with(unit, linux_unit, path, NO_DOMAIN_REFUSE)
+    prelude_with(unit, linux_unit, path, NO_DOMAIN_REFUSE, None)
 }
 
 /// Assemble a remote program: the shared prelude with this unit spliced in,
@@ -4011,8 +4023,28 @@ pub async fn restart_service_with_password(
     if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
         return restart_system_daemon(target, service, sudo_password, runner).await;
     }
-    let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
-    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    restart_non_system_service(target, service, None, false, runner).await
+}
+
+async fn restart_non_system_service(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    observed_domain: Option<&str>,
+    reload_unit: bool,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = format!(
+        "stado_reload_unit={}\n{}",
+        u8::from(reload_unit),
+        RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP)
+    );
+    let prelude = prelude_with(
+        service.unit_id(),
+        "",
+        &service.path,
+        NO_DOMAIN_REFUSE,
+        observed_domain,
+    )?;
     let mut report = run_remote_checked(
         target,
         &prelude,
@@ -4065,6 +4097,31 @@ async fn restart_system_daemon(
         // and that is a better answer than a refusal composed here.
         return Ok(probe);
     };
+    let cached = super::service_label_print::print_label(
+        target,
+        service.unit_id(),
+        BootoutScope::System,
+        runner,
+    )
+    .await?;
+    if cached.loaded() {
+        let cached_argv = cached.runs().ok_or_else(|| {
+            DeployError(format!(
+                "{} has no readable cached launchd argument vector",
+                service.unit_id()
+            ))
+        })?;
+        if cached_argv != daemon.argv {
+            return privileged_restart_system_daemon(
+                target,
+                service,
+                sudo_password.unwrap_or_default(),
+                true,
+                runner,
+            )
+            .await;
+        }
+    }
     if !daemon.restartable_unprivileged() {
         if let Some(password) = sudo_password {
             return privileged_restart_system_daemon(target, service, password, false, runner)
@@ -4341,7 +4398,8 @@ async fn privileged_restart_system_daemon(
                 path: service.path.clone(),
                 status: "restarted".to_string(),
                 detail: format!(
-                    "launchctl kickstart replaced the system daemon with pid(s) {}",
+                    "launchctl {} the system daemon with pid(s) {}",
+                    if reload_unit { "reloaded" } else { "restarted" },
                     daemon.owned_pids.join(" ")
                 ),
                 postcondition: RUNNING_DESCRIBE.to_string(),
@@ -4352,8 +4410,9 @@ async fn privileged_restart_system_daemon(
         }
     }
     Err(DeployError(format!(
-        "{} accepted the privileged kickstart but no process appeared for {} in 15 seconds",
+        "{} accepted the privileged {} but no process appeared for {} in 15 seconds",
         target.name,
+        if reload_unit { "reload" } else { "kickstart" },
         service.unit_id()
     )))
 }
@@ -5226,6 +5285,7 @@ pub async fn ensure_service(
         &plan.unit,
         &ensure_unit_path(plan),
         NO_DOMAIN_SYSTEM,
+        None,
     )?;
     let mut report = run_remote_checked(
         target,
@@ -6230,24 +6290,24 @@ pub fn units_running_replaced_images(
         .collect()
 }
 
-/// Restart one launchd unit on THIS machine, in place.
+/// Restart one local launchd unit in its observed owner domain.
 ///
-/// Without an observed owner, user units try `gui/<uid>` and then
-/// `user/<uid>`. Callers that already observed ownership supply its exact
-/// domain so it is selected before any mutation. System jobs use the same
-/// non-interactive `sudo -n` lifecycle path as the service installer and
-/// report refusal rather than prompting.
-///
-/// The unit path first establishes the allowed domain set. An observed owner
-/// outside that set is rejected before `launchctl` runs, so discovery cannot
-/// mutate one job and diagnose a cross-domain mismatch afterwards. Returns the
-/// service target that answered.
-pub fn kickstart_local_unit(
+/// Reuse the in-place kick when launchd still holds the program on disk.
+/// A changed cached definition must instead be reloaded through the existing
+/// system or user service lifecycle, after the plist and executable are read.
+/// Multiple owners, a domain inconsistent with the unit path, or an unreadable
+/// replacement refuse before mutation. System operations remain non-interactive.
+pub async fn restart_local_unit(
+    target: &ComputeTarget,
     label: &str,
     unit_path: &str,
     observed_domain: Option<&str>,
 ) -> Result<String, String> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if !host_channel::target_is_this_host(target) {
+        return Err("local unit restart requires this host's registry target".to_string());
+    }
+    validate_unit_id(label).map_err(|error| error.to_string())?;
     let unit_domain = UnitDomain::from_path(unit_path);
     if matches!(unit_domain, UnitDomain::Unknown) {
         return Err(format!(
@@ -6272,29 +6332,104 @@ pub fn kickstart_local_unit(
         }
         candidates.retain(|candidate| candidate == observed);
     }
-    let mut refusals = Vec::new();
-    for domain in candidates {
-        let service = format!("{domain}/{label}");
-        let output = if unit_domain.requires_privileged_bootstrap() {
-            std::process::Command::new("/usr/bin/sudo")
-                .args(["-n", "/bin/launchctl", "kickstart", "-k", &service])
-                .output()
-                .map_err(|error| format!("/usr/bin/sudo did not run: {error}"))?
-        } else {
-            std::process::Command::new("/bin/launchctl")
-                .args(["kickstart", "-k", &service])
-                .output()
-                .map_err(|error| format!("/bin/launchctl did not run: {error}"))?
-        };
-        if output.status.success() {
-            return Ok(service);
-        }
-        refusals.push(format!(
-            "{service}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+    let runner = super::production_runner();
+    let units = loaded_units(target, &runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    let loaded = units
+        .iter()
+        .find(|unit| unit.label == label)
+        .ok_or_else(|| format!("launchd holds no observed unit named {label}"))?;
+    let [domain] = loaded.loaded_domains.as_slice() else {
+        return Err(format!(
+            "{label} has {} loaded owners; refusing to choose a lifecycle domain",
+            loaded.loaded_domains.len()
+        ));
+    };
+    if !candidates.contains(domain) {
+        return Err(format!(
+            "{unit_path} permits {}, but launchd reports owner {domain}",
+            candidates.join(" or ")
         ));
     }
-    Err(refusals.join("; "))
+    let service = ManagedService {
+        host: target.name.clone(),
+        name: label.to_string(),
+        label: label.to_string(),
+        path: unit_path.to_string(),
+        kind: KIND_LAUNCHD.to_string(),
+        ..ManagedService::default()
+    };
+    let unit = fetch_unit_file(target, &service, &runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    let program = parse_unit_program(&unit)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("{unit_path} declares no executable program"))?;
+    let metadata = std::fs::metadata(&program)
+        .map_err(|error| format!("cannot read the replacement {program}: {error}"))?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        return Err(format!("{program} is not an executable file"));
+    }
+    let scope = if unit_domain.requires_privileged_bootstrap() {
+        BootoutScope::System
+    } else {
+        BootoutScope::User
+    };
+    let cached = super::service_label_print::print_label(target, label, scope, &runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    if cached.domain.as_deref() != Some(domain.as_str()) {
+        return Err(format!("{label} changed its loaded owner before restart"));
+    }
+    let cached_program = cached
+        .program
+        .as_deref()
+        .or_else(|| cached.arguments.as_deref()?.split_whitespace().next())
+        .ok_or_else(|| format!("{domain}/{label} has no readable cached program"))?;
+    if cached_program != program
+        || cached
+            .arguments
+            .as_deref()
+            .is_some_and(|argv| argv != loaded.program)
+    {
+        let report = if unit_domain.requires_privileged_bootstrap() {
+            reload_service_with_password(target, &service, None, &runner).await
+        } else {
+            restart_non_system_service(target, &service, Some(domain), true, &runner).await
+        }
+        .map_err(|error| error.to_string())?;
+        if !report.succeeded("restarted") {
+            return Err(report.failure());
+        }
+        if report.domain != *domain {
+            return Err(format!(
+                "{label} reloaded in {}, not {domain}",
+                report.domain
+            ));
+        }
+        return Ok(format!("{domain}/{label}"));
+    }
+    let qualified = format!("{domain}/{label}");
+    let output = if unit_domain.requires_privileged_bootstrap() {
+        std::process::Command::new("/usr/bin/sudo")
+            .args(["-n", "/bin/launchctl", "kickstart", "-k", &qualified])
+            .output()
+            .map_err(|error| format!("/usr/bin/sudo did not run: {error}"))?
+    } else {
+        std::process::Command::new("/bin/launchctl")
+            .args(["kickstart", "-k", &qualified])
+            .output()
+            .map_err(|error| format!("/bin/launchctl did not run: {error}"))?
+    };
+    if output.status.success() {
+        Ok(qualified)
+    } else {
+        Err(format!(
+            "{qualified}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
