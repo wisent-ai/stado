@@ -40,7 +40,11 @@ assert.ok(mediaManifest, 'PROBIERZ_MEDIA_MANIFEST is required');
 
 const result = await run('cargo', args, {
   cwd: crate,
-  env: process.env,
+  env: {
+    ...process.env,
+    CARGO_PROFILE_TEST_DEBUG: '0',
+    CARGO_INCREMENTAL: '0',
+  },
   encoding: 'utf8',
   timeout: 10 * 60 * 1000,
   maxBuffer: 8 * 1024 * 1024,

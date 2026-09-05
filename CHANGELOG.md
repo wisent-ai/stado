@@ -7,15 +7,18 @@
 ## 0.16.19
 
 - **Linux service creation:** `service deploy` and the first-install path of `service ensure` expand the same host-home and account placeholders as existing-unit reconciliation. A newly installed resolver no longer receives literal template values as `HOME` and `STADO_CONFIG`.
-- **Migration and rollback:** existing units remain eligible for the normal definition comparison and convergence; no registry schema changes are required. Rolling back restores unexpanded placeholders on new Linux units.
-- **Platforms:** Linux uses its native systemd owner and the existing installation path; Darwin service rendering is unchanged.
+- **Release capacity contract:** stable deployment reads `free_gb`, `low_watermark_gb`, and `target_free_gb` from the `disk` object emitted by `host gates --json`. Candidate admission and post-cleanup retention therefore judge the authoritative report instead of treating nested fields as absent.
+- **Migration and rollback:** existing units remain eligible for normal definition convergence, with no registry schema changes. Rolling back restores unexpanded placeholders on new Linux units and the stale top-level disk lookup that prevents release publication before platform object mutation.
+- **Platforms:** corrected release admission applies to `darwin-arm64` and `linux-amd64`; Linux unit creation uses the native systemd owner, and Darwin service rendering is unchanged.
 
 ## 0.16.18
 
 - **Measured CPU admission:** available cores use operating-system processor-time deltas instead of runnable-process load averages, so a high load average cannot falsely close a host whose CPU is idle. Unavailable measurements remain explicit, and already-owned jobs still reserve their requested cores.
 - **Linux release readers:** a system-scoped queue worker now addresses its owner's user systemd manager with the same runtime directory and bus address as service operations. Release installation can refresh the running user resolver instead of failing to enumerate it after replacing the binary.
 - **Failure reporting:** failed systemd reader operations retain the command's exit status and stderr; delivery still fails unless each replaced reader maps the installed executable.
-- **Migration and rollback:** no stored data changes. Rolling back restores dependence on inherited login-session variables during Linux release delivery.
+- **Canonical archive layout:** both native recipes now stage `stado` at the archive root, matching the existing release workflow and declared `current/darwin-arm/stado` readers. The candidate bootstrap and all three host installers consume that same member; private services no longer need a differently packed archive.
+- **Existing native journeys:** build qualification checks the completed artifact without requiring a fleeting queued state. Stale-lock qualification retains its filesystem and persisted-outcome checks without assuming a policy mode before policy resolution; the integrated isolated registry fixture names its actual native platform.
+- **Migration and rollback:** no stored data changes. Rolling back restores inherited-login dependence during Linux delivery and the incompatible `bin/stado` layout of the earlier native pipeline; published coordinates are not rewritten.
 - **Platforms:** the existing signed `darwin-arm64` and `linux-amd64` build and delivery paths remain unchanged.
 ## 0.16.17
 
