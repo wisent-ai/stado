@@ -562,6 +562,24 @@ source endpoint; a Wisent account token is not a registry credential.
 saved settings. See the canonical [Desktop](https://stado.wisent.com/docs/desktop)
 and [configuration](https://stado.wisent.com/docs/configuration) pages.
 
+The server's independent Skarbiec verifier grant can be created without
+transferring its bearer through the operator's terminal:
+
+```bash
+stado host vault-token-mint charless-mac-mini stado-registry-api-verifier \
+  --capabilities read:stado-desktop-registry-api#token \
+  --audience skarbiec \
+  --token-file-name stado-registry-api-verifier-skarbiec-token --json
+```
+
+`--token-file-name` creates an owner-only file under the target's `.stado`
+directory when absent and reuses its exact bearer when present. Skarbiec
+still owns the grant, capability changes and expiry. If minting fails, the
+file remains available for the same command to resume. The Desktop client
+bearer is a separate `stado-desktop-registry-api/token` item, not this verifier
+grant; its declared actions must include `converge-read` and `converge-apply`
+for both Services operations.
+
 *Cloudflare routes — list, inspect, add, update and remove hostnames on a
 declared Cloudflare Tunnel without leaving Stado Desktop. The screen compares
 tunnel ingress with exact proxied CNAMEs, reports connector connections

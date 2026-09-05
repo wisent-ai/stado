@@ -7159,7 +7159,7 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
-    remote_skarbiec_json_at(target, arguments, None).await
+    remote_skarbiec_json_at(target, arguments, None, None).await
 }
 
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
@@ -7183,6 +7183,7 @@ async fn remote_skarbiec_json_at(
     target: &str,
     arguments: &[String],
     vault_relative: Option<&str>,
+    token_file_name: Option<&str>,
 ) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
         .first()
@@ -7226,6 +7227,55 @@ async fn remote_skarbiec_json_at(
     };
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let tool_path = skarbiec_tool_path(&home);
+    let token_file = if let Some(name) = token_file_name {
+        release_component("token file name", name)?;
+        let path = format!("{home}/.stado/{name}");
+        let script = format!(
+            r#"set -euo pipefail
+umask 077
+directory={directory}
+destination={destination}
+/bin/mkdir -p "$directory"
+if [ -L "$destination" ]; then
+  printf '%s\n' 'token file must not be a symlink' >&2
+  exit 1
+fi
+if [ -e "$destination" ]; then
+  if [ ! -f "$destination" ] || [ ! -s "$destination" ]; then
+    printf '%s\n' 'token file must be a nonempty regular file' >&2
+    exit 1
+  fi
+else
+  pending="$destination.pending.$$"
+  trap 'rm -f "$pending"' EXIT
+  /usr/bin/openssl rand -hex 32 > "$pending"
+  /bin/chmod 600 "$pending"
+  if ! /bin/ln "$pending" "$destination"; then
+    printf '%s\n' 'token file was created concurrently; retry using the persisted file' >&2
+    exit 1
+  fi
+fi
+"#,
+            directory = crate::deploy::shlex_quote(&format!("{home}/.stado")),
+            destination = crate::deploy::shlex_quote(&path),
+        );
+        let prepared = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !prepared.ok() {
+            return Err(CmdError::click(format!(
+                "{}: preparing token file {path} failed: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(
+                    &prepared,
+                    "remote token file creation failed"
+                )
+            )));
+        }
+        Some(path)
+    } else {
+        None
+    };
     let mut invocation = vec![
         "/usr/bin/env",
         tool_path.as_str(),
@@ -7234,22 +7284,32 @@ async fn remote_skarbiec_json_at(
         skarbiec.as_str(),
     ];
     invocation.extend(arguments.iter().map(String::as_str));
+    if let Some(path) = &token_file {
+        invocation.extend(["--token-file", path.as_str()]);
+    }
     let output = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
+        let retained = token_file
+            .as_ref()
+            .map(|path| format!("; bearer remains at {path} for a retry"))
+            .unwrap_or_default();
         return Err(CmdError::click(format!(
-            "{}: Skarbiec {command} failed: {}",
+            "{}: Skarbiec {command} failed: {}{retained}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
         )));
     }
-    let report = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+    let mut report: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
             "{}: Skarbiec {command} returned unreadable JSON: {error}",
             resolved.name
         ))
     })?;
+    if let Some(path) = token_file {
+        report["token_file"] = Value::String(path);
+    }
     Ok((resolved, report))
 }
 
@@ -7312,7 +7372,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     let list = vec![String::from("list")];
     let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
     let (_, mirror_report) =
-        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE)).await?;
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None).await?;
     let live = mirror_items(&live_report)?;
     let mirror = mirror_items(&mirror_report)?;
 
@@ -7464,8 +7524,8 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
 
 /// Mint a least-privilege bearer inside TARGET's live Skarbiec vault.
 ///
-/// Metadata is the default output. `raw_token` exists only for a direct pipe
-/// into another secret store; Stado never writes that bearer to disk or argv.
+/// Metadata is the default output. `raw_token` is for a direct pipe into a
+/// secret store; `token_file_name` keeps the bearer on the target instead.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -7475,6 +7535,7 @@ pub async fn vault_token_mint(
     ttl_seconds: u64,
     replace_capabilities: bool,
     raw_token: bool,
+    token_file_name: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
@@ -7483,6 +7544,14 @@ pub async fn vault_token_mint(
         return Err(CmdError::usage(
             "--raw-token and --json cannot be used together",
         ));
+    }
+    if let Some(name) = token_file_name {
+        release_component("token file name", name)?;
+        if raw_token {
+            return Err(CmdError::usage(
+                "--raw-token and --token-file-name cannot be used together",
+            ));
+        }
     }
     if capabilities.is_empty()
         || !capabilities
@@ -7506,7 +7575,8 @@ pub async fn vault_token_mint(
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }
-    let (resolved, mut report) = remote_skarbiec_json(target, &arguments).await?;
+    let (resolved, mut report) =
+        remote_skarbiec_json_at(target, &arguments, None, token_file_name).await?;
     let token = report
         .get("token")
         .and_then(Value::as_str)
@@ -7539,6 +7609,9 @@ pub async fn vault_token_mint(
             "{}: token minted for {consumer} with audience {audience}",
             resolved.name
         );
+        if let Some(path) = report.get("token_file").and_then(Value::as_str) {
+            println!("Bearer file: {path}");
+        }
     }
     Ok(())
 }

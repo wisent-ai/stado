@@ -1839,6 +1839,9 @@ enum HostCommands {
         /// Print only the bearer, for piping directly into a secret store.
         #[arg(long)]
         raw_token: bool,
+        /// Keep the bearer in TARGET's ~/.stado/NAME; create if absent, reuse if present.
+        #[arg(long, conflicts_with = "raw_token")]
+        token_file_name: Option<String>,
         /// Emit nonsecret bearer metadata as JSON.
         #[arg(long)]
         json: bool,
@@ -3446,6 +3449,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 ttl_seconds,
                 replace_capabilities,
                 raw_token,
+                token_file_name,
                 json,
             } => {
                 host::vault_token_mint(
@@ -3456,6 +3460,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     ttl_seconds,
                     replace_capabilities,
                     raw_token,
+                    token_file_name.as_deref(),
                     json,
                 )
                 .await
