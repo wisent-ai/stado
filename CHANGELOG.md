@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.11
+
+- **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.
+- **Terminal cleanup:** the Linux matrix removes its own Cargo output on both success and failure, and keeps the downloaded signing tool in its ignored work directory instead of making the source checkout dirty.
+- **Migration and rollback:** no configuration or persisted-state migration is required. Rolling back restores the larger temporary build footprint and leaves Linux qualification caches until normal retention removes them.
+- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`.
+
+## 0.16.10
+
+- **Release-capacity correction:** local `host reclaim` now runs disk cleanup exclusively through the exact Stado binary that owns the invocation. A tagged release can therefore use its corrected bounded janitor during pre-publication capacity recovery instead of re-entering the older installed janitor that is holding the retired lock; remote targets retain their installed authoritative executable.
+- **Lifecycle boundary:** no manual service restart or bootstrap is added. Normal digest-pinned `install-local` delivery retains the existing idle-slot agent handoff and launchd service declaration.
+- **Migration and rollback:** no stored data changes. The immutable 0.16.9 tag remains at its original source and published no release objects; rolling back restores installed-binary-first pre-publication cleanup.
+- **Platforms and evidence:** the local release-capacity path runs on the native control-plane platform; the existing remote reclaim path and installed-candidate fallback are unchanged.
+
 ## 0.16.9
 
 - **Product delivery:** non-Stado releases now run the installed Stado delivery worker against the signed product archive instead of requiring that unrelated archive to contain `bin/stado`. Stado self-delivery still runs the digest-pinned candidate worker so it can repair an older installed worker.

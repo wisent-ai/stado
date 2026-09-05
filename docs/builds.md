@@ -230,6 +230,11 @@ platform. Linux submissions use a stable Probierz-derived run ID, and Probierz
 retains the submission identity and complete terminal job report with its logs.
 Both paths use the published, digest-pinned Skarbiec 0.1.3 binary rather than
 rebuilding a moving dependency branch, and keep temporary files in managed work.
+Disposable qualification builds omit debug symbols and incremental caches;
+runtime checks and disk admission thresholds remain unchanged. The Linux
+journey removes its own Cargo output on success or failure and keeps the
+downloaded signing tool in ignored work files, so the recorded source stays
+clean.
 
 For disk pressure, `stado host disk TARGET --json` includes Linux inventory
 under the managed home, `/home`, `/mnt`, `/var`, and `/opt`.
