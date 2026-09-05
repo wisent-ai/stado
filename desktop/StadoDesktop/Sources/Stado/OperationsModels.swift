@@ -586,11 +586,12 @@ struct HostReclaimStage: Decodable, Identifiable, Sendable {
     }
 }
 
-/// One report from `stado service converge <host> [binary] --json`.
+/// The complete product report from `service converge`.
 ///
 /// Report mode leaves the apply arrays empty. Apply mode carries every
-/// delivery, refusal and binary that could not be delivered, even when the
-/// process exits non-zero; `StadoCLI` deliberately decodes that stdout first.
+/// delivery, refusal and binary that could not be delivered, including the
+/// untouched delivery `detail` strings that retain child JSON, stdout and
+/// stderr when convergence exits non-zero.
 struct ServiceConvergeReport: Decodable, Sendable {
     let target: String
     let applied: Bool
@@ -606,15 +607,13 @@ struct ServiceConvergeReport: Decodable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
-        applied = try values.decodeIfPresent(Bool.self, forKey: .applied) ?? false
-        releases = try values.decodeIfPresent([ServiceConvergeRelease].self, forKey: .releases) ?? []
-        undeliverable =
-            try values.decodeIfPresent([ServiceConvergeUndeliverable].self, forKey: .undeliverable) ?? []
-        refused = try values.decodeIfPresent([ServiceConvergeRefusal].self, forKey: .refused) ?? []
-        units = try values.decodeIfPresent([ServiceUnit].self, forKey: .units) ?? []
+        target = try values.decode(String.self, forKey: .target)
+        applied = try values.decode(Bool.self, forKey: .applied)
+        releases = try values.decode([ServiceConvergeRelease].self, forKey: .releases)
+        undeliverable = try values.decode([ServiceConvergeUndeliverable].self, forKey: .undeliverable)
+        refused = try values.decode([ServiceConvergeRefusal].self, forKey: .refused)
+        units = try values.decode([ServiceUnit].self, forKey: .units)
     }
-
 }
 
 struct ServiceConvergeRelease: Decodable, Sendable {
@@ -642,12 +641,35 @@ struct ServiceConvergeRefusal: Decodable, Sendable {
     }
 }
 
-/// The exact invocation and its complete decoded answer. Kept apart from
-/// refreshed service state so a refresh cannot erase mutation evidence.
+/// The API returns the product-owned exit decision and its report atomically.
+/// A nonzero exit code is still a complete successful HTTP response.
+struct ServiceConvergeResponse: Decodable, Sendable {
+    let exitCode: Int32
+    let report: ServiceConvergeReport
+
+    enum CodingKeys: String, CodingKey {
+        case exitCode = "exit_code"
+        case report
+    }
+}
+
+/// The equivalent CLI argv and the complete API answer. Kept apart from
+/// refreshed service state so a read-only refresh cannot erase mutation
+/// evidence.
 struct ServiceConvergeReceipt: Sendable {
     let arguments: [String]
     let exitCode: Int32
-    let report: ServiceConvergeReport
+    let json: String
+
+    init(arguments: [String], exitCode: Int32, document: Data) throws {
+        self.arguments = arguments
+        self.exitCode = exitCode
+        let object = try JSONSerialization.jsonObject(with: document)
+        let formatted = try JSONSerialization.data(
+            withJSONObject: object, options: [.prettyPrinted, .sortedKeys]
+        )
+        json = String(decoding: formatted, as: UTF8.self)
+    }
 }
 
 struct ServiceUnit: Decodable, Sendable {

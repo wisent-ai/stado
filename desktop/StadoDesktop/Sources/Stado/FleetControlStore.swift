@@ -73,7 +73,7 @@ final class FleetControlStore: ObservableObject {
             if requestGeneration == generation { isRefreshing = false }
         }
         do {
-            let policy = try await client.policy(at: address, authorizationToken: authorizationToken)
+            let policy = try await client.policy(at: address)
             guard requestGeneration == generation else { return }
             self.policy = policy
             lastUpdated = Date()
@@ -98,7 +98,6 @@ final class FleetControlStore: ObservableObject {
         do {
             let generation = try await client.updatePolicy(
                 at: address,
-                authorizationToken: authorizationToken,
                 target: target,
                 patch: patch
             )

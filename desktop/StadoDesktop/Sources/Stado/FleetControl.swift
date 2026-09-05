@@ -288,14 +288,13 @@ actor FleetControlClient {
     }
 
     func policy(
-        at address: OperationsDashboardAddress,
-        authorizationToken: String?
+        at address: OperationsDashboardAddress
     ) async throws -> FleetPolicy {
         var request = URLRequest(url: address.endpoint("api/registry.json"))
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        apply(authorizationToken, to: &request)
+        apply(try RegistryAPICredential.load().token(for: address), to: &request)
 
         let data = try await payload(for: request)
         do {
@@ -310,7 +309,6 @@ actor FleetControlClient {
     /// only proof the write landed on the document they were reading.
     func updatePolicy(
         at address: OperationsDashboardAddress,
-        authorizationToken: String?,
         target: String,
         patch: FleetPolicyPatch
     ) async throws -> String {
@@ -320,7 +318,7 @@ actor FleetControlClient {
         request.httpMethod = "POST"
         request.setValue("registry-policy", forHTTPHeaderField: "X-Stado-Action")
         try attach(body, to: &request)
-        apply(authorizationToken, to: &request)
+        apply(try RegistryAPICredential.load().token(for: address), to: &request)
 
         let data = try await payload(for: request)
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
