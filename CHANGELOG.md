@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.28
+
+- **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
+- **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
+- **Native Desktop:** Hosts sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
+- **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
+
 ## 0.16.27
 
 - **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.
