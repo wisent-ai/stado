@@ -109,7 +109,7 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 "#;
 
 const REMOTE_SCRIPT: &str = r#"set -u
-STADO_RECONCILE_PHASE=@PHASE@ STADO_RECONCILE_TX=@TRANSACTION@ STADO_RECONCILE_OWNER_TOKEN=@OWNER_TOKEN@ STADO_RECONCILE_LOCK_FD=@LOCK_FD@ STADO_RECONCILE_TRANSITION_RETIRED_STATE=@TRANSITION_RETIRED_STATE@ /usr/bin/python3 - <<'STADO_RECONCILE_EOF'
+STADO_RECONCILE_PHASE=@PHASE@ STADO_RECONCILE_TX=@TRANSACTION@ STADO_RECONCILE_OWNER_TOKEN=@OWNER_TOKEN@ STADO_RECONCILE_LOCK_FD=@LOCK_FD@ /usr/bin/python3 -I - <<'STADO_RECONCILE_EOF'
 import ctypes, datetime, fcntl, hashlib, json, os, stat, sys, time
 
 phase = os.environ["STADO_RECONCILE_PHASE"]
@@ -133,7 +133,6 @@ lock_path = os.path.join(home, ".stado", "recovery", "storage-root-reconcile.loc
 schema = "stado.storage-root-reconcile.v2"
 staging = os.path.join(work, ".clone-staging")
 lifecycle_root = "ecosystem/probierz/"
-transition_retired_state = os.environ["STADO_RECONCILE_TRANSITION_RETIRED_STATE"]
 
 
 def fail(message):
@@ -1161,7 +1160,6 @@ struct LifecycleFence {
 }
 
 fn bind_remote_script(phase: &str, transaction: &str) -> String {
-    let transition_retired_state = crate::queue::storage::TRANSITION_RETIRED_STATE;
     REMOTE_SCRIPT
         .replace("@PHASE@", &shlex_quote(phase))
         .replace("@TRANSACTION@", &shlex_quote(transaction))
@@ -1172,10 +1170,6 @@ fn bind_remote_script(phase: &str, transaction: &str) -> String {
         .replace(
             "@LOCK_FD@",
             &shlex_quote(&RESIDENT_LOCK_FD.get().copied().unwrap_or(-1).to_string()),
-        )
-        .replace(
-            "@TRANSITION_RETIRED_STATE@",
-            &shlex_quote(transition_retired_state),
         )
 }
 
@@ -1190,10 +1184,12 @@ fn parse_remote_payload(output: &super::CommandOutput) -> Result<Value, DeployEr
         }
     }
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            output,
-            "storage reconciliation host program failed",
-        )));
+        let detail = output.detail().trim();
+        return Err(DeployError(if detail.is_empty() {
+            "storage reconciliation host program failed".to_string()
+        } else {
+            detail.to_string()
+        }));
     }
     payload.ok_or_else(|| DeployError("storage reconciliation returned no payload".to_string()))
 }
