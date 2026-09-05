@@ -680,9 +680,10 @@ pub async fn run_tick(
     // By-run reaper: drop per-job blobs once a run is fully terminal so
     // completed/+failed/ stop accumulating thousands of orphaned records.
     // Capped per tick to bound work on a large backlog. Cleanup is not the
-    // scheduler: a stale run index whose manifest was concurrently removed
-    // must be reported, but it must not terminate the daemon after dispatch
-    // has completed and cause launchd to restart it in a tight loop.
+    // scheduler: a manifest listed for cleanup can disappear between that
+    // listing and the cleanup reader's legacy-migration read. The race is
+    // reported, but it must not terminate the daemon after dispatch has
+    // completed and cause launchd to restart it in a tight loop.
     match reap_terminal_runs(store, config::RUN_REAP_PER_TICK).await {
         Ok(summary) => {
             if summary.reaped_runs > 0 {
