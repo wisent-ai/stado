@@ -1,4 +1,4 @@
-import ctypes, datetime, fcntl, hashlib, json, os, stat, sys, time
+import ctypes, datetime, errno, fcntl, hashlib, json, os, stat, subprocess, sys, time
 
 phase = os.environ["STADO_RECONCILE_PHASE"]
 tx = os.environ["STADO_RECONCILE_TX"]
@@ -36,12 +36,76 @@ def fsync_dir(path):
         os.close(descriptor)
 
 
+def confined_path(path, roots, label):
+    candidate = os.path.abspath(path)
+    for root in roots:
+        allowed = os.path.abspath(root)
+        if candidate != allowed and os.path.commonpath((candidate, allowed)) == allowed:
+            return candidate
+    fail(label + " escaped its captured transaction roots")
+
+
+def noninteractive_privileged(arguments, label):
+    result = subprocess.run(
+        ["/usr/bin/sudo", "-n"] + arguments,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        close_fds=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        fail(label + ": " + (detail[-1] if detail else "privileged command failed"))
+    return result
+
+
+def privileged_digest(path):
+    source = confined_path(
+        path, (primary, backup), "privileged physical-root digest")
+    result = noninteractive_privileged(
+        ["/usr/bin/openssl", "dgst", "-sha256", "-r", source],
+        "cannot hash unreadable physical-root file",
+    )
+    encoded = result.stdout.strip().split(None, 1)
+    if (not encoded
+            or len(encoded[0]) != 64
+            or any(character not in "0123456789abcdef" for character in encoded[0])):
+        fail("privileged physical-root digest has invalid output")
+    return encoded[0]
+
+
+def privileged_clone(source, destination):
+    source = confined_path(
+        source, (primary, backup), "privileged copy-on-write clone source")
+    destination = confined_path(
+        destination, (staging,), "privileged copy-on-write clone destination")
+    noninteractive_privileged(
+        ["/bin/cp", "-c", "-p", source, destination],
+        "privileged copy-on-write clone failed",
+    )
+    info = os.lstat(destination)
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        fail("privileged copy-on-write clone produced a non-regular destination")
+    noninteractive_privileged(
+        ["/usr/bin/chflags", "nouchg,noschg", destination],
+        "cannot clear immutable flags on privileged clone",
+    )
+    noninteractive_privileged(
+        ["/usr/sbin/chown", str(os.getuid()) + ":" + str(os.getgid()), destination],
+        "cannot transfer privileged clone ownership",
+    )
+
+
 def digest(path):
     value = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                value.update(chunk)
+        return value.hexdigest()
+    except PermissionError:
+        return privileged_digest(path)
 
 
 def metadata_path(root, relative):
@@ -133,7 +197,11 @@ def clone_file(source, destination):
         clone.restype = ctypes.c_int
         if clone(os.fsencode(source), os.fsencode(temporary), 0) != 0:
             error = ctypes.get_errno()
-            fail("clonefile refused copy-on-write clone: " + os.strerror(error))
+            if error not in (errno.EACCES, errno.EPERM):
+                fail("clonefile refused copy-on-write clone: " + os.strerror(error))
+            if os.path.lexists(temporary):
+                fail("clonefile left a partial privileged clone destination")
+            privileged_clone(source, temporary)
     if digest(source) != digest(temporary):
         fail("copy-on-write clone verification failed")
     if hasattr(os, "chflags"):
