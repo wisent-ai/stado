@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.15
+
+- **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.
+- **Deletion safety:** job entries still use non-following descriptor-relative operations, ownership and device checks, bounded passes, and the authoritative live-job keep list.
+- **Migration and rollback:** no stored data changes. Rolling back restores the unresolved legacy-root open and can leave a macOS worker unable to recover from disk pressure.
+- **Platforms:** the corrected root resolution applies to `darwin-arm64` and `linux-amd64`; the native Probierz matrix retains exact-source qualification.
+
 ## 0.16.14
 
 - **Canonical queue reachability:** the queue's HTTP client now uses the same Tailscale name-to-address map as artifact delivery. A broken system MagicDNS resolver no longer prevents submission, status, or cleanup from reaching the configured queue.
