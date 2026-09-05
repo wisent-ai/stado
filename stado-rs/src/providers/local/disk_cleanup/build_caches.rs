@@ -191,10 +191,10 @@ struct Walk<'a> {
     /// A level-order walk visits by increasing depth and, within a depth, in
     /// lexicographic order, so `(depth, relative path)` is a total order over
     /// everything the walk examines and "before the cursor" is decidable
-    /// without remembering the tree. Skipping forward is not charged to the
-    /// scan budget, exactly as the depth-first cursor it replaces was not:
-    /// re-crossing the shallow levels costs the pass wall clock, never
-    /// candidates.
+    /// without remembering the tree. Re-crossing untagged directories costs
+    /// wall clock but no scan budget. Tagged caches are judged and charged
+    /// again: a cache can appear or reach its retention age behind the cursor
+    /// while a large untagged subtree is still being crossed.
     resume: Option<PathBuf>,
     resume_depth: usize,
     /// The directory this pass could not get to, recorded the moment a
@@ -506,11 +506,10 @@ impl<'a> Walk<'a> {
         let child_depth = depth + 1;
         for name in names {
             let relative = parent.join(&name);
-            // Everything an earlier pass already decided is re-crossed to
-            // reach the cursor, and charged to nothing: resuming costs this
-            // walk wall clock, never candidates. Its tag is still read,
-            // because a cache skipped as "already judged" must still be
-            // pruned rather than descended into on the way past.
+            // Reconstruct the frontier without charging untagged directories
+            // already crossed. A tag still needs a fresh judgement below:
+            // the cursor records traversal, not whether a cache is old enough
+            // now or was created since the previous pass.
             let before = self.before_cursor(child_depth, &relative);
             if Instant::now() >= self.deadline {
                 report.caps.deadline = true;
@@ -614,13 +613,21 @@ impl<'a> Walk<'a> {
                 // regenerable unit, so the walk has no business inside it:
                 // its contents are neither candidates nor scannable items.
                 Tag::Signed => {
-                    if !before {
-                        if let Progress::Halt =
-                            self.judge(parent_fd, &name, child.as_raw_fd(), &child_info, report)?
-                        {
-                            self.halted_at.get_or_insert(relative);
+                    if before {
+                        if let Progress::Halt = self.charge(report) {
+                            self.halted_at = self.resume.clone();
                             return Ok(Progress::Halt);
                         }
+                    }
+                    if let Progress::Halt =
+                        self.judge(parent_fd, &name, child.as_raw_fd(), &child_info, report)?
+                    {
+                        self.halted_at = if before {
+                            self.resume.clone()
+                        } else {
+                            Some(relative)
+                        };
+                        return Ok(Progress::Halt);
                     }
                 }
                 // A tag file whose first line is not the signature is not a

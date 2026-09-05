@@ -2058,8 +2058,11 @@ async fn run_with_lock(
     // directories under the declared root against a `max_scan_items` ceiling
     // of 100,000, so the same first eleven percent was scanned hourly and the
     // caches in the rest were unreachable by construction.
+    // The cursor is relative to this policy's root. Reusing it after a root
+    // or retention change skips directories the new policy has never judged.
     report.builds_resume_from = previous_report
         .as_ref()
+        .filter(|r| r.get("policy_digest").and_then(Value::as_str) == Some(digest.as_str()))
         .and_then(|r| r.get("build_caches_resume_from"))
         .and_then(|v| v.as_str().map(str::to_string));
     let before = match free_bytes(home) {
