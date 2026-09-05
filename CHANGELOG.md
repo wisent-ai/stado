@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.18
+
+- **Linux release readers:** a system-scoped queue worker now addresses its owner's user systemd manager with the same runtime directory and bus address as service operations. Release installation can refresh the running user resolver instead of failing to enumerate it after replacing the binary.
+- **Failure reporting:** failed systemd reader operations retain the command's exit status and stderr; delivery still fails unless each replaced reader maps the installed executable.
+- **Migration and rollback:** no stored data changes. Rolling back restores dependence on inherited login-session variables during Linux release delivery.
+- **Platforms:** the existing signed `darwin-arm64` and `linux-amd64` build and delivery paths remain unchanged.
+
 ## 0.16.17
 
 - **Fleet delivery completion:** the stable deployment iterates each discovered service-local Stado reader before invoking its archive update. An empty reader set still succeeds, while every declared reader receives the canonical platform archive and image refresh instead of the shell aborting on an unbound loop variable.
