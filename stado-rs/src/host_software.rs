@@ -56,10 +56,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::time::Duration;
+
+use futures::{stream, StreamExt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::deploy::products::{self, Install, Readback, Shape};
 use crate::deploy::service;
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::observations::{self, Freshness, Observation, OBSERVED, UNVERIFIED};
@@ -75,6 +79,11 @@ pub const UNKNOWN: &str = "unknown";
 /// What [`report_fact`] prefixes, named once because [`reported_hosts`] reads it
 /// back off the fact.
 const REPORT_KIND: &str = "software-report:";
+/// Enough parallelism to amortize an SSH round trip without opening an
+/// unbounded number of sessions against one host.
+const INSPECTION_CONCURRENCY: usize = 8;
+/// A supported version command is a tiny read, not a recovery operation.
+const VERSION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The canonical fact name for "what is this program on this host".
 ///
@@ -346,19 +355,63 @@ impl Hasher {
     }
 }
 
-/// The reporting pass over one host: the population rules, the per-program
-/// readings and the report text, composed here in the wire format
-/// [`parse`] reads.
+/// One version command the shipped product declaration explicitly supports.
+#[derive(Debug, Clone)]
+struct VersionQuery {
+    argument: String,
+    shape: Shape,
+}
+
+/// Exact installed paths are the safety boundary for executable probes.
+///
+/// A basename is not enough: `$HOME/.stado/bin/stado.previous` and an
+/// unrelated service binary called `stado` did not come from the catalog's
+/// install declaration and must not be executed just because their names
+/// resemble one that did.
+fn version_queries(home: &str) -> Result<BTreeMap<String, VersionQuery>, DeployError> {
+    let mut queries = BTreeMap::new();
+    for product in products::declared()? {
+        let (Install::Program { root }, Readback::Program { argument, shape }) =
+            (&product.install, &product.readback)
+        else {
+            continue;
+        };
+        let root = root
+            .strip_prefix("$HOME/")
+            .map_or_else(|| root.to_string(), |relative| format!("{home}/{relative}"));
+        queries.insert(
+            format!("{root}/{}", product.name),
+            VersionQuery {
+                argument: argument.clone(),
+                shape: *shape,
+            },
+        );
+    }
+    Ok(queries)
+}
+
+struct ReleaseMatch {
+    provenance: &'static str,
+    version: Option<String>,
+}
+
+enum ProgramInspection {
+    Ignored,
+    Script,
+    Software(HostSoftware),
+}
+
+/// The reporting pass over one host: the population rules and the
+/// per-program readings. Population and output order stay outside this type;
+/// its reads are independent so [`gather`] can bound and overlap them.
 struct Reporter<'a> {
     target: &'a ComputeTarget,
     runner: &'a Runner,
     home: String,
     releases: String,
+    releases_present: bool,
     hasher: Option<Hasher>,
-    seen: BTreeSet<String>,
-    scripts: usize,
-    reported: usize,
-    out: String,
+    version_queries: BTreeMap<String, VersionQuery>,
 }
 
 impl Reporter<'_> {
@@ -417,24 +470,79 @@ impl Reporter<'_> {
         Ok((extracted.ok() && !program.is_empty()).then(|| program.to_string()))
     }
 
+    /// A version from one command whose argument and response shape are both
+    /// declared in the shipped product catalog.
+    ///
+    /// Failure is deliberately `None`: the caller still emits the program row
+    /// as `version=unknown`. The five-second command deadline is carried by
+    /// [`CommandSpec`](crate::deploy::CommandSpec), so a server-style binary
+    /// cannot consume the channel's 120-second recovery allowance.
+    async fn query_version(&self, path: &str, query: &VersionQuery) -> Option<String> {
+        let output = tokio::time::timeout(
+            VERSION_QUERY_TIMEOUT,
+            host_channel::run_program_with_timeout(
+                self.target,
+                &[path, &query.argument],
+                VERSION_QUERY_TIMEOUT,
+                self.runner,
+            ),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        if !output.ok() {
+            return None;
+        }
+        match query.shape {
+            Shape::Plain => host_channel::extract_semver(&output.stdout),
+            Shape::Json => {
+                let document = serde_json::from_str::<Value>(&output.stdout).ok()?;
+                let text = match document.get("version")? {
+                    Value::String(version) => version.clone(),
+                    Value::Number(version) => version.to_string(),
+                    _ => return None,
+                };
+                host_channel::extract_semver(&text)
+            }
+        }
+    }
+
+    /// Recover a version only from the immutable release coordinate of the
+    /// candidate whose bytes matched. A similarly named staged file is not
+    /// metadata for these bytes, and an arbitrary directory word is not a
+    /// version.
+    fn release_version(&self, candidate: &str, base: &str) -> Option<String> {
+        let relative = candidate.strip_prefix(&self.releases)?.strip_prefix('/')?;
+        let mut components = relative.split('/');
+        let product = components.next()?;
+        let version = components.next()?;
+        let platform = components.next()?;
+        if product != base
+            || relative.rsplit('/').next() != Some(base)
+            || !products::PLATFORMS.contains(&platform)
+        {
+            return None;
+        }
+        let parsed = host_channel::extract_semver(version)?;
+        (parsed == version).then_some(parsed)
+    }
+
     /// `release` when these exact bytes are also a staged release artefact
-    /// under `$HOME/.stado/releases`, else `unmanaged`.
+    /// under `$HOME/.stado/releases`, else `unmanaged`. When that digest match
+    /// sits under a canonical release coordinate, it also supplies an honest
+    /// version without executing the active file.
     ///
     /// Matched on the basename as well as the digest: the staging trees are
     /// the only place on the host where a verified published artefact is kept
     /// under its own coordinate, and hashing every file beneath them to
     /// answer one question would turn a status read into a full-tree walk of
     /// every release ever delivered.
-    async fn provenance(&mut self, digest: &str, base: &str) -> Result<&'static str, DeployError> {
-        if digest.is_empty()
-            || !host_channel::remote_test(
-                self.target,
-                &format!("-d {}", shlex_quote(&self.releases)),
-                self.runner,
-            )
-            .await?
-        {
-            return Ok(UNMANAGED);
+    async fn provenance(&self, digest: &str, base: &str) -> Result<ReleaseMatch, DeployError> {
+        if digest.is_empty() || !self.releases_present {
+            return Ok(ReleaseMatch {
+                provenance: UNMANAGED,
+                version: None,
+            });
         }
         let found = host_channel::run_command(
             self.target,
@@ -446,108 +554,123 @@ impl Reporter<'_> {
             self.runner,
         )
         .await?;
-        for candidate in found.stdout.lines() {
-            if candidate.is_empty() {
+        let Some(hasher) = &self.hasher else {
+            return Ok(ReleaseMatch {
+                provenance: UNMANAGED,
+                version: None,
+            });
+        };
+        let mut matched = false;
+        let mut matched_version: Option<String> = None;
+        let mut ambiguous_version = false;
+        for candidate in found
+            .stdout
+            .lines()
+            .filter(|candidate| !candidate.is_empty())
+        {
+            if hasher.digest(self.target, candidate, self.runner).await? != digest {
                 continue;
             }
-            if let Some(hasher) = &self.hasher {
-                if hasher.digest(self.target, candidate, self.runner).await? == digest {
-                    return Ok(RELEASE);
+            matched = true;
+            if let Some(version) = self.release_version(candidate, base) {
+                match matched_version.as_deref() {
+                    Some(previous) if previous != version.as_str() => ambiguous_version = true,
+                    None => matched_version = Some(version),
+                    _ => {}
                 }
             }
         }
-        Ok(UNMANAGED)
+        Ok(if matched {
+            ReleaseMatch {
+                provenance: RELEASE,
+                version: if ambiguous_version {
+                    None
+                } else {
+                    matched_version
+                },
+            }
+        } else {
+            ReleaseMatch {
+                provenance: UNMANAGED,
+                version: None,
+            }
+        })
     }
 
-    /// One program, reported once. A path already reported is skipped rather
-    /// than repeated: `$HOME/.stado/bin/stado` is both an installed program
-    /// and the program a declared unit runs, and two rows for one file would
-    /// read as two programs disagreeing with each other.
-    async fn report_program(&mut self, path: &str) -> Result<(), DeployError> {
-        if path.is_empty()
-            || !host_channel::remote_test(
-                self.target,
-                &format!("-f {}", shlex_quote(path)),
-                self.runner,
-            )
-            .await?
-            || !self.seen.insert(path.to_string())
-        {
-            return Ok(());
+    /// Inspect one unique population path without ever executing an
+    /// undeclared program.
+    async fn inspect_program(&self, path: &str) -> Result<ProgramInspection, DeployError> {
+        if path.is_empty() {
+            return Ok(ProgramInspection::Ignored);
         }
         let base = path.rsplit('/').next().unwrap_or(path);
         // A `.previous` is the rollback copy of a program already reported
         // under its own name, and a dotfile is this directory's own staging
         // litter.
         if base.starts_with('.') || base.ends_with(".previous") {
-            return Ok(());
+            return Ok(ProgramInspection::Ignored);
         }
-        // A compiled program is what a release pipeline produces; a shell
-        // script in the same directory is what the retired helper channel
-        // left there. Counted so the number is visible, not rowed so the
-        // real answers stay readable.
-        //
-        // Tested before the executable bit and not after, because the count
-        // has to match what `host helpers` reports and that command counts a
-        // leftover by its shebang alone. control-host carries 1393 of these
-        // against 28 programs and not one of them is executable any more;
-        // filtering on the exec bit first made every one of them vanish from
-        // the report instead of being counted, which is the accretion going
-        // quiet again in a command written to expose it.
-        let head = host_channel::run_program(
+
+        // The regular-file check and two-byte read share one single-line
+        // command so 1394 helper scripts cost 1394 overlapped SSH round trips,
+        // not twice that many serialized ones. The leading `f` preserves the
+        // distinction between a non-file and a file whose `head` itself failed.
+        let quoted = shlex_quote(path);
+        let head = host_channel::run_command(
             self.target,
-            &["/usr/bin/head", "-c", "2", path],
+            &format!("test -f {quoted} && printf f && /usr/bin/head -c 2 {quoted}"),
             self.runner,
         )
         .await?;
-        if head.stdout == "#!" {
-            self.scripts += 1;
-            return Ok(());
+        let Some(head) = head.stdout.strip_prefix('f') else {
+            return Ok(ProgramInspection::Ignored);
+        };
+        // Tested before the executable bit and not after: retired helpers on
+        // control-host are no longer executable, but their shebangs are still
+        // the population the report is contracted to count.
+        if head == "#!" {
+            return Ok(ProgramInspection::Script);
         }
         // What is left has to be executable to be a program.
-        // `$HOME/.stado/bin` also holds `SHA256SUMS` and a
-        // `release-manifest.json` left by earlier installs, and reporting a
-        // checksum list as software this host runs would put a row in front
-        // of an operator that no version and no release could ever account
-        // for.
-        if !host_channel::remote_test(
-            self.target,
-            &format!("-x {}", shlex_quote(path)),
-            self.runner,
-        )
-        .await?
-        {
-            return Ok(());
+        // `$HOME/.stado/bin` also holds `SHA256SUMS` and release manifests.
+        if !host_channel::remote_test(self.target, &format!("-x {quoted}"), self.runner).await? {
+            return Ok(ProgramInspection::Ignored);
         }
         let digest = match &self.hasher {
             Some(hasher) => hasher.digest(self.target, path, self.runner).await?,
             None => String::new(),
         };
-        let version = host_channel::remote_program_version(self.target, path, self.runner)
-            .await?
-            .unwrap_or_default();
-        let provenance = self.provenance(&digest, base).await?;
-        self.reported += 1;
-        self.out.push_str(&format!(
-            "software name={} version={} sha256={} provenance={} path={}\n",
-            base,
-            if version.is_empty() {
-                UNKNOWN
-            } else {
-                &version
-            },
-            if digest.is_empty() { UNKNOWN } else { &digest },
+        let ReleaseMatch {
             provenance,
-            path,
-        ));
-        Ok(())
+            version: release_version,
+        } = self.provenance(&digest, base).await?;
+        // A catalog query and release-coordinate metadata are disjoint safety
+        // paths. If a declared query fails, `unknown` keeps that failure
+        // visible; only a program we did not execute may take its version from
+        // the digest-matched release coordinate.
+        let version = match self.version_queries.get(path) {
+            Some(query) => self.query_version(path, query).await,
+            None => release_version,
+        }
+        .unwrap_or_else(|| UNKNOWN.to_string());
+        Ok(ProgramInspection::Software(HostSoftware {
+            name: base.to_string(),
+            path: path.to_string(),
+            version,
+            sha256: if digest.is_empty() {
+                UNKNOWN.to_string()
+            } else {
+                digest
+            },
+            provenance: provenance.to_string(),
+        }))
     }
 }
 
 /// Ask TARGET what it runs, natively: the population rules and per-program
-/// readings of the retired reporter script, as individual remote commands
-/// over the same audited channel `host provenance` reads with, with every
-/// branch taken here and nothing installed on the host.
+/// readings of the retired reporter over the same audited channel
+/// `host provenance` uses, with a modest fixed number of independent reads in
+/// flight and nothing installed on the host.
 ///
 /// Three sources make up the population, and all three are needed:
 ///
@@ -559,10 +682,9 @@ impl Reporter<'_> {
 ///      brama lives at `<install_root>/bin/brama` and appears in neither of
 ///      the above.
 ///
-/// The report is composed in the wire format [`parse`] reads, so the reader
-/// and every stored observation keep their contract byte-for-byte. Read-only,
-/// and strictly so: files are hashed, unit files are read, programs are asked
-/// their version, and nothing is written anywhere.
+/// Rows keep the same public and stored observation contract. Read-only,
+/// and strictly so: files are hashed, unit files are read, and only catalogued
+/// programs are asked their declared version query. Nothing is written.
 pub async fn gather(
     target: &ComputeTarget,
     programs: &[String],
@@ -570,50 +692,71 @@ pub async fn gather(
 ) -> Result<(Vec<HostSoftware>, usize), DeployError> {
     let home = host_channel::remote_home(target, runner).await?;
     let bin = format!("{home}/.stado/bin");
-    let mut reporter = Reporter {
+    let releases = format!("{home}/.stado/releases");
+    let releases_present =
+        host_channel::remote_test(target, &format!("-d {}", shlex_quote(&releases)), runner)
+            .await?;
+    let reporter = Reporter {
         target,
         runner,
-        releases: format!("{home}/.stado/releases"),
+        releases,
+        releases_present,
         hasher: Hasher::resolve(target, runner).await?,
-        seen: BTreeSet::new(),
-        scripts: 0,
-        reported: 0,
-        out: String::new(),
+        version_queries: version_queries(&home)?,
         home,
     };
-    reporter.out.push_str(&format!(
-        "# host software report at {}\n",
-        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
-    ));
 
+    // Preserve source order while admitting each concrete path once. In
+    // particular, an installed binary that is also named by a service unit is
+    // one observation, while same-named files at different paths remain two.
+    let mut paths = Vec::new();
+    let mut seen = BTreeSet::new();
     if host_channel::remote_test(target, &format!("-d {}", shlex_quote(&bin)), runner).await? {
         let listed = host_channel::run_program(target, &["/bin/ls", &bin], runner).await?;
         if listed.ok() {
-            for name in listed.stdout.lines() {
-                if !name.is_empty() {
-                    reporter.report_program(&format!("{bin}/{name}")).await?;
+            for name in listed.stdout.lines().filter(|name| !name.is_empty()) {
+                let path = format!("{bin}/{name}");
+                if seen.insert(path.clone()) {
+                    paths.push(path);
                 }
             }
         }
     }
-
     for (kind, path) in declared_units(target) {
         if let Some(program) = reporter.unit_program(&kind, &path).await? {
-            reporter.report_program(&program).await?;
+            if seen.insert(program.clone()) {
+                paths.push(program);
+            }
         }
     }
     for program in programs {
-        reporter.report_program(program).await?;
+        if !program.is_empty() && seen.insert(program.clone()) {
+            paths.push(program.clone());
+        }
     }
 
-    // The trailer is a report line and not a comment, because the caller
-    // stores the script count and a `#` line is one the reader is contracted
-    // to ignore.
-    reporter.out.push_str(&format!(
-        "report reported={} scripts={}\n",
-        reporter.reported, reporter.scripts
-    ));
-    Ok(parse(&reporter.out))
+    let mut inspections: Vec<(usize, Result<ProgramInspection, DeployError>)> =
+        stream::iter(paths.into_iter().enumerate())
+            .map(|(index, path)| {
+                let reporter = &reporter;
+                async move { (index, reporter.inspect_program(&path).await) }
+            })
+            .buffer_unordered(INSPECTION_CONCURRENCY)
+            .collect()
+            .await;
+    inspections.sort_by_key(|(index, _)| *index);
+
+    let mut rows = Vec::new();
+    let mut scripts = 0;
+    for (_, inspection) in inspections {
+        match inspection? {
+            ProgramInspection::Ignored => {}
+            ProgramInspection::Script => scripts += 1,
+            ProgramInspection::Software(row) => rows.push(row),
+        }
+    }
+
+    Ok((rows, scripts))
 }
 
 /// The reporter's stdout, as one row per program plus the script count.

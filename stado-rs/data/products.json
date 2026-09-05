@@ -3,7 +3,7 @@
   "products": [
     {
       "name": "stado",
-      "why": "the fleet's control binary shared by its resolver, coordinator, queue agent and release agent",
+      "why": "the fleet's control binary shared by its object API, resolver, coordinator, queue agent and release agent",
       "source": {
         "product": "stado",
         "member": "stado"

@@ -106,6 +106,19 @@ pub enum StorageCommands {
     Get(StorageGetArgs),
     /// List product objects in one provider-neutral Stado namespace.
     Objects(StorageObjectsArgs),
+    /// Discard the staged parts of one interrupted multipart upload.
+    ///
+    /// `put` stages a large body as `<key>.__stado_upload/<upload-id>/<index>`
+    /// parts and composition promotes them in one step, deleting the parts as
+    /// it goes. A publisher that dies between the last part and composition
+    /// leaves the parts and no object: on 2026-09-04 the `stado` 0.15.25
+    /// darwin-arm64 archive sat as 19 unfinalised parts, 57 MiB of a
+    /// coordinate nothing could read, and nothing in the product could remove
+    /// them - `rm` refuses the whole `releases` namespace as immutable, which
+    /// is true of published objects and false of staged parts. The object API
+    /// already authorizes a part's DELETE against its TARGET's publisher, so
+    /// the boundary for this was in place and only the command was missing.
+    AbortUpload(StorageAbortUploadArgs),
     /// Delete a product object through the provider-neutral Stado namespace.
     /// Release objects are immutable and cannot be deleted.
     Rm(StorageRmArgs),
@@ -291,6 +304,20 @@ pub struct StorageObjectsArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct StorageAbortUploadArgs {
+    /// The TARGET object whose staged parts are discarded, as
+    /// `stado://<namespace>/<key>` - not a part's own URI. The parts are
+    /// addressed relative to the object they were going to become, which is
+    /// the only name a publisher knows after it has failed.
+    uri: String,
+    /// Report the parts and delete nothing.
+    #[arg(long)]
+    dry_run: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
 pub struct StorageRmArgs {
     /// stado://<namespace>/<key>.
     uri: String,
@@ -355,6 +382,7 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
         StorageCommands::Put(args) => put(&args).await,
         StorageCommands::Get(args) => get(&args).await,
         StorageCommands::Objects(args) => objects(&args).await,
+        StorageCommands::AbortUpload(args) => abort_upload(&args).await,
         StorageCommands::Rm(args) => rm(&args).await,
         StorageCommands::Url(args) => object_url(&args),
     }
@@ -2916,6 +2944,7 @@ impl RemoteObjectApi {
         bearer: Option<&str>,
     ) -> CmdError {
         let status = response.status();
+        let endpoint = response.url().clone();
         let declared_length = response.content_length();
         let max_body = max_object_api_error_body();
         let mut body = Vec::new();
@@ -2927,7 +2956,7 @@ impl RemoteObjectApi {
                 Err(error) => {
                     let detail = response_body_detail(&body, self.generic_bearer(), bearer);
                     return CmdError::click(format!(
-                        "Stado object API returned HTTP {status}; partial response body: \
+                        "Stado object API returned HTTP {status} from {endpoint}; partial response body: \
                          {detail}; body read failed: {error}"
                     ));
                 }
@@ -2954,7 +2983,7 @@ impl RemoteObjectApi {
             ""
         };
         CmdError::click(format!(
-            "Stado object API returned HTTP {status}: {detail}{suffix}"
+            "Stado object API returned HTTP {status} from {endpoint}: {detail}{suffix}"
         ))
     }
 }
@@ -3934,11 +3963,88 @@ async fn objects(args: &StorageObjectsArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// The staged parts of one interrupted upload, and their removal.
+///
+/// Addressed by the TARGET object, because that is the only name a failed
+/// publisher still has: the parts carry a content digest as their upload id,
+/// which the publisher computed and then lost with the process. Every part
+/// under `<key>.__stado_upload/` belongs to this target by construction, and
+/// nothing else can live under that suffix - `put` is the only writer of it -
+/// so the enumeration is exact rather than a pattern match over the store.
+///
+/// A published object is never touched here: the prefix cannot address one.
+async fn abort_upload(args: &StorageAbortUploadArgs) -> Result<(), CmdError> {
+    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let prefix = format!("{}.__stado_upload/", object.key());
+    let parts =
+        if let Some(remote) = RemoteObjectApi::configured_for_list(object.namespace(), &prefix)? {
+            remote.list(object.namespace(), &prefix).await?
+        } else {
+            let storage_prefix =
+                crate::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
+            let store = JobStorage::new().await?;
+            let mut values = Vec::new();
+            for blob in store
+                .backend()
+                .list_blobs_with_meta(&storage_prefix)
+                .await?
+            {
+                let part = crate::object_store::ObjectRef::from_storage_path(&blob.name)?;
+                values.push(json!({
+                    "uri": part.to_string(),
+                    "key": part.key(),
+                    "size": blob.size,
+                }));
+            }
+            values
+        };
+    let mut discarded: Vec<String> = Vec::with_capacity(parts.len());
+    let mut bytes = 0u64;
+    for part in &parts {
+        let Some(uri) = part["uri"].as_str() else {
+            return Err(CmdError::click(
+                "Stado object API returned an upload part with no URI",
+            ));
+        };
+        bytes += part.get("size").and_then(Value::as_u64).unwrap_or_default();
+        if !args.dry_run {
+            let part_object = crate::object_store::ObjectRef::parse(uri)?;
+            if let Some(remote) = RemoteObjectApi::configured_for_object(&part_object)? {
+                remote.delete(uri).await?;
+            } else {
+                let store = JobStorage::new().await?;
+                store.delete_blob(&part_object.storage_path()).await?;
+            }
+        }
+        discarded.push(uri.to_string());
+    }
+    let state = if args.dry_run { "staged" } else { "discarded" };
+    if args.json {
+        echo_json(&json!({
+            "state": state,
+            "uri": object.to_string(),
+            "parts": discarded.len(),
+            "bytes": bytes,
+            "part_uris": discarded,
+        }))?;
+    } else {
+        for uri in &discarded {
+            println!("{uri}");
+        }
+        println!("{state} {} part(s), {bytes} byte(s)", discarded.len());
+    }
+    Ok(())
+}
+
 async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
     if object.namespace() == "releases" {
+        // True of a published release object, and false of the parts staged
+        // below it - which is why the refusal names the command that removes
+        // those instead of leaving them unreachable.
         return Err(CmdError::click(
-            "release objects are immutable and cannot be deleted",
+            "release objects are immutable and cannot be deleted; to discard the staged parts of \
+             an interrupted upload use `stado storage abort-upload <target-uri>`",
         ));
     }
     let uri = object.to_string();
