@@ -774,8 +774,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // The unit itself, rendered and installed by the same engine
     // `stado service ensure` uses. `ensure` rather than `deploy`, because
     // `stado web deploy` is how every subsequent release lands too: it
-    // installs the unit where the host does not have it, converges a drifted
-    // unit file in place, and never unloads a healthy job.
+    // installs the unit where the host does not have it, leaves matching
+    // loaded definitions alone, and reloads only an actual definition drift.
     let label = super::unit_label(name);
     let plan = service::plan_deploy_labelled(&target, name, &label, &program, &[], &environment)
         .map_err(click)?;
