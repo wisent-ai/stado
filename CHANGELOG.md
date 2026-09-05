@@ -1,11 +1,21 @@
 # Changelog
 
-## 0.16.15
+## 0.16.16
 
 - **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.
 - **Deletion safety:** job entries still use non-following descriptor-relative operations, ownership and device checks, bounded passes, and the authoritative live-job keep list.
 - **Migration and rollback:** no stored data changes. Rolling back restores the unresolved legacy-root open and can leave a macOS worker unable to recover from disk pressure.
 - **Platforms:** the corrected root resolution applies to `darwin-arm64` and `linux-amd64`; the native Probierz matrix retains exact-source qualification.
+
+## 0.16.15
+
+- **Coordinator archive delivery:** `service update --from-archive` validates members against the fixed `darwin-arm/` directory the installer actually supplies, so canonical root `stado` satisfies a unit running `current/darwin-arm/stado`.
+- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target and retains ordinary `host release` convergence for each target's host-global Stado image. Native install identifies long-running direct or launcher-owned readers by kernel device and inode, restarts each replaced image through the unit's declared lifecycle, and fails unless its replacement process maps the installed inode. The fleet job also discovers every registry-declared service-local Stado reader, installs the target platform's canonical archive into each private version tree, and uses that same kernel identity to restart only readers not already on the delivered inode.
+- **Resumability:** after delivery, `service converge --apply` runs the kernel-backed reader pass only when the Stado root is freshly observed both byte-attested and in sync. A prior files-only delivery can therefore finish its runtime half without allowing host-ahead, unknown, unattested, or failed pre-install state to launch an old or untrusted mutator.
+- **Convergence verdict:** unread image identity or lifecycle ownership, a failed restart, a replacement process that does not map the installed inode, or a failed release receipt remains a failed delivery even if a later installed-version read says the path is in sync.
+- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
+- **Migration and rollback:** no stored-state migration is required. Rolling back restores delivery that can stop after replacing only the root pathname while declared readers retain older mapped images.
+- **Platforms:** the native delivery and reader-verification path covers `darwin-arm64` and `linux-amd64`.
 
 ## 0.16.14
 

@@ -678,15 +678,18 @@ async fn recycle_launchd(
                 unit.loaded_domains.len()
             ));
         }
-        let service = format!("{}/{}", unit.loaded_domains[0], unit.label);
-        if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
-            .await
-            .is_none()
-        {
-            return Err(format!(
-                "{context}: {service} was executing the replaced {program} and could not be restarted"
-            ));
-        }
+        let service = crate::deploy::service::kickstart_local_unit_in_domain(
+            &unit.label,
+            &unit.path,
+            Some(&unit.loaded_domains[0]),
+        )
+        .map_err(|error| {
+            format!(
+                "{context}: {} was executing the replaced {program} and could not be restarted \
+                 through its observed owner {}/{} and declared unit {}: {error}",
+                unit.label, unit.loaded_domains[0], unit.label, unit.path
+            )
+        })?;
         let after = crate::deploy::service::loaded_units(target, &runner)
             .await
             .map_err(|error| format!("{context}: cannot re-read {service}: {error}"))?;
@@ -735,17 +738,14 @@ async fn recycle_systemd(
             "--no-legend",
             "--plain",
         ]);
-        let Some(listing) = command_stdout("systemctl", &list_args).await else {
-            if user {
-                log_fn(&format!(
-                    "{context}: no user systemd manager is available; that scope holds no running reader"
-                ));
-                continue;
-            }
-            return Err(format!(
-                "{context}: system systemd manager did not enumerate running services"
-            ));
-        };
+        let listing = command_stdout("systemctl", &list_args)
+            .await
+            .ok_or_else(|| {
+                format!(
+                    "{context}: {} systemd manager did not enumerate running services",
+                    if user { "user" } else { "system" }
+                )
+            })?;
         for line in listing.lines() {
             let Some(unit) = line.split_whitespace().next() else {
                 continue;

@@ -361,9 +361,6 @@ pub async fn converge(
     }
 
     let mut pass = apply_releases(&resolved.name, &rows, &runner).await;
-    if declared.iter().any(|(name, _)| name == "stado") {
-        converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
-    }
     // Re-read rather than trust delivery's own word for it. A `host release`
     // that reports `released` has testified about its own work, which is the
     // one witness that cannot establish the fact being claimed; the version the
@@ -372,6 +369,18 @@ pub async fn converge(
     // convergence are not the same claim.
     let reported = read_installed(&resolved, &runner).await;
     let mut rows = verdict_rows(&declared, &reported);
+    let stado_root_in_sync = rows.iter().any(|row| {
+        row.binary == "stado"
+            && row.verdict == IN_SYNC
+            && reported
+                .as_ref()
+                .ok()
+                .and_then(|entries| entries.get("stado"))
+                .is_some_and(|entry| entry.attestation == ATTEST_MATCH)
+    });
+    if stado_root_in_sync {
+        converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
+    }
     // Asked again after the delivery for the same reason the versions are: a
     // release ends in a restart, and whether the restarted process is executing
     // the artefact that was just installed is exactly the claim `--apply` is

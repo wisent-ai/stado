@@ -6106,25 +6106,35 @@ pub fn units_running_replaced_images(
 
 /// Restart one launchd unit on THIS machine, in place.
 ///
-/// `kickstart -k`, the same verb `self_update::recycle_launchd` uses, so the
-/// remediation and the delivery path stop a unit the same way. The domain
-/// comes off the unit-file path through [`UnitDomain`]: a system LaunchDaemon
-/// belongs to `system` and needs root, and a LaunchAgent belongs to a login.
-/// `gui/<uid>` is tried first and `user/<uid>` second, because a host with no
-/// graphical session has only the latter and `recycle_launchd`'s gui-only
-/// spelling is exactly why a unit there can be left behind.
+/// Without an observed owner, user units try `gui/<uid>` and then
+/// `user/<uid>`. Callers that already observed ownership use
+/// [`kickstart_local_unit_in_domain`] so the domain is selected before any
+/// mutation. System jobs use the same non-interactive `sudo -n` lifecycle path
+/// as the service installer and report refusal rather than prompting.
 ///
-/// Returns the service target that answered, so a report can name the domain
-/// the restart actually happened in rather than the one it assumed.
+/// Returns the service target that answered.
 pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, String> {
+    kickstart_local_unit_in_domain(label, unit_path, None)
+}
+
+/// Restart one local launchd unit only in `observed_domain`, when supplied.
+///
+/// The unit path first establishes the allowed domain set. An observed owner
+/// outside that set is rejected before `launchctl` runs, so discovery cannot
+/// mutate one job and diagnose a cross-domain mismatch afterwards.
+pub fn kickstart_local_unit_in_domain(
+    label: &str,
+    unit_path: &str,
+    observed_domain: Option<&str>,
+) -> Result<String, String> {
     use std::os::unix::fs::MetadataExt;
-    let domain = UnitDomain::from_path(unit_path);
-    if matches!(domain, UnitDomain::Unknown) {
+    let unit_domain = UnitDomain::from_path(unit_path);
+    if matches!(unit_domain, UnitDomain::Unknown) {
         return Err(format!(
             "{unit_path} is in none of launchd's three unit directories, so no domain places it"
         ));
     }
-    let candidates: Vec<String> = if domain.requires_privileged_bootstrap() {
+    let mut candidates: Vec<String> = if unit_domain.requires_privileged_bootstrap() {
         vec!["system".to_string()]
     } else {
         let home = std::env::var_os("HOME").ok_or("this process has no HOME")?;
@@ -6133,13 +6143,29 @@ pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, Stri
             .uid();
         vec![format!("gui/{uid}"), format!("user/{uid}")]
     };
+    if let Some(observed) = observed_domain {
+        if !candidates.iter().any(|candidate| candidate == observed) {
+            return Err(format!(
+                "{unit_path} permits {}, but launchd reports owner {observed}; refusing before restart",
+                candidates.join(" or ")
+            ));
+        }
+        candidates.retain(|candidate| candidate == observed);
+    }
     let mut refusals = Vec::new();
     for domain in candidates {
         let service = format!("{domain}/{label}");
-        let output = std::process::Command::new("/bin/launchctl")
-            .args(["kickstart", "-k", &service])
-            .output()
-            .map_err(|error| format!("/bin/launchctl did not run: {error}"))?;
+        let output = if unit_domain.requires_privileged_bootstrap() {
+            std::process::Command::new("/usr/bin/sudo")
+                .args(["-n", "/bin/launchctl", "kickstart", "-k", &service])
+                .output()
+                .map_err(|error| format!("/usr/bin/sudo did not run: {error}"))?
+        } else {
+            std::process::Command::new("/bin/launchctl")
+                .args(["kickstart", "-k", &service])
+                .output()
+                .map_err(|error| format!("/bin/launchctl did not run: {error}"))?
+        };
         if output.status.success() {
             return Ok(service);
         }
