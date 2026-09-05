@@ -19,12 +19,19 @@ A non-Stado archive contains that product rather than another Stado binary, so
 its delivery runs the installed Stado worker against the digest-pinned archive.
 
 Repeating `stado release submit` resumes the same release run. An initial
-platform submission keeps its original stable job identity and output URI. If
-that platform is already recorded as failed, the coordinator derives one retry
-identity from the release run, platform, and prior terminal job ID, and gives
-that attempt its own output URI. A crash before or after the replacement
-platform record is saved therefore reuses the same attempt; only a newly
-persisted terminal failure can chain to another retry.
+platform submission keeps its original stable job identity and output URI.
+Before replacing a failed platform attempt, the coordinator reads the original
+job: queued, running, completed, and uploaded jobs keep that identity and their
+existing output. A publication or storage-read failure does not start another
+build.
+
+Only a job recorded as failed or cancelled receives a retry identity derived
+from the release run, platform, and prior terminal job ID, with its own output
+URI. A crash before or after the replacement platform record is saved therefore
+reuses the same attempt; only another recorded terminal job failure can chain
+to another retry. An unreadable job returns the storage error. A missing job
+returns `release job JOB_ID was not found in recorded states; refusing a replacement without terminal failure`;
+neither condition creates a replacement build.
 
 Local queue jobs execute from the agent owner's
 `~/.stado/work/jobs/wc-<job-id>` tree, not a temporary directory. Admission
@@ -250,7 +257,17 @@ one step against the base revision in its own `git worktree` and reports:
 |---|---|---|
 | `verdict=introduced` | the step passes on the base and refuses this revision | this change |
 | `verdict=inherited` | the step already refuses the base, at the printed sha | the base, in its own change |
-| `verdict=unattributed` | the base could not be checked out, so ownership is unknown | read the printed step and decide |
+| `verdict=unattributed` | the base could not be checked out, or a clean tree is being compared against its own commit, so ownership is unknown | read the printed step and decide |
+
+The base is the pull request's base sha, and on a push to `main` the commit
+before that push. Comparing `main` against `origin/main` compares the revision
+under judgement against itself, which would answer `inherited` for every
+failure and never name the push that caused it; the script refuses that as
+evidence and says so.
+
+Running it by hand on a checkout with an uncommitted break still attributes:
+the base sha equals `HEAD`, but the base's own worktree does not carry the
+break, so the comparison is real and the answer is `introduced`.
 
 Every verdict still fails the gate: an inherited failure is a failure, and the
 release would hit it with a version already spent. What changes is that the
@@ -260,8 +277,6 @@ Run it by hand exactly as CI does:
 
 ```console
 $ bash scripts/quality_gate.sh --base origin/main
-platform: darwin-arm64
-.wisent-release.json declares 3 quality step(s) for darwin-arm64
 ```
 
 `--manifest` reads a different manifest and `--help` prints this contract. An

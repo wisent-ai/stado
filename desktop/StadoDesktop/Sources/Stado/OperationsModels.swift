@@ -2170,3 +2170,7 @@ enum HostLinkVerdict: Hashable, Sendable {
         }
     }
 }
+
+struct ServiceRunnerRuntimeReport: Decodable, Sendable {
+    let stdout: String
+}

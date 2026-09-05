@@ -313,7 +313,11 @@ jobs:
       - name: Run every quality step the release manifest declares
         env:
           MANIFEST: .wisent-release.json
-          BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+          # On a pull request the base branch; on a push to `main` the commit
+          # BEFORE that push, because comparing `main` against `origin/main`
+          # compares the revision under judgement against itself and answers
+          # `inherited` for everything.
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
         # One implementation, checked in and runnable by hand:
         # `scripts/quality_gate.sh` reads the same `platforms.<platform>.quality`
         # the release worker executes and runs exactly those argv. It also says

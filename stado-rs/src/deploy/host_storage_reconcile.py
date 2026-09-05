@@ -257,6 +257,7 @@ def regular_identity(path):
     return {"bytes": info.st_size, "sha256": digest(path)}
 
 
+
 def object_paths(root):
     ecosystem = os.path.join(root, "ecosystem")
     if not os.path.isdir(ecosystem) or os.path.islink(ecosystem):
@@ -518,6 +519,13 @@ def validate_complete_inventory(root, objects, label):
         fail(label + " metadata namespace changed")
 
 
+def fenced_checkpoint_inventory(root):
+    paths = object_paths(root)
+    return paths, inventory(root, paths), physical_inventory(root)
+
+
+
+
 def checkpoint_tree(source, destination, snapshot):
     if os.path.isdir(destination):
         seal_tree(destination)
@@ -733,13 +741,9 @@ if phase == "checkpoint":
         raise SystemExit(0)
     if receipt is not None and receipt.get("status") != "checkpointing":
         fail("checkpoint receipt is not resumable: " + str(receipt.get("status")))
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
     if receipt is None:
-        backup_objects = inventory(backup, backup_paths)
-        primary_objects = inventory(primary, primary_paths)
-        backup_physical = physical_inventory(backup)
-        primary_physical = physical_inventory(primary)
+        backup_paths, backup_objects, backup_physical = fenced_checkpoint_inventory(backup)
+        primary_paths, primary_objects, primary_physical = fenced_checkpoint_inventory(primary)
         checkpoint_evidence = {
             "schema": "stado.storage-root-checkpoint-evidence.v1",
             "transaction": tx,
@@ -779,6 +783,8 @@ if phase == "checkpoint":
     else:
         backup_objects, primary_objects, backup_physical, primary_physical = (
             load_checkpoint_evidence(receipt))
+        backup_paths = object_paths(backup)
+        primary_paths = object_paths(primary)
         if [item.get("path") for item in backup_objects] != backup_paths:
             fail("backup qualified namespace no longer matches the interrupted checkpoint")
         if [item.get("path") for item in primary_objects] != primary_paths:
