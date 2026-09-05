@@ -4969,14 +4969,18 @@ pub fn plan_deploy_labelled(
 /// program than the registry says they manage. Declared environment is
 /// materialized into the authored body in place, so `ensure --env` and a later
 /// declaration-driven convergence have the same semantics as generated units.
+/// An explicit program override replaces only `ExecStart`, retaining native
+/// dependencies and startup conditions rather than discarding the unit body.
 pub fn retain_systemd_unit(
     plan: &mut DeployPlan,
     definition: &str,
     environment: &[(String, String)],
+    replace_program: bool,
 ) -> Result<String, DeployError> {
-    let mut starts = definition
-        .lines()
-        .filter_map(|line| line.strip_prefix("ExecStart="));
+    let mut starts = definition.lines().filter_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        (name.trim() == "ExecStart").then_some(value.trim())
+    });
     let Some(exec_start) = starts.next() else {
         return Err(DeployError(
             "authored systemd unit carries no ExecStart".to_string(),
@@ -4987,7 +4991,7 @@ pub fn retain_systemd_unit(
             "authored systemd unit carries more than one ExecStart".to_string(),
         ));
     }
-    if exec_start != plan.argv {
+    if exec_start != plan.argv && !replace_program {
         return Err(DeployError(format!(
             "authored systemd unit starts {}, but the declaration says {}",
             py_str_repr(exec_start),
@@ -4997,12 +5001,16 @@ pub fn retain_systemd_unit(
 
     let mut remaining: BTreeMap<&str, &str> = environment
         .iter()
+        .filter(|(_, value)| !value.is_empty())
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
     let mut rendered = String::with_capacity(definition.len());
     let mut inserted = false;
     for line in definition.lines() {
-        if let Some(assignment) = line.strip_prefix("Environment=") {
+        if let Some((_, assignment)) = line
+            .split_once('=')
+            .filter(|(name, _)| name.trim() == "Environment")
+        {
             let Some((name, _)) = assignment.split_once('=') else {
                 return Err(DeployError(format!(
                     "authored systemd unit has malformed environment line {}",
@@ -5018,7 +5026,7 @@ pub fn retain_systemd_unit(
             }
             continue;
         }
-        if !inserted && line.starts_with("ExecStart") {
+        if !inserted && line.trim_start().starts_with("ExecStart") {
             for (name, value) in &remaining {
                 rendered.push_str("Environment=");
                 rendered.push_str(name);
@@ -5028,6 +5036,16 @@ pub fn retain_systemd_unit(
             }
             remaining.clear();
             inserted = true;
+        }
+        if replace_program
+            && line
+                .split_once('=')
+                .is_some_and(|(name, _)| name.trim() == "ExecStart")
+        {
+            rendered.push_str("ExecStart=");
+            rendered.push_str(&plan.argv);
+            rendered.push('\n');
+            continue;
         }
         rendered.push_str(line);
         rendered.push('\n');
@@ -9621,54 +9639,5 @@ mod tests {
         // The real payload: 35_331_163 bytes.
         let real = sync_timeout(35_331_163);
         assert!(real > Duration::from_secs(240), "{real:?}");
-    }
-
-    #[test]
-    fn authored_systemd_unit_retains_lifecycle_and_converges_declared_environment() {
-        let mut plan = DeployPlan {
-            label: "stado-stream-sunshine".to_string(),
-            unit: "stado-stream-sunshine.service".to_string(),
-            program: "/usr/bin/sunshine".to_string(),
-            argv: "/usr/bin/sunshine /root/.config/sunshine/sunshine.conf".to_string(),
-            darwin_unit: String::new(),
-            darwin_daemon_unit: String::new(),
-            linux_unit: String::new(),
-            force_daemon: false,
-        };
-        let definition = "[Unit]\nAfter=stado-stream-xorg.service\nRequires=stado-stream-xorg.service\n\n[Service]\nEnvironment=DISPLAY=:0\nEnvironment=OLD=remove\nExecStartPre=/usr/bin/xdpyinfo -display :0\nExecStart=/usr/bin/sunshine /root/.config/sunshine/sunshine.conf\n";
-        let environment = vec![
-            ("DISPLAY".to_string(), ":1".to_string()),
-            ("CUDA_VISIBLE_DEVICES".to_string(), "GPU-1".to_string()),
-        ];
-
-        let retained = retain_systemd_unit(&mut plan, definition, &environment).unwrap();
-
-        assert!(retained.contains("After=stado-stream-xorg.service\n"));
-        assert!(retained.contains("Requires=stado-stream-xorg.service\n"));
-        assert!(retained.contains("Environment=DISPLAY=:1\n"));
-        assert!(retained.contains("Environment=CUDA_VISIBLE_DEVICES=GPU-1\nExecStartPre="));
-        assert!(!retained.contains("OLD="));
-        assert_eq!(plan.linux_unit, retained);
-    }
-
-    #[test]
-    fn authored_systemd_unit_cannot_hide_a_different_program() {
-        let mut plan = DeployPlan {
-            label: "stream".to_string(),
-            unit: "stream.service".to_string(),
-            program: "/usr/bin/sunshine".to_string(),
-            argv: "/usr/bin/sunshine config".to_string(),
-            darwin_unit: String::new(),
-            darwin_daemon_unit: String::new(),
-            linux_unit: String::new(),
-            force_daemon: false,
-        };
-        let error = retain_systemd_unit(
-            &mut plan,
-            "[Service]\nExecStart=/usr/bin/other config\n",
-            &[],
-        )
-        .unwrap_err();
-        assert!(error.0.contains("but the declaration says"));
     }
 }

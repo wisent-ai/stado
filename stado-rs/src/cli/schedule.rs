@@ -22,12 +22,13 @@ fn created_by() -> String {
     }
     std::env::var("LOGNAME").unwrap_or_default()
 }
-fn resolve_pinned_host(value: &str) -> Result<String, CmdError> {
+async fn resolve_pinned_host(value: &str) -> Result<String, CmdError> {
     if value.is_empty() {
         return Ok(String::new());
     }
-    let registry =
-        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
     let Some(target) = registry.lookup(value) else {
         return Ok(value.to_string());
     };
@@ -72,7 +73,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.gpu_type = args.gpu_type.clone();
     sched.vram_gb = args.vram_gb;
     sched.machine_type = args.machine_type.clone();
-    sched.pinned_host = resolve_pinned_host(&args.pinned_host)?;
+    sched.pinned_host = resolve_pinned_host(&args.pinned_host).await?;
     sched.repo = args.repo.clone();
     sched.repo_ref = args.repo_ref.clone();
     sched.repo_workdir = args.repo_workdir.clone();

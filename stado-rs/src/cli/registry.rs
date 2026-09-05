@@ -1259,8 +1259,7 @@ impl Beacon {
         else {
             return false;
         };
-        let common_evidence = fields.get("state").and_then(Value::as_str)
-            == Some(SCHEDULED_STATE)
+        let common_evidence = fields.get("state").and_then(Value::as_str) == Some(SCHEDULED_STATE)
             && fields.get("service_type").and_then(Value::as_str) == Some("oneshot")
             && fields
                 .get("manager")
@@ -1274,7 +1273,9 @@ impl Beacon {
                         .get("active_trigger")
                         .and_then(Value::as_str)
                         .is_some_and(|active| {
-                            triggers.iter().any(|trigger| trigger.as_str() == Some(active))
+                            triggers
+                                .iter()
+                                .any(|trigger| trigger.as_str() == Some(active))
                         })
                 })
             && fields
@@ -2232,8 +2233,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
             // repair that happens silently is the same defect as a failure
             // that happens silently, and a new severity word for it would be
             // a third vocabulary for one condition. Only for units an enabled
-            // policy explicitly owns, and `None` on every host today because
-            // no registry carries `release_unit_image_revisit`.
+            // policy explicitly owns.
             let mut sentence = image.sentence();
             if let Some(clause) = revisit.as_ref().and_then(|revisit| revisit.clause(&image)) {
                 sentence.push_str(&clause);
@@ -2316,8 +2316,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     .about(declared.id.as_str()),
                 ),
                 Some(state)
-                    if state != ACTIVE_STATE
-                        && !beacon.scheduled_unit_is_healthy(&declared.id) =>
+                    if state != ACTIVE_STATE && !beacon.scheduled_unit_is_healthy(&declared.id) =>
                 {
                     findings.push(
                         Finding::new(

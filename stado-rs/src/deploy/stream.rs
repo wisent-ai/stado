@@ -198,7 +198,7 @@ fn sunshine_systemd_unit(declaration: &DisplayStream) -> String {
          # openbox does not daemonise, so it belongs in the background: as an\n\
          # ExecStartPre it never returned and the unit sat in `activating` until the\n\
          # start timeout, which reads exactly like a crash that never happened.\n\
-         ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable >/tmp/stado-stream-openbox.log 2>&1 &'\n\
+         ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable &'\n\
          ExecStart={SUNSHINE_PROGRAM} {SUNSHINE_CONFIG}\n\
          Restart=always\n\
          RestartSec=5\n\
@@ -248,7 +248,10 @@ pub fn managed_services(
         ("HOME".to_string(), "/root".to_string()),
         (
             "CUDA_VISIBLE_DEVICES".to_string(),
-            declaration.gpu_uuid.clone().unwrap_or_else(|| "0".to_string()),
+            declaration
+                .gpu_uuid
+                .clone()
+                .unwrap_or_else(|| "0".to_string()),
         ),
     ]
     .into_iter()
@@ -325,6 +328,23 @@ fi
 exec 2>&1
 export DEBIAN_FRONTEND=noninteractive
 
+write_if_changed() {
+  local path="$1" candidate
+  candidate=$(mktemp "${path}.stado-stream.XXXXXX")
+  if ! cat >"$candidate"; then
+    rm -f "$candidate"
+    return 1
+  fi
+  file_changed=0
+  if [ -f "$path" ] && cmp -s "$candidate" "$path"; then
+    rm -f "$candidate"
+  else
+    chmod 0644 "$candidate"
+    mv -f "$candidate" "$path"
+    file_changed=1
+  fi
+}
+
 mkdir -p "LIBRARY_DIR"
 chmod 0755 "LIBRARY_DIR"
 
@@ -349,7 +369,7 @@ printf 'LIBRARY\t%s on %s, %s KiB free\n' 'LIBRARY_DIR' "$library_device" "$libr
 
 # The session, not a desktop: an X server, something to own the root window,
 # and the audio sink Sunshine records silence from when nothing plays.
-packages="xserver-xorg-core xserver-xorg-input-libinput xinit x11-xserver-utils openbox pulseaudio curl ca-certificates"
+packages="xserver-xorg-core xserver-xorg-input-libinput xinit x11-xserver-utils openbox pulseaudio curl ca-certificates jq"
 if [ -n "STEAM_PACKAGES" ]; then
   dpkg --add-architecture i386
   packages="$packages STEAM_PACKAGES"
@@ -359,16 +379,24 @@ fi
 # business bouncing anything else on the machine.
 export NEEDRESTART_MODE=l
 export NEEDRESTART_SUSPEND=1
-apt-get update -qq
-# shellcheck disable=SC2086
-if ! apt-get install -y -qq --no-install-recommends $packages; then
-  printf 'ERROR\tsession packages did not install\n' >&2
-  exit 1
+missing_packages=""
+for package in $packages; do
+  if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" != installed ]; then
+    missing_packages="$missing_packages $package"
+  fi
+done
+if [ -n "$missing_packages" ]; then
+  apt-get update -qq
+  # shellcheck disable=SC2086
+  if ! apt-get install -y -qq --no-install-recommends $missing_packages; then
+    printf 'ERROR\tsession packages did not install\n' >&2
+    exit 1
+  fi
 fi
 printf 'PACKAGES\tinstalled\n'
 
 install -d -m 0755 /etc/X11/xorg.conf.d
-cat >XORG_CONFIG <<'EOF'
+write_if_changed XORG_CONFIG <<'EOF'
 # Written by `stado stream apply`. A screen with no monitor: the driver is told
 # to invent one, and its size is the registry declaration.
 Section "ServerLayout"
@@ -403,6 +431,7 @@ Section "Screen"
     EndSubSection
 EndSection
 EOF
+xorg_changed=$file_changed
 printf 'XORG_CONFIG\tXORG_CONFIG\n'
 
 cache=/var/cache/stado-stream
@@ -425,6 +454,7 @@ fi
 printf 'SUNSHINE_DEB\t%s (digest verified)\n' "$deb"
 installed_version=$(dpkg-query -W -f='${Version}' sunshine 2>/dev/null || printf 'absent')
 printf 'SUNSHINE_INSTALLED\t%s\n' "$installed_version"
+sunshine_updated=0
 case "$installed_version" in
   *SUNSHINE_BARE_VERSION*) ;;
   *)
@@ -432,52 +462,51 @@ case "$installed_version" in
       printf 'ERROR\tthe pinned sunshine package does not satisfy this release; declare the artifact built for it\n' >&2
       exit 1
     fi
+    sunshine_updated=1
     ;;
 esac
 printf 'SUNSHINE\t%s\n' "$(sunshine --version 2>&1 | sed -n 1p)"
 
-# Web-UI credentials: generated here, so no secret crosses the control channel
-# or lands in this host's process table from outside. `stream pair` reads them
-# back on this host and nowhere else.
-install -d -m 0700 /root/.stado
-if [ ! -s CREDENTIAL_FILE ]; then
-  password=$(openssl rand -hex 24)
-  printf 'stado:%s\n' "$password" >CREDENTIAL_FILE
-  chmod 0600 CREDENTIAL_FILE
-fi
-user=$(cut -d: -f1 CREDENTIAL_FILE)
-secret=$(cut -d: -f2- CREDENTIAL_FILE)
-timeout 20 sunshine --creds "$user" "$secret" >/dev/null 2>&1 || printf 'CREDS\tsunshine refused the credential write; the web UI keeps its own\n'
-printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 
 install -d -m 0755 /root/.config/sunshine
-cat >SUNSHINE_CONFIG <<'EOF'
+write_if_changed SUNSHINE_CONFIG <<'EOF'
 # Written by `stado stream apply`.
 origin_web_ui_allowed = lan
 address_family = both
 capture = x11
 encoder = nvenc
 EOF
+sunshine_changed=$file_changed
 
-cat >/etc/systemd/system/XORG_UNIT <<'EOF'
+write_if_changed /etc/systemd/system/XORG_UNIT <<'EOF'
 XORG_UNIT_BODY
 EOF
+if [ "$file_changed" -eq 1 ]; then xorg_changed=1; fi
 
-cat >/etc/systemd/system/SUNSHINE_UNIT <<'EOF'
+write_if_changed /etc/systemd/system/SUNSHINE_UNIT <<'EOF'
 SUNSHINE_UNIT_BODY
 EOF
+if [ "$file_changed" -eq 1 ]; then sunshine_changed=1; fi
 
 systemctl daemon-reload
-# Restart, not `enable --now`: a unit that is already active keeps running the
-# old file, so a reconcile that rewrote the unit changed nothing. The first
-# version of this script rewrote the Sunshine unit with the encoder binding and
-# the session kept encoding on the other board.
-systemctl enable XORG_UNIT >/dev/null 2>&1 || true
-systemctl enable SUNSHINE_UNIT >/dev/null 2>&1 || true
-systemctl restart XORG_UNIT || true
-systemctl restart SUNSHINE_UNIT || true
+systemctl enable XORG_UNIT >/dev/null 2>&1
+systemctl enable SUNSHINE_UNIT >/dev/null 2>&1
+current_dimensions=$(DISPLAY=DISPLAY_NUMBER xdpyinfo 2>/dev/null | awk '/dimensions:/ { print $2 }' | sed -n 1p || true)
+if [ "$xorg_changed" -eq 1 ] || [ "$current_dimensions" != "WIDTHxHEIGHT" ]; then
+  systemctl restart XORG_UNIT
+  xorg_changed=1
+else
+  systemctl start XORG_UNIT
+fi
+if [ "$sunshine_changed" -eq 1 ] || [ "$sunshine_updated" -eq 1 ] || [ "$xorg_changed" -eq 1 ]; then
+  systemctl restart SUNSHINE_UNIT
+else
+  systemctl start SUNSHINE_UNIT
+fi
 sleep 10
-printf 'XORG\t%s\n' "$(systemctl is-active XORG_UNIT 2>&1 || true)"
+xorg_state=$(systemctl is-active XORG_UNIT 2>&1 || true)
+sunshine_state=$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)
+printf 'XORG\t%s\n' "$xorg_state"
 printf 'SESSION\t'
 if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
   # No early `exit` in awk: it closes the pipe, xdpyinfo takes SIGPIPE, and
@@ -486,10 +515,58 @@ if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
 else
   printf 'no display answered on DISPLAY_NUMBER\n'
 fi
-printf 'SUNSHINE_STATE\t%s\n' "$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)"
+printf 'SUNSHINE_STATE\t%s\n' "$sunshine_state"
 printf 'PORTS\t'
 ss -ltn 2>/dev/null | awk '$4 ~ /:479[89][0-9]$/ { printf "%s ", $4 }' || true
 printf '\n'
+if [ "$xorg_state" != active ] || [ "$sunshine_state" != active ]; then
+  journalctl -u XORG_UNIT -u SUNSHINE_UNIT -n 40 --no-pager
+  printf 'ERROR\tthe declared stream services did not become active\n'
+  exit 1
+fi
+dimensions=$(DISPLAY=DISPLAY_NUMBER xdpyinfo | awk '/dimensions:/ { print $2 }' | sed -n 1p)
+if [ "$dimensions" != "WIDTHxHEIGHT" ]; then
+  printf 'ERROR\tthe stream display reports %s, expected WIDTHxHEIGHT\n' "$dimensions"
+  exit 1
+fi
+
+# Initialize only a missing credential. The pinned Sunshine API accepts
+# initial setup, and the pending credential authenticates an interrupted setup
+# whose HTTP write succeeded before the local receipt was renamed.
+if [ ! -s CREDENTIAL_FILE ]; then
+  install -d -m 0700 /root/.stado
+  pending=CREDENTIAL_FILE.pending
+  if [ ! -s "$pending" ]; then
+    (umask 077; set -o noclobber; printf 'stado:%s\n' "$(openssl rand -hex 24)" >"$pending") ||
+      [ -s "$pending" ]
+  fi
+  credential_request=$(mktemp /root/.stado/stream-credentials.XXXXXX)
+  trap 'rm -f "$credential_request"' EXIT
+  jq -Rs '
+    rtrimstr("\n") | index(":") as $separator |
+    {currentUsername: .[:$separator], currentPassword: .[($separator + 1):]} |
+    . + {newUsername: .currentUsername, newPassword: .currentPassword,
+         confirmNewPassword: .currentPassword}
+  ' "$pending" >"$credential_request"
+  authorization=$(printf '%s' "$(cat "$pending")" | base64 -w0)
+  if ! response=$(
+    printf 'header = "Authorization: Basic %s"\n' "$authorization" |
+      curl --silent --show-error --insecure --fail-with-body --max-time 20 \
+        --config - --header 'Content-Type: application/json' \
+        --data-binary "@$credential_request" https://127.0.0.1:47990/api/password
+  ); then
+    printf 'ERROR\tSunshine credential initialization failed: %s\n' "$response"
+    exit 1
+  fi
+  if ! printf '%s' "$response" | jq -e '.status == true' >/dev/null; then
+    printf 'ERROR\tSunshine did not accept its initial credential: %s\n' "$response"
+    exit 1
+  fi
+  mv "$pending" CREDENTIAL_FILE
+  rm -f "$credential_request"
+  trap - EXIT
+fi
+printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 "#
     .replace("XORG_UNIT_BODY", xorg_systemd_unit().trim_end())
     .replace(

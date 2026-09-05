@@ -219,9 +219,8 @@ fn resolved_plan(
             ));
         }
         let definition = std::mem::take(&mut unit.systemd_unit);
-        unit.systemd_unit =
-            service::retain_systemd_unit(&mut plan, &definition, &unit_env)
-                .map_err(|error| error.to_string())?;
+        unit.systemd_unit = service::retain_systemd_unit(&mut plan, &definition, &unit_env, false)
+            .map_err(|error| error.to_string())?;
     }
     if service::UnitDomain::from_path(&declared.path).is_per_login() {
         plan.force_daemon = false;
@@ -432,14 +431,9 @@ async fn reconcile_undeclared(
             .map_err(|error| error.to_string())?;
         match running.matches_process() {
             Some(true) => {
-                let changed = replace_declaration(
-                    &status.service,
-                    corrected,
-                    program,
-                    args,
-                    systemd_unit,
-                )
-                .await?;
+                let changed =
+                    replace_declaration(&status.service, corrected, program, args, systemd_unit)
+                        .await?;
                 let action = if changed { "adopted" } else { "confirmed" };
                 return Ok((
                     action.to_string(),

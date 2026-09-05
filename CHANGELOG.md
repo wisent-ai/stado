@@ -4,6 +4,15 @@
 
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
 
+## 0.16.20
+
+- **Canonical job targets:** direct submissions and schedules resolve `--pinned-host` from the configured authoritative registry, not the registry bundled into the executable. Newly declared targets therefore address their actual worker instead of remaining queued under an unresolved target name; an unreadable registry is reported rather than silently selecting stale metadata.
+- **Native stream reconciliation:** stream setup records the complete Xorg and Sunshine service definitions, including dependency ordering and startup conditions. Generic repairs retain those definitions and declared environment; an explicit program override changes only the start command. Setup replaces changed files atomically, preserves healthy unchanged services and existing credentials, and refuses success unless both services are active at the declared display size. Initial credentials use Sunshine's loopback API without placing secrets in process arguments.
+- **Authoritative host health:** beacon reads stay on the primary and select the newest registry-owned alias. A timer-triggered oneshot reports scheduled health only with its native trigger and execution evidence, rather than masquerading as a continuously running process.
+- **Publisher recovery:** a publisher can reconcile its service without rewriting repository secrets. A registered publisher reported online by GitHub is preserved; an offline one is repaired without replacing its registration.
+- **Migration and rollback:** deploy this version before storing authored `systemd_unit` definitions. Older reconcilers do not retain that field and can erase specialized native startup semantics; rollback requires removing those authored services from automatic generic reconciliation first.
+- **Platforms:** native streaming definitions apply to Linux; canonical submission, host observations, and publisher reconciliation cover both supported native platforms.
+
 ## 0.16.19
 
 - **Linux service creation:** `service deploy` and the first-install path of `service ensure` expand the same host-home and account placeholders as existing-unit reconciliation. A newly installed resolver no longer receives literal template values as `HOME` and `STADO_CONFIG`.

@@ -117,13 +117,7 @@ async fn refresh_local_unit_lifecycle(document: &mut Value, runner: &crate::depl
             let fields = entry.as_object()?;
             let state = fields.get("state").and_then(Value::as_str)?;
             let manager = fields.get("manager").and_then(Value::as_str)?;
-            (state != "active").then(|| {
-                (
-                    unit.clone(),
-                    state.to_string(),
-                    manager.to_string(),
-                )
-            })
+            (state != "active").then(|| (unit.clone(), state.to_string(), manager.to_string()))
         })
         .collect();
 
@@ -169,13 +163,9 @@ async fn refresh_local_unit_lifecycle(document: &mut Value, runner: &crate::depl
         let mut active_trigger = None;
         if scheduled_run.is_some() && !triggers.is_empty() {
             for trigger in &triggers {
-                let Some(trigger_properties) = local_systemd_properties(
-                    &manager,
-                    trigger,
-                    "LoadState,ActiveState",
-                    runner,
-                )
-                .await
+                let Some(trigger_properties) =
+                    local_systemd_properties(&manager, trigger, "LoadState,ActiveState", runner)
+                        .await
                 else {
                     continue;
                 };

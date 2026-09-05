@@ -7050,7 +7050,9 @@ pub(crate) fn unit_program(
             env: declared
                 .map(|service| service.env.clone())
                 .unwrap_or_default(),
-            systemd_unit: String::new(),
+            systemd_unit: declared
+                .map(|service| service.systemd_unit.clone())
+                .unwrap_or_default(),
         });
     }
     if !args.is_empty() {
@@ -7347,7 +7349,8 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         }
         let definition = std::mem::take(&mut unit.systemd_unit);
         unit.systemd_unit =
-            service::retain_systemd_unit(&mut plan, &definition, &unit_env).map_err(click)?;
+            service::retain_systemd_unit(&mut plan, &definition, &unit_env, unit.source == "flag")
+                .map_err(click)?;
     }
     // A declared path is the service's durable domain choice. In particular,
     // a LaunchAgent intentionally placed on an always-on Mac must not become

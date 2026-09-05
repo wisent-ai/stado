@@ -459,7 +459,8 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
 
     let mut pinned_host = args.pinned_host.clone();
     if !pinned_host.is_empty() {
-        let registry = crate::targets::load_bundled_registry()
+        let registry = crate::targets::fetch_registry_remote()
+            .await
             .map_err(|exc| CmdError::click(exc.to_string()))?;
         if let Some(target) = registry.lookup(&pinned_host) {
             if target.hostnames.is_empty() {
