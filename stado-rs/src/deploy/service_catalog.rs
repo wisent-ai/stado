@@ -19,9 +19,8 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-/// One preconfigured Wisent service. Internal processes stay internal: the
-/// Stado entry runs `local-control-plane`, which owns the API, scheduler and
-/// worker together instead of exposing three deployment choices.
+/// One preconfigured Wisent service. Its product name and stable init-system
+/// identity address the same program, arguments, and required environment.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CatalogService {
     pub name: String,
@@ -57,9 +56,11 @@ pub fn all() -> Result<Vec<CatalogService>, String> {
     Ok(document.services)
 }
 
-/// One entry by name.
+/// One entry by its product name or stable init-system identity.
 pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
-    Ok(all()?.into_iter().find(|entry| entry.name == name))
+    Ok(all()?
+        .into_iter()
+        .find(|entry| entry.name == name || entry.unit.as_deref() == Some(name)))
 }
 
 /// One placeholder expansion, applied to the program and every argument:
