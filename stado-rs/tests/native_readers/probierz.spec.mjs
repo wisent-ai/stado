@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
-const tests = ['convergence_reloads_a_cached_private_stado_definition_once'];
+const tests = [
+  'convergence_reloads_a_cached_private_stado_definition_once',
+  'service_update_reloads_a_cached_global_stado_definition_once',
+];
 const args = [
   'test', '--locked', '--test', 'native_readers',
   '--', '--ignored', '--nocapture', '--test-threads=1',
@@ -105,6 +108,7 @@ await writeFile(tracePath, `${JSON.stringify({
     'release converge-local-readers reloads that changed definition through the exact launchd domain observed to own it',
     'the public service label-print readback proves the replacement device, inode, executable path, and SHA-256 equal the delivered root file before convergence succeeds',
     'repeating convergence leaves an already-correct process running under the same pid',
+    'service update installs the real archive into a private tree, reloads the cached global definition, proves its replacement image, and leaves it running on an identical replay',
   ],
   redaction: {
     status: 'verified_redacted',

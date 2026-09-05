@@ -133,9 +133,6 @@ pub struct ReleaseConvergeLocalReadersArgs {
     /// Catalog SHA-256 for `archive`.
     #[arg(long)]
     sha256: String,
-    /// Root lifecycle was already attempted by this convergence pass.
-    #[arg(long)]
-    skip_global: bool,
 }
 
 /// `stado release claim-coordinate` — the publishers' shared first step.
@@ -1772,17 +1769,15 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     // running every minute the whole way down.
     //
     // In place, and never the agent: see `self_update::recycle_replaced_units`.
-    if !root_already_current {
-        let mut recycle_log = |message: &str| println!("{message}");
-        crate::self_update::recycle_replaced_units(
-            "release install-local",
-            &directory,
-            std::slice::from_ref(&name),
-            &mut recycle_log,
-        )
-        .await
-        .map_err(CmdError::click)?;
-    }
+    let mut recycle_log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release install-local",
+        &directory,
+        std::slice::from_ref(&name),
+        &mut recycle_log,
+    )
+    .await
+    .map_err(CmdError::click)?;
     if stado_version.is_some() {
         converge_service_local_stado_readers(
             "release install-local",
@@ -1849,17 +1844,15 @@ async fn converge_local_readers(args: &ReleaseConvergeLocalReadersArgs) -> Resul
 
     let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
     let executable = directory.join(&args.name);
-    if !args.skip_global {
-        let mut log = |message: &str| println!("{message}");
-        crate::self_update::recycle_replaced_units(
-            "release converge-local-readers",
-            &directory,
-            std::slice::from_ref(&args.name),
-            &mut log,
-        )
-        .await
-        .map_err(CmdError::click)?;
-    }
+    let mut log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release converge-local-readers",
+        &directory,
+        std::slice::from_ref(&args.name),
+        &mut log,
+    )
+    .await
+    .map_err(CmdError::click)?;
     converge_service_local_stado_readers(
         "release converge-local-readers",
         &executable,

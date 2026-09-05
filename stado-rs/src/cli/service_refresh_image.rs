@@ -75,7 +75,7 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
         })?;
     let host = local.name.clone();
 
-    let before = observe(local, &host, name)?;
+    let before = observe(local, &host, name).await?;
     let (running, installed) = if if_needed {
         match (&before.running, &before.installed) {
             (Some(running), Some(installed)) if running.is_same_file(installed) => {
@@ -115,13 +115,14 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
 }
 
 /// This unit's observation, or the reason there is none.
-fn observe(
+async fn observe(
     target: &crate::targets::ComputeTarget,
     host: &str,
     name: &str,
 ) -> Result<UnitImageObservation, CmdError> {
     let now = chrono::Utc::now().timestamp();
     service::observe_unit_images(target, Some(host), now)
+        .await
         .into_iter()
         .find(|row| row.unit == name)
         .ok_or_else(|| {
@@ -206,6 +207,7 @@ pub(crate) async fn settle(
         tokio::time::sleep(POLL_INTERVAL).await;
         let now = chrono::Utc::now().timestamp();
         let found = service::observe_unit_images(target, Some(host), now)
+            .await
             .into_iter()
             .find(|row| row.unit == name);
         if let Some(row) = found {

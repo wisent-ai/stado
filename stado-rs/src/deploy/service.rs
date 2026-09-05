@@ -6041,15 +6041,14 @@ impl UnitImageObservation {
     }
 }
 
-/// One row from the unit-image scan plus the exact argv used to join it to a
-/// live process.
+/// One row from the unit-image scan plus the native owner's observed argv.
 ///
 /// The public observation predates the release revisit pass and remains the
 /// stable value consumed by doctor and the manual refresh command. The
 /// release pass additionally needs the subcommand to exclude units that
 /// recycle themselves. Keeping it beside the observation internally preserves
-/// that evidence from the same plist/process pass without widening the public
-/// struct or reading either source again.
+/// that evidence from the same native process observation without widening the
+/// public struct or reading either source again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnitImageScan {
     pub observation: UnitImageObservation,
@@ -6070,13 +6069,11 @@ pub(crate) struct UnitImageScan {
 /// a remote host silently omitted would be that same defect wearing this
 /// check's name.
 ///
-/// A unit with no matching process yields nothing. That is not a silence but
-/// the honest answer — a job that is loaded and not running holds no image,
-/// the reasoning `recycle_launchd` already states — and the process table is
-/// joined on the WHOLE argument vector rather than on `argv[0]`, because every
-/// stado unit on a host runs the same binary and the subcommand is the entire
-/// difference between them.
-pub(crate) fn observe_unit_image_scan(
+/// The native manager supplies each label's live PID. The unit file supplies
+/// the installed program to compare with that PID's kernel image; its argv may
+/// already differ from launchd's cached definition. An unloaded or stopped
+/// unit holds no image, while ambiguous ownership remains explicitly unread.
+pub(crate) async fn observe_unit_image_scan(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
@@ -6094,8 +6091,7 @@ pub(crate) fn observe_unit_image_scan(
             installed: None,
             state,
         },
-        // No argv: these rows report a host, or a unit file that could not be
-        // read or declares no program, so there is nothing that was matched.
+        // No argv: the native owner or declared program could not be read.
         arguments: Vec::new(),
     };
     let whole_host = |reason: String| {
@@ -6128,18 +6124,19 @@ pub(crate) fn observe_unit_image_scan(
                 .to_string(),
         )];
     };
-    let processes = match process_table() {
-        Ok(processes) => processes,
-        Err(reason) => return vec![whole_host(reason)],
+    let native_units = match loaded_units(target, &super::production_runner()).await {
+        Ok(units) => units,
+        Err(error) => return vec![whole_host(error.to_string())],
     };
+    let native_by_label = native_units
+        .iter()
+        .map(|unit| (unit.label.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
 
     // One pass over the unit files, then one image read for every pid they
     // name.
     let mut rows: Vec<UnitImageScan> = Vec::new();
-    // One unit file joined to one live pid, with the argv the join was made
-    // on. A named struct rather than a tuple because the argv makes six
-    // fields, and a six-tuple threaded through two loops is how the wrong
-    // element gets read.
+    // Keep the native owner's PID and argv beside the declared executable.
     struct Matched {
         label: String,
         unit_path: String,
@@ -6174,24 +6171,41 @@ pub(crate) fn observe_unit_image_scan(
             ));
             continue;
         }
-        // Matched on the WHOLE argument vector, and the vector that matched
-        // travels with the row: every stado unit on a host runs the same
-        // binary, so the subcommand is the entire difference between them,
-        // and a caller that re-read the plist to recover it would be reading
-        // a different moment.
-        let declared = unit.arguments.join(" ");
-        for (pid, age, argv) in &processes {
-            if argv == &declared {
-                pending.push(Matched {
-                    label: label.clone(),
-                    unit_path: unit_path.clone(),
-                    program: unit.program.clone(),
-                    arguments: unit.arguments.clone(),
-                    pid: *pid,
-                    age: *age,
-                });
-            }
+        let Some(native) = native_by_label.get(label.as_str()) else {
+            continue;
+        };
+        if native.loaded_domains.len() > 1 {
+            rows.push(unread(
+                format!("{label}'s native owner"),
+                format!(
+                    "launchd reports {} loaded domains; refusing to choose a process",
+                    native.loaded_domains.len()
+                ),
+            ));
+            continue;
         }
+        let Ok(pid) = native.pid.parse::<u32>() else {
+            continue;
+        };
+        if native.loaded_domains.is_empty() || native.running_program.is_empty() {
+            rows.push(unread(
+                format!("{label}'s native owner"),
+                "a live PID has no readable owner domain or argument vector".to_string(),
+            ));
+            continue;
+        }
+        pending.push(Matched {
+            label,
+            unit_path,
+            program: unit.program,
+            arguments: native
+                .running_program
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
+            pid,
+            age: native.started_epoch.map(|started| now_epoch - started),
+        });
     }
 
     let pids: Vec<u32> = pending.iter().map(|matched| matched.pid).collect();
@@ -6270,15 +6284,16 @@ pub(crate) fn observe_unit_image_scan(
 
 /// The stable public projection of [`observe_unit_image_scan`].
 ///
-/// Both callers receive rows produced by the same plist/process/image pass;
-/// only the internal release revisit keeps the matched argv it additionally
+/// Both callers receive rows produced by the same native-owner/image pass;
+/// only the internal release revisit keeps the observed argv it additionally
 /// needs.
-pub fn observe_unit_images(
+pub async fn observe_unit_images(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
 ) -> Vec<UnitImageObservation> {
     observe_unit_image_scan(target, local_units, now_epoch)
+        .await
         .into_iter()
         .map(|scan| scan.observation)
         .collect()
@@ -6289,12 +6304,13 @@ pub fn observe_unit_images(
 ///
 /// The `registry doctor` view of [`observe_unit_images`]: the same pass, with
 /// the units that are fine dropped.
-pub fn units_running_replaced_images(
+pub async fn units_running_replaced_images(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
 ) -> Vec<StaleUnitImage> {
     observe_unit_images(target, local_units, now_epoch)
+        .await
         .iter()
         .filter_map(UnitImageObservation::finding)
         .collect()

@@ -378,7 +378,11 @@ pub async fn converge(
                 .and_then(|entries| entries.get("stado"))
                 .is_some_and(|entry| entry.attestation == ATTEST_MATCH)
     });
-    if stado_root_in_sync {
+    let root_delivery_failed = pass
+        .releases
+        .iter()
+        .any(|release| release.binary == "stado" && release.status == FAILED);
+    if stado_root_in_sync && !root_delivery_failed {
         converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
     }
     // Asked again after the delivery for the same reason the versions are: a
@@ -1415,13 +1419,6 @@ async fn converge_native_readers(
     else {
         return;
     };
-    // A Stado release row means host release already attempted the root
-    // lifecycle in this pass. Do not kick those owners a second time; the row
-    // retains any root failure while private delivery still gets its one turn.
-    let skip_global = pass
-        .releases
-        .iter()
-        .any(|release| release.binary == "stado");
     let (reader_target, request, self_store) = match host_release::resolve_release_request(
         &target.name,
         "stado",
@@ -1459,12 +1456,11 @@ async fn converge_native_readers(
         "set -euo pipefail\n\
          archive=\"$HOME/.stado/releases/stado/{}/{}/{}\"\n\
          \"$HOME/.stado/bin/stado\" release converge-local-readers \
-         --name stado --archive \"$archive\" --sha256 {}{}\n",
+         --name stado --archive \"$archive\" --sha256 {}\n",
         request.version,
         request.platform,
         host_release::READER_ARCHIVE_NAME,
         crate::deploy::shlex_quote(&request.sha256),
-        if skip_global { " --skip-global" } else { "" },
     );
     let outcome = host_channel::run_script(&reader_target, &script, runner).await;
     let (status, detail) = match outcome {
