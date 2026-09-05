@@ -239,13 +239,16 @@ impl OwnedProcessGroup {
 
             let result = match self.child_id {
                 Some(pid) => killpg(Pid::from_raw(pid as i32), Signal::SIGKILL),
-                None => return Some("child PID unavailable".to_string()),
-            };
-            match result {
-                Ok(()) | Err(Errno::ESRCH) => {
+                None => {
                     self.armed = false;
-                    None
+                    return Some("child PID unavailable".to_string());
                 }
+            };
+            // One exact attempt owns this process-group identity. Never retry
+            // from Drop after reaping, when the numeric id could be recycled.
+            self.armed = false;
+            match result {
+                Ok(()) | Err(Errno::ESRCH) => None,
                 Err(error) => Some(error.to_string()),
             }
         }
@@ -294,7 +297,7 @@ async fn run_process(spec: CommandSpec) -> Result<CommandOutput, String> {
     // the locally owned group while the leader handle still retains identity.
     let mut owned_group = OwnedProcessGroup::new(child.id());
     let stdin_payload = spec.stdin;
-    let mut stdin_pipe = child.stdin.take();
+    let stdin_pipe = child.stdin.take();
     let mut stdout = child.stdout.take().ok_or("child stdout was not piped")?;
     let mut stderr = child.stderr.take().ok_or("child stderr was not piped")?;
 
@@ -304,8 +307,8 @@ async fn run_process(spec: CommandSpec) -> Result<CommandOutput, String> {
     let communication = async {
         let mut stdout_bytes = Vec::new();
         let mut stderr_bytes = Vec::new();
-        let write_stdin = async {
-            if let (Some(pipe), Some(payload)) = (&mut stdin_pipe, stdin_payload) {
+        let write_stdin = async move {
+            if let (Some(mut pipe), Some(payload)) = (stdin_pipe, stdin_payload) {
                 if let Err(error) = pipe.write_all(payload.as_bytes()).await {
                     if error.kind() != std::io::ErrorKind::BrokenPipe {
                         return Err(error);
