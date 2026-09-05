@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 
 use crate::queue::runs::{
-    list_runs, read_run, record_terminal_outcome_for_entry, run_status, ALL_PREFIXES, RUN_PREFIX,
+    list_runs, record_terminal_outcome_for_entry, run_status, ALL_PREFIXES, RUN_PREFIX,
     TERMINAL_PREFIXES,
 };
 use crate::queue::{JobStorage, StorageError};
@@ -924,9 +924,6 @@ pub async fn reap_terminal_runs(
     let mut touched = 0;
     let cleanup_residue = cleanup_residue_job_ids(store).await?;
     for run_id in list_runs(store).await? {
-        if read_run(store, &run_id).await?.is_none() {
-            continue;
-        }
         let path = format!("{RUN_PREFIX}/{run_id}.json");
         let Some(initial) = store.read_text_versioned(&path).await? else {
             continue;
@@ -1075,12 +1072,16 @@ pub async fn reap_terminal_runs(
             Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
             Err(error) => return Err(error),
         }
-        let retained = read_run(store, &run_id).await?.ok_or_else(|| {
-            StorageError::Other(format!(
-                "run manifest {run_id} disappeared after reaping CAS"
-            ))
-        })?;
-        crate::queue::submit::validate_stored_run_manifest(&Value::Object(retained), &run_id)
+        // The manifest is the deletion fence. Another coordinator may retire
+        // it after our successful CAS; in that case do not guess a terminal
+        // state and, critically, do not delete any job blobs. A storage read
+        // error still propagates, while an absent object ends only this run's
+        // cleanup.
+        let Some(retained) = store.read_text_versioned(&path).await? else {
+            continue;
+        };
+        let retained: Value = serde_json::from_str(&retained.content)?;
+        crate::queue::submit::validate_stored_run_manifest(&retained, &run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
 
         summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
