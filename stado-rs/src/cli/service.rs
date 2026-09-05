@@ -2627,7 +2627,31 @@ async fn update(
             install_from_artifact(&target, &directory, reference).await?,
             false,
         ),
-        (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
+        (None, Some(path)) => {
+            let marker = format!("/services/{directory}/");
+            let required = if let Some((_, rest)) = program.split_once(&marker) {
+                rest.split_once('/')
+                    .map(|(_, tail)| tail.to_string())
+                    .ok_or_else(|| {
+                        CmdError::click("managed service program has no archive member")
+                    })?
+            } else {
+                let executable = std::path::Path::new(program)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| CmdError::click("managed service program has no filename"))?;
+                format!("darwin-arm/{executable}")
+            };
+            if !std::path::Path::new(&required)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(CmdError::click(
+                    "managed service archive member is not relative",
+                ));
+            }
+            install_from_archive(&target, &directory, path, &required, &runner).await?
+        }
         (None, None) => {
             return Err(CmdError::click(
                 "update needs --from-artifact REF or --from-archive PATH",
@@ -7799,10 +7823,14 @@ fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(
     ))
 }
 
+/// Extract beside the immutable version and confirm the declared executable
+/// before atomically replacing `current`. Never remove an installed version
+/// while extracting its replacement.
 async fn install_from_archive(
     target: &crate::targets::ComputeTarget,
     directory: &str,
     path: &str,
+    required: &str,
     runner: &crate::deploy::Runner,
 ) -> Result<(crate::deploy::artifact_install::InstalledArtifact, bool), CmdError> {
     let bytes = std::fs::read(path)?;
@@ -7864,11 +7892,12 @@ async fn install_from_archive(
     }
 
     let script = format!(
-        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\n{ARCHIVE_INSTALL_BODY}",
+        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\nrequired={}\n{ARCHIVE_INSTALL_BODY}",
         crate::deploy::shlex_quote(directory),
         crate::deploy::shlex_quote(&version),
         crate::deploy::shlex_quote(&digest),
         crate::deploy::shlex_quote(&staged),
+        crate::deploy::shlex_quote(required),
     );
     let output = host_channel::run_script(target, &script, runner)
         .await
@@ -7898,7 +7927,9 @@ const ARCHIVE_INSTALL_BODY: &str = r#"
 root="$HOME/.stado/services/$name"
 version_dir="$root/$version"
 archive="$HOME/$staged"
-trap 'rm -f "$archive"' EXIT
+incoming="$root/.$version.incoming.$$"
+link="$root/.current.new.$$"
+trap 'rm -f "$archive" "$link"; rm -rf "$incoming"' EXIT
 
 [ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; exit 1; }
 actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
@@ -7907,28 +7938,48 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+/bin/mkdir -p "$incoming/darwin-arm"
+/usr/bin/tar -xzf "$archive" -C "$incoming/darwin-arm"
+if [ ! -f "$incoming/$required" ] || [ ! -x "$incoming/$required" ]; then
+  printf '%s\n' "archive does not carry the declared executable $required; current is unchanged" >&2
+  exit 1
+fi
+if [ -e "$version_dir" ]; then
+  if ! /usr/bin/diff -qr "$incoming" "$version_dir" >/dev/null; then
+    printf '%s\n' "existing immutable version $version differs from its archive; current is unchanged" >&2
+    exit 1
+  fi
+  [ -x "$version_dir/$required" ] || {
+    printf '%s\n' "existing immutable version $version has no executable $required; current is unchanged" >&2
+    exit 1
+  }
+  rm -rf "$incoming"
+else
+  /usr/bin/python3 - "$incoming" "$version_dir" <<'PY'
+import os, sys
+os.rename(sys.argv[1], sys.argv[2])
+PY
+fi
+
 if [ -L "$root/current" ] &&
-   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ] &&
-   [ -d "$version_dir/darwin-arm" ]; then
+   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ]; then
   trap - EXIT
   rm -f "$archive"
   printf '%s\n' 'STADO_SERVICE_ARCHIVE already_active'
   exit 0
 fi
-rm -rf "$version_dir"
-/bin/mkdir -p "$version_dir/darwin-arm"
-/usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
 
 # `current` is a directory here on some hosts and a symlink on others; either
 # way the previous one is kept beside the new version rather than deleted, so a
 # rollback is a rename.
 if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
-  /bin/mv "$root/current" "$root/current.before-$version"
-else
-  rm -f "$root/current"
+  /bin/mv "$root/current" "$root/current.before-$version.$$"
 fi
-/bin/ln -sfn "$version_dir" "$root/.current.new"
-/bin/mv -f "$root/.current.new" "$root/current"
+/bin/ln -s "$version_dir" "$link"
+/usr/bin/python3 - "$link" "$root/current" <<'PY'
+import os, sys
+os.replace(sys.argv[1], sys.argv[2])
+PY
 trap - EXIT
 rm -f "$archive"
 printf '%s\n' "$version_dir"

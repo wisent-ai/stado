@@ -8303,18 +8303,44 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The fixed-script channel transports the checked-in helper verbatim. Its
-/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation; object recovery itself mutates only a listener whose
-/// authenticated protected read is unavailable.
+/// Storage authority changes belong to the resident storage-root transaction.
+/// This narrower repair shares its lock and never copies a backing store.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let script = format!(
+        r#"set -eu
+/usr/bin/python3 - <<'PY'
+import base64, fcntl, os, subprocess, sys
+work = os.path.join(os.path.expanduser("~"), ".stado", "recovery")
+os.makedirs(work, mode=0o700, exist_ok=True)
+descriptor = os.open(
+    os.path.join(work, "storage-root-reconcile.lock"),
+    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+    0o600,
+)
+with os.fdopen(descriptor, "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("storage authority recovery is already running on this host")
+    result = subprocess.run(
+        ["/bin/bash"],
+        input=base64.b64decode("{}"),
+        pass_fds=(lock.fileno(),),
+        check=False,
+    )
+    sys.exit(result.returncode)
+PY"#,
+        STANDARD.encode(include_str!("../../../deploy/recover_object_api.sh")),
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
-        include_str!("../../../deploy/recover_object_api.sh"),
-        std::time::Duration::from_secs(240),
+        &script,
+        std::time::Duration::from_secs(300),
         runner,
     )
     .await
@@ -8516,7 +8542,7 @@ pub async fn unit_log(
     // The unit id becomes a fixed word in the shared launchd/systemd reader,
     // so reject anything that is not a single safe unit name first.
     vault_word("unit label", unit)?;
-    let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
+    let lines = lines.unwrap_or(40).clamp(u32::from(true), 200_000);
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

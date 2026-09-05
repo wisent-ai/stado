@@ -1287,17 +1287,7 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "put",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(None) => {}
@@ -1388,6 +1378,12 @@ impl Dashboard {
                 &json!({
                     "degraded": degraded,
                     "boundaries": boundaries,
+                    "storage": {
+                        "pid": std::process::id(),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "backend": self.store.backend_name(),
+                        "local_path": self.store.local_storage_path(),
+                    },
                 }),
             );
         }
@@ -1449,9 +1445,7 @@ impl Dashboard {
                 let listing = list && namespace != "system";
                 authorize_release(self, request, &policy_key, listing).await
             } else {
-                object_decision(
-                    authorize_object(self, request, &namespace, &key_or_prefix, list, action).await,
-                )
+                authorize_object(self, request, &namespace, &key_or_prefix, list, action).await
             };
             match authorized {
                 Ok(None) => {}
@@ -2298,17 +2292,7 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "put",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(None) => {}
@@ -2661,17 +2645,7 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "put",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(None) => {}
@@ -2730,17 +2704,7 @@ impl Dashboard {
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
-            object_decision(
-                authorize_object(
-                    self,
-                    request,
-                    object.namespace(),
-                    object.key(),
-                    false,
-                    "delete",
-                )
-                .await,
-            )
+            authorize_object(self, request, object.namespace(), object.key(), false, "delete").await
         };
         match authorized {
             Ok(None) => {}
@@ -3645,6 +3609,17 @@ async fn authorize_host_health(dashboard: &Dashboard, request: &Request) -> Resu
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
 }
 
+/// Authorize one object request against the namespace that declares it, and
+/// say which of the four faults refused it.
+///
+/// [`ReleaseRefusal`] already learned this lesson on the release route: one
+/// code for every refusal cost a day, because "no declaration", "key outside
+/// the declared prefixes", "no bearer at all" and "the wrong bearer" need
+/// opposite repairs and read identically. The object route kept collapsing
+/// them, and on 2026-09-05 it answered `object_grant_does_not_cover_key` for
+/// `stado://spis-crawls/runs/…` on a host whose configuration declares
+/// `runs/` with `get` — so the message named the one cause that was not
+/// true, and the real one had to be found by excluding hypotheses again.
 async fn authorize_object(
     dashboard: &Dashboard,
     request: &Request,
@@ -3652,10 +3627,10 @@ async fn authorize_object(
     key_or_prefix: &str,
     list: bool,
     action: &str,
-) -> Result<bool, ()> {
+) -> ObjectDecision {
     let namespaces = config::object_api_namespaces().map_err(|_| ())?;
     let Some(policy) = namespaces.get(namespace) else {
-        return Ok(false);
+        return Ok(Some("no_namespace_declared"));
     };
     let in_scope = if list {
         policy
@@ -3665,12 +3640,18 @@ async fn authorize_object(
         policy.allows_object_action(key_or_prefix, action)
     };
     if !in_scope {
-        return Ok(false);
+        return Ok(Some("object_grant_does_not_cover_key"));
     }
     let expected = dashboard.object_token(namespace, policy.item()).await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
-    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-    Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
+    let Some(supplied) = authorization.strip_prefix("Bearer ") else {
+        return Ok(Some("no_bearer_presented"));
+    };
+    if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
+        Ok(None)
+    } else {
+        Ok(Some("bearer_does_not_match_namespace_item"))
+    }
 }
 
 /// Why one release request was refused, as a stable code an operator can act
@@ -3712,17 +3693,6 @@ impl ReleaseRefusal {
 /// The decision one object request reached: `None` authorized, `Some(code)`
 /// refused with a reason, `Err(())` the authority could not be consulted.
 type ObjectDecision = Result<Option<&'static str>, ()>;
-
-/// A plain boolean authorization, given the shape [`ObjectDecision`] wants.
-fn object_decision(authorized: Result<bool, ()>) -> ObjectDecision {
-    authorized.map(|allowed| {
-        if allowed {
-            None
-        } else {
-            Some("object_grant_does_not_cover_key")
-        }
-    })
-}
 
 /// Authenticate one immutable release publisher after resolving the exact
 /// product prefix, and say why when it refuses.
