@@ -938,7 +938,7 @@ jobs:
               [
                 .deliveries[]
                 | select(.required == true)
-                | select(.argv == ["stado", "release", "install-local"])
+                | select(.argv[0:3] == ["stado", "release", "install-local"])
                 | .target
               ]
               | if length > 0 and length == (unique | length)
