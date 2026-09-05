@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.26
+## 0.16.27
 
 - **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
 - **Desktop services:** the service inspector exposes the same runner repair and shows its result or refusal without replacing the CLI's diagnosis.
