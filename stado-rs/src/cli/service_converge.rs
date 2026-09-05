@@ -1397,31 +1397,87 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
 /// Finish the runtime half even when the installed Stado file was already
 /// attested and at the declared version.
 ///
-/// `install-local` may have replaced the root file and then failed while
-/// recycling one reader. A resumed `service converge --apply` must not read the
-/// matching file as completion and skip the still-old process. The target's
-/// installed binary owns the same kernel-identity implementation used during
-/// install, so this invokes that implementation rather than redelivering bytes.
+/// Root delivery retains the exact catalog-verified archive beside the staged
+/// binary. Pass that archive and its independently resolved catalog digest to
+/// the target CLI: global-path owners are recycled first, then the existing
+/// service-update implementation installs the same bytes into every private
+/// reader tree before restarting and proving its process image.
 async fn converge_native_readers(
     target: &ComputeTarget,
     declared: &[(String, String)],
     runner: &Runner,
     pass: &mut AppliedPass,
 ) {
-    let version = declared
+    let Some(version) = declared
         .iter()
         .find(|(name, _)| name == "stado")
         .map(|(_, version)| version.clone())
-        .unwrap_or_default();
-    let script = "set -euo pipefail\n\"$HOME/.stado/bin/stado\" release \
-                  converge-local-readers --name stado\n";
-    let outcome = host_channel::run_script(target, script, runner).await;
+    else {
+        return;
+    };
+    // A Stado release row means host release already attempted the root
+    // lifecycle in this pass. Do not kick those owners a second time; the row
+    // retains any root failure while private delivery still gets its one turn.
+    let skip_global = pass
+        .releases
+        .iter()
+        .any(|release| release.binary == "stado");
+    let (reader_target, request, self_store) = match host_release::resolve_release_request(
+        &target.name,
+        "stado",
+        &version,
+        false,
+        false,
+        runner,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            pass.releases.push(Released {
+                binary: "stado-readers".to_string(),
+                version,
+                status: FAILED,
+                detail: format!("cannot resolve the Stado reader archive: {error}"),
+            });
+            return;
+        }
+    };
+    if let Err(error) =
+        host_release::ensure_stado_reader_archive(&reader_target, &request, self_store, runner)
+            .await
+    {
+        pass.releases.push(Released {
+            binary: "stado-readers".to_string(),
+            version,
+            status: FAILED,
+            detail: error.to_string(),
+        });
+        return;
+    }
+    let script = format!(
+        "set -euo pipefail\n\
+         archive=\"$HOME/.stado/releases/stado/{}/{}/{}\"\n\
+         \"$HOME/.stado/bin/stado\" release converge-local-readers \
+         --name stado --archive \"$archive\" --sha256 {}{}\n",
+        request.version,
+        request.platform,
+        host_release::READER_ARCHIVE_NAME,
+        crate::deploy::shlex_quote(&request.sha256),
+        if skip_global { " --skip-global" } else { "" },
+    );
+    let outcome = host_channel::run_script(&reader_target, &script, runner).await;
     let (status, detail) = match outcome {
         Ok(output) if output.ok() => (COMPLETED, output.stdout.trim().to_string()),
-        Ok(output) => (
-            FAILED,
-            host_channel::last_error_line(&output, "native reader convergence failed"),
-        ),
+        Ok(output) => {
+            let captured = json!({
+                "operation": "native_reader_convergence",
+                "exit_code": output.code,
+                "stderr": output.stderr.trim(),
+                "stdout": output.stdout.trim(),
+            });
+            (FAILED, captured.to_string())
+        }
         Err(error) => (FAILED, error.to_string()),
     };
     pass.releases.push(Released {

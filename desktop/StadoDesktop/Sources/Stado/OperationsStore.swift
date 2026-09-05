@@ -593,6 +593,9 @@ final class FleetServicesStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    /// The last complete apply document and the exact argv that produced it.
+    /// Ordinary service refreshes never clear mutation evidence.
+    @Published private(set) var convergenceReceipt: ServiceConvergeReceipt?
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
@@ -644,6 +647,15 @@ final class FleetServicesStore: ObservableObject {
         ["service", "deploy", name, "--host", host, "--json"]
     }
 
+    nonisolated static func convergeApplyArguments(host: String, binary: String?) -> [String] {
+        var arguments = ["service", "converge", host]
+        if let binary, !binary.isEmpty {
+            arguments.append(binary)
+        }
+        arguments.append(contentsOf: ["--apply", "--json"])
+        return arguments
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -675,11 +687,44 @@ final class FleetServicesStore: ObservableObject {
         lastUpdated = Date()
     }
 
+    /// Deliver the selected binary to the host's declaration through the
+    /// product converge command. Its decoded document is retained before the
+    /// normal refresh, including when the CLI exits non-zero after printing a
+    /// complete refusal or partial-apply report.
+    func converge(host: String, binary: String?) async {
+        guard !mutation.isWorking else { return }
+        let arguments = Self.convergeApplyArguments(host: host, binary: binary)
+        convergenceReceipt = nil
+        mutation = .working("Converging \(binary.map { "\($0) on " } ?? "")\(host)")
+        do {
+            let result = try await cli.jsonResult(
+                ServiceConvergeReport.self,
+                arguments: arguments,
+                timeoutSeconds: 900
+            )
+            convergenceReceipt = ServiceConvergeReceipt(
+                arguments: arguments,
+                exitCode: result.exitCode,
+                report: result.value
+            )
+            mutation = result.exitCode == 0
+                ? .succeeded("Converged \(binary.map { "\($0) on " } ?? "")\(result.value.target).")
+                : .failed(
+                    "Convergence on \(result.value.target) exited \(result.exitCode). "
+                        + "The complete CLI receipt remains below."
+                )
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh(hosts: lastHosts)
+    }
+
     /// Deploy the declaration already stored in the canonical service
     /// directory. The operator supplies no program, args, artifact or digest
     /// here — those are the declaration's job, and a missing one is the CLI's
     /// refusal to carry verbatim.
     func deploy(_ entry: FleetServiceEntry) async {
+        guard !mutation.isWorking else { return }
         mutation = .working("Deploying \(entry.name) on \(entry.host)")
         do {
             let report = try await cli.json(
@@ -704,6 +749,7 @@ final class FleetServicesStore: ObservableObject {
     /// that exits zero but left the host outside the intended state is read
     /// off the payload's postcondition, in the same words the CLI prints.
     func restart(_ entry: FleetServiceEntry) async {
+        guard !mutation.isWorking else { return }
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         mutation = .working("Restarting \(unit) on \(entry.host)")
         do {
@@ -731,6 +777,7 @@ final class FleetServicesStore: ObservableObject {
     /// into retire + delete, because two commands an operator must order
     /// correctly are one command that cannot go wrong.
     func removeService(_ entry: FleetServiceEntry) async {
+        guard !mutation.isWorking else { return }
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         mutation = .working("Removing \(unit) on \(entry.host)")
         do {
@@ -755,6 +802,10 @@ final class FleetServicesStore: ObservableObject {
 
     func clearMutation() {
         mutation = .idle
+    }
+
+    func clearConvergenceReceipt() {
+        convergenceReceipt = nil
     }
 
     private enum ListReading: Sendable {
