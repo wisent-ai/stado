@@ -76,7 +76,9 @@ while IFS=$'\t' read -r target platform; do
   if [ "$target" = "$self_target" ]; then
     ensure_host_archive "$platform" yes
     installed="$("$HOME/.stado/bin/stado" --version 2>/dev/null || true)"
-    if [ "$installed" != "stado $version" ]; then
+    installed_version="${installed#stado }"
+    installed_version="${installed_version%% *}"
+    if [ "$installed_version" != "$version" ]; then
       WISENT_RELEASE_ARCHIVE="$work_root/$platform.tar.gz" \
         WISENT_RELEASE_SHA256="$expected_sha256" \
         WISENT_PRODUCT=stado WISENT_VERSION="$version" \
@@ -84,10 +86,13 @@ while IFS=$'\t' read -r target platform; do
           --member stado --name stado
     fi
     installed="$("$HOME/.stado/bin/stado" --version)"
-    [ "$installed" = "stado $version" ] || {
+    installed_version="${installed#stado }"
+    installed_version="${installed_version%% *}"
+    [ "$installed_version" = "$version" ] || {
       echo "FATAL: $target reports $installed after local Stado release" >&2
       exit 1
     }
+    "$HOME/.stado/bin/stado" release converge-local-readers --name stado
   else
     ensure_host_archive "$platform" no
     "$stado_bin" host release "$target" --binary stado --version "$version" --json

@@ -103,8 +103,9 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
         actionable(&before)?
     };
 
-    let service =
-        service::kickstart_local_unit(&before.unit, &before.unit_path, None).map_err(|reason| {
+    let service = service::restart_local_unit(local, &before.unit, &before.unit_path, None)
+        .await
+        .map_err(|reason| {
             CmdError::click(format!("{} was not restarted: {reason}", before.unit))
         })?;
 
