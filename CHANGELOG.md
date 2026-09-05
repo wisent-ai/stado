@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.16.28
+## 0.16.29
 
 - **Release request recovery:** resuming an attempt reuses its recorded builder and immutable request bytes rather than selecting a different host from current capacity. Concurrent submissions retain the first request after checking its source and recipe. A retry after a recorded terminal job failure has its own request URI, so it may select a new builder without overwriting an earlier attempt.
 
-## 0.16.27
+## 0.16.28
 
 - **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.
 - **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
@@ -15,7 +15,7 @@
 - **Native image diagnostics:** macOS shell dispatch is resolved from an observed process rather than comparing its selected shell with the `/bin/sh` dispatcher inode; aliases use the same identity check.
 - **Environment diagnostics:** service-owned pins retain the required native-unit comparison. Unread remote definitions and observed mismatches have separate findings, and another product's target entry no longer hides a missing delivery declaration.
 
-- **Reconciliation script transport:** native unit capture, listener closure, served-store comparison, and exact unit restoration preserve Python indentation. Their failures retain the operation, host, and complete remote output. Full inventory input travels in the streamed program instead of the process environment. The initial fenced checkpoint retries whole qualified and physical inventories until two consecutive snapshots agree, retaining every permitted key while preventing an atomic storage rename between enumeration and identity reads from aborting the resumable transaction.
+- **Reconciliation script transport:** native unit capture, listener closure, served-store comparison, and exact unit restoration preserve Python indentation. Their failures retain the operation, host, and complete remote output. Full inventory input travels in the streamed program instead of the process environment. Live preflight retries only an entry that disappears during its single complete qualified and physical capture; it emits those captured identities without rereading live files. The later fenced checkpoint additionally requires two consecutive identical captures. Served-object correlation uses the same `bytes`/SHA-256 identity shape as physical inventory, while every permitted key remains retained.
 - **Native unit restoration:** saved permission bits are rendered as octal for `install`; the restored file must match the captured mode, owner, group, and byte digest before restoration succeeds.
 - **Cargo inventory:** `stado host inventory` reports fixed Cargo-root metadata and complete direct bin membership, including cache symlinks and hidden entries, with explicit partial-read states. Stado Desktop reads the same typed report through the authenticated host inventory API.
 - **Service convergence:** catalog lookup resolves both product names and native unit identities, so label-addressed repairs retain the full required environment. Object API recovery preserves unrelated installed unit fields rather than competing with the shared renderer.
