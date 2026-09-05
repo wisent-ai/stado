@@ -548,7 +548,7 @@ pub(crate) async fn recycle_replaced_units(
     let restarted = if cfg!(target_os = "macos") {
         recycle_launchd(context, &paths, ours, log_fn).await?
     } else {
-        recycle_systemd(context, &paths, ours, log_fn).await
+        recycle_systemd(context, &paths, ours, log_fn).await?
     };
     if restarted == 0 {
         log_fn(&format!(
@@ -567,7 +567,14 @@ pub(crate) async fn recycle_replaced_units(
 /// second spelling of "which units recycle themselves" is a second answer
 /// waiting to disagree with this one.
 pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
-    argv.iter().skip(1).any(|token| token.as_ref() == "agent")
+    let mut arguments = argv.iter().skip(1).map(AsRef::as_ref);
+    let first = arguments.next();
+    let subcommand = if first == Some("--") {
+        arguments.next()
+    } else {
+        first
+    };
+    subcommand == Some("agent")
 }
 
 /// Stdout of a successful command, or `None` for a missing binary, a spawn
@@ -585,45 +592,6 @@ async fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
-/// This account's uid, read from the ownership of its own home directory, so
-/// that naming a launchd domain costs neither a new crate feature nor a
-/// subprocess.
-fn unix_uid() -> Option<u32> {
-    use std::os::unix::fs::MetadataExt;
-    let home = std::env::var_os("HOME")?;
-    Some(std::fs::metadata(home).ok()?.uid())
-}
-
-/// The argv of one launchd unit: `ProgramArguments` when it has one, else the
-/// single `Program`. Read through `plutil`, which every macOS carries, so no
-/// plist parser joins the dependency set for the sake of two fields.
-///
-/// The whole argv, not just the program, because the subcommand decides
-/// whether a unit recycles itself — see [`defers_to_release_handshake`].
-async fn launchd_argv(plist: &Path) -> Option<Vec<String>> {
-    let path = plist.to_string_lossy().into_owned();
-    let rendered =
-        command_stdout("/usr/bin/plutil", &["-convert", "json", "-o", "-", &path]).await?;
-    let value: serde_json::Value = serde_json::from_str(&rendered).ok()?;
-    if let Some(arguments) = value
-        .get("ProgramArguments")
-        .and_then(serde_json::Value::as_array)
-    {
-        let argv: Vec<String> = arguments
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(str::to_string)
-            .collect();
-        if !argv.is_empty() {
-            return Some(argv);
-        }
-    }
-    value
-        .get("Program")
-        .and_then(serde_json::Value::as_str)
-        .map(|program| vec![program.to_string()])
-}
-
 /// `launchctl list` prints `PID\tStatus\tLabel` after one header row. A job
 /// that is loaded but not running prints `-` for the PID and holds no image,
 /// so it is skipped: it will pick up the new binary the next time launchd
@@ -634,20 +602,24 @@ async fn recycle_launchd(
     ours: u32,
     log_fn: &mut dyn FnMut(&str),
 ) -> Result<usize, String> {
-    let Some(uid) = unix_uid() else {
-        return Err(format!(
-            "{context}: this account's uid is unreadable, so running readers of the replaced image are unknown"
-        ));
-    };
-    let Some(listing) = command_stdout("/bin/launchctl", &["list"]).await else {
-        return Err(format!(
-            "{context}: launchctl list failed, so running readers of the replaced image are unknown"
-        ));
-    };
-    let pids: Vec<u32> = listing
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split('\t').next()?.trim().parse().ok())
+    let registry = crate::cli::registry::read_registry()
+        .await
+        .map_err(|error| format!("{context}: cannot read registry unit ownership: {error}"))?;
+    let hostname = crate::providers::vast::system_hostname();
+    let target = registry
+        .lookup_self(&hostname)
+        .map_err(|error| format!("{context}: cannot identify this host: {error}"))?
+        .ok_or_else(|| format!("{context}: no registry target names this machine ({hostname})"))?;
+    let runner = crate::deploy::production_runner();
+    let units = crate::deploy::service::loaded_units(target, &runner)
+        .await
+        .map_err(|error| {
+            format!("{context}: cannot enumerate domain-bound launchd units: {error}")
+        })?;
+    let pids: Vec<u32> = units
+        .iter()
+        .filter_map(|unit| unit.pid.parse().ok())
+        .filter(|pid| *pid != ours)
         .collect();
     let running_images = crate::deploy::service::running_images(&pids)
         .map_err(|error| format!("{context}: cannot read running image identities: {error}"))?;
@@ -659,190 +631,196 @@ async fn recycle_launchd(
                 .map_err(|error| format!("{context}: cannot identify installed {path}: {error}"))
         })
         .collect::<Result<_, _>>()?;
-    let home = std::env::var("HOME").unwrap_or_default();
-    let domains = [
-        (
-            PathBuf::from(&home).join("Library").join("LaunchAgents"),
-            format!("gui/{uid}"),
-        ),
-        (
-            PathBuf::from("/Library/LaunchDaemons"),
-            "system".to_string(),
-        ),
-    ];
     let mut restarted = 0usize;
-    for line in listing.lines().skip(1) {
-        let mut columns = line.split('\t');
-        let (Some(pid), Some(_status), Some(label)) =
-            (columns.next(), columns.next(), columns.next())
-        else {
-            continue;
-        };
-        let Ok(pid) = pid.trim().parse::<u32>() else {
+    for unit in units {
+        let Ok(pid) = unit.pid.parse::<u32>() else {
             continue;
         };
         if pid == ours {
             continue;
         }
-        for (directory, domain) in &domains {
-            let plist = directory.join(format!("{label}.plist"));
-            if !plist.is_file() {
-                continue;
-            }
-            let Some(argv) = launchd_argv(&plist).await else {
-                continue;
-            };
-            let direct = paths
-                .iter()
-                .find(|path| argv.first().is_some_and(|program| program == *path));
-            let running = running_images.get(&pid);
-            if direct.is_some() && running.is_none() {
-                return Err(format!(
-                    "{context}: the kernel image for {label} pid {pid} is unreadable"
-                ));
-            }
-            let selected = running.and_then(|running| {
-                installed_images.iter().find(|(path, installed)| {
-                    running.path.trim_end_matches(" (deleted)") == path
-                        && !running.is_same_file(installed)
-                })
-            });
-            let Some((program, installed)) = selected else {
-                continue;
-            };
-            if defers_to_release_handshake(&argv) {
-                log_fn(&format!(
-                    "{context}: {label} is running the replaced {program} and recycles itself \
-                     through the installed-release handshake, so it was left to finish its slot"
-                ));
-                break;
-            }
-            let service = format!("{domain}/{label}");
-            if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
-                .await
-                .is_none()
-            {
-                return Err(format!(
-                    "{context}: {service} was executing the replaced {program} and could not be restarted"
-                ));
-            }
-            let mut verified = false;
-            for _ in 0..60 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let Some(current) = command_stdout("/bin/launchctl", &["list"]).await else {
-                    continue;
-                };
-                let Some(current_pid) = current.lines().skip(1).find_map(|line| {
-                    let mut fields = line.split('\t');
-                    let pid = fields.next()?.trim().parse::<u32>().ok()?;
-                    let _status = fields.next()?;
-                    (fields.next()? == label).then_some(pid)
-                }) else {
-                    continue;
-                };
-                let Ok(images) = crate::deploy::service::running_images(&[current_pid]) else {
-                    continue;
-                };
-                if images
-                    .get(&current_pid)
-                    .is_some_and(|running| running.is_same_file(installed))
-                {
-                    log_fn(&format!(
-                        "{context}: restarted {service} in place; pid {pid} was running the replaced {program}, and pid {current_pid} now executes the installed inode"
-                    ));
-                    restarted += 1;
-                    verified = true;
-                    break;
-                }
-            }
-            if !verified {
-                return Err(format!(
-                    "{context}: {service} restarted but its running image did not converge to {program}"
-                ));
-            }
-            break;
+        let running = running_images.get(&pid);
+        let directly_declared = paths.iter().any(|path| {
+            unit.program
+                .split_whitespace()
+                .next()
+                .is_some_and(|program| program == path)
+        });
+        if directly_declared && running.is_none() {
+            return Err(format!(
+                "{context}: the kernel image for {} pid {pid} is unreadable",
+                unit.label
+            ));
         }
+        let selected = running.and_then(|running| {
+            installed_images.iter().find(|(path, installed)| {
+                running.path.trim_end_matches(" (deleted)") == path
+                    && !running.is_same_file(installed)
+            })
+        });
+        let Some((program, installed)) = selected else {
+            continue;
+        };
+        let argv: Vec<&str> = unit.running_program.split_whitespace().collect();
+        if defers_to_release_handshake(&argv) {
+            log_fn(&format!(
+                "{context}: {} is running the replaced {program} and recycles itself through \
+                 the installed-release handshake, so it was left to finish its slot",
+                unit.label
+            ));
+            continue;
+        }
+        if unit.loaded_domains.len() != 1 {
+            return Err(format!(
+                "{context}: {} pid {pid} executes replaced {program}, but launchd reports {} \
+                 loaded domains; refusing to guess which job owns the pid",
+                unit.label,
+                unit.loaded_domains.len()
+            ));
+        }
+        let service = format!("{}/{}", unit.loaded_domains[0], unit.label);
+        if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
+            .await
+            .is_none()
+        {
+            return Err(format!(
+                "{context}: {service} was executing the replaced {program} and could not be restarted"
+            ));
+        }
+        let after = crate::deploy::service::loaded_units(target, &runner)
+            .await
+            .map_err(|error| format!("{context}: cannot re-read {service}: {error}"))?;
+        let current_pid = after
+            .iter()
+            .find(|current| {
+                current.label == unit.label && current.loaded_domains == unit.loaded_domains
+            })
+            .and_then(|current| current.pid.parse::<u32>().ok())
+            .ok_or_else(|| format!("{context}: {service} restarted without a readable pid"))?;
+        let images = crate::deploy::service::running_images(&[current_pid])
+            .map_err(|error| format!("{context}: cannot verify {service}'s new image: {error}"))?;
+        if !images
+            .get(&current_pid)
+            .is_some_and(|running| running.is_same_file(installed))
+        {
+            return Err(format!(
+                "{context}: {service} restarted but pid {current_pid} does not execute the installed inode at {program}"
+            ));
+        }
+        log_fn(&format!(
+            "{context}: restarted {service} in place; pid {pid} was running the replaced \
+             {program}, and pid {current_pid} now executes the installed inode"
+        ));
+        restarted += 1;
     }
     Ok(restarted)
 }
 
-/// systemd holds a replaced image for exactly the same reason launchd does.
-/// `try-restart` acts only on units that are already running and never starts
-/// a stopped one, which is the in-place equivalent of `kickstart -k` here.
 async fn recycle_systemd(
     context: &str,
     paths: &[String],
     ours: u32,
     log_fn: &mut dyn FnMut(&str),
-) -> usize {
-    let Some(listing) = command_stdout(
-        "systemctl",
-        &[
-            "--user",
+) -> Result<usize, String> {
+    let mut restarted = 0usize;
+    for user in [false, true] {
+        let mut list_args = Vec::new();
+        if user {
+            list_args.push("--user");
+        }
+        list_args.extend([
             "list-units",
             "--type=service",
             "--state=running",
             "--no-legend",
             "--plain",
-        ],
-    )
-    .await
-    else {
-        log_fn(&format!(
-            "{context}: systemctl --user is unavailable, so no systemd unit was restarted"
-        ));
-        return 0;
-    };
-    let mut restarted = 0usize;
-    for line in listing.lines() {
-        let Some(unit) = line.split_whitespace().next() else {
+        ]);
+        let Some(listing) = command_stdout("systemctl", &list_args).await else {
             continue;
         };
-        let Some(exec) = command_stdout(
-            "systemctl",
-            &["--user", "show", "-p", "ExecStart", "--value", unit],
-        )
-        .await
-        else {
-            continue;
-        };
-        let Some(program) = paths.iter().find(|path| exec.contains(path.as_str())) else {
-            continue;
-        };
-        let argv: Vec<&str> = exec.split_whitespace().collect();
-        if defers_to_release_handshake(&argv) {
+        for line in listing.lines() {
+            let Some(unit) = line.split_whitespace().next() else {
+                continue;
+            };
+            let mut show_args = Vec::new();
+            if user {
+                show_args.push("--user");
+            }
+            show_args.extend(["show", "-p", "MainPID", "--value", unit]);
+            let main_pid = command_stdout("systemctl", &show_args)
+                .await
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            if main_pid == 0 || main_pid == ours {
+                continue;
+            }
+            let images = crate::deploy::service::running_images(&[main_pid]).map_err(|error| {
+                format!("{context}: cannot read {unit} pid {main_pid}: {error}")
+            })?;
+            let running = images
+                .get(&main_pid)
+                .ok_or_else(|| format!("{context}: no kernel image for {unit} pid {main_pid}"))?;
+            let installed = paths.iter().find_map(|path| {
+                (running.path.trim_end_matches(" (deleted)") == path)
+                    .then(|| crate::deploy::service::installed_image(Path::new(path)))
+            });
+            let Some(Ok((installed, _))) = installed else {
+                continue;
+            };
+            if running.is_same_file(&installed) {
+                continue;
+            }
+            let argv = crate::deploy::service::process_table()
+                .ok()
+                .and_then(|rows| {
+                    rows.into_iter()
+                        .find(|(pid, _, _)| *pid == main_pid)
+                        .map(|(_, _, argv)| argv)
+                })
+                .ok_or_else(|| format!("{context}: cannot read argv for {unit} pid {main_pid}"));
+            let argv = argv?;
+            let tokens: Vec<&str> = argv.split_whitespace().collect();
+            if defers_to_release_handshake(&tokens) {
+                log_fn(&format!(
+                    "{context}: {unit} is the queue agent and defers to its installed-release handshake"
+                ));
+                continue;
+            }
+            let mut restart_args = Vec::new();
+            if user {
+                restart_args.push("--user");
+            }
+            restart_args.extend(["try-restart", unit]);
+            if command_stdout("systemctl", &restart_args).await.is_none() {
+                return Err(format!(
+                    "{context}: {unit} pid {main_pid} could not be restarted onto the installed inode"
+                ));
+            }
+            let Some(new_pid) = command_stdout("systemctl", &show_args)
+                .await
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .filter(|pid| *pid != 0)
+            else {
+                return Err(format!(
+                    "{context}: {unit} restarted without a readable pid"
+                ));
+            };
+            let verified = crate::deploy::service::running_images(&[new_pid])
+                .ok()
+                .and_then(|images| images.get(&new_pid).cloned())
+                .is_some_and(|image| image.is_same_file(&installed));
+            if !verified {
+                return Err(format!(
+                    "{context}: {unit} restarted but pid {new_pid} does not execute the installed inode"
+                ));
+            }
             log_fn(&format!(
-                "{context}: {unit} is running the replaced {program} and recycles itself through \
-                 the installed-release handshake, so it was left to finish its slot"
-            ));
-            continue;
-        }
-        let main_pid = command_stdout(
-            "systemctl",
-            &["--user", "show", "-p", "MainPID", "--value", unit],
-        )
-        .await
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-        if main_pid == ours {
-            continue;
-        }
-        if command_stdout("systemctl", &["--user", "try-restart", unit])
-            .await
-            .is_some()
-        {
-            log_fn(&format!(
-                "{context}: restarted {unit} in place; pid {main_pid} was running the replaced {program}"
+                "{context}: restarted {unit}; pid {main_pid} held the replaced inode and pid {new_pid} maps the installed inode"
             ));
             restarted += 1;
-        } else {
-            log_fn(&format!(
-                "{context}: {unit} is running the replaced {program} and could not be restarted; \
-                 it keeps the old image"
-            ));
         }
     }
-    restarted
+    Ok(restarted)
 }
 
 /// Copy the verified staging file next to `dest` as `<name>.new`, chmod

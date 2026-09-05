@@ -2635,6 +2635,21 @@ async fn update(
         follow_current(&target, declared, &directory, &runner).await?
     };
     let image_refresh = if refresh_image {
+        let before = service::inspect_process(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        if before.pid.is_empty() {
+            let started = service::restart_service(&target, declared, &runner)
+                .await
+                .map_err(click)?;
+            if !started.succeeded("restarted") {
+                return Err(CmdError::click(format!(
+                    "{host}: {} was freshly observed without a live pid and did not start: {}",
+                    declared.unit_id(),
+                    started.failure()
+                )));
+            }
+        }
         let script = format!(
             "set -euo pipefail\n\"$HOME/.stado/bin/stado\" service refresh-image {} \
              --if-needed --json",
@@ -2649,8 +2664,12 @@ async fn update(
                 host_channel::last_error_line(&output, "the running image did not converge")
             )));
         }
-        serde_json::from_str::<Value>(output.stdout.trim())
-            .unwrap_or_else(|_| json!({"status": "refreshed", "detail": output.stdout.trim()}))
+        serde_json::from_str::<Value>(output.stdout.trim()).map_err(|error| {
+            CmdError::click(format!(
+                "{host}: image refresh returned invalid JSON: {error}; stdout={}",
+                output.stdout.trim()
+            ))
+        })?
     } else {
         Value::Null
     };
