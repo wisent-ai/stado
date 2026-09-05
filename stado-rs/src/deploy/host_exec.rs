@@ -916,6 +916,34 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               must be queried; it accepts no operator path and changes no link or file",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--search", "/usr/bin/gnuls"],
+        why: "asks Ubuntu's installed-package database which package records the fixed file \
+              /bin/ls actually resolves to; it verifies no bytes, installs nothing, and accepts \
+              no operator path",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--search", "/usr/bin/ls"],
+        why: "asks Ubuntu's installed-package database which package records the standard ls \
+              path, for comparison with the resolved gnuls path; it verifies no bytes, installs \
+              nothing, and every argument is fixed",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--show", "coreutils"],
+        why: "reads the installed coreutils package name and version from Ubuntu's package \
+              database without verifying files, changing package state, or accepting a package \
+              selected by the operator",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/grep",
+            "usr/bin/ls",
+            "/var/lib/dpkg/info/coreutils.md5sums",
+        ],
+        why: "reads only the standard ls entry from coreutils' fixed package-recorded checksum \
+              file; both the literal match and file path are fixed, and no installed file is \
+              verified or changed",
+    },
+    ApprovedCommand {
         argv: &[
             "/bin/ps",
             "axww",
