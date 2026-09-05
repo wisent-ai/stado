@@ -1473,7 +1473,9 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
                         if status.is_empty() {
                             String::from("the delivery reported neither a status nor an error")
                         } else {
-                            format!("delivery returned non-success status {status} without an error")
+                            format!(
+                                "delivery returned non-success status {status} without an error"
+                            )
                         }
                     })
             };
