@@ -51,7 +51,8 @@ pub struct JobStorage {
 
 const TRANSITION_PREFIX: &str = "job-transitions";
 const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
-const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
+pub(crate) const TRANSITION_RETIRED_STATE: &str =
+    "retired:destination-verified-source-retired";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,8 +83,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn transition_path(job_id: &str) -> String {
+pub(crate) fn transition_path(job_id: &str) -> String {
     format!("{TRANSITION_PREFIX}/{}.json", sha256_hex(job_id.as_bytes()))
+}
+
+pub(crate) fn transition_is_retired(state: &str) -> bool {
+    state == TRANSITION_RETIRED_STATE
 }
 
 fn prefix_state(prefix: &str) -> &str {

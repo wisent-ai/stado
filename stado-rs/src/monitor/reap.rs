@@ -127,34 +127,66 @@ fn has_complete_retained_outcomes(manifest: &Value) -> bool {
 }
 
 
-/// Collect lifecycle residue once per tick. Cleanup markers may be copied
-/// across stores, but proving their destination has residue must not turn N
-/// retained runs into N fresh prefix walks.
-async fn cleanup_residue_paths(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
-    let mut paths = HashSet::new();
-    for prefix in ALL_PREFIXES
-        .iter()
-        .copied()
-        .chain(["status", "queue_priority"])
-    {
-        paths.extend(store.list_paths(&format!("{prefix}/"), 0).await?);
+/// Build one lifecycle-residue index per tick. Exact lifecycle/status paths
+/// encode the job id; priority and transition companions state it in their
+/// JSON body, so they are read once here rather than searched once per run.
+async fn cleanup_residue_job_ids(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
+    let mut job_ids = HashSet::new();
+    for prefix in ALL_PREFIXES {
+        let start = format!("{prefix}/");
+        for path in store.list_paths(&start, 0).await? {
+            if let Some(job_id) = path
+                .strip_prefix(&start)
+                .and_then(|tail| tail.strip_suffix(".json"))
+                .filter(|tail| !tail.is_empty() && !tail.contains('/'))
+            {
+                job_ids.insert(job_id.to_string());
+            }
+        }
     }
-    Ok(paths)
+    for path in store.list_paths("status/", 0).await? {
+        if let Some(job_id) = path
+            .strip_prefix("status/")
+            .and_then(|tail| tail.split('/').next())
+            .filter(|job_id| !job_id.is_empty())
+        {
+            job_ids.insert(job_id.to_string());
+        }
+    }
+    for prefix in ["queue_priority/", "job-transitions/"] {
+        for path in store.list_paths(prefix, 0).await? {
+            if prefix == "queue_priority/" && !crate::queue::listing::is_marker(&path) {
+                continue;
+            }
+            let Some(body) = store.download_text(&path).await? else {
+                continue;
+            };
+            let document: Value = serde_json::from_str(&body).map_err(|error| {
+                StorageError::Other(format!("invalid lifecycle companion {path}: {error}"))
+            })?;
+            let job_id = document
+                .get("job_id")
+                .and_then(Value::as_str)
+                .filter(|job_id| !job_id.is_empty())
+                .ok_or_else(|| {
+                    StorageError::Other(format!("lifecycle companion {path} has no job_id"))
+                })?;
+            if prefix == "job-transitions/"
+                && document
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .is_some_and(crate::queue::storage::transition_is_retired)
+            {
+                continue;
+            }
+            job_ids.insert(job_id.to_string());
+        }
+    }
+    Ok(job_ids)
 }
 
-fn retained_run_has_residue(paths: &HashSet<String>, job_ids: &[String]) -> bool {
-    job_ids.iter().any(|job_id| {
-        ALL_PREFIXES
-            .iter()
-            .any(|prefix| paths.contains(&format!("{prefix}/{job_id}.json")))
-            || paths
-                .iter()
-                .any(|path| path.starts_with(&format!("status/{job_id}/")))
-            || paths
-                .iter()
-                .any(|path| path.starts_with("queue_priority/")
-                    && path.ends_with(&format!("-{job_id}.json")))
-    })
+fn retained_run_has_residue(residue_job_ids: &HashSet<String>, job_ids: &[String]) -> bool {
+    job_ids.iter().any(|job_id| residue_job_ids.contains(job_id))
 }
 
 
@@ -169,6 +201,18 @@ async fn sweep_retained_run(
     run_id: &str,
     job_ids: &[String],
 ) -> Result<i64, StorageError> {
+    let path = format!("{RUN_PREFIX}/{run_id}.json");
+    let Some(retained) = store.read_text_versioned(&path).await? else {
+        return Ok(0);
+    };
+    let retained_manifest: Value = serde_json::from_str(&retained.content)?;
+    crate::queue::submit::validate_stored_run_manifest(&retained_manifest, run_id)
+        .map_err(|error| StorageError::Other(error.to_string()))?;
+    if !has_complete_retained_outcomes(&retained_manifest) {
+        return Err(StorageError::Other(format!(
+            "run {run_id} cannot be swept without complete retained terminal outcomes"
+        )));
+    }
     let mut deleted = 0;
     for job_id in job_ids {
         // A prepared transition is a lifecycle companion, not an independent
@@ -190,7 +234,6 @@ async fn sweep_retained_run(
         store.repair_priority_markers(job_id, None).await?;
         delete_status_dir(store, job_id).await?;
     }
-    let path = format!("{RUN_PREFIX}/{run_id}.json");
     for _ in 0..16 {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             return Ok(deleted);
@@ -236,7 +279,7 @@ pub async fn reap_terminal_runs(
 ) -> Result<ReapSummary, StorageError> {
     let mut summary = ReapSummary::default();
     let mut touched = 0;
-    let cleanup_residue = cleanup_residue_paths(store).await?;
+    let cleanup_residue = cleanup_residue_job_ids(store).await?;
     for run_id in list_runs(store).await? {
         if read_run(store, &run_id).await?.is_none() {
             continue;
@@ -279,6 +322,13 @@ pub async fn reap_terminal_runs(
             continue;
         }
         if initial_manifest.get(REAPED_AT).is_some_and(py_truthy) {
+            if !has_complete_retained_outcomes(&initial_manifest) {
+                summary.refused_runs.push(ReapRefusal {
+                    run_id,
+                    reason: "reaped marker lacks complete retained terminal outcomes; retained without cleanup",
+                });
+                continue;
+            }
             // Retained, but the deletion pass that follows retention did not
             // finish. Resume exactly that: no outcome is retained again and
             // `reaped_at` is not rewritten, so this run is not counted as a

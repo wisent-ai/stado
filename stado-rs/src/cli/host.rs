@@ -10644,6 +10644,43 @@ pub async fn storage_root_reconcile(
     }
     report_outcome(&report, "ok")
 }
+pub async fn storage_root_reconcile_worker(
+    target: &str,
+    transaction: &str,
+    phase: &str,
+    source_revision: &str,
+    tool_sha256: &str,
+    runner_gate: &str,
+    lock_fd: i32,
+) -> Result<(), CmdError> {
+    use base64::Engine;
+
+    let runner_gate = if runner_gate.is_empty() {
+        None
+    } else {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(runner_gate)
+            .map_err(|error| CmdError::click(format!("invalid resident runner gate: {error}")))?;
+        Some(
+            serde_json::from_slice::<Value>(&bytes)
+                .map_err(|error| CmdError::click(format!("invalid resident runner gate: {error}")))?,
+        )
+    };
+    let runner = crate::deploy::production_runner();
+    crate::deploy::host_storage_reconcile::reconcile_host_worker(
+        target,
+        transaction,
+        phase,
+        source_revision,
+        tool_sha256,
+        runner_gate,
+        lock_fd,
+        &runner,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| CmdError::click(error.to_string()))
+}
 
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()

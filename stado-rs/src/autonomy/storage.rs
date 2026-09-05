@@ -428,6 +428,41 @@ pub async fn acquire_placement_lease(
     }
 }
 
+pub async fn renew_placement_lease(
+    store: &JobStorage,
+    subject_id: &str,
+    token: &str,
+    ttl_seconds: u64,
+    now: DateTime<Utc>,
+) -> Result<Option<PlacementLease>, StorageError> {
+    let ttl_seconds = i64::try_from(ttl_seconds)
+        .map_err(|_| StorageError::Other("placement lease TTL exceeds i64".to_string()))?;
+    let path = lease_path(subject_id);
+    let Some(current) = store.read_text_versioned(&path).await? else {
+        return Ok(None);
+    };
+    let mut lease: PlacementLease = serde_json::from_str(&current.content)?;
+    if lease.schema_version != SCHEMA_VERSION {
+        return Err(StorageError::Other(format!(
+            "unsupported placement lease schema_version {}",
+            lease.schema_version
+        )));
+    }
+    if lease.token != token {
+        return Ok(None);
+    }
+    lease.expires_at = (now + Duration::seconds(ttl_seconds)).to_rfc3339();
+    let content = serde_json::to_string(&lease)?;
+    match store
+        .compare_and_swap_text(&path, &current.version, &content)
+        .await
+    {
+        Ok(_) => Ok(Some(lease)),
+        Err(StorageError::StorageConflict(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub async fn release_placement_lease(
     store: &JobStorage,
     subject_id: &str,
@@ -437,7 +472,7 @@ pub async fn release_placement_lease(
     let Some(current) = store.read_text_versioned(&path).await? else {
         return Ok(false);
     };
-    let lease: PlacementLease = serde_json::from_str(&current.content)?;
+    let mut lease: PlacementLease = serde_json::from_str(&current.content)?;
     if lease.schema_version != SCHEMA_VERSION {
         return Err(StorageError::Other(format!(
             "unsupported placement lease schema_version {}",
@@ -447,8 +482,16 @@ pub async fn release_placement_lease(
     if lease.token != token {
         return Ok(false);
     }
-    store.delete_blob(&path).await?;
-    Ok(true)
+    lease.expires_at = Utc::now().to_rfc3339();
+    let content = serde_json::to_string(&lease)?;
+    match store
+        .compare_and_swap_text(&path, &current.version, &content)
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(StorageError::StorageConflict(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 pub async fn write_feedback(

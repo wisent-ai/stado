@@ -1961,25 +1961,37 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Checkpoint both fixed local roots with COW clones, then additively
-    /// reconcile local-backup into local-storage without pruning either set.
-    ///
-    /// `checkpoint`, `apply`, and `finalize` are separate invocations so the
-    /// immutable sets and typed lifecycle decisions can be reviewed before any
-    /// primary byte changes. Apply resumes after interruption; finalize proves
-    /// canonical cancellation and retained-outcome recovery after services resume.
+    /// Run or resume the complete fenced A/B authority handoff, inspect its
+    /// durable state, explicitly roll back before data activation, or finalize
+    /// only after the ordinary coordinator has completed lifecycle cleanup.
     #[command(name = "storage-root-reconcile")]
     StorageRootReconcile {
         target: String,
         /// Stable transaction id used by the remote checkpoint and receipt.
         #[arg(long)]
         transaction: String,
-        /// Transaction phase: checkpoint, apply, or post-recovery finalize.
-        #[arg(long, value_parser = ["checkpoint", "apply", "finalize"])]
+        /// Transaction action: run, resume, status, rollback, or finalize.
+        #[arg(long, value_parser = ["run", "resume", "status", "rollback", "finalize"])]
         phase: String,
         /// Emit the durable transaction receipt as JSON.
         #[arg(long)]
         json: bool,
+    },
+    #[command(name = "storage-root-reconcile-worker", hide = true)]
+    StorageRootReconcileWorker {
+        target: String,
+        #[arg(long)]
+        transaction: String,
+        #[arg(long, value_parser = ["run", "resume", "rollback", "finalize"])]
+        phase: String,
+        #[arg(long)]
+        source_revision: String,
+        #[arg(long)]
+        tool_sha256: String,
+        #[arg(long)]
+        runner_gate: String,
+        #[arg(long)]
+        lock_fd: i32,
     },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
@@ -3491,6 +3503,26 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 phase,
                 json,
             } => host::storage_root_reconcile(&target, &transaction, &phase, json).await,
+            HostCommands::StorageRootReconcileWorker {
+                target,
+                transaction,
+                phase,
+                source_revision,
+                tool_sha256,
+                runner_gate,
+                lock_fd,
+            } => {
+                host::storage_root_reconcile_worker(
+                    &target,
+                    &transaction,
+                    &phase,
+                    &source_revision,
+                    &tool_sha256,
+                    &runner_gate,
+                    lock_fd,
+                )
+                .await
+            }
             HostCommands::ForwardLocal {
                 target,
                 name,
