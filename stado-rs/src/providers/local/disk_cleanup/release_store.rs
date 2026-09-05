@@ -129,16 +129,27 @@ fn platform_archive_name(product: &str, version: &str, platform: &str) -> String
 /// The digest list published beside them.
 const PLATFORM_SUMS_NAME: &str = "SHA256SUMS";
 
+/// The signed pipeline's release, named from `release_control` rather than
+/// spelled again here: the manifest, its signature and the archive. The
+/// qualification receipt is deliberately not required - a release can be
+/// deployed from these three, and demanding a fourth would make the pin
+/// narrower than the thing it protects.
+const SIGNED_FAMILY: [&str; 3] = [
+    crate::release_control::RELEASE_MANIFEST_NAME,
+    crate::release_control::RELEASE_SIGNATURE_NAME,
+    crate::release_control::RELEASE_ARCHIVE_NAME,
+];
+
 /// How many newest versions per product survive with no other reason, when
 /// the policy sets `keep_newest` without a number.
 const DEFAULT_KEEP_NEWEST: usize = 3;
 
-/// One product's versions on disk, with the bytes each one occupies and which
-/// of them carry a complete installer family.
+/// One product's versions on disk, with the bytes each one occupies and, per
+/// version, which release families it completes (see [`complete_families`]).
 #[derive(Debug, Default)]
 struct ProductReleases {
     versions: BTreeMap<String, (PathBuf, i64)>,
-    installable: BTreeSet<String>,
+    complete: BTreeMap<String, BTreeSet<&'static str>>,
 }
 
 /// Version strings ordered as numbers, newest last; a version that is not
@@ -311,17 +322,45 @@ fn config_pinned_versions(home: &Path) -> BTreeMap<String, BTreeSet<String>> {
     pinned
 }
 
-/// Whether one version directory carries the full installer family for at
-/// least one platform: the archive, its platform manifest, and `SHA256SUMS`.
+/// Whether one version directory carries a COMPLETE release for at least one
+/// platform, and in which of the two families.
 ///
-/// All three, from one platform directory. Two of them is what an interrupted
-/// publish leaves, and `install-stado.sh` fetches the manifest and the archive
-/// and then verifies the archive against the manifest's digest, so a version
-/// missing either is a version that fails after the download instead of
-/// before it.
-fn is_installable(version_path: &Path, product: &str, version: &str) -> bool {
+/// Two publishers write this prefix and their object names are disjoint by
+/// design (`release_control::RELEASE_REVISION_NAME`'s documentation):
+///
+/// - the tag train writes the installer family - `<product>-v<version>-<platform>.tar.gz`,
+///   `release-manifest-<platform>.json` and `SHA256SUMS` - which is what
+///   `install-stado.sh` and `self_update.rs` fetch;
+/// - the signed pipeline writes `release.json`, `release.sig` and
+///   `release.tar.gz`, which is what `stado release submit` publishes and
+///   `stado web deploy` and `deploy/host_release.rs` install from.
+///
+/// Only the first was recognised here, and `stado` is the one product that
+/// has both. Every pipeline-signed product - `preferences-landing`,
+/// `preferences`, and the roughly thirty-five web products behind them -
+/// publishes only the second, so no version of any of them was ever
+/// installable by that definition and none could ever hold the
+/// newest-complete-release pin. Their newest version was protected by
+/// `keep_newest` alone, which is a count of directories and not a statement
+/// about whether any of them can be deployed.
+///
+/// All three names of a family, from ONE platform directory: two of them is
+/// what an interrupted publish leaves, and both installers read a manifest
+/// and then verify the archive against its digest, so a version missing
+/// either fails after the download instead of before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseFamily {
+    /// The tag train's objects, read by `install-stado.sh`.
+    Installer,
+    /// The signed pipeline's objects, read by `stado web deploy` and
+    /// `host release`.
+    Signed,
+}
+
+fn complete_families(version_path: &Path, product: &str, version: &str) -> BTreeSet<&'static str> {
+    let mut families = BTreeSet::new();
     let Ok(platforms) = std::fs::read_dir(version_path) else {
-        return false;
+        return families;
     };
     for platform_entry in platforms.flatten() {
         let platform_path = platform_entry.path();
@@ -329,19 +368,36 @@ fn is_installable(version_path: &Path, product: &str, version: &str) -> bool {
             continue;
         }
         let platform = platform_entry.file_name().to_string_lossy().to_string();
-        let required = [
+        let installer = [
             platform_archive_name(product, version, &platform),
             platform_manifest_name(&platform),
             PLATFORM_SUMS_NAME.to_string(),
         ];
-        if required
+        if installer
             .iter()
             .all(|name| platform_path.join(name).is_file())
         {
-            return true;
+            families.insert(family_key(ReleaseFamily::Installer));
+        }
+        if SIGNED_FAMILY
+            .iter()
+            .all(|name| platform_path.join(name).is_file())
+        {
+            families.insert(family_key(ReleaseFamily::Signed));
         }
     }
-    false
+    families
+}
+
+/// The report's skip key for the newest complete release of one family. They
+/// are separate keys because a host reads one family and not the other, and
+/// an operator asking why a version survived is asking which installer still
+/// needs it.
+fn family_key(family: ReleaseFamily) -> &'static str {
+    match family {
+        ReleaseFamily::Installer => "newest_installable_kept",
+        ReleaseFamily::Signed => "newest_signed_release_kept",
+    }
 }
 
 /// Why one version survives a pass, or `None` when nothing needs it.
@@ -356,10 +412,11 @@ pub(crate) type KeepReason = Option<&'static str>;
 /// Separated from the filesystem on purpose: what survives a pass is a policy
 /// question, and it is answered here over sets so it can be tested exhaustively
 /// without a disk under pressure. `versions` is every version directory found,
-/// in any order.
+/// in any order; `complete` maps a version to the release families it holds
+/// completely, as [`complete_families`] read them off the disk.
 pub(crate) fn retention_decision<'a>(
     versions: &'a [String],
-    installable: &BTreeSet<String>,
+    complete: &BTreeMap<String, BTreeSet<&'static str>>,
     by_host: &BTreeSet<String>,
     by_declaration: &BTreeSet<String>,
     by_config: &BTreeSet<String>,
@@ -369,15 +426,19 @@ pub(crate) fn retention_decision<'a>(
     let mut ordered: Vec<&'a str> = versions.iter().map(String::as_str).collect();
     ordered.sort_by_key(|version| version_key(version));
     let newest: BTreeSet<&str> = ordered.iter().rev().take(keep_newest).copied().collect();
-    // The newest version that is genuinely installable, which the rollback
-    // ladder above cannot be relied on to include: a run of newer
-    // source-revision-only claims pushes it out of the newest `keep_newest`
-    // while adding nothing a host can install.
-    let newest_installable: Option<&str> = ordered
-        .iter()
-        .rev()
-        .copied()
-        .find(|version| installable.contains(*version));
+    // The newest version that is genuinely deployable, PER FAMILY, which the
+    // rollback ladder above cannot be relied on to include: a run of newer
+    // claim-only coordinates pushes it out of the newest `keep_newest` while
+    // adding nothing a host can install. Per family and not once overall,
+    // because a product may publish both and a host reads one: `stado` has an
+    // installer family and a signed one, and keeping only the newest complete
+    // release of either would leave the other installer with nothing.
+    let mut newest_complete: BTreeMap<&'static str, &str> = BTreeMap::new();
+    for version in ordered.iter().rev().copied() {
+        for family in complete.get(version).into_iter().flatten() {
+            newest_complete.entry(family).or_insert(version);
+        }
+    }
     ordered
         .into_iter()
         .map(|version| {
@@ -391,10 +452,13 @@ pub(crate) fn retention_decision<'a>(
                 Some("pipeline_run_names_it")
             } else if newest.contains(version) {
                 Some("newest_kept")
-            } else if newest_installable == Some(version) {
-                Some("newest_installable_kept")
             } else {
-                None
+                // Reported by family, so an operator reading the reason knows
+                // which installer still needs this version.
+                newest_complete
+                    .iter()
+                    .find(|(_, newest)| **newest == version)
+                    .map(|(family, _)| *family)
             };
             (version, reason)
         })
@@ -577,10 +641,10 @@ pub fn scan_release_store(
                 }
                 let version = version_entry.file_name().to_string_lossy().to_string();
                 let bytes = tree_bytes(&version_path);
-                let installable = is_installable(&version_path, &product, &version);
+                let complete = complete_families(&version_path, &product, &version);
                 let inventory = products.entry(product.clone()).or_default();
-                if installable {
-                    inventory.installable.insert(version.clone());
+                if !complete.is_empty() {
+                    inventory.complete.insert(version.clone(), complete);
                 }
                 inventory.versions.insert(version, (version_path, bytes));
             }
@@ -598,7 +662,7 @@ pub fn scan_release_store(
             let versions: Vec<String> = inventory.versions.keys().cloned().collect();
             let decisions = retention_decision(
                 &versions,
-                &inventory.installable,
+                &inventory.complete,
                 host_pins.get(product).unwrap_or(&empty),
                 declared_pins.get(product).unwrap_or(&empty),
                 config_pins.get(product).unwrap_or(&empty),
@@ -657,7 +721,11 @@ pub fn scan_release_store(
                             product = product.as_str(),
                             version,
                             bytes = *bytes,
-                            installable = inventory.installable.contains(version),
+                            complete_families = inventory
+                                .complete
+                                .get(version)
+                                .map(|families| families.iter().copied().collect::<Vec<_>>().join(","))
+                                .unwrap_or_else(|| "none".to_string()),
                             not_pinned_by =
                                 "host_state, host_declaration, config_release_version, pipeline_run",
                             keep_newest,
@@ -691,6 +759,24 @@ mod tests {
         names.iter().map(|name| name.to_string()).collect()
     }
 
+    /// Which families each named version completes, as `complete_families`
+    /// would have read them off the disk.
+    fn families(rows: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<&'static str>> {
+        rows.iter()
+            .map(|(version, names)| {
+                let set = names
+                    .iter()
+                    .map(|name| match *name {
+                        "installer" => family_key(ReleaseFamily::Installer),
+                        "signed" => family_key(ReleaseFamily::Signed),
+                        other => panic!("unknown family {other}"),
+                    })
+                    .collect();
+                (version.to_string(), set)
+            })
+            .collect()
+    }
+
     /// The decision for one version, by name.
     fn verdict(decisions: &[(&str, KeepReason)], version: &str) -> KeepReason {
         decisions
@@ -708,7 +794,7 @@ mod tests {
         let present = versions(&["0.15.21", "0.15.25", "0.15.26", "0.16.0", "0.16.1"]);
         let decisions = retention_decision(
             &present,
-            &set(&["0.15.21"]),
+            &families(&[("0.15.21", &["installer"])]),
             &BTreeSet::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
@@ -735,7 +821,7 @@ mod tests {
         let present = versions(&["0.14.6", "0.15.21", "0.16.0", "0.16.1", "0.16.2"]);
         let decisions = retention_decision(
             &present,
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             &BTreeSet::new(),
             &set(&["0.14.6"]),
             &BTreeSet::new(),
@@ -751,7 +837,7 @@ mod tests {
         let present = versions(&["0.15.3", "0.16.0", "0.16.1", "0.16.2"]);
         let decisions = retention_decision(
             &present,
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
             &set(&["0.15.3"]),
@@ -769,7 +855,7 @@ mod tests {
         let present = versions(&["1.0.0"]);
         let decisions = retention_decision(
             &present,
-            &set(&["1.0.0"]),
+            &families(&[("1.0.0", &["installer", "signed"])]),
             &set(&["1.0.0"]),
             &set(&["1.0.0"]),
             &set(&["1.0.0"]),
@@ -780,7 +866,7 @@ mod tests {
 
         let decisions = retention_decision(
             &present,
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
@@ -799,7 +885,11 @@ mod tests {
         let present = versions(&["0.13.0", "0.14.6", "0.15.21", "0.16.0", "0.16.1"]);
         let decisions = retention_decision(
             &present,
-            &set(&["0.13.0", "0.14.6", "0.15.21"]),
+            &families(&[
+                ("0.13.0", &["installer"]),
+                ("0.14.6", &["installer"]),
+                ("0.15.21", &["installer"]),
+            ]),
             &BTreeSet::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
@@ -822,7 +912,10 @@ mod tests {
         let present = versions(&["__release_preflight__", "0.1.0"]);
         let decisions = retention_decision(
             &present,
-            &set(&["__release_preflight__", "0.1.0"]),
+            &families(&[
+                ("__release_preflight__", &["installer"]),
+                ("0.1.0", &["installer"]),
+            ]),
             &BTreeSet::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
@@ -851,12 +944,15 @@ mod tests {
             b"{}",
         );
         write(&complete.join("darwin-arm64/SHA256SUMS"), b"sums");
-        assert!(is_installable(&complete, "stado", "0.15.21"));
+        assert_eq!(
+            complete_families(&complete, "stado", "0.15.21"),
+            BTreeSet::from([family_key(ReleaseFamily::Installer)])
+        );
 
         // The interrupted publish: the create-only claim and nothing else.
         let claim = home.path().join("0.16.1");
         write(&claim.join("darwin-arm64/source-revision.json"), b"{}");
-        assert!(!is_installable(&claim, "stado", "0.16.1"));
+        assert!(complete_families(&claim, "stado", "0.16.1").is_empty());
 
         // Archive and sums but no platform manifest: `install-stado.sh` reads
         // the manifest first and verifies the archive against its digest, so
@@ -867,7 +963,7 @@ mod tests {
             b"archive",
         );
         write(&partial.join("darwin-arm64/SHA256SUMS"), b"sums");
-        assert!(!is_installable(&partial, "stado", "0.16.0"));
+        assert!(complete_families(&partial, "stado", "0.16.0").is_empty());
 
         // The three files exist, but split across two platforms: neither
         // platform is installable, and a caller asks for one platform.
@@ -881,7 +977,7 @@ mod tests {
             b"{}",
         );
         write(&split.join("linux-amd64/SHA256SUMS"), b"sums");
-        assert!(!is_installable(&split, "stado", "0.16.2"));
+        assert!(complete_families(&split, "stado", "0.16.2").is_empty());
 
         // A version whose archive is named for another version is not this
         // version's release, which is what an unfinalised multipart upload
@@ -896,7 +992,7 @@ mod tests {
             b"{}",
         );
         write(&mismatched.join("darwin-arm64/SHA256SUMS"), b"sums");
-        assert!(!is_installable(&mismatched, "stado", "0.16.3"));
+        assert!(complete_families(&mismatched, "stado", "0.16.3").is_empty());
     }
 
     #[test]
@@ -948,5 +1044,100 @@ mod tests {
             br#"{"release": {"platform": "darwin-arm64"}}"#,
         );
         assert!(config_pinned_versions(home.path()).is_empty());
+    }
+
+    /// The web-product shape, which had no pin at all: `preferences-landing`
+    /// publishes `release.json` + `release.sig` + `release.tar.gz` under a
+    /// `web` platform and no installer family ever, so before this it could
+    /// only be protected by `keep_newest` - a count of directories that says
+    /// nothing about whether any of them can be deployed.
+    #[test]
+    fn a_signed_web_release_is_recognised_as_complete() {
+        let home = tempfile::tempdir().unwrap();
+        let release = home.path().join("0.1.1");
+        write(&release.join("web/release.json"), b"{}");
+        write(&release.join("web/release.sig"), b"sig");
+        write(&release.join("web/release.tar.gz"), b"archive");
+        write(&release.join("web/source-revision.json"), b"{}");
+        assert_eq!(
+            complete_families(&release, "preferences-landing", "0.1.1"),
+            BTreeSet::from([family_key(ReleaseFamily::Signed)])
+        );
+
+        // The signature is what makes it deployable; without it the manifest
+        // and archive are unverifiable bytes.
+        let unsigned = home.path().join("0.1.2");
+        write(&unsigned.join("web/release.json"), b"{}");
+        write(&unsigned.join("web/release.tar.gz"), b"archive");
+        assert!(complete_families(&unsigned, "preferences-landing", "0.1.2").is_empty());
+    }
+
+    #[test]
+    fn the_newest_signed_release_survives_a_ladder_full_of_claims() {
+        let present = versions(&["0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.1.5"]);
+        let decisions = retention_decision(
+            &present,
+            &families(&[("0.1.1", &["signed"])]),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            3,
+        );
+        assert_eq!(
+            verdict(&decisions, "0.1.1"),
+            Some("newest_signed_release_kept"),
+            "a pipeline-signed product's only deployable version must survive"
+        );
+        assert_eq!(verdict(&decisions, "0.1.2"), None);
+    }
+
+    /// A product publishing both families keeps the newest complete release
+    /// of EACH: `stado` is installed by `install-stado.sh` from the installer
+    /// family and by `host release` from the signed one, and keeping only the
+    /// newer of the two would leave the other installer with nothing.
+    #[test]
+    fn both_families_are_pinned_independently() {
+        let present = versions(&["0.14.6", "0.15.21", "0.16.0", "0.16.1", "0.16.2", "0.16.3"]);
+        let decisions = retention_decision(
+            &present,
+            &families(&[("0.14.6", &["signed"]), ("0.15.21", &["installer"])]),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            3,
+        );
+        assert_eq!(
+            verdict(&decisions, "0.15.21"),
+            Some("newest_installable_kept")
+        );
+        assert_eq!(
+            verdict(&decisions, "0.14.6"),
+            Some("newest_signed_release_kept")
+        );
+    }
+
+    /// One version completing both families is reported once, and reported as
+    /// the installer family: the report counts versions, not reasons, so a
+    /// version counted twice would make the skip totals disagree with the
+    /// number of directories on disk.
+    #[test]
+    fn a_version_completing_both_families_is_reported_once() {
+        let present = versions(&["0.9.0", "1.0.0", "1.1.0", "1.2.0", "1.3.0"]);
+        let decisions = retention_decision(
+            &present,
+            &families(&[("0.9.0", &["installer", "signed"])]),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            3,
+        );
+        assert_eq!(decisions.len(), present.len());
+        assert_eq!(
+            verdict(&decisions, "0.9.0"),
+            Some("newest_installable_kept")
+        );
     }
 }
