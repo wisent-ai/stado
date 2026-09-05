@@ -1027,7 +1027,7 @@ pub enum ServiceCommands {
     /// The effective environment a managed unit runs with, secrets
     /// redacted.
     ///
-    /// Parsed from the unit's own plist / systemd unit file. Values whose
+    /// Parsed from the plist or systemd unit and its drop-ins. Values whose
     /// variable name looks like a credential are replaced, in the table and
     /// in `--json` alike.
     Env {
