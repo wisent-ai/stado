@@ -1429,7 +1429,7 @@ fn managed_from_unit(
 
 fn exact_identity_component(value: &str, identity: &str) -> bool {
     value
-        .split(|character: char| matches!(character, '.' | '/' | '\\'))
+        .split(['.', '/', '\\'])
         .any(|component| component == identity)
 }
 
@@ -1440,9 +1440,7 @@ fn current_runner_candidate(
 ) -> bool {
     exact_identity_component(candidate.declared.unit_id(), current_runner)
         || exact_identity_component(&candidate.declared.path, current_runner)
-        || command_tokens(command)
-            .iter()
-            .any(|token| *token == current_runner)
+        || command_tokens(command).contains(&current_runner)
 }
 
 async fn registry_services(
@@ -3643,12 +3641,12 @@ async fn reconcile_host_inner(
         )));
     }
     if phase == STATUS {
-        let receipt = remote_phase(&target, transaction, STATUS, runner).await?;
-        let fence = read_fence(&target, transaction, runner).await?;
-        return report(&target, transaction, phase, receipt, fence.as_ref());
+        let receipt = remote_phase(target, transaction, STATUS, runner).await?;
+        let fence = read_fence(target, transaction, runner).await?;
+        return report(target, transaction, phase, receipt, fence.as_ref());
     }
     if phase == FINALIZE {
-        let fence = read_fence(&target, transaction, runner)
+        let fence = read_fence(target, transaction, runner)
             .await?
             .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
         if fence.status != "activated" {
@@ -3659,12 +3657,12 @@ async fn reconcile_host_inner(
         }
         let observations = typed_final_lifecycle_observations(transaction, &fence).await?;
         let receipt =
-            record_typed_final_lifecycle_observations(&target, transaction, &observations, runner)
+            record_typed_final_lifecycle_observations(target, transaction, &observations, runner)
                 .await?;
-        return report(&target, transaction, phase, receipt, Some(&fence));
+        return report(target, transaction, phase, receipt, Some(&fence));
     }
     if phase == ROLLBACK {
-        let receipt = remote_phase(&target, transaction, STATUS, runner).await?;
+        let receipt = remote_phase(target, transaction, STATUS, runner).await?;
         let receipt_status = receipt
             .get("status")
             .and_then(Value::as_str)
@@ -3678,12 +3676,12 @@ async fn reconcile_host_inner(
             )));
         }
         verify_resident_lock(transaction)?;
-        let receipt = remote_phase(&target, transaction, ARM_ROLLBACK, runner).await?;
-        let fence = activate_lifecycle_fence(&target, transaction, runner, true).await?;
-        return report(&target, transaction, phase, receipt, Some(&fence));
+        let receipt = remote_phase(target, transaction, ARM_ROLLBACK, runner).await?;
+        let fence = activate_lifecycle_fence(target, transaction, runner, true).await?;
+        return report(target, transaction, phase, receipt, Some(&fence));
     }
 
-    let existing = read_fence(&target, transaction, runner).await?;
+    let existing = read_fence(target, transaction, runner).await?;
     if existing
         .as_ref()
         .is_some_and(|fence| fence.status == "rolled_back")
@@ -3702,7 +3700,7 @@ async fn reconcile_host_inner(
         {
             fence
         }
-        _ => prepare_lifecycle_fence(&target, transaction, runner).await?,
+        _ => prepare_lifecycle_fence(target, transaction, runner).await?,
     };
     if fence.status == "already_reconciled" {
         let receipt = json!({
@@ -3711,14 +3709,14 @@ async fn reconcile_host_inner(
             "status": "already_reconciled",
             "preflight": fence.preflight.clone(),
         });
-        return report(&target, transaction, phase, receipt, Some(&fence));
+        return report(target, transaction, phase, receipt, Some(&fence));
     }
     if fence.status == "fenced" {
-        remote_phase(&target, transaction, CHECKPOINT, runner).await?;
+        remote_phase(target, transaction, CHECKPOINT, runner).await?;
         let checkpoint_decisions = typed_lifecycle_decisions(transaction).await?;
-        record_typed_lifecycle_decisions(&target, transaction, &checkpoint_decisions, runner)
+        record_typed_lifecycle_decisions(target, transaction, &checkpoint_decisions, runner)
             .await?;
-        fence = recheck_lifecycle_fence(&target, transaction, runner).await?;
+        fence = recheck_lifecycle_fence(target, transaction, runner).await?;
         let receipt_status = read_transaction_receipt(transaction)?
             .get("status")
             .and_then(Value::as_str)
@@ -3733,7 +3731,7 @@ async fn reconcile_host_inner(
                     "fenced transaction has non-resumable receipt state {receipt_status:?}"
                 )));
             }
-            remote_phase(&target, transaction, APPLY, runner).await?;
+            remote_phase(target, transaction, APPLY, runner).await?;
             let committed_decisions = typed_lifecycle_decisions(transaction).await?;
             if committed_decisions != checkpoint_decisions {
                 return Err(DeployError(
@@ -3741,10 +3739,10 @@ async fn reconcile_host_inner(
                         .to_string(),
                 ));
             }
-            record_typed_lifecycle_decisions(&target, transaction, &committed_decisions, runner)
+            record_typed_lifecycle_decisions(target, transaction, &committed_decisions, runner)
                 .await?;
-            fence = recheck_lifecycle_fence(&target, transaction, runner).await?;
-            remote_phase(&target, transaction, ARM_ACTIVATION, runner).await?;
+            fence = recheck_lifecycle_fence(target, transaction, runner).await?;
+            remote_phase(target, transaction, ARM_ACTIVATION, runner).await?;
         }
         if read_transaction_receipt(transaction)?
             .get("status")
@@ -3757,7 +3755,7 @@ async fn reconcile_host_inner(
         }
         verify_resident_lock(transaction)?;
         validate_prepared_fence(&fence)?;
-        fence = activate_lifecycle_fence(&target, transaction, runner, false).await?;
+        fence = activate_lifecycle_fence(target, transaction, runner, false).await?;
     } else if fence.status != "activated" {
         let receipt = read_transaction_receipt(transaction)?;
         if receipt.get("status").and_then(Value::as_str) != Some("activation_effects_armed") {
@@ -3766,13 +3764,13 @@ async fn reconcile_host_inner(
             ));
         }
         let decisions = typed_lifecycle_decisions(transaction).await?;
-        record_typed_lifecycle_decisions(&target, transaction, &decisions, runner).await?;
+        record_typed_lifecycle_decisions(target, transaction, &decisions, runner).await?;
         verify_resident_lock(transaction)?;
         validate_prepared_fence(&fence)?;
-        fence = activate_lifecycle_fence(&target, transaction, runner, false).await?;
+        fence = activate_lifecycle_fence(target, transaction, runner, false).await?;
     }
-    let receipt = remote_phase(&target, transaction, ACTIVATE, runner).await?;
-    report(&target, transaction, phase, receipt, Some(&fence))
+    let receipt = remote_phase(target, transaction, ACTIVATE, runner).await?;
+    report(target, transaction, phase, receipt, Some(&fence))
 }
 fn verify_resident_lock(transaction: &str) -> Result<(), DeployError> {
     let fd = RESIDENT_LOCK_FD.get().copied().ok_or_else(|| {
