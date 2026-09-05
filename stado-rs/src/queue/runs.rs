@@ -227,9 +227,7 @@ pub(crate) async fn record_terminal_outcome_for_entry(
     let path = format!("{RUN_PREFIX}/{run_id}.json");
     match crate::queue::submit::migrate_v2_run_manifest(store, run_id).await {
         Ok(_) => {}
-        Err(crate::queue::submit::SubmitError::Storage(StorageError::NotFound(_))) => {
-            return Ok(())
-        }
+        Err(crate::queue::submit::SubmitError::Storage(StorageError::NotFound(_))) => return Ok(()),
         Err(error) => return Err(StorageError::Other(error.to_string())),
     }
     for _ in 0..16 {
