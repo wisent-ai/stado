@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
+
 ## 0.16.18
 
 - **Measured CPU admission:** available cores use operating-system processor-time deltas instead of runnable-process load averages, so a high load average cannot falsely close a host whose CPU is idle. Unavailable measurements remain explicit, and already-owned jobs still reserve their requested cores.
@@ -7,7 +11,6 @@
 - **Failure reporting:** failed systemd reader operations retain the command's exit status and stderr; delivery still fails unless each replaced reader maps the installed executable.
 - **Migration and rollback:** no stored data changes. Rolling back restores dependence on inherited login-session variables during Linux release delivery.
 - **Platforms:** the existing signed `darwin-arm64` and `linux-amd64` build and delivery paths remain unchanged.
-
 ## 0.16.17
 
 - **Complete native delivery:** `release install-local` updates every registry-declared service-local Stado executable from the same verified archive and requires its existing image-convergence check to succeed. Archive validation reads the unit's actual executable, preserving quoted paths and launchd `Program` precedence instead of parsing presentation text.
@@ -16,7 +19,6 @@
 - **Systemd environment migration:** `service env-unset` removes assignments from the same declared unit/drop-in paths supported by `env-set`, removes an emptied drop-in, and reloads definitions without restarting the service.
 - **Migration and rollback:** no stored schema changes. Rolling back loses complete native and fleet private-reader delivery, persistent-work reclamation, and systemd assignment removal; published platform artifacts remain available for a corrected delivery.
 - **Platforms:** both delivery paths use the existing signed `darwin-arm64` and `linux-amd64` releases.
-
 ## 0.16.16
 
 - **Native disk recovery:** queue cleanup resolves the operating system's legacy temporary root before opening its directory descriptor. The normal macOS `/tmp` symlink no longer aborts the candidate lookup and disables cleanup of terminal jobs in the persistent work directory.

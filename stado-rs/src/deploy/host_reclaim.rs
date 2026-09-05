@@ -356,7 +356,7 @@ else
   # Queue workdirs are policy-owned by this pass. Its exclusive janitor lock
   # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
-    plan=$("$wc_bin" disk-cleanup --once)
+    plan=$("$wc_bin" disk-cleanup --once --to-target)
   else
     plan=$("$wc_bin" disk-cleanup --once --dry-run)
   fi

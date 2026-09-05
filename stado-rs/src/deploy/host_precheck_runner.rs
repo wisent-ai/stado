@@ -282,7 +282,7 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
     Ok(expanded)
 }
 
-async fn github_credential() -> Result<String, DeployError> {
+pub(crate) async fn github_credential() -> Result<String, DeployError> {
     admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
 }
 

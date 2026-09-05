@@ -389,6 +389,10 @@ enum Commands {
         /// Continuously check at the canonical policy interval.
         #[arg(long)]
         watch: bool,
+        /// Run one bounded enforcing pass toward the declared target even when
+        /// the host is already above its low watermark.
+        #[arg(long)]
+        to_target: bool,
         /// Plan a pass and delete nothing: same policy, same scan, an
         /// `enforce` policy pinned to the janitor's own report mode.
         #[arg(long)]
@@ -1934,14 +1938,22 @@ enum HostCommands {
     #[command(name = "backup-audit")]
     BackupAudit {
         target: String,
-        /// Compare only this exact object in the fixed primary and backup roots;
-        /// repeatable. Reports size and SHA-256, never object content.
+        /// Compare only this exact object in the fixed local-storage and
+        /// local-backup roots; repeatable. Reports size and SHA-256, never content.
         #[arg(
             long = "object",
             value_name = "STADO_URI",
             conflicts_with = "reclaim_twins"
         )]
         objects: Vec<String>,
+        /// List backup-visible object paths and size metadata in this exact API
+        /// namespace without reading object bodies; repeatable.
+        #[arg(
+            long = "inventory-namespace",
+            value_name = "NAMESPACE",
+            conflicts_with = "reclaim_twins"
+        )]
+        inventory_namespaces: Vec<String>,
         /// Delete the twins this pass proves. Names them and deletes nothing
         /// without --apply.
         #[arg(long = "reclaim-twins")]
@@ -1952,6 +1964,38 @@ enum HostCommands {
         /// Emit the classification as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Run or resume the complete fenced A/B authority handoff, inspect its
+    /// durable state, explicitly roll back before data activation, or finalize
+    /// only after the ordinary coordinator has completed lifecycle cleanup.
+    #[command(name = "storage-root-reconcile")]
+    StorageRootReconcile {
+        target: String,
+        /// Stable transaction id used by the remote checkpoint and receipt.
+        #[arg(long)]
+        transaction: String,
+        /// Transaction action: run, resume, status, rollback, or finalize.
+        #[arg(long, value_parser = ["run", "resume", "status", "rollback", "finalize"])]
+        phase: String,
+        /// Emit the durable transaction receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(name = "storage-root-reconcile-worker", hide = true)]
+    StorageRootReconcileWorker {
+        target: String,
+        #[arg(long)]
+        target_config: String,
+        #[arg(long)]
+        transaction: String,
+        #[arg(long, value_parser = ["run", "resume", "rollback", "finalize"])]
+        phase: String,
+        #[arg(long)]
+        source_revision: String,
+        #[arg(long)]
+        tool_sha256: String,
+        #[arg(long)]
+        runner_gate: String,
     },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
@@ -2966,8 +3010,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::DiskCleanup {
             once,
             watch,
+            to_target,
             dry_run,
-        } => disk_cleanup::run(once, watch, dry_run).await,
+        } => disk_cleanup::run(once, watch, to_target, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
         Commands::Release(sub) => release_cmd::dispatch(sub).await,
@@ -3446,10 +3491,47 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::BackupAudit {
                 target,
                 objects,
+                inventory_namespaces,
                 reclaim_twins,
                 apply,
                 json,
-            } => host::backup_audit(&target, &objects, reclaim_twins, apply, json).await,
+            } => {
+                host::backup_audit(
+                    &target,
+                    &objects,
+                    &inventory_namespaces,
+                    reclaim_twins,
+                    apply,
+                    json,
+                )
+                .await
+            }
+            HostCommands::StorageRootReconcile {
+                target,
+                transaction,
+                phase,
+                json,
+            } => host::storage_root_reconcile(&target, &transaction, &phase, json).await,
+            HostCommands::StorageRootReconcileWorker {
+                target,
+                target_config,
+                transaction,
+                phase,
+                source_revision,
+                tool_sha256,
+                runner_gate,
+            } => {
+                host::storage_root_reconcile_worker(
+                    &target,
+                    &target_config,
+                    &transaction,
+                    &phase,
+                    &source_revision,
+                    &tool_sha256,
+                    &runner_gate,
+                )
+                .await
+            }
             HostCommands::ForwardLocal {
                 target,
                 name,

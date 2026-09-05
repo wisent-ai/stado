@@ -10367,17 +10367,18 @@ const PRIMARY_ROOT: &str = ".stado/local-storage";
 pub async fn backup_audit(
     target: &str,
     object_uris: &[String],
+    inventory_namespaces: &[String],
     reclaim_twins: bool,
     apply: bool,
     json: bool,
 ) -> Result<(), CmdError> {
-    if !object_uris.is_empty() && (reclaim_twins || apply) {
+    if (!object_uris.is_empty() || !inventory_namespaces.is_empty()) && (reclaim_twins || apply) {
         return Err(CmdError::click(
             "exact object inspection is read-only and cannot reclaim backup objects",
         ));
     }
     let namespace = crate::config::wc_stado_storage_namespace();
-    if namespace.trim().is_empty() && object_uris.is_empty() {
+    if namespace.trim().is_empty() && object_uris.is_empty() && inventory_namespaces.is_empty() {
         return Err(CmdError::click(
             "this control plane has no storage.stado.namespace, so a replica path cannot be \
              resolved to a primary address",
@@ -10391,11 +10392,17 @@ pub async fn backup_audit(
                 .map_err(|error| CmdError::click(error.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    for namespace in inventory_namespaces {
+        crate::object_store::ObjectRef::new(namespace, "inventory")
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+    let inventory_namespaces = inventory_namespaces.to_vec();
     let plan = crate::deploy::host_backup_audit::AuditPlan {
         namespace: namespace.to_string(),
         backup_root: BACKUP_ROOT.to_string(),
         primary_root: PRIMARY_ROOT.to_string(),
         objects,
+        inventory_namespaces,
         reclaim: reclaim_twins,
         apply,
     };
@@ -10415,24 +10422,40 @@ pub async fn backup_audit(
                 )
             })
             .collect();
-        let objects = audit
-            .objects
-            .iter()
-            .map(|object| {
-                json!({
-                    "path": object.path,
-                    "primary": {
-                        "state": object.primary.state,
-                        "bytes": object.primary.bytes,
-                        "sha256": object.primary.sha256,
+        let render_object = |object: &crate::deploy::host_backup_audit::ObjectComparison| {
+            json!({
+                "path": object.path,
+                // These names identify the two fixed physical roots. They
+                // deliberately do not claim which one is authoritative.
+                "local_storage": {
+                    "state": object.primary.state,
+                    "bytes": object.primary.bytes,
+                    "sha256": object.primary.sha256,
+                },
+                "local_backup": {
+                    "state": object.backup.state,
+                    "bytes": object.backup.bytes,
+                    "sha256": object.backup.sha256,
+                },
+                "metadata": {
+                    "local_storage": {
+                        "state": object.primary_metadata.state,
+                        "bytes": object.primary_metadata.bytes,
+                        "sha256": object.primary_metadata.sha256,
                     },
-                    "backup": {
-                        "state": object.backup.state,
-                        "bytes": object.backup.bytes,
-                        "sha256": object.backup.sha256,
+                    "local_backup": {
+                        "state": object.backup_metadata.state,
+                        "bytes": object.backup_metadata.bytes,
+                        "sha256": object.backup_metadata.sha256,
                     },
-                })
+                },
             })
+        };
+        let objects = audit.objects.iter().map(render_object).collect::<Vec<_>>();
+        let inventory_objects = audit
+            .inventory_objects
+            .iter()
+            .map(render_object)
             .collect::<Vec<_>>();
         print_json(&json!({
             "host": audit.host,
@@ -10440,6 +10463,12 @@ pub async fn backup_audit(
             "unavailable": audit.unavailable,
             "classes": classes,
             "objects": objects,
+            "inventory_objects": inventory_objects,
+            "namespace_inventory": {
+                "complete": audit.namespace_inventory_complete,
+                "local_storage": audit.namespaces.get("local_storage").cloned().unwrap_or_default(),
+                "local_backup": audit.namespaces.get("local_backup").cloned().unwrap_or_default(),
+            },
             "reclaimable_bytes": audit.reclaimable_bytes(),
             "retained_bytes": audit.retained_bytes(),
             "reclaim": {
@@ -10459,10 +10488,67 @@ pub async fn backup_audit(
         }));
         return Ok(());
     }
+    if !audit.inventory_objects.is_empty() {
+        println!(
+            "namespace inventory: complete={} local-storage=[{}] local-backup=[{}]",
+            audit.complete,
+            audit
+                .namespaces
+                .get("local_storage")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+            audit
+                .namespaces
+                .get("local_backup")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+        );
+        for object in &audit.inventory_objects {
+            println!(
+                "{} local-storage={}({}) local-backup={}({}) metadata={}/{}",
+                object.path,
+                object.primary.state,
+                object
+                    .primary
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.backup.state,
+                object
+                    .backup
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.primary_metadata.state,
+                object.backup_metadata.state,
+            );
+        }
+        if !audit.complete {
+            return Err(CmdError::click(audit.unavailable.unwrap_or_else(|| {
+                "namespace inventory did not complete".to_string()
+            })));
+        }
+        return Ok(());
+    }
     if !audit.objects.is_empty() {
+        println!(
+            "namespaces: complete={} local-storage=[{}] local-backup=[{}]",
+            audit.namespace_inventory_complete,
+            audit
+                .namespaces
+                .get("local_storage")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+            audit
+                .namespaces
+                .get("local_backup")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+        );
         for object in &audit.objects {
             println!("{}", object.path);
-            for (name, identity) in [("primary", &object.primary), ("backup", &object.backup)] {
+            for (name, identity) in [
+                ("local-storage", &object.primary),
+                ("local-backup", &object.backup),
+            ] {
                 println!(
                     "  {name}: state={} bytes={} sha256={}",
                     identity.state,
@@ -10472,6 +10558,21 @@ pub async fn backup_audit(
                     identity.sha256.as_deref().unwrap_or("-"),
                 );
             }
+            println!(
+                "  metadata: local-storage state={} bytes={} sha256={}; local-backup state={} bytes={} sha256={}",
+                object.primary_metadata.state,
+                object
+                    .primary_metadata
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.primary_metadata.sha256.as_deref().unwrap_or("-"),
+                object.backup_metadata.state,
+                object
+                    .backup_metadata
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.backup_metadata.sha256.as_deref().unwrap_or("-"),
+            );
         }
         if !audit.complete {
             return Err(CmdError::click(
@@ -10550,6 +10651,92 @@ pub async fn backup_audit(
         );
     }
     Ok(())
+}
+/// Create or apply one durable, source-preserving reconciliation of the two
+/// fixed physical local-store roots on a host.
+pub async fn storage_root_reconcile(
+    target: &str,
+    transaction: &str,
+    phase: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let report =
+        crate::deploy::host_storage_reconcile::reconcile_host(target, transaction, phase, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        print_json(&report);
+    } else {
+        println!(
+            "{} storage-root reconciliation {}: {}",
+            target,
+            transaction,
+            report
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("failed")
+        );
+        if let Some(path) = report.pointer("/receipt/snapshot").and_then(Value::as_str) {
+            println!("checkpoint: {path}");
+        }
+        if let Some(count) = report
+            .pointer("/receipt/verified_objects")
+            .and_then(Value::as_u64)
+        {
+            println!("verified objects: {count}");
+        }
+    }
+    report_outcome(&report, "ok")
+}
+pub async fn storage_root_reconcile_worker(
+    target: &str,
+    target_config: &str,
+    transaction: &str,
+    phase: &str,
+    source_revision: &str,
+    tool_sha256: &str,
+    runner_gate: &str,
+) -> Result<(), CmdError> {
+    use base64::Engine;
+
+    let decode = |label: &str, encoded: &str| {
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| CmdError::click(format!("invalid resident {label}: {error}")))
+    };
+    let target_config = serde_json::from_slice::<crate::targets::ComputeTarget>(&decode(
+        "target config",
+        target_config,
+    )?)
+    .map_err(|error| CmdError::click(format!("invalid resident target config: {error}")))?;
+    if target_config.name != target {
+        return Err(CmdError::click(
+            "resident target config belongs to another target",
+        ));
+    }
+    let runner_gate = if runner_gate.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_slice::<Value>(&decode("runner gate", runner_gate)?).map_err(
+                |error| CmdError::click(format!("invalid resident runner gate: {error}")),
+            )?,
+        )
+    };
+    let runner = crate::deploy::production_runner();
+    crate::deploy::host_storage_reconcile::reconcile_host_worker(
+        target_config,
+        transaction,
+        phase,
+        source_revision,
+        tool_sha256,
+        runner_gate,
+        &runner,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| CmdError::click(error.to_string()))
 }
 
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {

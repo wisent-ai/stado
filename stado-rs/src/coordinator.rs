@@ -571,6 +571,12 @@ pub async fn run_tick(
     with_billing: bool,
     log: &dyn Fn(&str),
 ) -> Result<i64, CoordinatorError> {
+    let cancellations = store.settle_queued_cancellations().await?;
+    if cancellations > 0 {
+        log(&format!(
+            "cancellation: finalized {cancellations} queued request(s)"
+        ));
+    }
     if let Err(exc) = config::refresh_model_policy(store).await {
         log(&format!(
             "model policy refresh failed; retaining last good policy: {exc}"
@@ -679,6 +685,12 @@ pub async fn run_tick(
         log(&format!(
             "run-reaper: reaped {} run(s), deleted {} job blob(s)",
             summary.reaped_runs, summary.deleted_jobs
+        ));
+    }
+    for refusal in &summary.refused_runs {
+        log(&format!(
+            "run-reaper: retained run {} without cleanup: {}",
+            refusal.run_id, refusal.reason
         ));
     }
     if with_billing {
