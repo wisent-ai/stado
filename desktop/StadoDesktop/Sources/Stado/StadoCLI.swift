@@ -65,7 +65,7 @@ actor StadoCLI {
     nonisolated func json<T: Decodable & Sendable>(
         _ type: T.Type,
         arguments: [String],
-        timeoutSeconds: Int = 120
+        timeoutSeconds: Int? = 120
     ) async throws -> T {
         try await jsonResult(type, arguments: arguments, timeoutSeconds: timeoutSeconds).value
     }
@@ -73,11 +73,13 @@ actor StadoCLI {
     /// Run one JSON command while retaining its process exit status.
     ///
     /// A valid payload is always returned, including for a non-zero exit. Only
-    /// an absent or malformed payload falls back to the CLI refusal.
+    /// an absent or malformed payload falls back to the CLI refusal. A `nil`
+    /// deadline leaves bounded host operations to the product command itself;
+    /// readonly callers keep the default screen deadline.
     nonisolated func jsonResult<T: Decodable & Sendable>(
         _ type: T.Type,
         arguments: [String],
-        timeoutSeconds: Int = 120
+        timeoutSeconds: Int? = 120
     ) async throws -> StadoCLIJSONResult<T> {
         let executable = try await executableURL()
         let completion = try await Self.capture(
@@ -188,14 +190,16 @@ actor StadoCLI {
     private static func capture(
         executable: URL,
         arguments: [String],
-        timeoutSeconds: Int
+        timeoutSeconds: Int?
     ) async throws -> Completion {
         let invocation = Invocation()
-        let watchdog = Task.detached(priority: .utility) {
-            try? await Task.sleep(for: .seconds(timeoutSeconds))
-            invocation.terminateForTimeout()
+        let watchdog = timeoutSeconds.map { seconds in
+            Task.detached(priority: .utility) {
+                try? await Task.sleep(for: .seconds(seconds))
+                invocation.terminateForTimeout()
+            }
         }
-        defer { watchdog.cancel() }
+        defer { watchdog?.cancel() }
 
         return try await Task.detached(priority: .userInitiated) {
             try runToCompletion(
@@ -218,7 +222,7 @@ actor StadoCLI {
         invocation: Invocation,
         executable: URL,
         arguments: [String],
-        timeoutSeconds: Int
+        timeoutSeconds: Int?
     ) throws -> Completion {
         let process = invocation.process
         let output = Pipe()
@@ -277,9 +281,9 @@ actor StadoCLI {
         stdout: Data,
         stderr: String,
         timedOut: Bool,
-        timeoutSeconds: Int
+        timeoutSeconds: Int?
     ) -> StadoCLIError {
-        if timedOut {
+        if timedOut, let timeoutSeconds {
             return .failed(
                 exitCode: exitCode,
                 message: "\(commandLine(arguments)) gave no answer within \(timeoutSeconds) s and was stopped. Nothing was written."

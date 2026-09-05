@@ -700,7 +700,9 @@ final class FleetServicesStore: ObservableObject {
             let result = try await cli.jsonResult(
                 ServiceConvergeReport.self,
                 arguments: arguments,
-                timeoutSeconds: 900
+                // The product command owns bounded host stages, including a
+                // 30-minute archive stage. Desktop must not stop it sooner.
+                timeoutSeconds: nil
             )
             convergenceReceipt = ServiceConvergeReceipt(
                 arguments: arguments,
