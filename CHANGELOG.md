@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.8
+
+- **Guarded handoff delivery:** carries the complete interruption-safe release-control handoff from 0.16.5 together with the newer installed fleet functionality already merged through 0.16.7. Matching prepared receipts can refresh a stale expected generation only after the same intent, exact runtime files, and still-managed lifecycle are re-proved; a registry-committed resume skips the successful CAS, reacquires the service lease, verifies the exact active release, and finishes the reconciler fence.
+- **Release correction:** the immutable 0.16.5 tag remains attached to its original source, whose declared Clippy gate rejected an eight-argument internal helper before publication. This coordinate groups the three legacy identities into one fixed array without changing the checks, uses the first unoccupied version after the already-owned 0.16.6 and 0.16.7 coordinates, and does not move or overwrite either tag.
+- **Migration and rollback:** no stored data changes. Install a compatible release on every registry reader before handoff; rolling back below 0.15.24 makes the external placement shape unreadable, while rolling back below this release removes interruption-safe completion.
+- **Platforms and evidence:** the supported native platforms remain `darwin-arm64` and `linux-amd64`; formatting, locked compilation, and Clippy cover the corrected source, while immutable release publication supplies signed manifests, artifacts, source identity, and delivery receipts.
+
 ## 0.16.7
 
 - **Exact storage-root evidence:** `stado host backup-audit TARGET --object STADO_URI` compares only the named existing object in the host's declared local primary and backup roots. The read-only report returns each side's state, byte count, and SHA-256 without returning object content or walking either store; repeat `--object` for additional coordinates.

@@ -52,15 +52,17 @@ jobs:
           for attempt in $(seq 1 180); do
             runs="$(
               gh api \
-                "repos/$GITHUB_REPOSITORY/actions/workflows/version-check.yml/runs?head_sha=$SOURCE_SHA&event=push&per_page=100"
+                "repos/$GITHUB_REPOSITORY/actions/workflows/version-check.yml/runs?head_sha=$SOURCE_SHA&per_page=100"
             )"
             verdict="$(
               jq -c --arg sha "$SOURCE_SHA" '
                 [.workflow_runs[]
                   | select(
                       .head_sha == $sha and
-                      .head_branch == "main" and
-                      .event == "push"
+                      (
+                        (.head_branch == "main" and .event == "push") or
+                        .event == "workflow_dispatch"
+                      )
                     )]
                 | sort_by(.run_number)
                 | last
