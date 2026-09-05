@@ -1129,30 +1129,31 @@ async fn prove_listener_closed(
     runner: &Runner,
 ) -> Result<(), DeployError> {
     let script = format!(
-        "PORT={} /usr/bin/python3 - <<'PY'\n\
-import os, socket, time\n\
-port = int(os.environ['PORT'])\n\
-deadline = time.monotonic() + 30\n\
-while True:\n\
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n\
-    probe.settimeout(0.2)\n\
-    result = probe.connect_ex(('127.0.0.1', port))\n\
-    probe.close()\n\
-    if result != 0:\n\
-        print('STADO_LISTENER_CLOSED\\t' + str(port))\n\
-        break\n\
-    if time.monotonic() >= deadline:\n\
-        raise SystemExit('object API listener remained open')\n\
-    time.sleep(0.2)\n\
-PY",
+        r#"PORT={} /usr/bin/python3 - <<'PY'
+import os, socket, time
+port = int(os.environ['PORT'])
+deadline = time.monotonic() + 30
+while True:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.2)
+    result = probe.connect_ex(('127.0.0.1', port))
+    probe.close()
+    if result != 0:
+        print('STADO_LISTENER_CLOSED\t' + str(port))
+        break
+    if time.monotonic() >= deadline:
+        raise SystemExit('object API listener remained open')
+    time.sleep(0.2)
+PY"#,
         port
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "object API listener did not close",
+        return Err(DeployError(format!(
+            "object API listener on {}:{port} did not close: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     Ok(())
@@ -1206,33 +1207,34 @@ async fn snapshot_unit_file(
     runner: &Runner,
 ) -> Result<Option<FileSnapshot>, DeployError> {
     let script = format!(
-        "STADO_UNIT_PATH={} /usr/bin/python3 - <<'PY'\n\
-import base64, hashlib, json, os, stat\n\
-path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))\n\
-try:\n\
-    info = os.lstat(path)\n\
-except FileNotFoundError:\n\
-    print('STADO_UNIT_SNAPSHOT\\tabsent')\n\
-    raise SystemExit(0)\n\
-if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):\n\
-    raise SystemExit('unit path is not a regular non-symlink file')\n\
-with open(path, 'rb') as handle:\n\
-    body = handle.read()\n\
-print('STADO_UNIT_SNAPSHOT\\t' + json.dumps({{\n\
-    'body_base64': base64.b64encode(body).decode('ascii'),\n\
-    'sha256': hashlib.sha256(body).hexdigest(),\n\
-    'mode': stat.S_IMODE(info.st_mode),\n\
-    'uid': info.st_uid,\n\
-    'gid': info.st_gid,\n\
-}}, sort_keys=True, separators=(',', ':')))\n\
-PY",
+        r#"STADO_UNIT_PATH={} /usr/bin/python3 - <<'PY'
+import base64, hashlib, json, os, stat
+path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
+try:
+    info = os.lstat(path)
+except FileNotFoundError:
+    print('STADO_UNIT_SNAPSHOT\tabsent')
+    raise SystemExit(0)
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    raise SystemExit('unit path is not a regular non-symlink file')
+with open(path, 'rb') as handle:
+    body = handle.read()
+print('STADO_UNIT_SNAPSHOT\t' + json.dumps({{
+    'body_base64': base64.b64encode(body).decode('ascii'),
+    'sha256': hashlib.sha256(body).hexdigest(),
+    'mode': stat.S_IMODE(info.st_mode),
+    'uid': info.st_uid,
+    'gid': info.st_gid,
+}}, sort_keys=True, separators=(',', ':')))
+PY"#,
         shlex_quote(path)
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "unit file could not be snapshotted",
+        return Err(DeployError(format!(
+            "unit snapshot failed for {path} on {}: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     let value = output
@@ -1298,93 +1300,92 @@ async fn correlate_served_store(
     .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
     let script = format!(
-        "STADO_CORRELATION={} STADO_OBJECT_PORT={} /usr/bin/python3 - <<'PY'\n\
-import base64, hashlib, json, os, urllib.parse, urllib.request\n\
-payload = json.loads(base64.b64decode(os.environ['STADO_CORRELATION']))\n\
-port = int(os.environ['STADO_OBJECT_PORT'])\n\
-token_path = os.path.expanduser('~/.stado/queue-object-api-token')\n\
-with open(token_path, encoding='utf-8') as handle:\n\
-    token = handle.read().strip()\n\
-if not token:\n\
-    raise SystemExit('object API correlation token is empty')\n\
-headers = {{'Authorization': 'Bearer ' + token}}\n\
-base = 'http://127.0.0.1:' + str(port)\n\
-request = urllib.request.Request(base + '/api/object/list?namespace=probierz&prefix=', headers=headers)\n\
-with urllib.request.urlopen(request, timeout=30) as response:\n\
-    listed = json.load(response)\n\
-keys = sorted(item.get('key') for item in listed.get('objects', []) if isinstance(item.get('key'), str))\n\
-def identities(name):\n\
-    result = {{}}\n\
-    prefix = 'ecosystem/probierz/'\n\
-    for item in payload[name]:\n\
-        path = item.get('path', '')\n\
-        if not path.startswith(prefix):\n\
-            continue\n\
-        result[path[len(prefix):]] = item.get('body')\n\
-    return result\n\
-primary_before = identities('primary')\n\
-backup = identities('backup')\n\
-primary = dict(primary_before)\n\
-if payload.get('primary_after_commit'):\n\
-    primary.update(backup)\n\
-served = {{}}\n\
-for key in keys:\n\
-    uri = 'stado://probierz/' + key\n\
-    url = base + '/api/object?uri=' + urllib.parse.quote(uri, safe='')\n\
-    request = urllib.request.Request(url, headers=headers)\n\
-    digest = hashlib.sha256()\n\
-    size = 0\n\
-    with urllib.request.urlopen(request, timeout=60) as response:\n\
-        while True:\n\
-            chunk = response.read(1024 * 1024)\n\
-            if not chunk:\n\
-                break\n\
-            digest.update(chunk)\n\
-            size += len(chunk)\n\
-    served[key] = {{'sha256': digest.hexdigest(), 'size': size}}\n\
-matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)\n\
-matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)\n\
-if not matches_primary and not matches_backup:\n\
-    raise SystemExit('object API does not serve either complete physical qualified root')\n\
-authority = 'identical' if matches_primary and matches_backup else 'A' if matches_primary else 'B'\n\
-def physical_identity(name, path):\n\
-    for item in payload[name].get('files', []):\n\
-        if item.get('path') == path:\n\
-            return item.get('body')\n\
-    return None\n\
-object_mappings = [{{\n\
-    'backend': 'stado-object-api', 'namespace': 'probierz', 'key': key,\n\
-    'physical_path': 'ecosystem/probierz/' + key, 'identity': served[key],\n\
-}} for key in keys]\n\
-registry_mappings = [\n\
-    {{'root': 'A', 'backend': 'local', 'namespace': None, 'key': 'registry.json',\n\
-      'physical_path': 'registry.json',\n\
-      'identity': physical_identity('primary_physical', 'registry.json')}},\n\
-    {{'root': 'B', 'backend': 'local', 'namespace': None, 'key': 'registry.json',\n\
-      'physical_path': 'registry.json',\n\
-      'identity': physical_identity('backup_physical', 'registry.json')}},\n\
-    {{'root': 'served', 'backend': 'stado-object', 'namespace': None,\n\
-      'key': 'registry.json', 'physical_path': None,\n\
-      'observation': 'client namespace was not observable from the object API'}},\n\
-]\n\
-print('STADO_SERVED_STORE\\t' + json.dumps({{\n\
-    'object_authority': authority,\n\
-    'endpoint': base,\n\
-    'object_store': {{'backend': 'stado-object-api', 'namespace': 'probierz',\n\
-                     'objects': object_mappings}},\n\
-    'registry_store': {{'mappings': registry_mappings}},\n\
-    'primary_root': os.path.expanduser('~/.stado/local-storage'),\n\
-    'backup_root': os.path.expanduser('~/.stado/local-backup'),\n\
-}}, sort_keys=True, separators=(',', ':')))\n\
-PY",
-        shlex_quote(&encoded),
-        port
+        r#"STADO_OBJECT_PORT={port} /usr/bin/python3 - <<'PY'
+import base64, hashlib, json, os, urllib.parse, urllib.request
+payload = json.loads(base64.b64decode('{encoded}'))
+port = int(os.environ['STADO_OBJECT_PORT'])
+token_path = os.path.expanduser('~/.stado/queue-object-api-token')
+with open(token_path, encoding='utf-8') as handle:
+    token = handle.read().strip()
+if not token:
+    raise SystemExit('object API correlation token is empty')
+headers = {{'Authorization': 'Bearer ' + token}}
+base = 'http://127.0.0.1:' + str(port)
+request = urllib.request.Request(base + '/api/object/list?namespace=probierz&prefix=', headers=headers)
+with urllib.request.urlopen(request, timeout=30) as response:
+    listed = json.load(response)
+keys = sorted(item.get('key') for item in listed.get('objects', []) if isinstance(item.get('key'), str))
+def identities(name):
+    result = {{}}
+    prefix = 'ecosystem/probierz/'
+    for item in payload[name]:
+        path = item.get('path', '')
+        if not path.startswith(prefix):
+            continue
+        result[path[len(prefix):]] = item.get('body')
+    return result
+primary_before = identities('primary')
+backup = identities('backup')
+primary = dict(primary_before)
+if payload.get('primary_after_commit'):
+    primary.update(backup)
+served = {{}}
+for key in keys:
+    uri = 'stado://probierz/' + key
+    url = base + '/api/object?uri=' + urllib.parse.quote(uri, safe='')
+    request = urllib.request.Request(url, headers=headers)
+    digest = hashlib.sha256()
+    size = 0
+    with urllib.request.urlopen(request, timeout=60) as response:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    served[key] = {{'sha256': digest.hexdigest(), 'size': size}}
+matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)
+matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)
+if not matches_primary and not matches_backup:
+    raise SystemExit('object API does not serve either complete physical qualified root')
+authority = 'identical' if matches_primary and matches_backup else 'A' if matches_primary else 'B'
+def physical_identity(name, path):
+    for item in payload[name].get('files', []):
+        if item.get('path') == path:
+            return item.get('body')
+    return None
+object_mappings = [{{
+    'backend': 'stado-object-api', 'namespace': 'probierz', 'key': key,
+    'physical_path': 'ecosystem/probierz/' + key, 'identity': served[key],
+}} for key in keys]
+registry_mappings = [
+    {{'root': 'A', 'backend': 'local', 'namespace': None, 'key': 'registry.json',
+      'physical_path': 'registry.json',
+      'identity': physical_identity('primary_physical', 'registry.json')}},
+    {{'root': 'B', 'backend': 'local', 'namespace': None, 'key': 'registry.json',
+      'physical_path': 'registry.json',
+      'identity': physical_identity('backup_physical', 'registry.json')}},
+    {{'root': 'served', 'backend': 'stado-object', 'namespace': None,
+      'key': 'registry.json', 'physical_path': None,
+      'observation': 'client namespace was not observable from the object API'}},
+]
+print('STADO_SERVED_STORE\t' + json.dumps({{
+    'object_authority': authority,
+    'endpoint': base,
+    'object_store': {{'backend': 'stado-object-api', 'namespace': 'probierz',
+                     'objects': object_mappings}},
+    'registry_store': {{'mappings': registry_mappings}},
+    'primary_root': os.path.expanduser('~/.stado/local-storage'),
+    'backup_root': os.path.expanduser('~/.stado/local-backup'),
+}}, sort_keys=True, separators=(',', ':')))
+PY"#
     );
     let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "object API physical-store correlation failed",
+        return Err(DeployError(format!(
+            "object API physical-store correlation failed on {}:{port}: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     output
@@ -2340,43 +2341,43 @@ async fn restore_unit_snapshot(
         .as_ref()
         .ok_or_else(|| DeployError(format!("{} has no captured exact unit bytes", writer.label)))?;
     let script = format!(
-        "STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'\n\
-import base64, hashlib, os, stat, subprocess, tempfile\n\
-path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))\n\
-body = base64.b64decode(os.environ['STADO_UNIT_BODY'])\n\
-expected = os.environ['STADO_UNIT_SHA']\n\
-if hashlib.sha256(body).hexdigest() != expected:\n\
-    raise SystemExit('captured unit bytes fail their digest')\n\
-work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')\n\
-os.makedirs(work, mode=0o700, exist_ok=True)\n\
-fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)\n\
-try:\n\
-    with os.fdopen(fd, 'wb') as handle:\n\
-        handle.write(body)\n\
-        handle.flush()\n\
-        os.fsync(handle.fileno())\n\
-    command = ['/usr/bin/sudo', '-n', '/usr/bin/install',\n\
-               '-m', os.environ['STADO_UNIT_MODE'],\n\
-               '-o', os.environ['STADO_UNIT_UID'],\n\
-               '-g', os.environ['STADO_UNIT_GID'], temporary, path]\n\
-    result = subprocess.run(command, stdin=subprocess.DEVNULL,\n\
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n\
-                            text=True, close_fds=False)\n\
-    if result.returncode != 0:\n\
-        raise SystemExit((result.stderr or result.stdout).strip())\n\
-finally:\n\
-    try:\n\
-        os.unlink(temporary)\n\
-    except FileNotFoundError:\n\
-        pass\n\
-info = os.lstat(path)\n\
-if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):\n\
-    raise SystemExit('restored unit is not a regular file')\n\
-with open(path, 'rb') as handle:\n\
-    if hashlib.sha256(handle.read()).hexdigest() != expected:\n\
-        raise SystemExit('restored unit digest mismatch')\n\
-print('STADO_UNIT_RESTORED\\t' + expected)\n\
-PY",
+        r#"STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'
+import base64, hashlib, os, stat, subprocess, tempfile
+path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
+body = base64.b64decode(os.environ['STADO_UNIT_BODY'])
+expected = os.environ['STADO_UNIT_SHA']
+if hashlib.sha256(body).hexdigest() != expected:
+    raise SystemExit('captured unit bytes fail their digest')
+work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')
+os.makedirs(work, mode=0o700, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)
+try:
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    command = ['/usr/bin/sudo', '-n', '/usr/bin/install',
+               '-m', os.environ['STADO_UNIT_MODE'],
+               '-o', os.environ['STADO_UNIT_UID'],
+               '-g', os.environ['STADO_UNIT_GID'], temporary, path]
+    result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, close_fds=False)
+    if result.returncode != 0:
+        raise SystemExit((result.stderr or result.stdout).strip())
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+info = os.lstat(path)
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    raise SystemExit('restored unit is not a regular file')
+with open(path, 'rb') as handle:
+    if hashlib.sha256(handle.read()).hexdigest() != expected:
+        raise SystemExit('restored unit digest mismatch')
+print('STADO_UNIT_RESTORED\t' + expected)
+PY"#,
         shlex_quote(&writer.path),
         shlex_quote(&snapshot.body_base64),
         shlex_quote(&snapshot.sha256),
@@ -2387,9 +2388,11 @@ PY",
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "exact unit bytes were not restored",
+        return Err(DeployError(format!(
+            "exact unit restoration failed for {} on {}: {}",
+            writer.label,
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     Ok(())
