@@ -1519,11 +1519,17 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
             "ExecMainStartTimestamp",
             "-p",
             "ExecMainStatus",
+            "-p",
+            "FragmentPath",
+            "-p",
+            "DropInPaths",
+            "-p",
+            "EnvironmentFiles",
         ],
-        why: "reads the loaded beacon definition and its last publication result. A unit \
-              file can name the corrected endpoint while systemd still holds its older \
-              definition; NeedDaemonReload distinguishes that state without restarting \
-              anything. The unit and properties are fixed and no credentials are read",
+        why: "reads the loaded beacon definition, its source and override paths, and its \
+              last publication result. This distinguishes a stale manager definition from \
+              a later environment override without restarting anything. The unit and \
+              properties are fixed and credential values are not read",
     },
 ];
 

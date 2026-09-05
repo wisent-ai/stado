@@ -679,22 +679,38 @@ fn superseded_words() -> String {
 
 /// The remote program for one mode, with every substitution in place.
 ///
-/// The Stado candidates are quoted exactly the way
-/// [`crate::deploy::host_recovery::remote_script`] quotes them, so `$HOME`
-/// still expands on the remote side while the word stays one word. When the
-/// queue authority is readable it supplies the keep-list; otherwise each
-/// workdir must earn deletion from the two-pass local proof.
+/// Remote targets use the installed authoritative Stado candidates, quoted so
+/// `$HOME` expands on the target. Local targets instead receive the exact
+/// executable that owns this invocation; they never fall back to stale
+/// installed code. When the queue authority is readable it supplies the
+/// keep-list; otherwise each workdir must earn deletion from the two-pass local
+/// proof.
 pub fn remote_script(
     apply: bool,
     live_jobs: Option<&[String]>,
     work_roots: &str,
     target_free_gb: Option<i64>,
 ) -> String {
-    let wc_words = WC_CANDIDATES
-        .iter()
-        .map(|value| format!("\"{value}\""))
-        .collect::<Vec<String>>()
-        .join(" ");
+    remote_script_with_stado(apply, live_jobs, work_roots, target_free_gb, None)
+}
+
+fn remote_script_with_stado(
+    apply: bool,
+    live_jobs: Option<&[String]>,
+    work_roots: &str,
+    target_free_gb: Option<i64>,
+    current_stado: Option<&str>,
+) -> String {
+    let wc_words = current_stado.map_or_else(
+        || {
+            WC_CANDIDATES
+                .iter()
+                .map(|value| format!("\"{value}\""))
+                .collect::<Vec<String>>()
+                .join(" ")
+        },
+        shlex_quote,
+    );
     let live_words = live_jobs
         .unwrap_or_default()
         .iter()
@@ -1105,13 +1121,29 @@ pub async fn reclaim_host(
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.target_free_gb);
+    // A local reclaim must use the binary that owns this invocation. Release
+    // capacity deliberately builds the corrected tree before installation;
+    // selecting the older installed janitor would make that correction
+    // unreachable.
+    let current_stado = if host_channel::target_is_this_host(&target) {
+        Some(
+            std::env::current_exe()
+                .map_err(|error| DeployError(format!("cannot identify current Stado: {error}")))?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| DeployError("current Stado path is not valid UTF-8".to_string()))?,
+        )
+    } else {
+        None
+    };
     let output = host_channel::run_script_with_timeout(
         &target,
-        &remote_script(
+        &remote_script_with_stado(
             apply,
             live_jobs.as_deref(),
             DEFAULT_WORK_ROOTS,
             target_free_gb,
+            current_stado.as_deref(),
         ),
         RECLAIM_TIMEOUT,
         runner,
