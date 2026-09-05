@@ -644,6 +644,10 @@ final class FleetServicesStore: ObservableObject {
         ["service", "deploy", name, "--host", host, "--json"]
     }
 
+    nonisolated static func repairRunnerRuntimeArguments(name: String, host: String) -> [String] {
+        ["service", "repair-runner-runtime", name, "--host", host, "--json"]
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -747,6 +751,21 @@ final class FleetServicesStore: ObservableObject {
             } else {
                 mutation = .failed("\(report.target): \(report.fileSentence)")
             }
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh(hosts: lastHosts)
+    }
+
+    func repairRunnerRuntime(_ entry: FleetServiceEntry) async {
+        mutation = .working("Repairing runner runtime on \(entry.host)")
+        do {
+            let report = try await cli.json(
+                ServiceRunnerRuntimeReport.self,
+                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host),
+                timeoutSeconds: 360
+            )
+            mutation = .succeeded(report.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {
             mutation = .failed(Self.message(for: error))
         }

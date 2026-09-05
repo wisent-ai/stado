@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
+- **Desktop services:** the service inspector exposes the same runner repair and shows its result or refusal without replacing the CLI's diagnosis.
+
 ## 0.16.23
 
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.

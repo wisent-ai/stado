@@ -184,6 +184,30 @@ stado service restart com.wisent.always-on.weles --host charless-mac-mini
 
 `retire` now handles the unit's real domain instead of assuming a per-login job. A system LaunchDaemon is stopped through the host account credential, then both `system/<label>` and its recovery job are disabled with privileged `launchctl`; a Linux user unit is stopped, disabled, and runtime-masked so an older coordinator cannot revive it from a stale read. `service remove` composes the same fenced retirement with deletion of the exact managed unit file, while `retire` keeps that file for an explicit rollback.
 
+### Repairing a macOS GitHub runner's apphost signatures
+
+Managed runner installation preserves the signatures shipped in GitHub's
+checksum-pinned archive. For an already adopted service that directly starts
+`runsvc.sh`, the same repair is available through the CLI and the **Services**
+inspector's **Repair GitHub runner runtime** action:
+
+```console
+stado service repair-runner-runtime actions.runner.wisent-ai-brama.charless-mac-mini-stado-release --host charless-mac-mini --json
+```
+
+The repair retains the installed version and registration, verifies the official
+archive's SHA-256 and both replacement apphosts, and replaces only those files.
+It does not restart the unit: GitHub's existing listener retry loop owns the
+next launch. An intact signature returns `runner apphost signatures are intact;
+no files changed`. That result describes the files, not a working runner.
+Use `service logs` to read the listener's actual failure.
+
+Linux services and units that do not directly launch `runsvc.sh` are refused.
+Missing registration, an ambiguous version, a missing release digest, a digest
+mismatch, or a failed signature check stops the repair before activation.
+The JSON receipt names the target, unit, runner root, output, and
+`restarted: false`; Desktop displays the same output or refusal.
+
 ### A live process still executing a binary that was replaced underneath it
 
 A launchd unit's process goes on executing the image it started with. Replacing the file the unit declares does not move it, and nothing on this fleet revisited a unit that was missed: `self_update::recycle_replaced_units` cycles units only inside the invocation that replaced their bytes, matches `argv[0]` by string equality, skips its own pid, defers any unit whose argv carries `agent`, and logs a failed `kickstart` without ever coming back to it. `com.wisent.compute.disk-cleanup.disk-cleanup` recorded `policy:ValueError` 8,348 times across thirteen days from a `--watch` process alive since 27 August, executing an inode its declared path no longer held; an unrelated restart is what ended it. The condition is not rare and not static — the installed binary went 0.13.50 to 0.14.8 inside one day, and measured hours apart on 2026-09-03 the stale set on `lukasz-macbook` lost `com.wisent.compute.agent.lukasz-macbook` to an unrelated restart and gained `com.wisent.stado-resolver` to a new release.
