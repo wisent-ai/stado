@@ -36,11 +36,17 @@ impl Journey {
             .unwrap()
             .trim()
             .to_ascii_lowercase();
+        let release_platform = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "darwin-arm64",
+            ("linux", "x86_64") => "linux-amd64",
+            platform => panic!("unsupported cleanup journey platform: {platform:?}"),
+        };
         let registry = json!({
             "schema_version": 2,
             "targets": [{
                 "name": "cleanup-runner",
                 "kind": "local",
+                "release_platform": release_platform,
                 "ssh": "nobody@127.0.0.1",
                 "hostnames": [hostname],
                 "disk_cleanup": {
