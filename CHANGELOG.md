@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.25
+
+- **Reconciliation retries:** before fencing writers, `host storage-root-reconcile` reads the current canonical Stado version instead of reusing the version in an older captured target. An existing fence keeps its staged version pinned; an unavailable registry is an error, not permission to use cached declarations.
+- **Live transaction status:** owner reports retain `recorded_status` and include the native manager's current observation. A previously executing owner is reported as interrupted when its process is gone, or unobserved when the manager cannot be read.
+- **Release identity:** 0.16.24 remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e`; the merged reconciliation corrections use this new coordinate rather than replacing that version's source record.
+
 ## 0.16.24
 
 - **Stable proxy startup:** activation and rollback wait for the stable readiness endpoint using the product's declared readiness timeout. A live process or a fixed 200 ms delay no longer substitutes for a listening, forwarding proxy; an exited process still fails immediately, and an expired wait reports the last observed error.
