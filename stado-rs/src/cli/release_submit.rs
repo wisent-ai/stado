@@ -26,7 +26,7 @@ use crate::release_pipeline::{
     WorkerRequest, PRODUCT_MANIFEST,
 };
 
-const OBJECT_API_SERVICE: &str = "stado-object-api";
+const OBJECT_API_CATALOG_SERVICE: &str = "stado";
 const OBJECT_API_REASON: &str =
     "release submission requires the canonical object store before its first write";
 
@@ -710,53 +710,76 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
             if target.release_platform != platform {
                 return None;
             }
-            let (consumer, publication) = live_consumers.get(&target.name)?.clone();
-            let verdict = claimability(&publication);
+            let (consumer, publication) = live_consumers.get(&target.name)?;
+            let verdict = claimability(publication);
             considered.push((target.name.clone(), verdict.clone()));
-            // A host that says it will take nothing must not be pinned. The
-            // pin is irrevocable for the job's lifetime, so selecting one is
-            // not a slow path -- it is a job that can never run.
-            verdict.eligible().then_some((target, consumer))
+            // Busy workers can receive queued builds; their normal claim gate
+            // still waits for resources. Disk, policy, missing measurements,
+            // and unexplained refusals must never be treated as a busy queue.
+            let waiting_for_resources = match &verdict {
+                Claimability::Refusing { blockers }
+                    if !blockers.is_empty()
+                        && blockers.iter().all(|reason| {
+                            matches!(
+                                reason.as_str(),
+                                "cpu_busy" | "ram_headroom_low" | "exclusive_job_running"
+                            )
+                        }) =>
+                {
+                    true
+                }
+                verdict if verdict.eligible() => false,
+                _ => return None,
+            };
+            Some((waiting_for_resources, target, consumer.clone()))
         })
         .collect();
-    candidates.sort_by(|left, right| left.0.name.cmp(&right.0.name));
-    candidates.into_iter().next().ok_or_else(|| {
-        // Name the store this looked in. Builders are selected from capacity
-        // publications, not from the registry's platform declaration, so a host
-        // that declares the platform and publishes to a different store is
-        // invisible here. This message blamed a builder that had been running
-        // for seven hours, because the operator machine's queue store was a
-        // private loopback resolver and the fleet publishes to a tailnet
-        // address, both under namespace `probierz`.
-        let store = crate::config::wc_stado_storage_url();
-        let store = if store.is_empty() {
-            "the configured queue store".to_string()
-        } else {
-            store.to_string()
-        };
-        // Every host that was considered and what its own publication said,
-        // because "no builder is available" without a reason cost an hour of
-        // nobody knowing why a pinned job never started.
-        let verdicts = if considered.is_empty() {
-            String::from("no declared target of that platform is publishing capacity")
-        } else {
-            considered
-                .iter()
-                .map(|(host, verdict)| format!("{host} {}", verdict.describe()))
-                .collect::<Vec<_>>()
-                .join("; ")
-        };
-        CmdError::click(format!(
-            "no live fleet builder can CLAIM release_platform {platform}; capacity read \
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.name.cmp(&right.1.name))
+    });
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, target, consumer)| (target, consumer))
+        .ok_or_else(|| {
+            // Name the store this looked in. Builders are selected from capacity
+            // publications, not from the registry's platform declaration, so a host
+            // that declares the platform and publishes to a different store is
+            // invisible here. This message blamed a builder that had been running
+            // for seven hours, because the operator machine's queue store was a
+            // private loopback resolver and the fleet publishes to a tailnet
+            // address, both under namespace `probierz`.
+            let store = crate::config::wc_stado_storage_url();
+            let store = if store.is_empty() {
+                "the configured queue store".to_string()
+            } else {
+                store.to_string()
+            };
+            // Every host that was considered and what its own publication said,
+            // because "no builder is available" without a reason cost an hour of
+            // nobody knowing why a pinned job never started.
+            let verdicts = if considered.is_empty() {
+                String::from("no declared target of that platform is publishing capacity")
+            } else {
+                considered
+                    .iter()
+                    .map(|(host, verdict)| format!("{host} {}", verdict.describe()))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            CmdError::click(format!(
+                "no live fleet builder can CLAIM release_platform {platform}; capacity read \
              from {store} namespace {:?} listed {} live consumer(s) and the registry \
              declares {} target(s) for that platform. Considered: {verdicts}. A host that \
              publishes capacity but claims nothing cannot build: read \
              `stado host gates <host>` for the full verdict.",
-            crate::config::wc_stado_storage_namespace(),
-            live_consumers.len(),
-            declared_for_platform,
-        ))
-    })
+                crate::config::wc_stado_storage_namespace(),
+                live_consumers.len(),
+                declared_for_platform,
+            ))
+        })
 }
 
 /// Resolve the consumer id last published by one exact registry target.
@@ -766,7 +789,8 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
 /// to be fresh here deadlocks that lane: a long-running job or disk-pressure
 /// gate can age the row past the scheduler horizon while the agent still has
 /// enough identity to claim the exact pinned delivery. Builders still use
-/// [`builder`] and therefore still require fresh, claimable capacity.
+/// [`builder`] and require fresh capacity without a policy or disk refusal;
+/// a busy builder leaves its build queued until the normal claim gate opens.
 async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -1563,18 +1587,24 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     require_rollback_compatibility(&m, &args.version).await?;
     // An explicit endpoint may be a Stado-managed loopback forward to the
     // control host. Only an absent endpoint means this caller owns the local
-    // object daemon and must ensure it before publishing.
+    // object daemon and must ensure it before publishing. Address the service
+    // by its canonical catalog name: that entry owns both the stable object-API
+    // unit identity and its host-local storage environment.
     if crate::config::stado_api_url().is_empty()
         && crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
             != Some(crate::capabilities::StorageAdapter::Local)
     {
-        super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "cannot ensure required service {OBJECT_API_SERVICE}: {error}"
-                ))
-            })?;
+        super::service::ensure_local_dependency(
+            OBJECT_API_CATALOG_SERVICE,
+            OBJECT_API_REASON,
+            true,
+        )
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot ensure required service {OBJECT_API_CATALOG_SERVICE}: {error}"
+            ))
+        })?;
     }
     let (commit, archive) = snapshot(&root)?;
     // Reserve every platform coordinate before this submission can become the
@@ -1804,6 +1834,14 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+fn delivery_job_command(product: &str) -> &'static str {
+    if product == "stado" {
+        crate::constants::RELEASE_DELIVERY_JOB_COMMAND
+    } else {
+        crate::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
+    }
+}
+
 async fn run_deliveries(
     run: &mut ReleaseRun,
     m: &ReleasePipelineManifest,
@@ -1891,7 +1929,7 @@ async fn run_deliveries(
                 secret_env: secret_refs(&d.secret_env),
                 ..Default::default()
             };
-            let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
+            let command = delivery_job_command(&run.product).to_string();
             let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
             let job = jobs
                 .pop()
@@ -2403,7 +2441,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
     }
 
     if transaction.stage == RedeliveryStage::RunReopened {
-        let command = crate::constants::RELEASE_DELIVERY_JOB_COMMAND.to_string();
+        let command = delivery_job_command(&run.product).to_string();
         let job = submit_batch(std::slice::from_ref(&command), &options)
             .await?
             .pop()

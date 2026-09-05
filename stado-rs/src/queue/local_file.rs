@@ -60,6 +60,32 @@ impl LocalBackend {
         })
     }
 
+    /// Open a previously materialized local store without creating or repairing
+    /// any directory. Immutable recovery snapshots use this constructor so a
+    /// validator cannot turn an absent internal directory into evidence.
+    pub(crate) fn open_existing(root: &Path) -> Result<Self, StorageError> {
+        let root = normalize(root);
+        if !root.is_dir() || root.is_symlink() {
+            return Err(StorageError::Other(format!(
+                "immutable local snapshot is absent or unsafe: {}",
+                root.display()
+            )));
+        }
+        let locks = root.join(".locks");
+        let metadata = root.join(".metadata");
+        if !locks.is_dir() || locks.is_symlink() || !metadata.is_dir() || metadata.is_symlink() {
+            return Err(StorageError::Other(format!(
+                "immutable local snapshot has no safe internal layout: {}",
+                root.display()
+            )));
+        }
+        Ok(Self {
+            root,
+            locks,
+            metadata,
+        })
+    }
+
     /// Resolve a blob path against the deployment root, rejecting escapes
     /// (Python `ValueError("storage path escapes deployment root")`).
     fn path(&self, path: &str) -> Result<PathBuf, StorageError> {
@@ -111,19 +137,26 @@ impl LocalBackend {
         let parent = target.parent().ok_or_else(|| {
             StorageError::Other(format!("no parent directory for {}", target.display()))
         })?;
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)
+            .map_err(|error| local_io("create parent directory for", &target, error))?;
         let name = target.file_name().unwrap_or_default().to_string_lossy();
         let prefix = format!(".{}.", name.trim_start_matches('.'));
-        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)?;
-        tmp.write_all(data)?;
-        tmp.as_file().sync_all()?;
+        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)
+            .map_err(|error| local_io("create temporary file for", &target, error))?;
+        tmp.write_all(data)
+            .map_err(|error| local_io("write temporary file for", &target, error))?;
+        tmp.as_file()
+            .sync_all()
+            .map_err(|error| local_io("sync temporary file for", &target, error))?;
         match tmp.persist_noclobber(&target) {
             Ok(_) => {
-                File::open(parent)?.sync_all()?;
+                File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| local_io("sync parent directory for", &target, error))?;
                 Ok(true)
             }
             Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(err) => Err(err.error.into()),
+            Err(err) => Err(local_io("persist", &target, err.error)),
         }
     }
 
@@ -133,14 +166,22 @@ impl LocalBackend {
         let parent = target.parent().ok_or_else(|| {
             StorageError::Other(format!("no parent directory for {}", target.display()))
         })?;
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)
+            .map_err(|error| local_io("create parent directory for", target, error))?;
         let name = target.file_name().unwrap_or_default().to_string_lossy();
         let prefix = format!(".{}.", name.trim_start_matches('.'));
-        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)?;
-        tmp.write_all(data)?;
-        tmp.as_file().sync_all()?;
-        tmp.persist(target).map_err(|err| err.error)?;
-        File::open(parent)?.sync_all()?;
+        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)
+            .map_err(|error| local_io("create temporary file for", target, error))?;
+        tmp.write_all(data)
+            .map_err(|error| local_io("write temporary file for", target, error))?;
+        tmp.as_file()
+            .sync_all()
+            .map_err(|error| local_io("sync temporary file for", target, error))?;
+        tmp.persist(target)
+            .map_err(|error| local_io("persist", target, error.error))?;
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| local_io("sync parent directory for", target, error))?;
         Ok(())
     }
 
@@ -159,7 +200,8 @@ impl LocalBackend {
             .read(true)
             .append(true)
             .create(true)
-            .open(lock_path)?;
+            .open(&lock_path)
+            .map_err(|error| local_io("open lock", &lock_path, error))?;
         file.lock_exclusive()?;
         let result = f();
         // Python releases the lock in a finally block and would propagate an
@@ -202,6 +244,19 @@ impl LocalBackend {
             .filter(|rel| rel.starts_with(prefix))
             .collect())
     }
+}
+
+/// Preserve the operation and exact physical target for local I/O failures.
+///
+/// A bare `Permission denied (os error 13)` cannot distinguish an object body,
+/// its metadata sidecar, or its lock. The path here is the durable target the
+/// caller intended, even when the kernel refused creation of its temporary
+/// sibling first.
+fn local_io(action: &str, target: &Path, error: std::io::Error) -> StorageError {
+    StorageError::Other(format!(
+        "local storage {action} {}: {error}",
+        target.display()
+    ))
 }
 
 /// Lexical path normalization: resolve `.` and `..` without touching the

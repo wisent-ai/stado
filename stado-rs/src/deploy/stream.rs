@@ -21,13 +21,16 @@
 
 use serde_json::{json, Map, Value};
 
-use super::{host_channel, DeployError, Runner};
+use super::{host_channel, service, DeployError, Runner};
 use crate::stream::schema::{DisplayStream, DISPLAY, SUNSHINE_HTTPS_PORT};
 use crate::targets::ComputeTarget;
 
 const XORG_UNIT: &str = "stado-stream-xorg.service";
 const SUNSHINE_UNIT: &str = "stado-stream-sunshine.service";
+const XORG_PROGRAM: &str = "/usr/bin/Xorg";
+const SUNSHINE_PROGRAM: &str = "/usr/bin/sunshine";
 const XORG_CONFIG: &str = "/etc/X11/xorg.conf.d/10-stado-stream.conf";
+const SUNSHINE_CONFIG: &str = "/root/.config/sunshine/sunshine.conf";
 const CREDENTIAL_FILE: &str = "/root/.stado/stream-webui-credentials";
 
 fn report(target: &ComputeTarget, output: &super::CommandOutput, ok: &str) -> Value {
@@ -157,6 +160,107 @@ fn library_dir(target: &ComputeTarget) -> String {
         .unwrap_or_else(|| crate::stream::schema::DEFAULT_LIBRARY_DIR.to_string())
 }
 
+fn xorg_systemd_unit() -> String {
+    format!(
+        "[Unit]\n\
+         Description=Stado stream: X server on the declared board\n\
+         After=network-online.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={XORG_PROGRAM} {DISPLAY} -config {XORG_CONFIG} -noreset -novtswitch -sharevts\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    )
+}
+
+fn sunshine_systemd_unit(declaration: &DisplayStream) -> String {
+    let cuda_device = declaration.gpu_uuid.as_deref().unwrap_or("0");
+    format!(
+        "[Unit]\n\
+         Description=Stado stream: Sunshine encoding the session\n\
+         After={XORG_UNIT}\n\
+         Requires={XORG_UNIT}\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         Environment=DISPLAY={DISPLAY}\n\
+         Environment=HOME=/root\n\
+         # The screen lives on the declared board, but Sunshine's NVENC path opens the\n\
+         # driver's default device, so the first live session rendered on card 1 and\n\
+         # encoded on card 0. Binding the encoder keeps the whole session on one board,\n\
+         # which is the point of declaring one on a two-card host.\n\
+         Environment=CUDA_VISIBLE_DEVICES={cuda_device}\n\
+         ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display {DISPLAY} >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'\n\
+         # openbox does not daemonise, so it belongs in the background: as an\n\
+         # ExecStartPre it never returned and the unit sat in `activating` until the\n\
+         # start timeout, which reads exactly like a crash that never happened.\n\
+         ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable &'\n\
+         ExecStart={SUNSHINE_PROGRAM} {SUNSHINE_CONFIG}\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    )
+}
+
+/// Canonical managed-service declarations for the two native units installed
+/// by [`install`]. The exact systemd bodies are retained because the generic
+/// service renderer cannot express Sunshine's dependency and session prelude.
+pub fn managed_services(
+    target: &ComputeTarget,
+    declaration: &DisplayStream,
+    managed_since: &str,
+) -> [service::ManagedService; 2] {
+    let mut xorg = service::systemd_service(
+        &target.name,
+        XORG_UNIT,
+        &format!("/etc/systemd/system/{XORG_UNIT}"),
+        service::SOURCE_REGISTRY,
+        managed_since,
+    );
+    xorg.program = XORG_PROGRAM.to_string();
+    xorg.args = vec![
+        DISPLAY.to_string(),
+        "-config".to_string(),
+        XORG_CONFIG.to_string(),
+        "-noreset".to_string(),
+        "-novtswitch".to_string(),
+        "-sharevts".to_string(),
+    ];
+    xorg.systemd_unit = xorg_systemd_unit();
+
+    let mut sunshine = service::systemd_service(
+        &target.name,
+        SUNSHINE_UNIT,
+        &format!("/etc/systemd/system/{SUNSHINE_UNIT}"),
+        service::SOURCE_REGISTRY,
+        managed_since,
+    );
+    sunshine.program = SUNSHINE_PROGRAM.to_string();
+    sunshine.args = vec![SUNSHINE_CONFIG.to_string()];
+    sunshine.env = [
+        ("DISPLAY".to_string(), DISPLAY.to_string()),
+        ("HOME".to_string(), "/root".to_string()),
+        (
+            "CUDA_VISIBLE_DEVICES".to_string(),
+            declaration
+                .gpu_uuid
+                .clone()
+                .unwrap_or_else(|| "0".to_string()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    sunshine.systemd_unit = sunshine_systemd_unit(declaration);
+
+    [xorg, sunshine]
+}
+
 /// Reconcile the host to its declaration: packages, screen, session, Sunshine,
 /// units. Idempotent — an installed host reports what it already had.
 ///
@@ -224,6 +328,23 @@ fi
 exec 2>&1
 export DEBIAN_FRONTEND=noninteractive
 
+write_if_changed() {
+  local path="$1" candidate
+  candidate=$(mktemp "${path}.stado-stream.XXXXXX")
+  if ! cat >"$candidate"; then
+    rm -f "$candidate"
+    return 1
+  fi
+  file_changed=0
+  if [ -f "$path" ] && cmp -s "$candidate" "$path"; then
+    rm -f "$candidate"
+  else
+    chmod 0644 "$candidate"
+    mv -f "$candidate" "$path"
+    file_changed=1
+  fi
+}
+
 mkdir -p "LIBRARY_DIR"
 chmod 0755 "LIBRARY_DIR"
 
@@ -248,7 +369,7 @@ printf 'LIBRARY\t%s on %s, %s KiB free\n' 'LIBRARY_DIR' "$library_device" "$libr
 
 # The session, not a desktop: an X server, something to own the root window,
 # and the audio sink Sunshine records silence from when nothing plays.
-packages="xserver-xorg-core xserver-xorg-input-libinput xinit x11-xserver-utils openbox pulseaudio curl ca-certificates"
+packages="xserver-xorg-core xserver-xorg-input-libinput xinit x11-xserver-utils openbox pulseaudio curl ca-certificates jq"
 if [ -n "STEAM_PACKAGES" ]; then
   dpkg --add-architecture i386
   packages="$packages STEAM_PACKAGES"
@@ -258,16 +379,24 @@ fi
 # business bouncing anything else on the machine.
 export NEEDRESTART_MODE=l
 export NEEDRESTART_SUSPEND=1
-apt-get update -qq
-# shellcheck disable=SC2086
-if ! apt-get install -y -qq --no-install-recommends $packages; then
-  printf 'ERROR\tsession packages did not install\n' >&2
-  exit 1
+missing_packages=""
+for package in $packages; do
+  if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" != installed ]; then
+    missing_packages="$missing_packages $package"
+  fi
+done
+if [ -n "$missing_packages" ]; then
+  apt-get update -qq
+  # shellcheck disable=SC2086
+  if ! apt-get install -y -qq --no-install-recommends $missing_packages; then
+    printf 'ERROR\tsession packages did not install\n' >&2
+    exit 1
+  fi
 fi
 printf 'PACKAGES\tinstalled\n'
 
 install -d -m 0755 /etc/X11/xorg.conf.d
-cat >XORG_CONFIG <<'EOF'
+write_if_changed XORG_CONFIG <<'EOF'
 # Written by `stado stream apply`. A screen with no monitor: the driver is told
 # to invent one, and its size is the registry declaration.
 Section "ServerLayout"
@@ -302,6 +431,7 @@ Section "Screen"
     EndSubSection
 EndSection
 EOF
+xorg_changed=$file_changed
 printf 'XORG_CONFIG\tXORG_CONFIG\n'
 
 cache=/var/cache/stado-stream
@@ -324,6 +454,7 @@ fi
 printf 'SUNSHINE_DEB\t%s (digest verified)\n' "$deb"
 installed_version=$(dpkg-query -W -f='${Version}' sunshine 2>/dev/null || printf 'absent')
 printf 'SUNSHINE_INSTALLED\t%s\n' "$installed_version"
+sunshine_updated=0
 case "$installed_version" in
   *SUNSHINE_BARE_VERSION*) ;;
   *)
@@ -331,87 +462,51 @@ case "$installed_version" in
       printf 'ERROR\tthe pinned sunshine package does not satisfy this release; declare the artifact built for it\n' >&2
       exit 1
     fi
+    sunshine_updated=1
     ;;
 esac
 printf 'SUNSHINE\t%s\n' "$(sunshine --version 2>&1 | sed -n 1p)"
 
-# Web-UI credentials: generated here, so no secret crosses the control channel
-# or lands in this host's process table from outside. `stream pair` reads them
-# back on this host and nowhere else.
-install -d -m 0700 /root/.stado
-if [ ! -s CREDENTIAL_FILE ]; then
-  password=$(openssl rand -hex 24)
-  printf 'stado:%s\n' "$password" >CREDENTIAL_FILE
-  chmod 0600 CREDENTIAL_FILE
-fi
-user=$(cut -d: -f1 CREDENTIAL_FILE)
-secret=$(cut -d: -f2- CREDENTIAL_FILE)
-timeout 20 sunshine --creds "$user" "$secret" >/dev/null 2>&1 || printf 'CREDS\tsunshine refused the credential write; the web UI keeps its own\n'
-printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 
 install -d -m 0755 /root/.config/sunshine
-cat >/root/.config/sunshine/sunshine.conf <<'EOF'
+write_if_changed SUNSHINE_CONFIG <<'EOF'
 # Written by `stado stream apply`.
 origin_web_ui_allowed = lan
 address_family = both
 capture = x11
 encoder = nvenc
 EOF
+sunshine_changed=$file_changed
 
-cat >/etc/systemd/system/XORG_UNIT <<'EOF'
-[Unit]
-Description=Stado stream: X server on the declared board
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/Xorg DISPLAY_NUMBER -config XORG_CONFIG -noreset -novtswitch -sharevts
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+write_if_changed /etc/systemd/system/XORG_UNIT <<'EOF'
+XORG_UNIT_BODY
 EOF
+if [ "$file_changed" -eq 1 ]; then xorg_changed=1; fi
 
-cat >/etc/systemd/system/SUNSHINE_UNIT <<'EOF'
-[Unit]
-Description=Stado stream: Sunshine encoding the session
-After=XORG_UNIT
-Requires=XORG_UNIT
-
-[Service]
-Type=simple
-Environment=DISPLAY=DISPLAY_NUMBER
-Environment=HOME=/root
-# The screen lives on the declared board, but Sunshine's NVENC path opens the
-# driver's default device, so the first live session rendered on card 1 and
-# encoded on card 0. Binding the encoder keeps the whole session on one board,
-# which is the point of declaring one on a two-card host.
-Environment=CUDA_VISIBLE_DEVICES=CUDA_DEVICE
-ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display DISPLAY_NUMBER >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-# openbox does not daemonise, so it belongs in the background: as an
-# ExecStartPre it never returned and the unit sat in `activating` until the
-# start timeout, which reads exactly like a crash that never happened.
-ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable >/tmp/stado-stream-openbox.log 2>&1 &'
-ExecStart=/usr/bin/sunshine /root/.config/sunshine/sunshine.conf
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+write_if_changed /etc/systemd/system/SUNSHINE_UNIT <<'EOF'
+SUNSHINE_UNIT_BODY
 EOF
+if [ "$file_changed" -eq 1 ]; then sunshine_changed=1; fi
 
 systemctl daemon-reload
-# Restart, not `enable --now`: a unit that is already active keeps running the
-# old file, so a reconcile that rewrote the unit changed nothing. The first
-# version of this script rewrote the Sunshine unit with the encoder binding and
-# the session kept encoding on the other board.
-systemctl enable XORG_UNIT >/dev/null 2>&1 || true
-systemctl enable SUNSHINE_UNIT >/dev/null 2>&1 || true
-systemctl restart XORG_UNIT || true
-systemctl restart SUNSHINE_UNIT || true
+systemctl enable XORG_UNIT >/dev/null 2>&1
+systemctl enable SUNSHINE_UNIT >/dev/null 2>&1
+current_dimensions=$(DISPLAY=DISPLAY_NUMBER xdpyinfo 2>/dev/null | awk '/dimensions:/ { print $2 }' | sed -n 1p || true)
+if [ "$xorg_changed" -eq 1 ] || [ "$current_dimensions" != "WIDTHxHEIGHT" ]; then
+  systemctl restart XORG_UNIT
+  xorg_changed=1
+else
+  systemctl start XORG_UNIT
+fi
+if [ "$sunshine_changed" -eq 1 ] || [ "$sunshine_updated" -eq 1 ] || [ "$xorg_changed" -eq 1 ]; then
+  systemctl restart SUNSHINE_UNIT
+else
+  systemctl start SUNSHINE_UNIT
+fi
 sleep 10
-printf 'XORG\t%s\n' "$(systemctl is-active XORG_UNIT 2>&1 || true)"
+xorg_state=$(systemctl is-active XORG_UNIT 2>&1 || true)
+sunshine_state=$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)
+printf 'XORG\t%s\n' "$xorg_state"
 printf 'SESSION\t'
 if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
   # No early `exit` in awk: it closes the pipe, xdpyinfo takes SIGPIPE, and
@@ -420,11 +515,64 @@ if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
 else
   printf 'no display answered on DISPLAY_NUMBER\n'
 fi
-printf 'SUNSHINE_STATE\t%s\n' "$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)"
+printf 'SUNSHINE_STATE\t%s\n' "$sunshine_state"
 printf 'PORTS\t'
 ss -ltn 2>/dev/null | awk '$4 ~ /:479[89][0-9]$/ { printf "%s ", $4 }' || true
 printf '\n'
+if [ "$xorg_state" != active ] || [ "$sunshine_state" != active ]; then
+  journalctl -u XORG_UNIT -u SUNSHINE_UNIT -n 40 --no-pager
+  printf 'ERROR\tthe declared stream services did not become active\n'
+  exit 1
+fi
+dimensions=$(DISPLAY=DISPLAY_NUMBER xdpyinfo | awk '/dimensions:/ { print $2 }' | sed -n 1p)
+if [ "$dimensions" != "WIDTHxHEIGHT" ]; then
+  printf 'ERROR\tthe stream display reports %s, expected WIDTHxHEIGHT\n' "$dimensions"
+  exit 1
+fi
+
+# Initialize only a missing credential. The pinned Sunshine API accepts
+# initial setup, and the pending credential authenticates an interrupted setup
+# whose HTTP write succeeded before the local receipt was renamed.
+if [ ! -s CREDENTIAL_FILE ]; then
+  install -d -m 0700 /root/.stado
+  pending=CREDENTIAL_FILE.pending
+  if [ ! -s "$pending" ]; then
+    (umask 077; set -o noclobber; printf 'stado:%s\n' "$(openssl rand -hex 24)" >"$pending") ||
+      [ -s "$pending" ]
+  fi
+  credential_request=$(mktemp /root/.stado/stream-credentials.XXXXXX)
+  trap 'rm -f "$credential_request"' EXIT
+  jq -Rs '
+    rtrimstr("\n") | index(":") as $separator |
+    {currentUsername: .[:$separator], currentPassword: .[($separator + 1):]} |
+    . + {newUsername: .currentUsername, newPassword: .currentPassword,
+         confirmNewPassword: .currentPassword}
+  ' "$pending" >"$credential_request"
+  authorization=$(printf '%s' "$(cat "$pending")" | base64 -w0)
+  if ! response=$(
+    printf 'header = "Authorization: Basic %s"\n' "$authorization" |
+      curl --silent --show-error --insecure --fail-with-body --max-time 20 \
+        --config - --header 'Content-Type: application/json' \
+        --data-binary "@$credential_request" https://127.0.0.1:47990/api/password
+  ); then
+    printf 'ERROR\tSunshine credential initialization failed: %s\n' "$response"
+    exit 1
+  fi
+  if ! printf '%s' "$response" | jq -e '.status == true' >/dev/null; then
+    printf 'ERROR\tSunshine did not accept its initial credential: %s\n' "$response"
+    exit 1
+  fi
+  mv "$pending" CREDENTIAL_FILE
+  rm -f "$credential_request"
+  trap - EXIT
+fi
+printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 "#
+    .replace("XORG_UNIT_BODY", xorg_systemd_unit().trim_end())
+    .replace(
+        "SUNSHINE_UNIT_BODY",
+        sunshine_systemd_unit(declaration).trim_end(),
+    )
     .replace("LIBRARY_BLOCK", library_block)
     .replace("LIBRARY_DIR", &declaration.library_dir)
     .replace("STEAM_PACKAGES", steam_packages)
@@ -440,13 +588,10 @@ printf '\n'
     .replace("SUNSHINE_VERSION", &declaration.sunshine.version)
     .replace("SUNSHINE_URL", &declaration.sunshine.deb_url)
     .replace("SUNSHINE_SHA256", &declaration.sunshine.deb_sha256)
+    .replace("SUNSHINE_CONFIG", SUNSHINE_CONFIG)
     .replace("CREDENTIAL_FILE", CREDENTIAL_FILE)
     .replace("XORG_UNIT", XORG_UNIT)
     .replace("SUNSHINE_UNIT", SUNSHINE_UNIT)
-    .replace(
-        "CUDA_DEVICE",
-        declaration.gpu_uuid.as_deref().unwrap_or("0"),
-    )
     .replace("DISPLAY_NUMBER", DISPLAY);
     let output =
         host_channel::run_script_with_timeout(target, &script, install_timeout(), runner).await?;

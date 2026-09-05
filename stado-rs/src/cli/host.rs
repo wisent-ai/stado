@@ -30,13 +30,13 @@ pub(crate) async fn beacon_store() -> Result<crate::queue::JobStorage, CmdError>
     let gcs_backend = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
         == Some(crate::capabilities::StorageAdapter::Gcs);
     if !gcs_backend {
-        return Ok(crate::queue::JobStorage::new().await?);
+        return Ok(crate::queue::JobStorage::for_primary_reads().await?);
     }
     let bucket = crate::targets::GCS_REGISTRY_URI
         .split_once("//")
         .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
         .unwrap_or_default();
-    Ok(crate::queue::JobStorage::with_bucket(bucket).await?)
+    Ok(crate::queue::JobStorage::with_bucket_primary_reads(bucket).await?)
 }
 
 /// `stado host health TARGET [--json]` — show the latest Stado health
@@ -57,6 +57,168 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     }
     Ok(())
 }
+/// Read a fixed set of non-secret systemd properties for one exact unit.
+///
+/// The manager scope comes from the collector's own unit entry. A missing
+/// scope, command failure, or timeout is unread state and returns `None`.
+async fn local_systemd_properties(
+    manager: &str,
+    unit: &str,
+    properties: &str,
+    runner: &crate::deploy::Runner,
+) -> Option<BTreeMap<String, String>> {
+    let mut argv = vec!["/usr/bin/systemctl".to_string()];
+    match manager {
+        "system" => {}
+        "user" => argv.push("--user".to_string()),
+        _ => return None,
+    }
+    argv.extend([
+        "show".to_string(),
+        format!("--property={properties}"),
+        "--".to_string(),
+        unit.to_string(),
+    ]);
+    let mut spec = crate::deploy::CommandSpec::new(argv);
+    spec.timeout = Some(std::time::Duration::from_secs(2));
+    let output = runner(spec).await.ok()?;
+    if !output.ok() {
+        return None;
+    }
+    Some(
+        output
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect(),
+    )
+}
+
+/// Reconcile a collector's non-active systemd sample with native lifecycle
+/// evidence that exists at publication time.
+///
+/// A timer-triggered oneshot is not a continuously active service. It becomes
+/// `scheduled` only when systemd proves its type, an active trigger, and either
+/// an execution underway or a completed successful run. Ordinary services
+/// become `active` only when their own native state is active or reloading.
+/// Any unread or incomplete evidence leaves the collector's explicit
+/// non-active state untouched.
+async fn refresh_local_unit_lifecycle(document: &mut Value, runner: &crate::deploy::Runner) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let pending: Vec<(String, String, String)> = document
+        .get("units")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|units| units.iter())
+        .filter_map(|(unit, entry)| {
+            let fields = entry.as_object()?;
+            let state = fields.get("state").and_then(Value::as_str)?;
+            let manager = fields.get("manager").and_then(Value::as_str)?;
+            (state != "active").then(|| (unit.clone(), state.to_string(), manager.to_string()))
+        })
+        .collect();
+
+    for (unit, collector_state, manager) in pending {
+        let Some(properties) = local_systemd_properties(
+            &manager,
+            &unit,
+            "LoadState,ActiveState,Type,Result,ExecMainStatus,ExecMainStartTimestamp,TriggeredBy",
+            runner,
+        )
+        .await
+        else {
+            continue;
+        };
+        if properties.get("LoadState").map(String::as_str) != Some("loaded") {
+            continue;
+        }
+        let Some(native_state) = properties.get("ActiveState").map(String::as_str) else {
+            continue;
+        };
+
+        let triggers: Vec<String> = properties
+            .get("TriggeredBy")
+            .into_iter()
+            .flat_map(|value| value.split_whitespace())
+            .map(str::to_string)
+            .collect();
+        let oneshot = properties.get("Type").map(String::as_str) == Some("oneshot");
+        let scheduled_run = if oneshot && native_state == "activating" {
+            Some("running")
+        } else if oneshot
+            && properties.get("Result").map(String::as_str) == Some("success")
+            && properties.get("ExecMainStatus").map(String::as_str) == Some("0")
+            && properties
+                .get("ExecMainStartTimestamp")
+                .is_some_and(|stamp| !stamp.is_empty() && stamp != "n/a")
+            && matches!(native_state, "inactive" | "active" | "reloading")
+        {
+            Some("succeeded")
+        } else {
+            None
+        };
+        let mut active_trigger = None;
+        if scheduled_run.is_some() && !triggers.is_empty() {
+            for trigger in &triggers {
+                let Some(trigger_properties) =
+                    local_systemd_properties(&manager, trigger, "LoadState,ActiveState", runner)
+                        .await
+                else {
+                    continue;
+                };
+                let trigger_state = trigger_properties.get("ActiveState");
+                if trigger_properties.get("LoadState").map(String::as_str) == Some("loaded")
+                    && trigger_state.is_some_and(|state| {
+                        matches!(state.as_str(), "active" | "activating" | "reloading")
+                    })
+                {
+                    active_trigger = trigger_state.map(|state| (trigger.clone(), state.clone()));
+                    break;
+                }
+            }
+        }
+
+        let published_state = if active_trigger.is_some() && scheduled_run.is_some() {
+            "scheduled"
+        } else if !oneshot && matches!(native_state, "active" | "reloading") {
+            "active"
+        } else {
+            continue;
+        };
+        let Some(fields) = document
+            .get_mut("units")
+            .and_then(Value::as_object_mut)
+            .and_then(|units| units.get_mut(&unit))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        fields.insert("state".to_string(), json!(published_state));
+        fields.insert("collector_state".to_string(), json!(collector_state));
+        fields.insert("native_state".to_string(), json!(native_state));
+        if published_state == "scheduled" {
+            fields.insert("service_type".to_string(), json!("oneshot"));
+            fields.insert("run_state".to_string(), json!(scheduled_run));
+            fields.insert("triggered_by".to_string(), json!(triggers));
+            if scheduled_run == Some("succeeded") {
+                fields.insert("result".to_string(), json!("success"));
+                fields.insert("exec_main_status".to_string(), json!("0"));
+                fields.insert(
+                    "last_started_at".to_string(),
+                    json!(properties.get("ExecMainStartTimestamp")),
+                );
+            }
+            if let Some((trigger, trigger_state)) = active_trigger {
+                fields.insert("active_trigger".to_string(), json!(trigger));
+                fields.insert("trigger_state".to_string(), json!(trigger_state));
+            }
+        }
+    }
+}
+
 /// `stado host publish-beacon FILE [--print]` — publish a locally collected
 /// health document through the dedicated, route-scoped Stado control API.
 ///
@@ -118,8 +280,9 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     }
 
     if beacon_is_this_host(&host) {
-        let link =
-            crate::deploy::host_link::collect_link(&crate::deploy::production_runner()).await;
+        let runner = crate::deploy::production_runner();
+        refresh_local_unit_lifecycle(&mut document, &runner).await;
+        let link = crate::deploy::host_link::collect_link(&runner).await;
         if let Some(object) = document.as_object_mut() {
             object.insert("link".to_string(), serde_json::to_value(&link)?);
         }
@@ -932,6 +1095,7 @@ pub struct DiskCleanupPolicyEdit {
     pub cleaner_root: Vec<String>,
     pub clear_cleaner_root: Vec<String>,
     pub cleaner_min_age_seconds: Vec<String>,
+    pub cleaner_keep_newest: Vec<String>,
 }
 
 impl DiskCleanupPolicyEdit {
@@ -951,6 +1115,7 @@ impl DiskCleanupPolicyEdit {
             && self.cleaner_root.is_empty()
             && self.clear_cleaner_root.is_empty()
             && self.cleaner_min_age_seconds.is_empty()
+            && self.cleaner_keep_newest.is_empty()
     }
 }
 
@@ -977,7 +1142,7 @@ fn cleaner_pair(raw: &str, flag: &str) -> Result<(String, String), CmdError> {
 fn cleaner_age_floor(name: &str) -> i64 {
     match name {
         "huggingface_cache" => 3600,
-        "queue_workdirs" | "backup_twins" => 0,
+        "queue_workdirs" | "backup_twins" | "release_store" => 0,
         _ => 86400,
     }
 }
@@ -1148,6 +1313,22 @@ pub async fn disk_cleanup_policy(
                 CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
             })?
             .insert("min_age_seconds".to_string(), Value::from(seconds));
+    }
+    for raw in &edit.cleaner_keep_newest {
+        let (name, raw_count) = cleaner_pair(raw, "cleaner-keep-newest")?;
+        let count: i64 = raw_count.parse().map_err(|_| {
+            CmdError::usage(format!(
+                "--cleaner-keep-newest takes NAME=COUNT, got {raw:?}"
+            ))
+        })?;
+        enable(&name, cleaners);
+        cleaners
+            .get_mut(&name)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
+            })?
+            .insert("keep_newest".to_string(), Value::from(count));
     }
 
     entry.insert("disk_cleanup".to_string(), policy.clone());
@@ -1942,12 +2123,26 @@ const LINK_DEGRADED: &str = "degraded";
 /// know how this host is reachable" is the answer that sends an operator to
 /// look, and a guess is the answer that does not.
 const PATH_KIND_UNKNOWN: &str = "unknown";
-const HOST_HEALTH_BEACON_UNIT: &str = "com.wisent.host-health-beacon";
+const HOST_HEALTH_BEACON_UNIT_MACOS: &str = "com.wisent.host-health-beacon";
+const HOST_HEALTH_BEACON_UNIT_LINUX: &str = "stado-host-beacon.service";
 const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
 const HOST_HEALTH_LOG_LINES: u32 = 80;
 const OBJECT_API_SERVICE: &str = "stado-object-api";
 const LINK_REPAIR_WAIT_SECONDS: u64 = 90;
 const LINK_REPAIR_POLL_SECONDS: u64 = 5;
+/// The publisher unit this target actually runs.
+///
+/// Linux and macOS do not share a service namespace. Treating the launchd
+/// label as universal made a reachable Linux host's stale beacon diagnose as
+/// "no unit file" while systemd was recording the publisher's exit on every
+/// timer tick.
+fn host_health_beacon_unit(target: &ComputeTarget) -> &'static str {
+    if target.release_platform.starts_with("linux-") {
+        HOST_HEALTH_BEACON_UNIT_LINUX
+    } else {
+        HOST_HEALTH_BEACON_UNIT_MACOS
+    }
+}
 
 /// The beacon publisher's newest outcome, read from the managed unit's own
 /// declared log. A later successful host-name line supersedes an older error;
@@ -1955,7 +2150,11 @@ const LINK_REPAIR_POLL_SECONDS: u64 = 5;
 /// old cause forever.
 fn host_health_publisher_diagnosis(report: &UnitLogReport) -> Value {
     let lines = report.log.lines().collect::<Vec<_>>();
-    let last_success = lines.iter().rposition(|line| line.trim() == report.target);
+    let journal_success = format!(": {}", report.target);
+    let last_success = lines.iter().rposition(|line| {
+        let line = line.trim();
+        line == report.target || line.ends_with(&journal_success)
+    });
     let last_error = lines
         .iter()
         .rposition(|line| line.contains("Error:") || line.contains(HOST_HEALTH_AUTH_UNAVAILABLE));
@@ -2133,17 +2332,11 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // carries the cause an operator previously had to discover with a second
     // command.
     let beacon_publisher = if stale && ssh_reachable {
-        match collect_unit_log(
-            resolved,
-            HOST_HEALTH_BEACON_UNIT,
-            HOST_HEALTH_LOG_LINES,
-            &runner,
-        )
-        .await
-        {
+        let publisher_unit = host_health_beacon_unit(resolved);
+        match collect_unit_log(resolved, publisher_unit, HOST_HEALTH_LOG_LINES, &runner).await {
             Ok(report) => Some(host_health_publisher_diagnosis(&report)),
             Err(error) => Some(json!({
-                "unit": HOST_HEALTH_BEACON_UNIT,
+                "unit": publisher_unit,
                 "code": "diagnostic_unavailable",
                 "detail": error.to_string(),
                 "repairable": false,
@@ -2530,7 +2723,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
     let runner = crate::deploy::production_runner();
     let publisher_log = collect_unit_log(
         &resolved,
-        HOST_HEALTH_BEACON_UNIT,
+        host_health_beacon_unit(&resolved),
         HOST_HEALTH_LOG_LINES,
         &runner,
     )
@@ -2868,8 +3061,9 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 }
 
 /// `stado host inventory TARGET [--json]` — the stado-managed binaries,
-/// forward markers and loopback listeners of TARGET, and the verdict on
-/// whether each marker still matches a live listener.
+/// fixed Cargo-home metadata and bin membership, forward markers and loopback
+/// listeners of TARGET, and the verdict on whether each marker still matches
+/// a live listener.
 ///
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
@@ -2965,7 +3159,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 }
 
 /// `stado host declare-version TARGET --binary B --version V` — say what a
-/// host must run.
+/// host must run. `--unset` removes that one declaration.
 ///
 /// `managed_versions` is the declaration every version verdict is measured
 /// against, and nothing wrote it: `host inventory` compared each host's
@@ -2976,15 +3170,32 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 pub async fn declare_version(
     target: &str,
     binary: &str,
-    version: &str,
+    version: Option<&str>,
+    unset: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     let binary = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let version = version.trim();
-    if version.is_empty() {
-        return Err(CmdError::usage("--version must name an exact version"));
-    }
+    let version = match (version, unset) {
+        (Some(_), true) => {
+            return Err(CmdError::usage(
+                "--version and --unset cannot be used together",
+            ));
+        }
+        (None, false) => {
+            return Err(CmdError::usage(
+                "one of --version or --unset must be provided",
+            ));
+        }
+        (Some(version), false) => {
+            let version = version.trim();
+            if version.is_empty() {
+                return Err(CmdError::usage("--version must name an exact version"));
+            }
+            Some(version)
+        }
+        (None, true) => None,
+    };
     let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let targets = document
         .get_mut("targets")
@@ -2997,23 +3208,53 @@ pub async fn declare_version(
             (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
         })
         .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
-    let versions = entry
-        .entry("managed_versions".to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
-    versions.insert(binary.name.to_string(), json!(version));
-    let generation = super::registry::push_document_if(&document, &expected_generation).await?;
+
+    if let Some(version) = version {
+        let versions = entry
+            .entry("managed_versions".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+        versions.insert(binary.name.to_string(), json!(version));
+        let generation = super::registry::push_document_if(&document, &expected_generation).await?;
+        if json {
+            print_json(&json!({
+                "target": target,
+                "binary": binary.name,
+                "version": version,
+                "generation": generation,
+            }));
+            return Ok(());
+        }
+        println!("{target}: {} declared at {version}", binary.name);
+        return Ok(());
+    }
+
+    let removed = match entry.get_mut("managed_versions") {
+        None => false,
+        Some(versions) => versions
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?
+            .remove(&binary.name)
+            .is_some(),
+    };
+    let generation = if removed {
+        super::registry::push_document_if(&document, &expected_generation).await?
+    } else {
+        expected_generation
+    };
     if json {
         print_json(&json!({
             "target": target,
             "binary": binary.name,
-            "version": version,
+            "removed": removed,
             "generation": generation,
         }));
-        return Ok(());
+    } else if removed {
+        println!("{target}: {} declaration removed", binary.name);
+    } else {
+        println!("{target}: {} declaration is already absent", binary.name);
     }
-    println!("{target}: {} declared at {version}", binary.name);
     Ok(())
 }
 
@@ -3425,6 +3666,91 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect::<Vec<Vec<String>>>(),
+    );
+
+    // The fixed Cargo paths and their children are part of the same typed
+    // report in JSON and text. Keeping the table here avoids a second
+    // filesystem reader that could drift from the JSON document.
+    let cargo = report.get("cargo").and_then(Value::as_object);
+    let cargo_roots = [("$HOME/.cargo", "home"), ("$HOME/.cargo/bin", "bin")]
+        .iter()
+        .filter_map(|(path, key)| {
+            cargo.and_then(|value| value.get(*key)).map(|metadata| {
+                vec![
+                    (*path).to_string(),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+        })
+        .collect::<Vec<Vec<String>>>();
+    super::table::print(
+        &[
+            "CARGO PATH",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_roots,
+    );
+    let cargo_entries = cargo
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    super::table::print(
+        &[
+            "CARGO BIN ENTRY",
+            "NAME STATE",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_entries
+            .iter()
+            .map(|metadata| {
+                vec![
+                    cell(metadata.get("name")),
+                    cell(metadata.get("name_state")),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+    println!(
+        "Cargo bin membership: state={} listed={} seen={} entries_complete={} complete={}",
+        cell(cargo.and_then(|value| value.get("entries_state"))),
+        cargo_entries.len(),
+        cell(cargo.and_then(|value| value.get("entries_seen"))),
+        cell(cargo.and_then(|value| value.get("entries_complete"))),
+        cell(cargo.and_then(|value| value.get("complete"))),
     );
 
     let markers = section("forwards");
@@ -7315,8 +7641,12 @@ async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdErro
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout =
-        remote_config_output(&canonical, None, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Show,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
             "object_verifier_reconcile_host_declaration_unreadable: {error}"
@@ -7344,33 +7674,96 @@ pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Resul
     render_verifier_report(&report, json_output)
 }
 
-/// Reconcile one product's release verifier dependency on TARGET.
-pub async fn reconcile_release_verifier(
-    target: &str,
-    product: &str,
-    json_output: bool,
+fn release_publisher_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
+    let publishers = document
+        .pointer("/resolved/release_api_publishers")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            CmdError::click(
+                "release_verifier_reconcile_host_declaration_unreadable: remote config has no resolved release_api_publishers",
+            )
+        })?;
+    publishers
+        .iter()
+        .map(|(product, declaration)| {
+            let item = declaration
+                .get("item")
+                .and_then(Value::as_str)
+                .filter(|item| !item.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "release_verifier_reconcile_host_declaration_unreadable: product {product:?} has no item"
+                    ))
+                })?;
+            Ok((product.clone(), item.to_string()))
+        })
+        .collect()
+}
+
+fn ensure_release_verifier_declarations_match(
+    host: &BTreeMap<String, String>,
+    local: &BTreeMap<String, String>,
 ) -> Result<(), CmdError> {
+    let missing = host
+        .iter()
+        .filter(|(product, item)| local.get(*product) != Some(*item))
+        .map(|(product, item)| format!("{product}={item}"))
+        .collect::<Vec<_>>();
+    let unexpected = local
+        .iter()
+        .filter(|(product, item)| host.get(*product) != Some(*item))
+        .map(|(product, item)| format!("{product}={item}"))
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "release_verifier_reconcile_declaration_mismatch: local release_api.publishers cannot \
+         prove TARGET's declaration (missing_local=[{}], unexpected_local=[{}]); copy the \
+         host's exact publisher declarations locally before reconciling",
+        missing.join(","),
+        unexpected.join(",")
+    )))
+}
+
+/// Reconcile the release verifier on TARGET to every configured publisher.
+pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         CmdError::click(format!(
             "invalid release_api.publishers: {}",
             problems.join("; ")
         ))
     })?;
-    let publisher = publishers.get(product).ok_or_else(|| {
+    let local = publishers
+        .iter()
+        .map(|(product, publisher)| (product.clone(), publisher.item().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let items = local.values().cloned().collect::<BTreeSet<_>>();
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Show,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
+    let document: Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
-            "release_api.publishers declares no publisher for {product:?}"
+            "release_verifier_reconcile_host_declaration_unreadable: {error}"
         ))
     })?;
-    let items = std::collections::BTreeSet::from([publisher.item().to_string()]);
+    let host = release_publisher_items(&document)?;
+    ensure_release_verifier_declarations_match(&host, &local)?;
     let report = reconcile_verifier(
         target,
         "release",
-        &format!("release_api.publishers.{product}"),
+        "matching local and target release_api.publishers",
         crate::config::RELEASE_API_VERIFIER_CONSUMER,
         "WC_RELEASE_SKARBIEC_TOKEN_FILE",
         "stado-release-api-verifier-skarbiec-token",
         items,
-        false,
+        true,
     )
     .await?;
     render_verifier_report(&report, json_output)
@@ -7996,18 +8389,44 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The fixed-script channel transports the checked-in helper verbatim. Its
-/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation; object recovery itself mutates only a listener whose
-/// authenticated protected read is unavailable.
+/// Storage authority changes belong to the resident storage-root transaction.
+/// This narrower repair shares its lock and never copies a backing store.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let script = format!(
+        r#"set -eu
+/usr/bin/python3 - <<'PY'
+import base64, fcntl, os, subprocess, sys
+work = os.path.join(os.path.expanduser("~"), ".stado", "recovery")
+os.makedirs(work, mode=0o700, exist_ok=True)
+descriptor = os.open(
+    os.path.join(work, "storage-root-reconcile.lock"),
+    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+    0o600,
+)
+with os.fdopen(descriptor, "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("storage authority recovery is already running on this host")
+    result = subprocess.run(
+        ["/bin/bash"],
+        input=base64.b64decode("{}"),
+        pass_fds=(lock.fileno(),),
+        check=False,
+    )
+    sys.exit(result.returncode)
+PY"#,
+        STANDARD.encode(include_str!("../../../deploy/recover_object_api.sh")),
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
-        include_str!("../../../deploy/recover_object_api.sh"),
-        std::time::Duration::from_secs(240),
+        &script,
+        std::time::Duration::from_secs(300),
         runner,
     )
     .await
@@ -8044,6 +8463,65 @@ pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), C
     Ok(())
 }
 
+/// Repair the release-catalog ownership fault on the object API authority.
+///
+/// This is a separate operation from [`recover_object_api`]: the listener is
+/// healthy and authorized, but its local backend cannot replace one existing
+/// catalog object because root created that coordinate's directories. The
+/// fixed helper validates each source owner before changing it and has no
+/// operator-supplied path, so the repair cannot widen into a recursive chown of
+/// the store.
+pub async fn repair_release_store(
+    target: &str,
+    product: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if !crate::release_control::identifier(product) {
+        return Err(CmdError::usage(
+            "product must be a canonical release identifier",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!(
+        "export STADO_RELEASE_STORE_PRODUCT={}\n{}",
+        crate::deploy::shlex_quote(product),
+        include_str!("../../../deploy/repair_release_store.sh")
+    );
+    let repaired = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !repaired.ok() {
+        return Err(CmdError::click(format!(
+            "{}: release store repair failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&repaired, "remote command failed")
+        )));
+    }
+    let detail = repaired.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "repaired",
+                "scope": format!("stado://system/release-catalog/{product}.json"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// Authorize TARGET's service resolver on the service-directory authority.
 pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(), CmdError> {
     let report = crate::deploy::host_resolver_key::authorize(target)
@@ -8062,27 +8540,6 @@ pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(
         );
     }
     Ok(())
-}
-
-/// One declared log path out of a unit plist: `StandardOutPath` or
-/// `StandardErrorPath`, or nothing when the plist does not declare it.
-/// PlistBuddy writes its "does not exist" to stderr and prints nothing, so a
-/// failed read is simply no path.
-async fn unit_log_path(
-    resolved: &ComputeTarget,
-    key: &str,
-    plist: &str,
-    runner: &crate::deploy::Runner,
-) -> Result<Option<String>, CmdError> {
-    let output = crate::deploy::host_channel::run_program(
-        resolved,
-        &["/usr/libexec/PlistBuddy", "-c", key, plist],
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    let declared = output.stdout.trim();
-    Ok((output.ok() && !declared.is_empty()).then(|| declared.to_string()))
 }
 
 /// One collected managed-unit log, before the CLI or a higher-level
@@ -8107,98 +8564,40 @@ impl UnitLogReport {
     }
 }
 
-/// Collect a managed unit's declared logs without rendering them.
+/// Collect a managed unit's logs through the service subsystem's shared
+/// platform reader.
 ///
-/// `host unit-log` and higher-level diagnostics share this collector so the
-/// first one never knows a failure sentence the second one cannot see.
+/// `service logs`, `host unit-log`, and higher-level diagnostics must resolve
+/// launchd files and systemd scopes identically. The old implementation was a
+/// second, Darwin-only reader: on Linux it searched three `Library`
+/// directories and never reached the journal that held the failure.
 async fn collect_unit_log(
     resolved: &ComputeTarget,
     unit: &str,
     lines: u32,
     runner: &crate::deploy::Runner,
 ) -> Result<UnitLogReport, CmdError> {
-    let home = crate::deploy::host_channel::remote_home(resolved, runner)
+    let tail = crate::deploy::service::tail_unit_logs(resolved, unit, "", lines as usize, runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    // The unit file is found, never guessed: the daemon directory first, then
-    // both agent directories, exactly the retired reader's search order.
-    let mut plist = None;
-    for candidate in [
-        format!("/Library/LaunchDaemons/{unit}.plist"),
-        format!("{home}/Library/LaunchAgents/{unit}.plist"),
-        format!("/Library/LaunchAgents/{unit}.plist"),
-    ] {
-        if crate::deploy::host_channel::remote_test(
-            resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
-            runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            plist = Some(candidate);
-            break;
-        }
-    }
-    let Some(plist) = plist else {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
-             directories",
-            resolved.name
-        )));
-    };
-
-    let mut sources = vec![json!({"kind": "plist", "path": plist})];
-    let mut body = String::new();
-
-    // One reader for both keys: a unit that sends stdout and stderr to the
-    // same file must not be tailed twice, and a unit that separates them must
-    // not have half of its account silently dropped.
-    let out_path = unit_log_path(resolved, "Print :StandardOutPath", &plist, runner).await?;
-    let err_path = unit_log_path(resolved, "Print :StandardErrorPath", &plist, runner).await?;
-    let mut declared: Vec<String> = Vec::new();
-    if let Some(path) = &out_path {
-        declared.push(path.clone());
-    }
-    if let Some(path) = &err_path {
-        if out_path.as_ref() != Some(path) {
-            declared.push(path.clone());
-        }
-    }
-    if declared.is_empty() {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: {unit} declares no log path",
-            resolved.name
-        )));
-    }
-
-    for log in &declared {
-        if crate::deploy::host_channel::remote_test(
-            resolved,
-            &format!("-f {}", crate::deploy::shlex_quote(log)),
-            runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        {
-            sources.push(json!({"kind": "file", "path": log}));
-            body.push_str(&format!("=== {log} (last {lines} lines)\n"));
-            let tail = crate::deploy::host_channel::run_program(
-                resolved,
-                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
-                runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-            if tail.ok() {
-                body.push_str(&tail.stdout);
-            } else {
-                body.push_str("    unreadable\n");
-            }
+    let source = |origin: &str| {
+        let kind = if origin.starts_with("journalctl ") {
+            "journal"
         } else {
-            sources.push(json!({"kind": "absent", "path": log}));
-            body.push_str(&format!("=== {log} (absent)\n"));
+            "file"
+        };
+        json!({"kind": kind, "path": origin})
+    };
+    let mut declared = vec![source(&tail.origin)];
+    let mut log = tail.body;
+    if let Some(error_origin) = tail.error_origin {
+        declared.push(source(&error_origin));
+        if !tail.error_body.is_empty() {
+            if !log.is_empty() && !log.ends_with('\n') {
+                log.push('\n');
+            }
+            log.push_str(&tail.error_body);
         }
     }
 
@@ -8206,13 +8605,13 @@ async fn collect_unit_log(
         target: resolved.name.clone(),
         unit: unit.to_string(),
         lines,
-        declared: sources,
-        log: body.trim_end().to_string(),
+        declared,
+        log: log.trim_end().to_string(),
     })
 }
 
-/// The tail of one managed unit's own log, from the paths its unit file
-/// declares.
+/// The tail of one managed unit's own log, through the same platform reader as
+/// `stado service logs`.
 ///
 /// A unit that crash-loops states why in its log and nowhere else: the health
 /// beacon reports `failed` with an empty `last_log`, `service status` reports
@@ -8226,10 +8625,10 @@ pub async fn unit_log(
     lines: Option<u32>,
     json: bool,
 ) -> Result<(), CmdError> {
-    // A unit label is a reverse-DNS name; it names the plist files this reads,
-    // so it is checked before it gets there.
+    // The unit id becomes a fixed word in the shared launchd/systemd reader,
+    // so reject anything that is not a single safe unit name first.
     vault_word("unit label", unit)?;
-    let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
+    let lines = lines.unwrap_or(40).clamp(u32::from(true), 200_000);
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8949,8 +9348,8 @@ pub async fn weles_browser_runtime(
     let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    // One set decides both what is judged and what a repair installs, so the
-    // verdict can never fail on something --repair would not have fixed.
+    // This set decides required_state and what a repair installs. Browser-engine
+    // readiness is measured separately and its refusal names an explicit engine.
     let required: Vec<String> = if components.is_empty() {
         vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
     } else {
@@ -8978,8 +9377,10 @@ pub async fn weles_browser_runtime(
         object.insert("repaired".to_string(), serde_json::json!(installed));
         println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
     } else {
-        println!("host:     {}", resolved.name);
-        println!("runtime:  {}", report.verdict());
+        println!("host:           {}", resolved.name);
+        println!("runtime:        {}", report.verdict());
+        println!("required state: {}", report.required_state());
+        println!("browser engine: {}", report.browser_engine_state());
         for line in &installed {
             println!("repair:   {line}");
         }
@@ -10240,21 +10641,43 @@ const PRIMARY_ROOT: &str = ".stado/local-storage";
 /// the deletion — and they did move on this host, twice, in one evening.
 pub async fn backup_audit(
     target: &str,
+    object_uris: &[String],
+    inventory_namespaces: &[String],
     reclaim_twins: bool,
     apply: bool,
     json: bool,
 ) -> Result<(), CmdError> {
+    if (!object_uris.is_empty() || !inventory_namespaces.is_empty()) && (reclaim_twins || apply) {
+        return Err(CmdError::click(
+            "exact object inspection is read-only and cannot reclaim backup objects",
+        ));
+    }
     let namespace = crate::config::wc_stado_storage_namespace();
-    if namespace.trim().is_empty() {
+    if namespace.trim().is_empty() && object_uris.is_empty() && inventory_namespaces.is_empty() {
         return Err(CmdError::click(
             "this control plane has no storage.stado.namespace, so a replica path cannot be \
              resolved to a primary address",
         ));
     }
+    let objects = object_uris
+        .iter()
+        .map(|uri| {
+            crate::object_store::ObjectRef::parse(uri)
+                .map(|object| object.storage_path())
+                .map_err(|error| CmdError::click(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for namespace in inventory_namespaces {
+        crate::object_store::ObjectRef::new(namespace, "inventory")
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+    let inventory_namespaces = inventory_namespaces.to_vec();
     let plan = crate::deploy::host_backup_audit::AuditPlan {
         namespace: namespace.to_string(),
         backup_root: BACKUP_ROOT.to_string(),
         primary_root: PRIMARY_ROOT.to_string(),
+        objects,
+        inventory_namespaces,
         reclaim: reclaim_twins,
         apply,
     };
@@ -10274,11 +10697,53 @@ pub async fn backup_audit(
                 )
             })
             .collect();
+        let render_object = |object: &crate::deploy::host_backup_audit::ObjectComparison| {
+            json!({
+                "path": object.path,
+                // These names identify the two fixed physical roots. They
+                // deliberately do not claim which one is authoritative.
+                "local_storage": {
+                    "state": object.primary.state,
+                    "bytes": object.primary.bytes,
+                    "sha256": object.primary.sha256,
+                },
+                "local_backup": {
+                    "state": object.backup.state,
+                    "bytes": object.backup.bytes,
+                    "sha256": object.backup.sha256,
+                },
+                "metadata": {
+                    "local_storage": {
+                        "state": object.primary_metadata.state,
+                        "bytes": object.primary_metadata.bytes,
+                        "sha256": object.primary_metadata.sha256,
+                    },
+                    "local_backup": {
+                        "state": object.backup_metadata.state,
+                        "bytes": object.backup_metadata.bytes,
+                        "sha256": object.backup_metadata.sha256,
+                    },
+                },
+            })
+        };
+        let objects = audit.objects.iter().map(render_object).collect::<Vec<_>>();
+        let inventory_objects = audit
+            .inventory_objects
+            .iter()
+            .map(render_object)
+            .collect::<Vec<_>>();
         print_json(&json!({
             "host": audit.host,
             "complete": audit.complete,
             "unavailable": audit.unavailable,
             "classes": classes,
+            "objects": objects,
+            "inventory_objects": inventory_objects,
+            "namespace_inventory": {
+                "complete": audit.namespace_inventory_complete,
+                "local_storage": audit.namespaces.get("local_storage").cloned().unwrap_or_default(),
+                "local_backup": audit.namespaces.get("local_backup").cloned().unwrap_or_default(),
+            },
             "reclaimable_bytes": audit.reclaimable_bytes(),
             "retained_bytes": audit.retained_bytes(),
             "reclaim": {
@@ -10296,6 +10761,99 @@ pub async fn backup_audit(
             "free_kb_before": audit.free_kb_before,
             "free_kb_after": audit.free_kb_after,
         }));
+        return Ok(());
+    }
+    if !audit.inventory_objects.is_empty() {
+        println!(
+            "namespace inventory: complete={} local-storage=[{}] local-backup=[{}]",
+            audit.complete,
+            audit
+                .namespaces
+                .get("local_storage")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+            audit
+                .namespaces
+                .get("local_backup")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+        );
+        for object in &audit.inventory_objects {
+            println!(
+                "{} local-storage={}({}) local-backup={}({}) metadata={}/{}",
+                object.path,
+                object.primary.state,
+                object
+                    .primary
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.backup.state,
+                object
+                    .backup
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.primary_metadata.state,
+                object.backup_metadata.state,
+            );
+        }
+        if !audit.complete {
+            return Err(CmdError::click(audit.unavailable.unwrap_or_else(|| {
+                "namespace inventory did not complete".to_string()
+            })));
+        }
+        return Ok(());
+    }
+    if !audit.objects.is_empty() {
+        println!(
+            "namespaces: complete={} local-storage=[{}] local-backup=[{}]",
+            audit.namespace_inventory_complete,
+            audit
+                .namespaces
+                .get("local_storage")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+            audit
+                .namespaces
+                .get("local_backup")
+                .map(|names| names.join(","))
+                .unwrap_or_default(),
+        );
+        for object in &audit.objects {
+            println!("{}", object.path);
+            for (name, identity) in [
+                ("local-storage", &object.primary),
+                ("local-backup", &object.backup),
+            ] {
+                println!(
+                    "  {name}: state={} bytes={} sha256={}",
+                    identity.state,
+                    identity
+                        .bytes
+                        .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                    identity.sha256.as_deref().unwrap_or("-"),
+                );
+            }
+            println!(
+                "  metadata: local-storage state={} bytes={} sha256={}; local-backup state={} bytes={} sha256={}",
+                object.primary_metadata.state,
+                object
+                    .primary_metadata
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.primary_metadata.sha256.as_deref().unwrap_or("-"),
+                object.backup_metadata.state,
+                object
+                    .backup_metadata
+                    .bytes
+                    .map_or_else(|| "-".to_string(), |bytes| bytes.to_string()),
+                object.backup_metadata.sha256.as_deref().unwrap_or("-"),
+            );
+        }
+        if !audit.complete {
+            return Err(CmdError::click(
+                "the host did not complete exact backup-object inspection",
+            ));
+        }
         return Ok(());
     }
     for class in [
@@ -10368,6 +10926,95 @@ pub async fn backup_audit(
         );
     }
     Ok(())
+}
+/// Create or apply one durable, source-preserving reconciliation of the two
+/// fixed physical local-store roots on a host.
+pub async fn storage_root_reconcile(
+    target: &str,
+    transaction: &str,
+    phase: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let report =
+        crate::deploy::host_storage_reconcile::reconcile_host(target, transaction, phase, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        print_json(&report);
+    } else {
+        println!(
+            "{} storage-root reconciliation {}: {}",
+            target,
+            transaction,
+            report
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("failed")
+        );
+        if let Some(path) = report.pointer("/receipt/snapshot").and_then(Value::as_str) {
+            println!("checkpoint: {path}");
+        }
+        if let Some(count) = report
+            .pointer("/receipt/verified_objects")
+            .and_then(Value::as_u64)
+        {
+            println!("verified objects: {count}");
+        }
+    }
+    // Mutating phases only acknowledge that the target-native owner was
+    // accepted. Their terminal result remains the durable STATUS receipt.
+    // Keep STATUS on the ordinary completed-report convention.
+    report_outcome(&report, if phase == "status" { "ok" } else { "accepted" })
+}
+pub async fn storage_root_reconcile_worker(
+    target: &str,
+    target_config: &str,
+    transaction: &str,
+    phase: &str,
+    source_revision: &str,
+    tool_sha256: &str,
+    runner_gate: &str,
+) -> Result<(), CmdError> {
+    use base64::Engine;
+
+    let decode = |label: &str, encoded: &str| {
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| CmdError::click(format!("invalid resident {label}: {error}")))
+    };
+    let target_config = serde_json::from_slice::<crate::targets::ComputeTarget>(&decode(
+        "target config",
+        target_config,
+    )?)
+    .map_err(|error| CmdError::click(format!("invalid resident target config: {error}")))?;
+    if target_config.name != target {
+        return Err(CmdError::click(
+            "resident target config belongs to another target",
+        ));
+    }
+    let runner_gate = if runner_gate.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_slice::<Value>(&decode("runner gate", runner_gate)?).map_err(
+                |error| CmdError::click(format!("invalid resident runner gate: {error}")),
+            )?,
+        )
+    };
+    let runner = crate::deploy::production_runner();
+    crate::deploy::host_storage_reconcile::reconcile_host_worker(
+        target_config,
+        transaction,
+        phase,
+        source_revision,
+        tool_sha256,
+        runner_gate,
+        &runner,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| CmdError::click(error.to_string()))
 }
 
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
@@ -10979,7 +11626,7 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
 /// Read the effective configuration on a fleet host using the same installed
 /// Stado binary and config path its services consume.
 pub async fn config_show(target: &str) -> Result<(), CmdError> {
-    remote_config(target, None).await
+    remote_config(target, RemoteConfigAction::Show).await
 }
 
 /// Persist one configuration field on a fleet host. Values travel base64
@@ -10998,18 +11645,152 @@ pub async fn config_set(
             "configuration key must be a non-empty dotted name",
         ));
     }
-    remote_config(target, Some((key, value))).await?;
+    // Before the write, not after: a declaration whose item does not exist
+    // closes the host's release publication boundary the moment the unit
+    // reloads, and the cheapest place to say so is here.
+    refuse_unminted_publisher(target, key, value).await?;
+    remote_config(target, RemoteConfigAction::Set { key, value }).await?;
     warn_unbacked_object_namespace(target, key, value);
     warn_unbacked_verifier_item(target, key, value);
     if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(
-            service,
-            target,
-            &format!("managed configuration {key} changed"),
-        )
-        .await?;
+        super::service::reconcile_after_config_change(service, target).await?;
     }
     Ok(())
+}
+
+/// Retract one configuration key from a fleet host.
+///
+/// Setting a declaration to `null` is not a retraction: a key present with a
+/// null value and a key that is absent read alike through `jq` and differently
+/// through the code that iterates the object, which is how a publisher nobody
+/// meant to declare kept being counted.
+pub async fn config_unset(
+    target: &str,
+    key: &str,
+    reload_service: Option<&str>,
+) -> Result<(), CmdError> {
+    if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
+        return Err(CmdError::click(
+            "configuration key must be a non-empty dotted name",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!(
+        "set -euo pipefail\n\
+         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+         binary=\"$HOME/.stado/bin/stado\"\n\
+         test -x \"$binary\"\n\
+         key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+         \"$binary\" config unset \"$key\"\n\
+         \"$binary\" config show\n",
+        STANDARD.encode(key.as_bytes())
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        // The host's own sentence, not just its last line: `stado config
+        // unset` prints why it refused and a tracing banner after it, so
+        // reporting the last line reports the banner and loses the reason.
+        let detail = output.detail().trim().to_string();
+        return Err(CmdError::click(if detail.is_empty() {
+            "remote Stado configuration command failed".to_string()
+        } else {
+            detail
+        }));
+    }
+    print!("{}", output.stdout);
+    if let Some(service) = reload_service {
+        super::service::reconcile_after_config_change(service, &resolved.name).await?;
+    }
+    Ok(())
+}
+
+/// Refuse a publisher declaration whose Skarbiec item the host does not hold.
+///
+/// `release_api.publishers.<product>` names an item the host's release verifier
+/// must be able to read. The host computes its grant's item set from that
+/// declaration and compares the two as sets, so one declaration whose item was
+/// never minted takes the WHOLE release publication boundary down: every
+/// `/api/object` read of a `system/release-catalog/*` key then answers 401 or
+/// 503, for every product, including the ones publishing perfectly.
+///
+/// That happened on `charless-mac-mini`: `weles-client` and
+/// `wisent-cost-tracker` were declared with no
+/// `weles-client-release-publisher` or `wisent-cost-tracker-release-publisher`
+/// in the vault, and the boundary reported
+/// `release verifier grant item set mismatch (missing=[...], unexpected=[...])`
+/// on the host and nowhere an operator was looking. A publisher declaration
+/// whose item does not exist is the defect, never the missing item: mint the
+/// item first, then declare it.
+async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Result<(), CmdError> {
+    let Some(product) = key.strip_prefix("release_api.publishers.") else {
+        return Ok(());
+    };
+    if product.is_empty() || product.contains('.') {
+        return Ok(());
+    }
+    let Some(item) = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|declared| {
+            declared
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+    else {
+        return Ok(());
+    };
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: the vault path could not be read, so it cannot be said whether {item} exists: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let vault = environment.stdout.trim().to_string();
+    if vault.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: the vault path is empty",
+            resolved.name
+        )));
+    }
+    let record = read_vault_phase(&resolved, &vault, &item, &runner)
+        .await
+        .map_err(CmdError::click)?;
+    if record.state != "absent" {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{host} does not hold Skarbiec item {item:?}, so declaring publisher {product:?} would \
+         close that host's whole release publication boundary: its release verifier compares the \
+         declared publisher set against its grant's item set, and one unmintable name makes them \
+         unequal for every product, answering 401 or 503 to every release-catalog read on the \
+         fleet. Mint the item on {host} first - `stado host vault-item-put {host} {item} --type \
+         token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
+         {product}`.",
+        host = resolved.name
+    )))
 }
 
 /// Say, at declaration time, what an object namespace without a grant costs.
@@ -11129,16 +11910,21 @@ fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {
     );
 }
 
-async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {
+pub(crate) enum RemoteConfigAction<'a> {
+    Show,
+    Set { key: &'a str, value: &'a str },
+}
+
+async fn remote_config(target: &str, action: RemoteConfigAction<'_>) -> Result<(), CmdError> {
     let target = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stdout = remote_config_output(&target, update, &crate::deploy::production_runner()).await?;
+    let stdout = remote_config_output(&target, action, &crate::deploy::production_runner()).await?;
     print!("{stdout}");
     Ok(())
 }
 
-/// One `stado config show` on a fleet host — the effective configuration its
+/// One Stado configuration action on a fleet host — the effective configuration its
 /// own installed binary resolves, from its own `STADO_CONFIG` — returned
 /// instead of printed.
 ///
@@ -11157,14 +11943,15 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
 /// the whole time; nothing that judged the host asked it.
 pub(crate) async fn remote_config_output(
     target: &ComputeTarget,
-    update: Option<(&str, &str)>,
+    action: RemoteConfigAction<'_>,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
-    let action = match update {
-        None => "\"$binary\" config show".to_string(),
-        Some((key, value)) => format!(
+    let action = match action {
+        RemoteConfigAction::Show => "\"$binary\" config show".to_string(),
+        RemoteConfigAction::Set { key, value } => format!(
             "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             \"$binary\" config migrate\n\
              \"$binary\" config set \"$key\" \"$value\"\n\
              \"$binary\" config show",
             STANDARD.encode(key.as_bytes()),
@@ -11226,16 +12013,38 @@ root="$HOME/.stado/work"
 /bin/mkdir -p "$root"
 work=$(/usr/bin/mktemp -d "$root/release-platform.XXXXXX")
 trap '/bin/rm -rf "$work"' EXIT HUP INT TERM
+export TMPDIR="$work/tmp"
+/bin/mkdir -p "$TMPDIR"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+export CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
 /usr/bin/git -C "$work" init -q source
 /usr/bin/git -C "$work/source" remote add origin {repo}
 /usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
 /usr/bin/git -C "$work/source" checkout -q --detach FETCH_HEAD
-/usr/bin/git clone -q --depth 1 https://github.com/wisent-ai/skarbiec.git "$work/skarbiec"
-cargo build --release --manifest-path "$work/skarbiec/Cargo.toml"
-export SKARBIEC_TEST_BIN="$work/skarbiec/target/release/skarbiec"
+case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
+  Darwin:arm64)
+    platform=darwin-arm64
+    digest=70c925dfe22be3f3c1879f94901977c583fa03b6f367583b4c93815e4ec8bde4
+    ;;
+  Linux:x86_64)
+    platform=linux-amd64
+    digest=4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68
+    ;;
+  *) printf 'unsupported native verification platform\n' >&2; exit 1 ;;
+esac
+/usr/bin/curl -fsSLo "$work/skarbiec.tar.gz" "https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-$platform.tar.gz"
+if [ "$platform" = darwin-arm64 ]; then
+  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/shasum -a 256 -c -
+else
+  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/sha256sum -c -
+fi
+/bin/mkdir "$work/skarbiec"
+/usr/bin/tar -xzf "$work/skarbiec.tar.gz" -C "$work/skarbiec"
+export SKARBIEC_TEST_BIN="$work/skarbiec/skarbiec"
 cd "$work/source/stado-rs"
-cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1
-cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1
+cargo test --locked --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1
 "#
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
@@ -11247,11 +12056,10 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
-        let detail = format!("{}\n{}", output.stdout, output.stderr);
-        let tail = detail.lines().rev().take(80).collect::<Vec<_>>();
+        eprint!("{}", output.stderr);
         return Err(CmdError::click(format!(
             "{target}: platform verification failed:\n{}",
-            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            output.stdout
         )));
     }
     if json_output {
@@ -11262,6 +12070,7 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
                 "revision": revision.trim_matches('\''),
                 "verified": true,
                 "output": output.stdout,
+                "stderr": output.stderr,
             }))?
         );
     } else {

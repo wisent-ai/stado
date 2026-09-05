@@ -189,7 +189,7 @@ impl From<DeployError> for ExecRefusal {
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
 /// no word splitting, no redirection, no globbing.
-const SAFE_PUNCTUATION: &str = "-_./:%";
+const SAFE_PUNCTUATION: &str = "-_./:%+";
 
 /// One approved remote program.
 #[derive(Debug)]
@@ -432,6 +432,9 @@ const BRAMA_LAUNCHER: &str = "~/.stado/bin/start-with-skarbiec";
 /// pinned one in a script.
 const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";
 
+/// The registry-managed Stado binary on either supported host platform.
+const STADO_CLI: &str = "~/.stado/bin/stado";
+
 /// The uv package installer, at the two absolute paths every reader in this
 /// fleet probes for it — including Weles's kimi login trajectory, whose pinned
 /// CLI install depends on one of them existing.
@@ -566,6 +569,32 @@ const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
 /// Total allocated KiB below the manual Figma export's fixed work tree.
 const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &["/usr/bin/du", "-sk", ".stado/work/figma-export"];
 
+/// Allocated size and open-file census for the two tagged Cargo trees that
+/// dominate the MacBook's cleanup inventory. Both roots are fixed: an
+/// operator cannot redirect either read at source or account data.
+const JOB_PROGRESS_TARGET_SIZE: &[&str] = &[
+    "/usr/bin/du",
+    "-sk",
+    "Documents/CodingProjects/Wisent/stado-job-progress-probe/stado-rs/target",
+];
+const JOB_PROGRESS_TARGET_OPEN_FILES: &[&str] = &[
+    "/usr/sbin/lsof",
+    "-n",
+    "+D",
+    "Documents/CodingProjects/Wisent/stado-job-progress-probe/stado-rs/target",
+];
+const WEB_HOSTING_TARGET_SIZE: &[&str] = &[
+    "/usr/bin/du",
+    "-sk",
+    "Documents/CodingProjects/Wisent/stado-web-hosting/stado-rs/target",
+];
+const WEB_HOSTING_TARGET_OPEN_FILES: &[&str] = &[
+    "/usr/sbin/lsof",
+    "-n",
+    "+D",
+    "Documents/CodingProjects/Wisent/stado-web-hosting/stado-rs/target",
+];
+
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
 ///
@@ -588,6 +617,10 @@ const HOME_ROOTED_READS: &[&[&str]] = &[
     WELES_ADMISSION_WORKER_MODULES,
     FIGMA_EXPORT_LOG_STAT,
     FIGMA_EXPORT_WORK_TREE_SIZE,
+    JOB_PROGRESS_TARGET_SIZE,
+    JOB_PROGRESS_TARGET_OPEN_FILES,
+    WEB_HOSTING_TARGET_SIZE,
+    WEB_HOSTING_TARGET_OPEN_FILES,
 ];
 
 /// Is this entry's fixed argv one of the home-rooted reads?
@@ -638,6 +671,12 @@ struct AccountProgram {
 
 /// Every program in the table that the managed account owns.
 const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
+    AccountProgram {
+        program: STADO_CLI,
+        candidates: &[STADO_CLI],
+        environment: &[],
+        timeout_seconds: 180,
+    },
     AccountProgram {
         program: BRAMA_LAUNCHER,
         // The launcher is part of the release bundle, and the live bundle is the
@@ -744,6 +783,14 @@ fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
 /// it while a box is misbehaving.
 pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
     ApprovedCommand {
+        argv: &[STADO_CLI, "registry", "doctor"],
+        why: "reads the installed build's registry verdict and the unit images on the \
+              machine that owns them. A workstation cannot inspect another host's \
+              executing images; the diagnostic must run there. This fixed command \
+              changes no service, accepts no path or repair flag, and reports the \
+              host's own findings without treating an unread image as agreement",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/uptime"],
         why: "reads kernel uptime and load counters; takes no argument and writes nothing",
     },
@@ -759,6 +806,39 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               writes nothing. Added 2026-08-19: the linux builder sat at 100% used and every \
               declared cleaner and reclaim stage measured zero, so the operator had no \
               sanctioned way to even name what was eating the disk",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "3", "/"],
+        why: "attributes a full root filesystem one level below the existing depth-two report; \
+              the depth and root remain fixed, read-only words. Added 2026-09-04 after the \
+              Ubuntu builder reached 100% while depth two named 16 GiB in /root/.stado, \
+              20 GiB in /home/ubuntu and 26 GiB in /mnt/wd16tb but could not identify any \
+              directory a declared cleaner could safely own",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/root/.stado/work"],
+        why: "attributes the root-owned Stado work tree two levels deep; the path and depth \
+              are fixed and read-only. Added 2026-09-04 after the Ubuntu builder reached \
+              100% with 13 GiB below this one managed root while every reclaim stage \
+              reported zero items",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/home/ubuntu/.cache"],
+        why: "attributes the Ubuntu service account's cache tree two levels deep; the path \
+              and depth are fixed and read-only, so regenerable caches can be distinguished \
+              from installed environments before a cleaner claims them",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/home/ubuntu/.local"],
+        why: "attributes the Ubuntu service account's local data tree two levels deep; the \
+              path and depth are fixed and read-only, separating installed programs from \
+              build artifacts before any cleanup policy changes",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/mnt/wd16tb/stado"],
+        why: "attributes the declared large-disk Stado tree two levels deep; the path and \
+              depth are fixed and read-only, proving whether its 26 GiB belongs on the root \
+              filesystem or to a mounted storage role before any relocation",
     },
     ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "1", "/private/tmp"],
@@ -840,6 +920,32 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               from logging alone. The path, unit and recursion root are compile-time \
               constants, no operator word is appended, du stays within the managed account's \
               work tree, and the command writes nothing",
+    },
+    ApprovedCommand {
+        argv: JOB_PROGRESS_TARGET_SIZE,
+        why: "reads allocated KiB below only the inactive job-progress probe's standard-tagged \
+              Cargo target. The full host inventory times out before it reports this managed \
+              root; the fixed path and unit expose no source contents and du writes nothing",
+    },
+    ApprovedCommand {
+        argv: JOB_PROGRESS_TARGET_OPEN_FILES,
+        why: "lists open files only below the inactive job-progress probe's fixed Cargo target. \
+              A forced tagged-cache prune has no process guard of its own, so this read proves \
+              whether any process still holds that exact cache before it is considered. The \
+              recursive root is compile-time data and lsof writes nothing",
+    },
+    ApprovedCommand {
+        argv: WEB_HOSTING_TARGET_SIZE,
+        why: "reads allocated KiB below only the web-hosting worktree's standard-tagged Cargo \
+              target. The fixed managed root is the remaining large cache named by disk \
+              inventory; no operator path is accepted and du writes nothing",
+    },
+    ApprovedCommand {
+        argv: WEB_HOSTING_TARGET_OPEN_FILES,
+        why: "lists open files only below the web-hosting worktree's fixed Cargo target. A \
+              forced tagged-cache prune has no process guard of its own, so the cache remains \
+              protected unless this exact read finds no holder. The recursive root is \
+              compile-time data and lsof writes nothing",
     },
     ApprovedCommand {
         argv: &[
@@ -1439,6 +1545,25 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               absent from this table and cannot be reached through it",
     },
     ApprovedCommand {
+        argv: &["/bin/cat", "/etc/ssh/sshd_config"],
+        why: "reads the Ubuntu OpenSSH server's fixed primary configuration file so a \
+              server-side command or session override can be attributed; the path is fixed, \
+              no included file or operator-supplied path is followed, and cat writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/journalctl",
+            "--unit",
+            "ssh.service",
+            "--lines",
+            "200",
+            "--no-pager",
+        ],
+        why: "reads the last 200 records owned by Ubuntu's active OpenSSH systemd unit, with \
+              a fixed unit and bound output; journalctl's read-only form neither changes the \
+              service nor follows future records",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/bin/systemctl",
             "list-unit-files",
@@ -1451,6 +1576,49 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               different question from `list-units` above: a unit whose file exists but was \
               never loaded appears only here, and that is exactly the shape an undeclared \
               queue agent takes. Read-only, every selector fixed, and it takes no unit name",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "show",
+            "stado-host-beacon.service",
+            "-p",
+            "NeedDaemonReload",
+            "-p",
+            "Type",
+            "-p",
+            "TriggeredBy",
+            "-p",
+            "Result",
+            "-p",
+            "ExecMainStartTimestamp",
+            "-p",
+            "ExecMainStatus",
+            "-p",
+            "FragmentPath",
+            "-p",
+            "DropInPaths",
+            "-p",
+            "EnvironmentFiles",
+        ],
+        why: "reads the loaded beacon definition, its source and override paths, and its \
+              last publication result. This distinguishes a stale manager definition from \
+              a later environment override without restarting anything. The unit and \
+              properties are fixed and credential values are not read",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/systemctl",
+            "cat",
+            "stado-host-beacon.service",
+            "--no-pager",
+        ],
+        why: "prints the fixed beacon unit fragment followed by every systemd drop-in in \
+              precedence order. The loaded property view above names override paths but does \
+              not show which one still supplies an obsolete API URL after the managed base \
+              environment file was corrected. `cat` is read-only, the unit name and \
+              no-pager flag are fixed, and no operator path or arbitrary argument reaches \
+              systemd",
     },
 ];
 

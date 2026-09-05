@@ -8,16 +8,11 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
-const tests = [
-  'coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry',
-  'coordinator_preserves_settled_history_and_refuses_missing_unretired_history',
-];
 let stdout;
 let stderr;
 try {
   ({ stdout, stderr } = await exec('cargo', [
-    'test', '--test', 'run_history',
-    '--', '--ignored', '--nocapture', '--test-threads=1',
+    'test', '--locked', '--test', 'weles_browser_runtime', '--', '--nocapture', '--test-threads=1',
   ], {
     cwd: crate,
     env: process.env,
@@ -27,11 +22,10 @@ try {
 } catch (error) {
   const output = `${error.stdout || ''}\n${error.stderr || ''}`.trim();
   process.stderr.write(`${output}\n`);
-  throw new Error(`run-retention journey failed with exit code ${error.code ?? 'unknown'}`);
+  throw new Error(`weles-browser-runtime journey failed with exit code ${error.code ?? 'unknown'}`);
 }
 assert.equal(stderr.includes('FAILED'), false, stderr);
-for (const test of tests) assert.match(stdout, new RegExp(`${test} \\.\\.\\.`));
-assert.ok(stdout.includes(`test result: ok. ${tests.length} passed; 0 failed`));
+assert.ok(stdout.includes('test result: ok. 3 passed; 0 failed'), stdout);
 process.stdout.write(stdout);
 
 const artifacts = process.env.PROBIERZ_ARTIFACTS;
@@ -42,12 +36,12 @@ const [{ stdout: revision }, { stdout: status }] = await Promise.all([
   exec('git', ['rev-parse', 'HEAD'], { cwd: repository }),
   exec('git', ['status', '--porcelain'], { cwd: repository }),
 ]);
-const tracePath = join(artifacts, 'stado-run-retention.trace.json');
+const tracePath = join(artifacts, 'stado-weles-browser-runtime.trace.json');
 await mkdir(dirname(tracePath), { recursive: true });
 await writeFile(tracePath, `${JSON.stringify({
   schemaVersion: 1,
   kind: 'probierz-stado-cli-trace',
-  journey: 'run-retention',
+  journey: 'weles-browser-runtime',
   runId: process.env.PROBIERZ_RUN_ID || null,
   status: 'completed',
   source: {
@@ -55,19 +49,12 @@ await writeFile(tracePath, `${JSON.stringify({
     revision: revision.trim(),
     dirty: status.trim().length > 0,
   },
-  tests,
-  productionMutations: 'none: the product binary used an isolated local Stado store',
+  productionMutations: 'none: the product binary used an isolated local Stado store and HOME',
   contracts: [
-    'the coordinator retains the exact legacy terminal job named by its manifest entry',
-    'the lifecycle blob is reaped only after its outcome is retained',
-    'settled cancellation history is not reopened after its run manifest is removed',
-    'an unretired transition still refuses a missing run manifest',
+    'required component readiness is reported separately from browser-engine readiness',
+    'a host with ffmpeg but no Chromium, Firefox, or WebKit is refused as browser_engine_missing',
+    'a named missing browser engine reports the exact component repair command',
   ],
-  redaction: {
-    status: 'verified_redacted',
-    credentialsIncluded: false,
-    productionIdentifiersIncluded: false,
-  },
 }, null, 2)}\n`, { mode: 0o600 });
 await mkdir(dirname(mediaManifest), { recursive: true });
 await writeFile(

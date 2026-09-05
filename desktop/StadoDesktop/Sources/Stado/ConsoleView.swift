@@ -20,6 +20,7 @@ struct ConsoleView: View {
     /// enrollment, nothing here spans a walk to another machine, and a
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
+    @StateObject private var inventoryStore = HostInventoryStore()
     @StateObject private var retireFileStore = HostRetireFileStore()
     @StateObject private var linkStore = HostLinkStore()
     @StateObject private var connectionPathStore = HostConnectionPathStore()
@@ -359,6 +360,7 @@ struct ConsoleView: View {
                     store: store,
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
+                    inventoryStore: inventoryStore,
                     retireFileStore: retireFileStore,
                     linkStore: linkStore,
                     connectionPathStore: connectionPathStore,
@@ -468,6 +470,7 @@ struct ConsoleView: View {
     private func configureAuthorization() {
         store.configureAuthorization(token: auth.session?.accessToken)
         cleanupStore.configureAuthorization(token: auth.session?.accessToken)
+        inventoryStore.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
         groupStore.configureAuthorization(token: auth.session?.accessToken)
@@ -482,6 +485,7 @@ struct ConsoleView: View {
             guard let selectedEndpoint = deployment.endpoint else {
                 store.clearDashboardURL()
                 cleanupStore.clearDashboardURL()
+                inventoryStore.configureEndpoint(nil)
                 fleetStore.configureEndpoint(nil)
                 enrollmentStore.configureEndpoint(nil)
                 groupStore.configureEndpoint(nil)
@@ -495,6 +499,7 @@ struct ConsoleView: View {
         do {
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
+            inventoryStore.configureEndpoint(endpoint)
             fleetStore.configureEndpoint(endpoint)
             enrollmentStore.configureEndpoint(endpoint)
             groupStore.configureEndpoint(endpoint)
@@ -502,6 +507,7 @@ struct ConsoleView: View {
         } catch {
             store.clearDashboardURL()
             cleanupStore.clearDashboardURL()
+            inventoryStore.configureEndpoint(nil)
             fleetStore.configureEndpoint(nil)
             enrollmentStore.configureEndpoint(nil)
             groupStore.configureEndpoint(nil)

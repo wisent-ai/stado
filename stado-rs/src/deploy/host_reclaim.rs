@@ -184,12 +184,23 @@ const SERVICES_ROOT_MARK: &str = "@SERVICES_ROOT@";
 const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
 const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
+const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
+const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
+/// Current agents retain queue workdirs under `$HOME/.stado/work/jobs`; older
+/// agents used `/tmp` or the per-user temporary container. All three roots
+/// carry the same queue-authority and process-liveness proof policy.
+pub const DEFAULT_WORK_ROOTS: &str = "\"$HOME/.stado/work/jobs\" /tmp \"${TMPDIR:-}\"";
 const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
 const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
 const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";
 const CONTAINER_PREFIX_MARK: &str = "@CONTAINER_PREFIX@";
 const SUPERSEDED_ROOTS_MARK: &str = "@SUPERSEDED_ROOTS@";
 const TARGET_FREE_KB_MARK: &str = "@TARGET_FREE_KB@";
+const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
+const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
+const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
+pub const LOCAL_EVIDENCE_ROOT: &str = ".stado/work/host-reclaim-local-evidence";
+pub const LOCAL_TERMINALITY_GRACE_SECONDS: i64 = crate::config::HEARTBEAT_STALE_MINUTES * 60;
 
 /// The fixed remote program.
 ///
@@ -202,6 +213,9 @@ apply=@APPLY@
 scratch="$HOME/@BUILD_WORK@"
 services="$HOME/@SERVICES_ROOT@"
 target_free_kb=@TARGET_FREE_KB@
+keep_mode="@LOCAL_EVIDENCE_MODE@"
+local_evidence="$HOME/@LOCAL_EVIDENCE_ROOT@"
+local_grace=@LOCAL_TERMINALITY_GRACE_SECONDS@
 
 free_kb() { /bin/df -Pk / 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}'; }
 
@@ -216,6 +230,26 @@ held() {
   return 1
 }
 
+# A queue job is launched with its workdir as cwd, inherited by the owning
+# shell for the whole execution. The argv snapshot catches build children that
+# name files inside it; lsof proves whether any process still has the tree as
+# cwd or holds a file below it. Missing/failed lsof is unknown, never absent.
+process_absent() {
+  if held "$1"; then return 1; fi
+  lsof_bin=""
+  for candidate in /usr/sbin/lsof /usr/bin/lsof; do
+    if [ -x "$candidate" ]; then lsof_bin="$candidate"; break; fi
+  done
+  [ -n "$lsof_bin" ] || return 2
+  "$lsof_bin" -n +D "$1" >/dev/null 2>&1
+  status=$?
+  case "$status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return 2 ;;
+  esac
+}
+
 # Older than the age gate. Asked per candidate rather than by sweeping a root,
 # so the candidates come from exactly one enumeration -- see below.
 stale() {
@@ -224,6 +258,77 @@ stale() {
 
 stale_minutes() {
   [ -n "$(/usr/bin/find "$1" -maxdepth 0 -mmin +@CLONE_AGE_MINUTES@ 2>/dev/null)" ]
+}
+
+mtime_seconds() {
+  /usr/bin/stat -f %m "$1" 2>/dev/null || /usr/bin/stat -c %Y "$1" 2>/dev/null
+}
+
+local_evidence() {
+  entry="$1"
+  id="$2"
+  now=$(/bin/date +%s)
+  tree_mtime=$(mtime_seconds "$entry") || {
+    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tstat_failed\ttrue\tfalse\t0\t0\n' "$id" "$entry"
+    return 1
+  }
+  tree_age=$((now - tree_mtime))
+  process_absent "$entry"
+  process_status=$?
+  if [ "$process_status" -eq 1 ]; then
+    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tprocess_present\tfalse\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
+    return 1
+  fi
+  if [ "$process_status" -ne 0 ]; then
+    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tprocess_probe_unavailable\tfalse\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
+    return 1
+  fi
+  if [ "$tree_age" -lt "$local_grace" ]; then
+    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\ttree_too_young\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
+    return 1
+  fi
+  evidence="$local_evidence/$id"
+  observed_mtime=""
+  absent_since=""
+  if [ -r "$evidence" ]; then
+    read -r observed_mtime absent_since < "$evidence" || true
+  fi
+  case "$observed_mtime:$absent_since" in
+    "$tree_mtime":[0-9]*) ;;
+    *)
+      if [ "$apply" = 1 ]; then
+        /bin/mkdir -p "$local_evidence" 2>/dev/null || {
+          printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tevidence_write_failed\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
+          return 1
+        }
+        printf '%s %s\n' "$tree_mtime" "$now" > "$evidence.new" 2>/dev/null &&
+          /bin/mv -f "$evidence.new" "$evidence" 2>/dev/null || {
+            /bin/rm -f "$evidence.new" 2>/dev/null || true
+            printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tevidence_write_failed\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
+            return 1
+          }
+      fi
+      printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tobservation_started\ttrue\tfalse\t%s\t0\n' "$id" "$entry" "$tree_age"
+      return 1
+      ;;
+  esac
+  absence_age=$((now - absent_since))
+  if [ "$absence_age" -lt "$local_grace" ]; then
+    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\tlease_not_expired\ttrue\tfalse\t%s\t%s\n' "$id" "$entry" "$tree_age" "$absence_age"
+    return 1
+  fi
+  if reclaim "$entry" queue_workdirs; then
+    if [ "$apply" = 1 ]; then
+      /bin/rm -f "$evidence" 2>/dev/null || true
+      decision=reclaimed
+    else
+      decision=eligible
+    fi
+    printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\t%s\ttrue\ttrue\t%s\t%s\n' "$id" "$entry" "$decision" "$tree_age" "$absence_age"
+    return 0
+  fi
+  printf 'STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\t%s\t%s\treclaim_refused\ttrue\ttrue\t%s\t%s\n' "$id" "$entry" "$tree_age" "$absence_age"
+  return 1
 }
 
 # The only place anything is removed. A held path is skipped silently -- it is
@@ -251,7 +356,7 @@ else
   # Queue workdirs are policy-owned by this pass. Its exclusive janitor lock
   # fences local admission, unlike an independent path sweep.
   if [ "$apply" = 1 ]; then
-    plan=$("$wc_bin" disk-cleanup --once)
+    plan=$("$wc_bin" disk-cleanup --once --to-target)
   else
     plan=$("$wc_bin" disk-cleanup --once --dry-run)
   fi
@@ -269,28 +374,37 @@ fi
 printf 'STADO_RECLAIM_STAGE\tbuild_scratch\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
-# Queue job trees an agent that predates the persistent root left in the OS
-# scratch directory. The janitor's own `queue_workdirs` cleaner is rooted in
-# the account's home and only ever unlinked the compatibility SYMLINK here, so
-# a real tree left by an older agent was invisible to every stage: on
-# 2026-09-04 ten of them held 14.2 GB on charless-mac-mini while the host sat
-# at 1.1 GB free, which took its object API, the registry authority and every
-# Skarbiec decryption down together, and this command measured zero in all
-# eight stages. The gates are the ones the rest of this script uses: the entry
-# is a directory and not a symlink, no live process names its path, and it has
-# not been written to for an hour. The floor is the clone stage's hour rather
-# than the day the home stages use, because a queue tree is scratch whose real
-# fence is `held` — the janitor itself gives this cleaner no age floor at all
-# and gates on the job being terminal.
-if [ -d /tmp ]; then
-  for entry in /tmp/wc-*; do
+# The queue store is the primary terminality authority. If it is unavailable,
+# never turn that absence into an empty keep-list. Instead require three local
+# facts together: no process names the tree, the tree has not changed for a
+# whole worker-lease window, and that absence was observed continuously for a
+# whole lease window. The first apply records the observation; only a later
+# pass can reclaim, so elapsed time alone never authorizes deletion.
+for workroot in @WORK_ROOTS@; do
+  [ -n "$workroot" ] && [ -d "$workroot" ] || continue
+  for entry in "$workroot"/wc-* "$workroot"/stado-bootstrap-*; do
     [ -d "$entry" ] || continue
-    [ -L "$entry" ] && continue
-    stale_minutes "$entry" || continue
-    reclaim "$entry" legacy_tmp_workdirs
+    id=$(basename "$entry")
+    case "$id" in
+      wc-*) id="${id#wc-}" ;;
+      stado-bootstrap-*)
+        stale "$entry" || continue
+        reclaim "$entry" queue_workdirs
+        continue
+        ;;
+      *) continue ;;
+    esac
+    if [ "$keep_mode" = store ]; then
+      case " @LIVE_JOBS@ " in
+        *" $id "*) continue ;;
+      esac
+      reclaim "$entry" queue_workdirs
+    else
+      local_evidence "$entry" "$id" || true
+    fi
   done
-fi
-printf 'STADO_RECLAIM_STAGE\tlegacy_tmp_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
+done
+printf 'STADO_RECLAIM_STAGE\tqueue_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
 # macOS-style home trees on a Linux host. `/Users/<name>` exists on Linux only
@@ -438,6 +552,24 @@ for entry in "$HOME/.cargo/git/checkouts"/*; do
   fi
   reclaim "$entry" rebuildable_caches
 done
+# The old platform-matrix runner kept Cargo output outside its queue workdir.
+# Its exact product-owned cache is disposable; arbitrary untagged directories
+# are not. Keep active, young, linked, or unrecognizable trees.
+entry="$HOME/.stado/work/platform-matrix-cargo-target"
+if [ -d "$entry" ] && [ ! -L "$HOME/.stado" ] &&
+   [ ! -L "$HOME/.stado/work" ] && [ ! -L "$entry" ]; then
+  if [ ! -f "$entry/.rustc_info.json" ] ||
+     { [ ! -f "$entry/debug/.cargo-lock" ] && [ ! -f "$entry/release/.cargo-lock" ]; }; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache has no Cargo identity'
+  elif ! stale_minutes "$entry"; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is too young'
+  elif ! process_absent "$entry"; then
+    printf 'STADO_RECLAIM_REFUSED\trebuildable_caches\t%s\t%s\n' "$entry" 'managed build cache is held or process ownership is unavailable'
+  elif [ "$apply" != 1 ] || [ "$target_free_kb" -le 0 ] ||
+       [ "$(free_kb)" -lt "$target_free_kb" ]; then
+    reclaim "$entry" rebuildable_caches
+  fi
+fi
 printf 'STADO_RECLAIM_STAGE\trebuildable_caches\t%s\t%s\n' "$before" "$(free_kb)"
 before=$(free_kb)
 
@@ -546,17 +678,43 @@ fn superseded_words() -> String {
         .join(" ")
 }
 
-/// The remote program for one mode, with every substitution in place.
+/// The remote-target program for one mode, with every substitution in place.
 ///
-/// The Stado candidates are quoted exactly the way
-/// [`crate::deploy::host_recovery::remote_script`] quotes them, so `$HOME`
-/// still expands on the remote side while the word stays one word. Queue-owned
-/// workdirs are handled only by the registry cleanup invoked by the script,
-/// under the janitor's exclusive admission lock.
-pub fn remote_script(apply: bool, target_free_gb: Option<i64>) -> String {
-    let wc_words = WC_CANDIDATES
+/// Installed authoritative Stado candidates are quoted so `$HOME` expands on
+/// the target while each value stays one word. When the queue authority is
+/// readable it supplies the keep-list; otherwise each workdir must earn
+/// deletion from the two-pass local proof.
+pub fn remote_script(
+    apply: bool,
+    live_jobs: Option<&[String]>,
+    work_roots: &str,
+    target_free_gb: Option<i64>,
+) -> String {
+    remote_script_with_stado(apply, live_jobs, work_roots, target_free_gb, None)
+}
+
+fn remote_script_with_stado(
+    apply: bool,
+    live_jobs: Option<&[String]>,
+    work_roots: &str,
+    target_free_gb: Option<i64>,
+    current_stado: Option<&str>,
+) -> String {
+    let wc_words = current_stado.map_or_else(
+        || {
+            WC_CANDIDATES
+                .iter()
+                .map(|value| format!("\"{value}\""))
+                .collect::<Vec<String>>()
+                .join(" ")
+        },
+        shlex_quote,
+    );
+    let live_words = live_jobs
+        .unwrap_or_default()
         .iter()
-        .map(|value| format!("\"{value}\""))
+        .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'))
+        .cloned()
         .collect::<Vec<String>>()
         .join(" ");
     REMOTE_SCRIPT_TEMPLATE
@@ -564,8 +722,23 @@ pub fn remote_script(apply: bool, target_free_gb: Option<i64>) -> String {
         .replace(WC_WORDS_MARK, &wc_words)
         .replace(SERVICES_ROOT_MARK, SERVICES_ROOT)
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
-        .replace(CLONE_AGE_MINUTES_MARK, CLONE_MIN_AGE_MINUTES)
         .replace(AGE_DAYS_MARK, MIN_AGE_DAYS)
+        .replace(LIVE_JOBS_MARK, &live_words)
+        .replace(
+            LOCAL_EVIDENCE_MODE_MARK,
+            if live_jobs.is_some() {
+                "store"
+            } else {
+                "local"
+            },
+        )
+        .replace(LOCAL_EVIDENCE_ROOT_MARK, LOCAL_EVIDENCE_ROOT)
+        .replace(
+            LOCAL_TERMINALITY_GRACE_MARK,
+            &LOCAL_TERMINALITY_GRACE_SECONDS.to_string(),
+        )
+        .replace(CLONE_AGE_MINUTES_MARK, CLONE_MIN_AGE_MINUTES)
+        .replace(WORK_ROOTS_MARK, work_roots)
         .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
         .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
@@ -598,6 +771,8 @@ pub struct Stage {
     pub detail: Option<String>,
     /// Snapshot identifiers refused by the native ownership/type checks.
     pub refused: Vec<String>,
+    /// Per-workdir proof used only when the queue authority was unavailable.
+    pub local_terminality_evidence: Vec<Value>,
 }
 
 /// Everything one reclamation did.
@@ -633,6 +808,18 @@ fn drain(pending: &mut Vec<(String, String)>, stage: &str) -> Vec<String> {
     mine
 }
 
+fn drain_evidence(pending: &mut Vec<(String, Value)>, stage: &str) -> Vec<Value> {
+    let mut mine = Vec::new();
+    pending.retain(|(named, evidence)| {
+        if named == stage {
+            mine.push(evidence.clone());
+            return false;
+        }
+        true
+    });
+    mine
+}
+
 /// Fold the marker lines of stdout into a reclamation.
 ///
 /// Item lines always precede the stage marker that closes their stage, because
@@ -645,6 +832,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
     };
     let mut pending: Vec<(String, String)> = Vec::new();
     let mut refused: Vec<(String, String)> = Vec::new();
+    let mut local_evidence: Vec<(String, Value)> = Vec::new();
     // Item lines are drained by the stage marker that closes them, through a
     // free function so the pending list stays borrowable by the arm that fills
     // it.
@@ -658,9 +846,26 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
             ["STADO_RECLAIM_REFUSED", stage, item, detail] => {
                 refused.push(((*stage).to_string(), format!("{item}: {detail}")));
             }
+            ["STADO_RECLAIM_LOCAL_EVIDENCE", stage, job_id, path, decision, process_absent, lease_expired, tree_age_seconds, absence_age_seconds] =>
+            {
+                local_evidence.push((
+                    (*stage).to_string(),
+                    json!({
+                        "source": "local_observation",
+                        "job_id": job_id,
+                        "path": path,
+                        "decision": decision,
+                        "process_absent": *process_absent == "true",
+                        "lease_expired": *lease_expired == "true",
+                        "tree_age_seconds": blocks(tree_age_seconds),
+                        "absence_age_seconds": blocks(absence_age_seconds),
+                    }),
+                ));
+            }
             ["STADO_RECLAIM_STAGE", stage, before, after] => {
                 let paths = drain(&mut pending, stage);
                 let stage_refused = drain(&mut refused, stage);
+                let stage_local_evidence = drain_evidence(&mut local_evidence, stage);
                 reclamation.stages.push(Stage {
                     stage: (*stage).to_string(),
                     free_kb_before: blocks(before),
@@ -669,6 +874,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     paths,
                     detail: None,
                     refused: stage_refused,
+                    local_terminality_evidence: stage_local_evidence,
                 });
             }
             ["STADO_RECLAIM_CLEANUP", before, after, plan] => {
@@ -684,6 +890,29 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     ));
                     continue;
                 };
+                if parsed.get("outcome").and_then(Value::as_str)
+                    == Some("invalid_or_unavailable_policy")
+                {
+                    let detail = parsed
+                        .get("errors")
+                        .and_then(Value::as_array)
+                        .map(|errors| {
+                            errors
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .filter(|detail| !detail.is_empty())
+                        .unwrap_or_else(|| {
+                            "host janitor reported invalid_or_unavailable_policy".to_string()
+                        });
+                    reclamation.janitor_plan = Some(parsed);
+                    reclamation
+                        .stages
+                        .push(unavailable(REGISTRY_CLEANUP_STAGE, &detail));
+                    continue;
+                }
                 let counted: i64 = cleaner_plans(&parsed)
                     .iter()
                     .map(|cleaner| {
@@ -703,6 +932,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     paths: Vec::new(),
                     detail: None,
                     refused: Vec::new(),
+                    local_terminality_evidence: Vec::new(),
                 });
             }
             ["STADO_RECLAIM_UNAVAILABLE", stage, detail] => {
@@ -724,6 +954,7 @@ fn unavailable(stage: &str, detail: &str) -> Stage {
         paths: Vec::new(),
         detail: Some(detail.to_string()),
         refused: Vec::new(),
+        local_terminality_evidence: Vec::new(),
     }
 }
 
@@ -752,6 +983,7 @@ pub fn to_report(target: &ComputeTarget, reclamation: &Reclamation) -> Map<Strin
                         "paths": stage.paths,
                         "refused": stage.refused,
                         "detail": stage.detail,
+                        "local_terminality_evidence": stage.local_terminality_evidence,
                     })
                 })
                 .collect(),
@@ -828,6 +1060,7 @@ pub async fn record_audit(
                 "refused": stage.refused,
                 "free_gb_before": stage.free_kb_before.map(|kb| gib_from_blocks(kb as f64)),
                 "free_gb_after": stage.free_kb_after.map(|kb| gib_from_blocks(kb as f64)),
+                "local_terminality_evidence": stage.local_terminality_evidence,
             }))
             .collect::<Vec<Value>>(),
     });
@@ -862,23 +1095,113 @@ pub async fn reclaim_host(
     runner: &Runner,
 ) -> Result<(ComputeTarget, Reclamation), DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
+    let mut unreadable = Vec::new();
+    let live_jobs = match crate::queue::JobStorage::new().await {
+        Ok(store) => {
+            let mut ids = Vec::new();
+            for state in ["queue", "running"] {
+                match store.list_jobs(state, 0).await {
+                    Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
+                    Err(error) => unreadable.push(format!("{state}/: {error}")),
+                }
+            }
+            if unreadable.is_empty() {
+                Some(ids)
+            } else {
+                None
+            }
+        }
+        Err(error) => {
+            unreadable.push(format!("opening the queue store: {error}"));
+            None
+        }
+    };
     let target_free_gb = target
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.target_free_gb);
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &remote_script(apply, target_free_gb),
-        RECLAIM_TIMEOUT,
-        runner,
-    )
-    .await?;
+    let script = if host_channel::target_is_this_host(&target) {
+        // A local reclaim must use the binary that owns this invocation.
+        // Release capacity builds the corrected tree before installation;
+        // selecting the older installed janitor would make that correction
+        // unreachable.
+        let current_stado = std::env::current_exe()
+            .map_err(|error| DeployError(format!("cannot identify current Stado: {error}")))?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| DeployError("current Stado path is not valid UTF-8".to_string()))?;
+        remote_script_with_stado(
+            apply,
+            live_jobs.as_deref(),
+            DEFAULT_WORK_ROOTS,
+            target_free_gb,
+            Some(&current_stado),
+        )
+    } else {
+        remote_script(
+            apply,
+            live_jobs.as_deref(),
+            DEFAULT_WORK_ROOTS,
+            target_free_gb,
+        )
+    };
+    let output =
+        host_channel::run_script_with_timeout(&target, &script, RECLAIM_TIMEOUT, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
             "the reclamation did not run",
         )));
     }
-    let reclamation = parse_output(&output.stdout, apply);
+    let mut reclamation = parse_output(&output.stdout, apply);
+    if live_jobs.is_none() {
+        reclamation.skipped.push((
+            "queue_authority".to_string(),
+            format!(
+                "the queue store did not answer; queue_workdirs used conservative local \
+                 terminality observations and kept every candidate without a full proof — {}",
+                unreadable.join("; ")
+            ),
+        ));
+    }
     Ok((target, reclamation))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_queue_uses_two_observation_local_proof() {
+        let script = remote_script(true, None, "/fixture", Some(18));
+
+        assert!(script.contains("keep_mode=\"local\""));
+        assert!(script.contains("local_grace=900"));
+        assert!(script.contains("process_absent \"$entry\""));
+        assert!(script.contains("lsof_bin"));
+        assert!(script.contains("if [ \"$tree_age\" -lt \"$local_grace\" ]"));
+        assert!(script.contains("if [ \"$absence_age\" -lt \"$local_grace\" ]"));
+    }
+
+    #[test]
+    fn local_terminality_evidence_is_machine_readable() {
+        let report = parse_output(
+            concat!(
+                "STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\tjob-a\t/tmp/wc-job-a\t",
+                "reclaimed\ttrue\ttrue\t1801\t901\n",
+                "STADO_RECLAIM_ITEM\tqueue_workdirs\t/tmp/wc-job-a\n",
+                "STADO_RECLAIM_STAGE\tqueue_workdirs\t100\t200\n",
+            ),
+            true,
+        );
+        let evidence = &report.stages[0].local_terminality_evidence[0];
+
+        assert_eq!(evidence["source"], "local_observation");
+        assert_eq!(evidence["job_id"], "job-a");
+        assert_eq!(evidence["decision"], "reclaimed");
+        assert_eq!(evidence["process_absent"], true);
+        assert_eq!(evidence["lease_expired"], true);
+        assert_eq!(evidence["tree_age_seconds"], 1801);
+        assert_eq!(evidence["absence_age_seconds"], 901);
+    }
 }

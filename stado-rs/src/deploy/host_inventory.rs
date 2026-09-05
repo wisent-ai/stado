@@ -64,6 +64,16 @@
 //! `reconciliation.vaults_not_owner_only` is the finding that matters: a
 //! vault the group can read is an incident.
 //!
+//! Cargo uses the same fixed, metadata-only boundary. `cargo.home` uses lstat
+//! on `$HOME/.cargo` and preserves its link target; `cargo.bin` is the fixed
+//! direct `bin` child even when Cargo home is a symlink; and `cargo.entries`
+//! names every direct child, including dotfiles, with type, mode, numeric
+//! ownership, size, mtime, and symlink text. No operator path enters the
+//! script and no file body is opened. `complete` is false after any refused
+//! or partial traversal, unreadable or malformed metadata, sanitized name or
+//! link, or output cap, so a prefix can never masquerade as the whole
+//! directory.
+//!
 //! Reporting drift is not the same as failing on it. A host with a forward
 //! that was deliberately torn down is not a broken host, so `status` stays
 //! [`OK_STATUS`] whenever the inventory was collected; the drift is in the
@@ -177,6 +187,12 @@ pub const LISTENERS_FAILED: &str = "failed";
 /// everything it matched into `vaults_seen` / `vault_sidecars_seen`, so the
 /// cap shows up as a number the report states rather than as a silent cut.
 pub const MAX_VAULT_FILES: usize = 64;
+/// The most Cargo bin entries one report will carry.
+///
+/// The script still counts every matching directory member. When this cap is
+/// exceeded, `entries_complete` is false rather than silently presenting the
+/// prefix as the whole directory.
+pub const MAX_CARGO_BIN_ENTRIES: usize = 512;
 
 /// A vault path that is a regular file. Its METADATA was read; its contents
 /// were not, and there is no state in which they would be.
@@ -203,6 +219,8 @@ export LC_ALL
 stado_home="$HOME/.stado"
 bin_dir="$stado_home/bin"
 forward_dir="$stado_home/forwards"
+cargo_home="$HOME/.cargo"
+cargo_bin="$cargo_home/bin"
 
 kernel=$(/usr/bin/uname -s 2>/dev/null || :)
 architecture=$(/usr/bin/uname -m 2>/dev/null || :)
@@ -216,6 +234,10 @@ field_limit=200
 # thousand files must not produce an unbounded report; what was matched
 # beyond the cap is counted, not silently dropped.
 vault_limit=64
+# A Cargo bin directory is normally small (rustup's proxies plus explicitly
+# installed tools), but it is still owner-writable input and may not make the
+# report unbounded. Every member is counted even after this output cap.
+cargo_entry_limit=512
 # A literal newline, for the first-line-only expansions below. Written as a
 # quoted line break rather than bash's $'\n' so nothing here needs a dialect.
 newline='
@@ -273,6 +295,128 @@ sanitize() {
     sanitized='?'
     sanitizer_state=broken
   fi
+}
+
+# Emit lstat metadata for one fixed path or one member discovered below the
+# fixed Cargo bin directory. Both stat dialects report the directory entry
+# itself by default, so a symlink is never followed. Numeric fields become
+# JSON null unless every one was read and validated; zero is a real size and
+# must not double as "stat failed".
+emit_filesystem_metadata() {
+  metadata_path="$1"
+  metadata_name="$2"
+  if [ -L "$metadata_path" ]; then
+    metadata_kind=symlink
+  elif [ -d "$metadata_path" ]; then
+    metadata_kind=directory
+  elif [ -f "$metadata_path" ]; then
+    metadata_kind=regular
+  elif [ -e "$metadata_path" ]; then
+    metadata_kind=other
+  else
+    metadata_kind=uninspected
+  fi
+
+  metadata_complete=true
+  metadata_state=unavailable
+  metadata_bytes=null
+  metadata_mode=unknown
+  metadata_uid=null
+  metadata_gid=null
+  metadata_modified_epoch=null
+  # A failed -e check also means denied traversal; only stat's ENOENT
+  # diagnosis proves absence. LC_ALL=C above fixes both stat error dialects.
+  metadata_facts_read=false
+  if [ "$kernel" = Darwin ]; then
+    if metadata_facts=$(/usr/bin/stat -f '%z %Lp %u %g %m' "$metadata_path" 2>&1); then
+      metadata_facts_read=true
+    fi
+  else
+    if metadata_facts=$(/usr/bin/stat -c '%s %a %u %g %Y' "$metadata_path" 2>&1); then
+      metadata_facts_read=true
+    fi
+  fi
+  if [ "$metadata_facts_read" = true ]; then
+    metadata_state=malformed
+    # Function-local positional parameters keep the split out of the caller's
+    # state. A modification epoch may precede 1970; ownership and size may not.
+    set -- $metadata_facts
+    if [ "$#" -eq 5 ] && [ -n "${5#-}" ]; then
+      case "$1:$3:$4:${5#-}" in
+        *[!0-9:]*) ;;
+        *)
+          case "$2" in
+            ''|*[!0-7]*) ;;
+            *)
+              metadata_state=read
+              metadata_bytes=$1
+              metadata_mode=$2
+              metadata_uid=$3
+              metadata_gid=$4
+              metadata_modified_epoch=$5
+              ;;
+          esac
+          ;;
+      esac
+    fi
+  else
+    case "$metadata_facts" in
+      *': No such file or directory')
+        metadata_kind=missing
+        metadata_state=missing
+        ;;
+    esac
+  fi
+  if [ "$metadata_kind" = uninspected ] || \
+     { [ "$metadata_state" != read ] && [ "$metadata_state" != missing ]; }; then
+    metadata_complete=false
+  fi
+
+  metadata_symlink_target=""
+  metadata_symlink_target_state=not_symlink
+  if [ "$metadata_kind" = symlink ]; then
+    metadata_symlink_target_state=unavailable
+    if metadata_symlink_target=$(/usr/bin/readlink "$metadata_path" 2>/dev/null); then
+      metadata_symlink_target_state=read
+    else
+      metadata_symlink_target=""
+      metadata_complete=false
+    fi
+  fi
+  sanitize "$metadata_name"
+  metadata_name_safe=$sanitized
+  metadata_name_state=read
+  if [ "$metadata_name_safe" != "$metadata_name" ]; then
+    metadata_name_state=sanitized
+    metadata_complete=false
+  fi
+  sanitize "$metadata_mode"
+  metadata_mode_safe=$sanitized
+  sanitize "$metadata_symlink_target"
+  metadata_symlink_target_safe=$sanitized
+  if [ "$metadata_symlink_target_safe" != "$metadata_symlink_target" ]; then
+    metadata_symlink_target_state=sanitized
+    metadata_complete=false
+  fi
+  printf '{"name":"%s","name_state":"%s","kind":"%s","metadata_state":"%s","bytes":%s,"mode":"%s","uid":%s,"gid":%s,"modified_epoch":%s,"symlink_target":"%s","symlink_target_state":"%s"}' \
+    "$metadata_name_safe" "$metadata_name_state" "$metadata_kind" "$metadata_state" \
+    "$metadata_bytes" "$metadata_mode_safe" "$metadata_uid" "$metadata_gid" \
+    "$metadata_modified_epoch" "$metadata_symlink_target_safe" \
+    "$metadata_symlink_target_state"
+}
+
+# A non-directory parent refused before traversal still gets one whole typed
+# row. This is distinct from `missing`: no claim was made about what sits
+# below the non-directory.
+emit_refused_filesystem_metadata() {
+  metadata_name="$1"
+  metadata_state="$2"
+  sanitize "$metadata_name"
+  metadata_name_safe=$sanitized
+  printf '{"name":"%s","name_state":"read","kind":"uninspected","metadata_state":"%s","bytes":null,"mode":"unknown","uid":null,"gid":null,"modified_epoch":null,"symlink_target":"","symlink_target_state":"not_symlink"}' \
+    "$metadata_name_safe" "$metadata_state"
+  metadata_complete=false
+  metadata_kind=uninspected
 }
 
 # The sanitizer is checked before anything is reported, never trusted. Every
@@ -485,7 +629,93 @@ if [ -d "$services_root" ]; then
   done
 fi
 
-printf '],"forwards":['
+# Cargo home metadata and complete bin membership belong to the typed host
+# inventory, not to `host exec`: the paths are fixed at the managed account's
+# own `$HOME`, names are sanitized, and each reported entry is lstat'd. A
+# symlink at `$HOME/.cargo` is itself reported with its link target, then its
+# fixed `bin` child is traversed: Cargo installations commonly place that
+# whole tree on a mounted cache, and this read-only inventory opens no child
+# contents.
+printf '],"cargo":{"home":'
+emit_filesystem_metadata "$cargo_home" '.cargo'
+cargo_home_complete=$metadata_complete
+cargo_home_kind=$metadata_kind
+printf ',"bin":'
+case "$cargo_home_kind" in
+  directory|symlink)
+    emit_filesystem_metadata "$cargo_bin" 'bin'
+    ;;
+  missing)
+    # If the fixed parent does not exist, its fixed child does not exist
+    # either; no second filesystem traversal is needed to state that.
+    emit_filesystem_metadata "$cargo_bin" 'bin'
+    ;;
+  *)
+    emit_refused_filesystem_metadata 'bin' refused_parent_not_directory
+    ;;
+esac
+cargo_bin_complete=$metadata_complete
+cargo_bin_kind=$metadata_kind
+printf ',"entries":['
+separator=""
+cargo_entries_seen=0
+cargo_entries_emitted=0
+cargo_entries_complete=true
+cargo_entries_state=missing
+if [ "$cargo_home_kind" != directory ] && [ "$cargo_home_kind" != symlink ] && \
+   [ "$cargo_home_kind" != missing ]; then
+  cargo_entries_state=refused_parent_not_directory
+  cargo_entries_complete=false
+elif [ "$cargo_bin_kind" = directory ] || [ "$cargo_bin_kind" = symlink ]; then
+  if [ ! -d "$cargo_bin" ]; then
+    cargo_entries_state=refused_not_directory
+    cargo_entries_complete=false
+  elif [ ! -r "$cargo_bin" ]; then
+    cargo_entries_state=refused_unreadable
+    cargo_entries_complete=false
+  elif ! /usr/bin/find -H "$cargo_bin" -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1; then
+    # Globs do not expose a traversal status. A fixed, depth-one walk does,
+    # so an I/O or permission failure cannot become a complete empty list.
+    cargo_entries_state=partial_traversal
+    cargo_entries_complete=false
+  else
+    cargo_entries_state=read
+    # `*` excludes dotfiles. The two disjoint dot patterns add every real
+    # hidden member without ever including the synthetic `.` and `..`.
+    for cargo_entry_path in "$cargo_bin"/* "$cargo_bin"/.[!.]* "$cargo_bin"/..?*; do
+      # An unmatched glob stays literal; a dangling symlink fails -e but not -L.
+      if [ ! -e "$cargo_entry_path" ] && [ ! -L "$cargo_entry_path" ]; then
+        continue
+      fi
+      cargo_entries_seen=$((cargo_entries_seen + 1))
+      if [ "$cargo_entries_emitted" -lt "$cargo_entry_limit" ]; then
+        cargo_entries_emitted=$((cargo_entries_emitted + 1))
+        cargo_entry_name=${cargo_entry_path##*/}
+        printf '%s' "$separator"
+        emit_filesystem_metadata "$cargo_entry_path" "$cargo_entry_name"
+        if [ "$metadata_complete" != true ] || [ "$metadata_state" != read ]; then
+          cargo_entries_complete=false
+        fi
+        separator=,
+      else
+        cargo_entries_complete=false
+      fi
+    done
+  fi
+elif [ "$cargo_bin_kind" != missing ]; then
+  cargo_entries_state=refused_not_directory
+  cargo_entries_complete=false
+fi
+cargo_complete=true
+if [ "$cargo_home_complete" != true ] || [ "$cargo_bin_complete" != true ] || \
+   [ "$cargo_entries_complete" != true ]; then
+  cargo_complete=false
+fi
+printf '],"entries_seen":%d,"entries_complete":%s,"entries_state":"%s","complete":%s}' \
+  "$cargo_entries_seen" "$cargo_entries_complete" "$cargo_entries_state" \
+  "$cargo_complete"
+
+printf ',"forwards":['
 separator=""
 if [ "$forwards_dir_state" = directory ]; then
   for marker_path in "$forward_dir"/*.url; do
@@ -887,6 +1117,56 @@ pub struct VaultFile {
     pub owner_only: bool,
 }
 
+/// Metadata for one fixed filesystem entry, collected without following it.
+///
+/// Numeric fields are absent when lstat could not read all of them. `kind`
+/// still distinguishes an absent path from one whose metadata read failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesystemMetadata {
+    pub name: String,
+    /// `read` or `sanitized`. The latter makes Cargo inventory incomplete:
+    /// its bounded display name is not exact membership.
+    pub name_state: String,
+    /// `missing`, `symlink`, `directory`, `regular`, `other`, or
+    /// `uninspected` when a parent was refused.
+    pub kind: String,
+    /// `read`, `missing`, `unavailable`, `malformed`, or a
+    /// `refused_parent_*` state.
+    pub metadata_state: String,
+    pub bytes: Option<u64>,
+    /// Permission bits in octal, or `unknown`.
+    pub mode: String,
+    pub uid: Option<u64>,
+    pub gid: Option<u64>,
+    pub modified_epoch: Option<i64>,
+    /// The link text for a symlink. Empty for every other kind and when
+    /// readlink itself could not answer.
+    pub symlink_target: String,
+    /// `read`, `not_symlink`, `unavailable`, or `sanitized`.
+    pub symlink_target_state: String,
+}
+
+/// The managed account's fixed Cargo home and bin directory inventory.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CargoInventory {
+    pub home: FilesystemMetadata,
+    pub bin: FilesystemMetadata,
+    pub entries: Vec<FilesystemMetadata>,
+    /// Every child matched, including any beyond [`MAX_CARGO_BIN_ENTRIES`].
+    pub entries_seen: u64,
+    /// True only when `entries` names every child.
+    pub entries_complete: bool,
+    /// `read`, `missing`, `partial_traversal`,
+    /// `refused_not_directory`, `refused_unreadable`, or
+    /// `refused_parent_not_directory`.
+    pub entries_state: String,
+    /// True only when both fixed roots and every child were reported without
+    /// truncation, sanitization, malformed metadata, or an unavailable read.
+    pub complete: bool,
+}
+
 /// Everything the remote script reported, before reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -905,6 +1185,10 @@ pub struct Inventory {
     /// no `$HOME/.stado/services` tree.
     #[serde(default)]
     pub service_artifacts: Vec<ServiceArtifact>,
+    /// Metadata for `$HOME/.cargo` and `$HOME/.cargo/bin`, plus the bin
+    /// directory's complete child membership when `entries_complete` is true.
+    #[serde(default)]
+    pub cargo: CargoInventory,
     pub forwards: Vec<ForwardMarker>,
     pub listeners: Vec<Listener>,
     /// [`LISTENERS_READ`] or [`LISTENERS_FAILED`]. An empty `listeners` means
@@ -954,6 +1238,43 @@ fn clamp_vault_section(files: &mut Vec<VaultFile>, seen: &mut u64) {
     }
 }
 
+fn clamp_filesystem_metadata(metadata: &mut FilesystemMetadata) -> bool {
+    let exact = metadata.name.chars().count() <= MAX_FIELD_CHARS
+        && metadata.symlink_target.chars().count() <= MAX_FIELD_CHARS;
+    clamp(&mut metadata.name);
+    clamp(&mut metadata.name_state);
+    clamp(&mut metadata.kind);
+    clamp(&mut metadata.metadata_state);
+    clamp(&mut metadata.mode);
+    clamp(&mut metadata.symlink_target);
+    clamp(&mut metadata.symlink_target_state);
+    exact
+}
+
+fn clamp_cargo_inventory(cargo: &mut CargoInventory) {
+    let home_exact = clamp_filesystem_metadata(&mut cargo.home);
+    let bin_exact = clamp_filesystem_metadata(&mut cargo.bin);
+    let mut complete = home_exact && bin_exact;
+    clamp(&mut cargo.entries_state);
+    cargo
+        .entries
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    cargo.entries_seen = cargo.entries_seen.max(cargo.entries.len() as u64);
+    cargo.entries.truncate(MAX_CARGO_BIN_ENTRIES);
+    cargo.entries_complete &= matches!(cargo.entries_state.as_str(), "read" | "missing")
+        && cargo.entries_seen == cargo.entries.len() as u64;
+    for entry in &mut cargo.entries {
+        complete &= clamp_filesystem_metadata(entry)
+            && entry.name_state == "read"
+            && entry.metadata_state == "read"
+            && matches!(entry.symlink_target_state.as_str(), "read" | "not_symlink");
+    }
+    cargo.entries_complete &= complete;
+    cargo.complete &= cargo.entries_complete
+        && matches!(cargo.home.metadata_state.as_str(), "read" | "missing")
+        && matches!(cargo.bin.metadata_state.as_str(), "read" | "missing");
+}
+
 /// Cap every string in the inventory.
 fn clamp_inventory(inventory: &mut Inventory) {
     clamp(&mut inventory.forwards_dir_state);
@@ -974,6 +1295,10 @@ fn clamp_inventory(inventory: &mut Inventory) {
     for listener in &mut inventory.listeners {
         clamp(&mut listener.address);
     }
+    if inventory.sanitizer_state != SANITIZER_OK {
+        inventory.cargo.entries_complete = false;
+        inventory.cargo.complete = false;
+    }
     for subcommand in &mut inventory.subcommands {
         clamp(&mut subcommand.name);
         clamp(&mut subcommand.state);
@@ -983,6 +1308,7 @@ fn clamp_inventory(inventory: &mut Inventory) {
         &mut inventory.vault_sidecars,
         &mut inventory.vault_sidecars_seen,
     );
+    clamp_cargo_inventory(&mut inventory.cargo);
 }
 
 /// Parse the script's one line of JSON.
@@ -1391,6 +1717,7 @@ pub fn to_report(
         "service_artifacts".to_string(),
         json!(inventory.service_artifacts),
     );
+    report.insert("cargo".to_string(), json!(inventory.cargo));
     report.insert("forwards".to_string(), json!(markers));
     report.insert("listeners".to_string(), json!(inventory.listeners));
     report.insert(
