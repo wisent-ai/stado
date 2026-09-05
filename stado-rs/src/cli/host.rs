@@ -7153,7 +7153,7 @@ async fn remote_skarbiec_json_at(
         crate::deploy::host_channel::run_program_with_stdin(
             &resolved,
             &invocation,
-            include_bytes!("../../../scripts/vault-token-from-item.py"),
+            include_str!("../../../scripts/vault-token-from-item.py"),
             &runner,
         )
         .await
