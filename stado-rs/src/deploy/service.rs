@@ -7816,8 +7816,8 @@ if [ "$os" = Darwin ]; then
       exit 0
     }
     case "$disabled" in
-      true) state=disabled ;;
-      false) state=enabled ;;
+      true|disabled) state=disabled ;;
+      false|enabled) state=enabled ;;
       *) report refused "$candidate returned invalid disabled state $disabled"; exit 0 ;;
     esac
     if { [ "$action" = enable ] && [ "$state" != enabled ]; } ||

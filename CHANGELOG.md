@@ -2,6 +2,9 @@
 
 ## 0.16.25
 
+- **Reconciliation retries:** before fencing writers, `host storage-root-reconcile` reads the current canonical Stado version instead of reusing the version in an older captured target. An existing fence keeps its staged version pinned; an unavailable registry is an error, not permission to use cached declarations.
+- **Live transaction status:** owner reports retain `recorded_status` and include the native manager's current observation. A previously executing owner is reported as interrupted when its process is gone, or unobserved when the manager cannot be read.
+- **Native autostart state:** launchd inspection and mutation read-back accept both boolean overrides and the native `enabled`/`disabled` state names. Reconciliation can preserve and restore the observed boot state without treating a valid macOS answer as a refusal.
 - **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
 
 ## 0.16.24
