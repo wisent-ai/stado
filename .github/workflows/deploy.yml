@@ -582,9 +582,38 @@ jobs:
               sleep "$((attempt * 2))"
             done
             if [ "$published" != true ]; then
+              # Every attempt failed, so whatever this object staged is
+              # residue: `put` writes a large body as
+              # `<key>.__stado_upload/<id>/<index>` parts and only
+              # composition promotes them, so a publish that never composed
+              # leaves parts and no object. On 2026-09-04 the 0.15.25
+              # darwin-arm64 archive was left as 19 such parts, 57 MiB the
+              # release-store janitor cannot even see as a version and no
+              # reader can resolve. Discard them here, where the target URI
+              # is still known, and then fail.
+              "$stado_bin" storage abort-upload "$uri" --json || true
               echo "::error::Could not create and verify $uri after $max_attempts attempts"
               false
             fi
+          done
+
+      - name: Discard staged Linux upload parts
+        if: always()
+        run: |
+          # Idempotent and safe after success: composition deletes the parts
+          # it promoted, so a published coordinate has none and this reports
+          # zero. It runs on cancellation and on any later failure too,
+          # because the parts outlive the process that staged them.
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          export STADO_API_URL="$STADO_WRITER_API_URL"
+          if [ ! -x "$stado_bin" ] || [ ! -d "$RUNNER_TEMP/stado-release" ]; then
+            echo "no publisher or no release directory: nothing was staged"
+            exit 0
+          fi
+          for source in "$RUNNER_TEMP"/stado-release/*; do
+            name="${source##*/}"
+            "$stado_bin" storage abort-upload \
+              "stado://releases/stado/$STADO_VERSION/linux-amd64/$name" --json || true
           done
 
       - name: Validate public Linux release delivery
@@ -665,6 +694,33 @@ jobs:
             ! jq -e '.providers_disabled // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
             jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
           fi
+
+      # The public route, asked BEFORE anything is published, because every
+      # later step depends on it and the repair for it used to sit at the end
+      # of the job. On 2026-09-04 this job failed at "Create immutable native
+      # release through Stado" while the loopback listener behind the route
+      # was down, so "Reconcile public release ingress" - which IS the repair,
+      # `stado host recover-object-api` - was skipped on exactly the run that
+      # needed it, and the route stayed 502 for hours. Asking here fails the
+      # job in seconds with the route's own answer instead of after a full
+      # build and publish.
+      - name: Require the public release route before publishing
+        run: |
+          route="$STADO_PUBLIC_RELEASE_API_URL/api/release/object"
+          # A malformed `uri` is answered by the route's own handler, so the
+          # expected status is a refusal, not a success: what is being tested
+          # is that the loopback listener answers at all. 502 is what a dead
+          # listener behind the Funnel produces, and 000 is curl failing to
+          # reach the host.
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "$route?uri=stado://releases/precondition")"
+          echo "public release route answered HTTP $status"
+          case "$status" in
+            502|503|504|000)
+              echo "::error::The public release route answers HTTP $status: the object API behind it is not serving. Repair it with 'stado host recover-object-api charless-mac-mini' before publishing."
+              false
+              ;;
+          esac
 
 
       - name: Create immutable native release through Stado
@@ -791,6 +847,10 @@ jobs:
               fi
               sleep "$((attempt * 2))"
             done
+            # No attempt composed, so the parts this staged are residue: a
+            # coordinate holding `<key>.__stado_upload/<id>/<index>` and no
+            # object. The 0.15.25 darwin-arm64 archive was left exactly so.
+            "$stado_bin" storage abort-upload "$uri" --json || true
             echo "::error::Could not create and verify $uri after 12 attempts"
             return 1
           }
@@ -837,26 +897,18 @@ jobs:
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Validate public native release delivery
-        run: |
-          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
-          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          bash "$STADO_SOURCE_DIR/scripts/verify_public_stado_release.sh" \
-            "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
-            "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
-            "$RUNNER_TEMP"
-
-      - name: Deliver verified native release
-        run: |
-          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
-          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          "$stado_bin" host declare-version "$COORD_TARGET" \
-            --binary stado \
-            --version "$STADO_NATIVE_RELEASE_VERSION" \
-            --json
-          "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
-
+      # Immediately after publication and `if: always()`, because this step IS
+      # the route's repair - `stado host recover-object-api` - and it used to
+      # sit at the END of this job, after delivery. That order meant it was
+      # skipped on precisely the runs that broke the route: on 2026-09-04 the
+      # job failed at "Create immutable native release through Stado" and this
+      # step never ran, leaving `/api/release/object` answering 502 through
+      # both the Funnel and `stado.wisent.com` while `install-stado.sh`,
+      # `self_update.rs`, `host_release.rs` and `host_recovery_release.rs` all
+      # read that path. A repair reachable only on the happy path is not a
+      # repair.
       - name: Reconcile public release ingress
+        if: always()
         run: |
           "$HOME/.stado/bin/stado" host recover-object-api \
             charless-mac-mini --json \
@@ -882,6 +934,26 @@ jobs:
                   "http://127.0.0.1:8765/api/release/object")
               ] | any
             '
+
+      - name: Validate public native release delivery
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          bash "$STADO_SOURCE_DIR/scripts/verify_public_stado_release.sh" \
+            "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
+            "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
+            "$RUNNER_TEMP"
+
+      - name: Deliver verified native release
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          "$stado_bin" host declare-version "$COORD_TARGET" \
+            --binary stado \
+            --version "$STADO_NATIVE_RELEASE_VERSION" \
+            --json
+          "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
+
 
       - name: Reload TLS reverse proxy
         if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
@@ -938,7 +1010,7 @@ jobs:
               [
                 .deliveries[]
                 | select(.required == true)
-                | select(.argv == ["stado", "release", "install-local"])
+                | select(.argv[0:3] == ["stado", "release", "install-local"])
                 | .target
               ]
               | if length > 0 and length == (unique | length)

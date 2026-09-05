@@ -92,18 +92,18 @@ if [ \"$os\" = Darwin ]; then
       opened_inode=''
       if [ -n \"$image\" ] && [ -n \"$mapped_device\" ] && [ -n \"$mapped_inode\" ] &&
          exec 9<\"$image\"; then
-        opened_identity=$(/usr/bin/stat -f '%d:%i' <&9 2>/dev/null || true)
-        opened_device=${opened_identity%%:*}
-        opened_inode=${opened_identity#*:}
+        opened_identity=$(/usr/bin/stat -f '%d %i' <&9 2>/dev/null || true)
+        opened_device=${opened_identity%% *}
+        opened_inode=${opened_identity#* }
         mapped_device_decimal=$((mapped_device))
         if [ -n \"$opened_device\" ] && [ -n \"$opened_inode\" ] &&
            [ \"$opened_device\" -eq \"$mapped_device_decimal\" ] &&
            [ \"$opened_inode\" -eq \"$mapped_inode\" ]; then
           image_digest=$(/usr/bin/openssl dgst -sha256 -r <&9 2>/dev/null)
           image_digest=${image_digest%% *}
-          after_identity=$(/usr/bin/stat -f '%d:%i' <&9 2>/dev/null || true)
-          after_device=${after_identity%%:*}
-          after_inode=${after_identity#*:}
+          after_identity=$(/usr/bin/stat -f '%d %i' <&9 2>/dev/null || true)
+          after_device=${after_identity%% *}
+          after_inode=${after_identity#* }
           if [ \"$after_device\" != \"$opened_device\" ] ||
              [ \"$after_inode\" != \"$opened_inode\" ]; then
             image_digest=''

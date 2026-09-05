@@ -22,7 +22,7 @@
 //!   TOP-LEVEL, unmodelled key rather than a `release_control` field so that
 //!   older builds preserve and ignore it instead of refusing the whole
 //!   document — see [`REVISIT_POLICY_KEY`]. [`policy`] returns `None` for
-//!   today's absent key before [`host_scope`] is called. For a present block,
+//!   an absent key before [`host_scope`] is called. For a present block,
 //!   `host_scope` answers `None` when no product names a label for this target.
 //! - **One unit per reconcile invocation.** One scheduled tick is one
 //!   invocation; [`revisit_plan`] picks one and records the rest as
@@ -403,9 +403,8 @@ pub(crate) struct RevisitTargetPolicy {
 
 /// The policy block, or `None` when the document carries none.
 ///
-/// Absent means off, and that is the whole default: no registry in this fleet
-/// carries the key, so every reader of this function returns before it looks
-/// at a process table, a unit file, a lock or a disk.
+/// Absent means off: readers return before inspecting a process table, unit
+/// file, lock, or ledger when this block is not declared.
 ///
 /// A block that is present and will not parse is an `Err` and never a `None`.
 /// Reading a malformed policy as "nothing authorised" would be the same defect
@@ -1090,7 +1089,7 @@ pub(crate) async fn revisit_once(
         &pick,
         AttemptOutcome::Attempting,
         &attempted_at,
-        "about to issue launchctl kickstart -k".to_string(),
+        "about to reconcile the observed launchd unit".to_string(),
     )
     .map_err(|error| {
         format!(
@@ -1100,7 +1099,7 @@ pub(crate) async fn revisit_once(
         )
     })?;
     let (outcome, service_target) =
-        match service::kickstart_local_unit(&pick.unit, &pick.unit_path, None) {
+        match service::restart_local_unit(target, &pick.unit, &pick.unit_path, None).await {
             Ok(service_target) => {
                 let after = settle(target, target_name, &pick.unit, pick.pid).await;
                 (
@@ -1155,10 +1154,9 @@ pub(crate) struct RevisitAnnotations {
 
 /// The annotations for one host, or `None` when there is nothing to annotate.
 ///
-/// `None` on every host today, because no target declares
-/// `release_unit_image_revisit`, so [`declared_units`] is empty before a file is
-/// opened. `local_units` is the host this process runs on: the ledger is a
-/// local file, so a row about another host gets no clause.
+/// No clause is added when the target declares no image revisit policy.
+/// `local_units` is the host this process runs on: the ledger is a local file,
+/// so a row about another host gets no clause.
 pub(crate) fn annotations(
     document: &Value,
     target_name: &str,

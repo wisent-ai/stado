@@ -2233,8 +2233,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
             // repair that happens silently is the same defect as a failure
             // that happens silently, and a new severity word for it would be
             // a third vocabulary for one condition. Only for units an enabled
-            // policy explicitly owns, and `None` on every host today because
-            // no registry carries `release_unit_image_revisit`.
+            // policy explicitly owns.
             let mut sentence = image.sentence();
             if let Some(clause) = revisit.as_ref().and_then(|revisit| revisit.clause(&image)) {
                 sentence.push_str(&clause);

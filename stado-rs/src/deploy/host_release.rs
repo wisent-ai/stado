@@ -1873,6 +1873,13 @@ async fn release_target_inner(
         .await?;
         prior_unit_state.insert(declared.unit_id().to_string(), state);
     }
+    report.insert(
+        "unit_processes_before".to_string(),
+        json!(prior_unit_state
+            .values()
+            .map(|state| state.to_json())
+            .collect::<Vec<_>>()),
+    );
 
     // Phase three: activate. Reached only because phase two verified.
     let activate = host_channel::run_script(target, &activate_script(&plan), runner).await?;
@@ -1941,6 +1948,22 @@ async fn release_target_inner(
                 unit_processes.push(evidence.clone());
                 continue;
             }
+            let arguments = std::iter::once(declared.program.as_str())
+                .chain(declared.args.iter().map(String::as_str))
+                .collect::<Vec<_>>();
+            if crate::self_update::defers_to_release_handshake(&arguments) {
+                if let Some(evidence) = prior_unit_state.get(&unit_id) {
+                    unit_processes.push(evidence.to_json());
+                }
+                steps.push(step_entry(
+                    "restart",
+                    "deferred_to_release_handshake",
+                    Some(format!(
+                        "{unit_id} is the queue agent and will recycle itself after its current slot"
+                    )),
+                ));
+                continue;
+            }
             match service::restart_service(target, declared, runner).await {
                 Ok(restarted) if restarted.succeeded("restarted") => {
                     match service_label_print::print_label(
@@ -1967,6 +1990,7 @@ async fn release_target_inner(
                                 && (plan.product.install.is_tree()
                                     || current.process_sha256.as_deref()
                                         == Some(active_sha256.as_str()));
+                            unit_processes.push(current.to_json());
                             if fresh && exact_image {
                                 let detail = format!(
                                     "{unit_id} fresh pid {} image {} sha256 {}",
@@ -1975,10 +1999,18 @@ async fn release_target_inner(
                                     current.process_sha256.as_deref().unwrap_or_default()
                                 );
                                 steps.push(step_entry("restart", "ok", Some(detail)));
-                                unit_processes.push(current.to_json());
                             } else {
                                 let detail = format!(
-                                    "{unit_id}: restart did not prove a fresh pid on the activated immutable image"
+                                    "{unit_id}: restart did not prove a fresh pid on the activated immutable image; prior pid={} start={} current pid={} start={} executable={} device={} inode={} sha256={} identity_unavailable={}",
+                                    previous_pid.unwrap_or_default(),
+                                    previous_start.unwrap_or_default(),
+                                    current_pid.unwrap_or_default(),
+                                    current_start.unwrap_or_default(),
+                                    current.process_executable.as_deref().unwrap_or_default(),
+                                    current.process_device.unwrap_or_default(),
+                                    current.process_inode.unwrap_or_default(),
+                                    current.process_sha256.as_deref().unwrap_or_default(),
+                                    current.process_identity_unavailable.as_deref().unwrap_or_default()
                                 );
                                 steps.push(step_entry(
                                     "restart",

@@ -235,6 +235,12 @@ pub struct ManagedService {
     pub args: Vec<String>,
     /// Non-secret environment rendered into the unit and preserved by repairs.
     pub env: BTreeMap<String, String>,
+    /// Exact systemd unit body for a service whose native definition carries
+    /// lifecycle semantics the generic renderer cannot express. Empty for the
+    /// ordinary generated unit. When present, reconciliation validates that
+    /// its `ExecStart` is exactly [`ManagedService::program`] plus
+    /// [`ManagedService::args`] before retaining these authored semantics.
+    pub systemd_unit: String,
     /// [`SOURCE_REGISTRY`] or [`SOURCE_RECOVERY`].
     pub source: String,
     /// When the unit entered management; empty for a recovery-sourced one,
@@ -295,6 +301,9 @@ impl ManagedService {
         if !self.env.is_empty() {
             record["env"] = json!(self.env);
         }
+        if !self.systemd_unit.is_empty() {
+            record["systemd_unit"] = Value::String(self.systemd_unit.clone());
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
                 serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
@@ -319,6 +328,7 @@ impl ManagedService {
             "program": self.program,
             "args": self.args,
             "env": self.env,
+            "systemd_unit": self.systemd_unit,
         });
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
@@ -389,6 +399,7 @@ impl ManagedService {
                         .collect()
                 })
                 .unwrap_or_default(),
+            systemd_unit: text("systemd_unit"),
             onboarding: record
                 .get("onboarding")
                 .and_then(|value| serde_json::from_value(value.clone()).ok()),
@@ -418,6 +429,7 @@ pub fn launchd_service(
         program: String::new(),
         args: Vec::new(),
         env: BTreeMap::new(),
+        systemd_unit: String::new(),
         onboarding: None,
     }
 }
@@ -443,6 +455,7 @@ pub fn systemd_service(
         program: String::new(),
         args: Vec::new(),
         env: BTreeMap::new(),
+        systemd_unit: String::new(),
         onboarding: None,
     }
 }
@@ -2002,6 +2015,7 @@ say() {
   if ! stado_domain_of \"$unit_path\"; then
 @NO_DOMAIN@
   fi
+@OBSERVED_DOMAIN@
 elif [ \"$os\" = \"Linux\" ]; then
   # The same search the Darwin branch above makes, for the same reason it was
   # widened: adoption looked only at this login's user units and reported a
@@ -2697,7 +2711,7 @@ say 'restart_failed' \"ended pid(s) $daemon_before and launchd started nothing i
 /// restart used is [`STATUS_NOT_LOADED`]: the domain, launchd's own words and
 /// the reason, and nothing started outside launchd.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
-  if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+  if [ \"${stado_reload_unit:-0}\" != 1 ] && $launch print \"$domain/$unit\" >/dev/null 2>&1; then
     # An in-place kick re-execs the argv launchd already holds. It cannot
     # apply a unit file whose program or arguments have changed, and it
     # reports success either way -- which is how two restarts and an ensure
@@ -3495,7 +3509,7 @@ const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
     printf 'STADO_LOG\\t%s\\n' \"$log\"
-    /usr/bin/tail -n @OUT_LINES@ \"$log\"
+    /usr/bin/tail -c @MAX_BYTES@ \"$log\" | /usr/bin/tail -n @OUT_LINES@
   else
     say 'missing_log' \"$log\"
   fi
@@ -3503,7 +3517,7 @@ const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     printf 'STADO_ERR\\t%s\\n' 'absent in plist'
   elif [ -s \"$err_log\" ]; then
     printf 'STADO_ERR\\t%s\\n' \"$err_log\"
-    /usr/bin/tail -n @ERR_LINES@ \"$err_log\"
+    /usr/bin/tail -c @MAX_BYTES@ \"$err_log\" | /usr/bin/tail -n @ERR_LINES@
   else
     printf 'STADO_ERR\\t%s\\n' \"$err_log (empty)\"
   fi
@@ -3736,10 +3750,21 @@ fn prelude_with(
     linux_unit: &str,
     path: &str,
     no_domain: &str,
+    observed_domain: Option<&str>,
 ) -> Result<String, DeployError> {
     validate_unit_id(unit)?;
     Ok(REMOTE_PRELUDE
         .replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER)
+        .replace(
+            "@OBSERVED_DOMAIN@",
+            &observed_domain.map_or_else(String::new, |domain| {
+                format!(
+                    "  domain={}\n  domain_status={}\n  domain_reason='the exact loaded owner was observed before this lifecycle action'\n",
+                    shlex_quote(domain),
+                    if domain.starts_with("gui/") { "graphical" } else { "fallback" },
+                )
+            }),
+        )
         .replace("@UNIT_STATE@", UNIT_STATE)
         .replace("@UNIT@", &shlex_quote(unit))
         .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
@@ -3748,7 +3773,7 @@ fn prelude_with(
 }
 
 fn remote_prelude(unit: &str, linux_unit: &str, path: &str) -> Result<String, DeployError> {
-    prelude_with(unit, linux_unit, path, NO_DOMAIN_REFUSE)
+    prelude_with(unit, linux_unit, path, NO_DOMAIN_REFUSE, None)
 }
 
 /// Assemble a remote program: the shared prelude with this unit spliced in,
@@ -3998,8 +4023,28 @@ pub async fn restart_service_with_password(
     if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
         return restart_system_daemon(target, service, sudo_password, runner).await;
     }
-    let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
-    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    restart_non_system_service(target, service, None, false, runner).await
+}
+
+async fn restart_non_system_service(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    observed_domain: Option<&str>,
+    reload_unit: bool,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = format!(
+        "stado_reload_unit={}\n{}",
+        u8::from(reload_unit),
+        RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP)
+    );
+    let prelude = prelude_with(
+        service.unit_id(),
+        "",
+        &service.path,
+        NO_DOMAIN_REFUSE,
+        observed_domain,
+    )?;
     let mut report = run_remote_checked(
         target,
         &prelude,
@@ -4052,6 +4097,31 @@ async fn restart_system_daemon(
         // and that is a better answer than a refusal composed here.
         return Ok(probe);
     };
+    let cached = super::service_label_print::print_label(
+        target,
+        service.unit_id(),
+        BootoutScope::System,
+        runner,
+    )
+    .await?;
+    if cached.loaded() {
+        let cached_argv = cached.runs().ok_or_else(|| {
+            DeployError(format!(
+                "{} has no readable cached launchd argument vector",
+                service.unit_id()
+            ))
+        })?;
+        if cached_argv != daemon.argv {
+            return privileged_restart_system_daemon(
+                target,
+                service,
+                sudo_password.unwrap_or_default(),
+                true,
+                runner,
+            )
+            .await;
+        }
+    }
     if !daemon.restartable_unprivileged() {
         if let Some(password) = sudo_password {
             return privileged_restart_system_daemon(target, service, password, false, runner)
@@ -4328,7 +4398,8 @@ async fn privileged_restart_system_daemon(
                 path: service.path.clone(),
                 status: "restarted".to_string(),
                 detail: format!(
-                    "launchctl kickstart replaced the system daemon with pid(s) {}",
+                    "launchctl {} the system daemon with pid(s) {}",
+                    if reload_unit { "reloaded" } else { "restarted" },
                     daemon.owned_pids.join(" ")
                 ),
                 postcondition: RUNNING_DESCRIBE.to_string(),
@@ -4339,8 +4410,9 @@ async fn privileged_restart_system_daemon(
         }
     }
     Err(DeployError(format!(
-        "{} accepted the privileged kickstart but no process appeared for {} in 15 seconds",
+        "{} accepted the privileged {} but no process appeared for {} in 15 seconds",
         target.name,
+        if reload_unit { "reload" } else { "kickstart" },
         service.unit_id()
     )))
 }
@@ -4947,6 +5019,107 @@ pub fn plan_deploy_labelled(
     Ok(plan)
 }
 
+/// Retain an authored systemd definition whose lifecycle semantics cannot be
+/// represented by the generic program/args/environment renderer.
+///
+/// The run declaration remains the authority for process ownership. Requiring
+/// the definition's one `ExecStart` to match that declaration prevents an
+/// opaque unit body from making lifecycle commands install a different
+/// program than the registry says they manage. Declared environment is
+/// materialized into the authored body in place, so `ensure --env` and a later
+/// declaration-driven convergence have the same semantics as generated units.
+/// An explicit program override replaces only `ExecStart`, retaining native
+/// dependencies and startup conditions rather than discarding the unit body.
+pub fn retain_systemd_unit(
+    plan: &mut DeployPlan,
+    definition: &str,
+    environment: &[(String, String)],
+    replace_program: bool,
+) -> Result<String, DeployError> {
+    let mut starts = definition.lines().filter_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        (name.trim() == "ExecStart").then_some(value.trim())
+    });
+    let Some(exec_start) = starts.next() else {
+        return Err(DeployError(
+            "authored systemd unit carries no ExecStart".to_string(),
+        ));
+    };
+    if starts.next().is_some() {
+        return Err(DeployError(
+            "authored systemd unit carries more than one ExecStart".to_string(),
+        ));
+    }
+    if exec_start != plan.argv && !replace_program {
+        return Err(DeployError(format!(
+            "authored systemd unit starts {}, but the declaration says {}",
+            py_str_repr(exec_start),
+            py_str_repr(&plan.argv),
+        )));
+    }
+
+    let mut remaining: BTreeMap<&str, &str> = environment
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let mut rendered = String::with_capacity(definition.len());
+    let mut inserted = false;
+    for line in definition.lines() {
+        if let Some((_, assignment)) = line
+            .split_once('=')
+            .filter(|(name, _)| name.trim() == "Environment")
+        {
+            let Some((name, _)) = assignment.split_once('=') else {
+                return Err(DeployError(format!(
+                    "authored systemd unit has malformed environment line {}",
+                    py_str_repr(line),
+                )));
+            };
+            if let Some(value) = remaining.remove(name) {
+                rendered.push_str("Environment=");
+                rendered.push_str(name);
+                rendered.push('=');
+                rendered.push_str(value);
+                rendered.push('\n');
+            }
+            continue;
+        }
+        if !inserted && line.trim_start().starts_with("ExecStart") {
+            for (name, value) in &remaining {
+                rendered.push_str("Environment=");
+                rendered.push_str(name);
+                rendered.push('=');
+                rendered.push_str(value);
+                rendered.push('\n');
+            }
+            remaining.clear();
+            inserted = true;
+        }
+        if replace_program
+            && line
+                .split_once('=')
+                .is_some_and(|(name, _)| name.trim() == "ExecStart")
+        {
+            rendered.push_str("ExecStart=");
+            rendered.push_str(&plan.argv);
+            rendered.push('\n');
+            continue;
+        }
+        rendered.push_str(line);
+        rendered.push('\n');
+    }
+    if !remaining.is_empty() {
+        return Err(DeployError(
+            "authored systemd unit carries no ExecStart position for its declared environment"
+                .to_string(),
+        ));
+    }
+    guard_heredoc(&rendered)?;
+    plan.linux_unit = rendered.clone();
+    Ok(rendered)
+}
+
 /// `service deploy` on one host: push the rendered unit and bootstrap it.
 ///
 /// This is the fleet's only start, so it carries the start's end state. It
@@ -5112,6 +5285,7 @@ pub async fn ensure_service(
         &plan.unit,
         &ensure_unit_path(plan),
         NO_DOMAIN_SYSTEM,
+        None,
     )?;
     let mut report = run_remote_checked(
         target,
@@ -6116,24 +6290,24 @@ pub fn units_running_replaced_images(
         .collect()
 }
 
-/// Restart one launchd unit on THIS machine, in place.
+/// Restart one local launchd unit in its observed owner domain.
 ///
-/// Without an observed owner, user units try `gui/<uid>` and then
-/// `user/<uid>`. Callers that already observed ownership supply its exact
-/// domain so it is selected before any mutation. System jobs use the same
-/// non-interactive `sudo -n` lifecycle path as the service installer and
-/// report refusal rather than prompting.
-///
-/// The unit path first establishes the allowed domain set. An observed owner
-/// outside that set is rejected before `launchctl` runs, so discovery cannot
-/// mutate one job and diagnose a cross-domain mismatch afterwards. Returns the
-/// service target that answered.
-pub fn kickstart_local_unit(
+/// Reuse the in-place kick when launchd still holds the program on disk.
+/// A changed cached definition must instead be reloaded through the existing
+/// system or user service lifecycle, after the plist and executable are read.
+/// Multiple owners, a domain inconsistent with the unit path, or an unreadable
+/// replacement refuse before mutation. System operations remain non-interactive.
+pub async fn restart_local_unit(
+    target: &ComputeTarget,
     label: &str,
     unit_path: &str,
     observed_domain: Option<&str>,
 ) -> Result<String, String> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if !host_channel::target_is_this_host(target) {
+        return Err("local unit restart requires this host's registry target".to_string());
+    }
+    validate_unit_id(label).map_err(|error| error.to_string())?;
     let unit_domain = UnitDomain::from_path(unit_path);
     if matches!(unit_domain, UnitDomain::Unknown) {
         return Err(format!(
@@ -6158,29 +6332,104 @@ pub fn kickstart_local_unit(
         }
         candidates.retain(|candidate| candidate == observed);
     }
-    let mut refusals = Vec::new();
-    for domain in candidates {
-        let service = format!("{domain}/{label}");
-        let output = if unit_domain.requires_privileged_bootstrap() {
-            std::process::Command::new("/usr/bin/sudo")
-                .args(["-n", "/bin/launchctl", "kickstart", "-k", &service])
-                .output()
-                .map_err(|error| format!("/usr/bin/sudo did not run: {error}"))?
-        } else {
-            std::process::Command::new("/bin/launchctl")
-                .args(["kickstart", "-k", &service])
-                .output()
-                .map_err(|error| format!("/bin/launchctl did not run: {error}"))?
-        };
-        if output.status.success() {
-            return Ok(service);
-        }
-        refusals.push(format!(
-            "{service}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+    let runner = super::production_runner();
+    let units = loaded_units(target, &runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    let loaded = units
+        .iter()
+        .find(|unit| unit.label == label)
+        .ok_or_else(|| format!("launchd holds no observed unit named {label}"))?;
+    let [domain] = loaded.loaded_domains.as_slice() else {
+        return Err(format!(
+            "{label} has {} loaded owners; refusing to choose a lifecycle domain",
+            loaded.loaded_domains.len()
+        ));
+    };
+    if !candidates.contains(domain) {
+        return Err(format!(
+            "{unit_path} permits {}, but launchd reports owner {domain}",
+            candidates.join(" or ")
         ));
     }
-    Err(refusals.join("; "))
+    let service = ManagedService {
+        host: target.name.clone(),
+        name: label.to_string(),
+        label: label.to_string(),
+        path: unit_path.to_string(),
+        kind: KIND_LAUNCHD.to_string(),
+        ..ManagedService::default()
+    };
+    let unit = fetch_unit_file(target, &service, &runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    let program = parse_unit_program(&unit)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("{unit_path} declares no executable program"))?;
+    let metadata = std::fs::metadata(&program)
+        .map_err(|error| format!("cannot read the replacement {program}: {error}"))?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        return Err(format!("{program} is not an executable file"));
+    }
+    let scope = if unit_domain.requires_privileged_bootstrap() {
+        BootoutScope::System
+    } else {
+        BootoutScope::User
+    };
+    let cached = super::service_label_print::print_label(target, label, scope, &runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    if cached.domain.as_deref() != Some(domain.as_str()) {
+        return Err(format!("{label} changed its loaded owner before restart"));
+    }
+    let cached_program = cached
+        .program
+        .as_deref()
+        .or_else(|| cached.arguments.as_deref()?.split_whitespace().next())
+        .ok_or_else(|| format!("{domain}/{label} has no readable cached program"))?;
+    if cached_program != program
+        || cached
+            .arguments
+            .as_deref()
+            .is_some_and(|argv| argv != loaded.program)
+    {
+        let report = if unit_domain.requires_privileged_bootstrap() {
+            reload_service_with_password(target, &service, None, &runner).await
+        } else {
+            restart_non_system_service(target, &service, Some(domain), true, &runner).await
+        }
+        .map_err(|error| error.to_string())?;
+        if !report.succeeded("restarted") {
+            return Err(report.failure());
+        }
+        if report.domain != *domain {
+            return Err(format!(
+                "{label} reloaded in {}, not {domain}",
+                report.domain
+            ));
+        }
+        return Ok(format!("{domain}/{label}"));
+    }
+    let qualified = format!("{domain}/{label}");
+    let output = if unit_domain.requires_privileged_bootstrap() {
+        std::process::Command::new("/usr/bin/sudo")
+            .args(["-n", "/bin/launchctl", "kickstart", "-k", &qualified])
+            .output()
+            .map_err(|error| format!("/usr/bin/sudo did not run: {error}"))?
+    } else {
+        std::process::Command::new("/bin/launchctl")
+            .args(["kickstart", "-k", &qualified])
+            .output()
+            .map_err(|error| format!("/bin/launchctl did not run: {error}"))?
+    };
+    if output.status.success() {
+        Ok(qualified)
+    } else {
+        Err(format!(
+            "{qualified}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -8154,6 +8403,14 @@ pub async fn tail_logs(
     tail_unit_logs(target, service.unit_id(), &service.path, lines, runner).await
 }
 
+/// The most log bytes one read may pull across the host channel.
+///
+/// A cap in lines cannot bound a transfer and cannot bound a diagnosis: on
+/// 2026-09-05 `stado host unit-log … --lines 40000` returned 500 lines of the
+/// object API's request log, which covered a few minutes, and an event at
+/// 13:17 was already unreadable at 14:10. Bytes bound the transfer honestly.
+pub const LOG_WINDOW_BYTES: usize = 4 * 1024 * 1024;
+
 /// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
 /// whose caller names a unit the registry may never have declared, so the
 /// plist search falls to the remote prelude's LaunchAgents/LaunchDaemons
@@ -8173,7 +8430,13 @@ pub async fn tail_unit_logs(
     let body = LOGS_BODY
         .replace("@LINES@", &shlex_quote(&lines.to_string()))
         .replace("@OUT_LINES@", &shlex_quote(&out_lines.to_string()))
-        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()));
+        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()))
+        // Bounded by bytes, not by trust in the line count: a unit that
+        // writes a request per line fills any line budget in minutes, and a
+        // reader who asks for more lines than the host hands back cannot tell
+        // a quiet unit from a truncated window. 4 MiB is the ceiling on what
+        // crosses the channel; the line count still selects within it.
+        .replace("@MAX_BYTES@", &shlex_quote(&LOG_WINDOW_BYTES.to_string()));
     let script = remote_script(unit_id, "", path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {
