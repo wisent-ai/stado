@@ -2150,6 +2150,16 @@ async fn run_with_lock(
     // operator asking what a cleanup WOULD delete would have silently
     // delayed the cleanup that does.
     let persist = if preview { None } else { Some(state_dir) };
+    // Which release versions the fleet DECLARES, taken from the same document
+    // this pass resolves its policy from, before that document is consumed.
+    // The registry is the only place a version another host needs is written
+    // down, and the release-store cleaner runs on whichever host carries the
+    // store — usually not the host that runs the binary.
+    let declared_release_versions = registry
+        .as_ref()
+        .ok()
+        .map(release_store::declared_versions)
+        .unwrap_or_default();
     let (target, mut policy, digest, policy_defaulted) =
         match registry.and_then(|data| resolve_canonical_policy(&data, &report.hostname)) {
             Ok(value) => value,
@@ -2544,7 +2554,14 @@ async fn run_with_lock(
     // share and only after every cleaner that reclaims scratch has had its
     // turn — a release is the one class here that costs a rebuild to get
     // back.
-    release_store::scan_release_store(home, &policy, remaining_after_twins, deadline, &mut report);
+    release_store::scan_release_store(
+        home,
+        &policy,
+        &declared_release_versions,
+        remaining_after_twins,
+        deadline,
+        &mut report,
+    );
     let total_scanned = report.hf.scanned_items
         + report.weles.scanned_items
         + report.builds.scanned_items
