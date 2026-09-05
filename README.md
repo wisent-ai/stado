@@ -373,6 +373,13 @@ stado capabilities --json
 
 See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
 
+The graphical equivalent for bounded host-vault bearer work is **Fleet › Hosts
+› selected host › Bounded vault bearer**. It can mint a new least-privilege
+bearer or register an existing owner-vault item field (default field `token`)
+without exposing bearer bytes. The sheet shows target, status, grant metadata,
+stored-source metadata, and Stado's refusal details. See
+[Channels](docs/channels.md#bounded-vault-bearers).
+
 For a loaded launchd label or systemd unit that the registry does not declare,
 `stado service bootout <exact-unit> --host <target> --domain system|user`
 retires only that exact init-system identity. Linux bootout disables and stops

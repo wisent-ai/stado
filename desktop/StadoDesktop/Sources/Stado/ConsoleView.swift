@@ -21,6 +21,7 @@ struct ConsoleView: View {
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
     @StateObject private var retireFileStore = HostRetireFileStore()
+    @StateObject private var vaultBearerStore = HostVaultBearerStore()
     @StateObject private var linkStore = HostLinkStore()
     @StateObject private var connectionPathStore = HostConnectionPathStore()
     @StateObject private var serviceStore = ServiceTruthStore()
@@ -360,6 +361,7 @@ struct ConsoleView: View {
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
                     retireFileStore: retireFileStore,
+                    vaultBearerStore: vaultBearerStore,
                     linkStore: linkStore,
                     connectionPathStore: connectionPathStore,
                     enrollmentStore: enrollmentStore,

@@ -19,6 +19,31 @@ The host channel resolves the target from the canonical registry, checks its pin
 
 Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. Mutating workflows use their owning commands, such as `stado service file-sync`, `stado service secret-sync`, `stado release apply`, or `stado host reconcile-object-verifier`. Secret values are read and written on the target; they never appear in the remote argument list or command result.
 
+### Bounded vault bearers
+
+Select a declared host in Stado Desktop and open **Fleet › Hosts › selected host
+› Bounded vault bearer** to run the same host operation without switching to a
+terminal. The form names the consumer, comma-separated exact
+`action:item[#field]` capabilities, audience, and lifetime in seconds. **Replace
+an existing capability set** maps to `--replace-capabilities`; leave it off to
+make a different existing grant a refusal rather than an implicit widening or
+replacement.
+
+**Mint a new bearer** asks the target's live Skarbiec vault to create the
+bounded bearer. **Register a stored bearer** instead adds an existing
+owner-vault item and field; the field defaults to `token`. Only that item/field
+coordinate crosses the host channel. The existing field value does not enter
+the process argument vector or ordinary output, and the operation does not
+rotate it.
+
+On success Desktop shows the selected target, the command's `token_minted` or
+`token_registered` status, consumer, audience, expiry, workload-binding state,
+exact capabilities, and the stored source coordinate when one was used. It
+does not show a bearer. Host-channel, vault, item, field, audience, capability,
+expiry, and existing-capability conflicts are shown using Stado's actual
+refusal detail rather than a generic command-failed message.
+
+
 An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
 
 ### Retiring an undeclared init-system unit
