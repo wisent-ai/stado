@@ -3,10 +3,11 @@
 ## 0.16.17
 
 - **Complete native delivery:** `release install-local` updates every registry-declared service-local Stado executable from the same verified archive and requires its existing image-convergence check to succeed. Archive validation reads the unit's actual executable, preserving quoted paths and launchd `Program` precedence instead of parsing presentation text.
+- **Fleet delivery completion:** the stable deployment iterates each discovered service-local Stado reader before invoking its archive update. An empty reader set still succeeds, while every declared reader receives the canonical platform archive and image refresh instead of the shell aborting on an unbound loop variable.
 - **Safe disk recovery:** tagged-cache pruning checks activity in the owning project, including Cargo's working directory. Host reclamation includes the current persistent job directory and keeps queue-active or process-held work.
 - **Systemd environment migration:** `service env-unset` removes assignments from the same declared unit/drop-in paths supported by `env-set`, removes an emptied drop-in, and reloads definitions without restarting the service.
-- **Migration and rollback:** no stored schema changes. Rolling back loses complete private-reader delivery, persistent-work reclamation, and systemd assignment removal.
-- **Platforms:** the native release path remains available on `darwin-arm64` and `linux-amd64`.
+- **Migration and rollback:** no stored schema changes. Rolling back loses complete native and fleet private-reader delivery, persistent-work reclamation, and systemd assignment removal; published platform artifacts remain available for a corrected delivery.
+- **Platforms:** both delivery paths use the existing signed `darwin-arm64` and `linux-amd64` releases.
 
 ## 0.16.16
 
