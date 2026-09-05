@@ -736,7 +736,15 @@ async fn recycle_systemd(
             "--plain",
         ]);
         let Some(listing) = command_stdout("systemctl", &list_args).await else {
-            continue;
+            if user {
+                log_fn(&format!(
+                    "{context}: no user systemd manager is available; that scope holds no running reader"
+                ));
+                continue;
+            }
+            return Err(format!(
+                "{context}: system systemd manager did not enumerate running services"
+            ));
         };
         for line in listing.lines() {
             let Some(unit) = line.split_whitespace().next() else {
@@ -749,9 +757,16 @@ async fn recycle_systemd(
             show_args.extend(["show", "-p", "MainPID", "--value", unit]);
             let main_pid = command_stdout("systemctl", &show_args)
                 .await
-                .and_then(|value| value.trim().parse::<u32>().ok())
-                .unwrap_or(0);
-            if main_pid == 0 || main_pid == ours {
+                .ok_or_else(|| format!("{context}: {unit} did not report MainPID"))?
+                .trim()
+                .parse::<u32>()
+                .map_err(|error| format!("{context}: {unit} reported invalid MainPID: {error}"))?;
+            if main_pid == 0 {
+                return Err(format!(
+                    "{context}: {unit} was listed running but reported MainPID=0"
+                ));
+            }
+            if main_pid == ours {
                 continue;
             }
             let images = crate::deploy::service::running_images(&[main_pid]).map_err(|error| {
@@ -760,13 +775,14 @@ async fn recycle_systemd(
             let running = images
                 .get(&main_pid)
                 .ok_or_else(|| format!("{context}: no kernel image for {unit} pid {main_pid}"))?;
-            let installed = paths.iter().find_map(|path| {
-                (running.path.trim_end_matches(" (deleted)") == path)
-                    .then(|| crate::deploy::service::installed_image(Path::new(path)))
-            });
-            let Some(Ok((installed, _))) = installed else {
+            let Some(path) = paths
+                .iter()
+                .find(|path| running.path.trim_end_matches(" (deleted)") == path.as_str())
+            else {
                 continue;
             };
+            let (installed, _) = crate::deploy::service::installed_image(Path::new(path))
+                .map_err(|error| format!("{context}: cannot identify installed {path}: {error}"))?;
             if running.is_same_file(&installed) {
                 continue;
             }
@@ -796,24 +812,33 @@ async fn recycle_systemd(
                     "{context}: {unit} pid {main_pid} could not be restarted onto the installed inode"
                 ));
             }
-            let Some(new_pid) = command_stdout("systemctl", &show_args)
-                .await
-                .and_then(|value| value.trim().parse::<u32>().ok())
-                .filter(|pid| *pid != 0)
-            else {
+            let mut replacement = None;
+            for _ in 0..60 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let Some(new_pid) = command_stdout("systemctl", &show_args)
+                    .await
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                    .filter(|pid| *pid != 0)
+                else {
+                    continue;
+                };
+                let verified = crate::deploy::service::running_images(&[new_pid])
+                    .ok()
+                    .is_some_and(|images| {
+                        images
+                            .get(&new_pid)
+                            .is_some_and(|image| image.is_same_file(&installed))
+                    });
+                if verified {
+                    replacement = Some(new_pid);
+                    break;
+                }
+            }
+            let Some(new_pid) = replacement else {
                 return Err(format!(
-                    "{context}: {unit} restarted without a readable pid"
+                    "{context}: {unit} restarted but no replacement pid mapped the installed inode within 30s"
                 ));
             };
-            let verified = crate::deploy::service::running_images(&[new_pid])
-                .ok()
-                .and_then(|images| images.get(&new_pid).cloned())
-                .is_some_and(|image| image.is_same_file(&installed));
-            if !verified {
-                return Err(format!(
-                    "{context}: {unit} restarted but pid {new_pid} does not execute the installed inode"
-                ));
-            }
             log_fn(&format!(
                 "{context}: restarted {unit}; pid {main_pid} held the replaced inode and pid {new_pid} maps the installed inode"
             ));
