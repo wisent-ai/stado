@@ -917,7 +917,8 @@ jobs:
                 [
                   .targets[]
                   | select(.name == $target)
-                  | .services[]
+                  | .services[]?
+                  | select((.program? | type) == "string")
                   | select(
                       (.program | contains("/.stado/services/")) and
                       (.program | endswith("/stado"))
