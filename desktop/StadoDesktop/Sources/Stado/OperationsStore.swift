@@ -822,6 +822,71 @@ final class FleetServicesStore: ObservableObject {
     }
 }
 
+/// Live fixed-path filesystem inventory for the selected Hosts inspector row.
+///
+/// Reads go through the product CLI's typed JSON client. One host is requested
+/// at a time: a full inventory reaches the target and must not become an
+/// implicit fleet-wide poll when the dashboard refreshes.
+@MainActor
+final class HostInventoryStore: ObservableObject {
+    @Published private(set) var cargoByHost: [String: HostCargoInventory] = [:]
+    @Published private(set) var failures: [String: String] = [:]
+    @Published private(set) var readingHosts: Set<String> = []
+
+    private let cli: StadoCLI
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    func cargo(for host: String) -> HostCargoInventory? {
+        cargoByHost[host]
+    }
+
+    func failure(for host: String) -> String? {
+        failures[host]
+    }
+
+    func isReading(_ host: String) -> Bool {
+        readingHosts.contains(host)
+    }
+
+    nonisolated static func inventoryArguments(host: String) -> [String] {
+        ["host", "inventory", host, "--json"]
+    }
+
+    func refresh(host: String) async {
+        guard !host.isEmpty, !readingHosts.contains(host) else { return }
+        readingHosts.insert(host)
+        defer { readingHosts.remove(host) }
+        do {
+            let report = try await cli.json(
+                HostInventoryReport.self,
+                arguments: Self.inventoryArguments(host: host)
+            )
+            guard report.target == host else {
+                failures[host] = "inventory for \(host) answered for \(report.target)"
+                return
+            }
+            guard report.status == "inventory" else {
+                failures[host] = report.error ?? "\(host) did not complete its inventory"
+                return
+            }
+            cargoByHost[host] = report.cargo
+            failures.removeValue(forKey: host)
+        } catch {
+            failures[host] = Self.message(for: error)
+        }
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+}
+
 /// Why a host went quiet, per registry host.
 ///
 /// The reading that did not exist during the six-minute gap on

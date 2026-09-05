@@ -20,6 +20,7 @@ struct ConsoleView: View {
     /// enrollment, nothing here spans a walk to another machine, and a
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
+    @StateObject private var inventoryStore = HostInventoryStore()
     @StateObject private var retireFileStore = HostRetireFileStore()
     @StateObject private var linkStore = HostLinkStore()
     @StateObject private var connectionPathStore = HostConnectionPathStore()
@@ -359,6 +360,7 @@ struct ConsoleView: View {
                     store: store,
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
+                    inventoryStore: inventoryStore,
                     retireFileStore: retireFileStore,
                     linkStore: linkStore,
                     connectionPathStore: connectionPathStore,

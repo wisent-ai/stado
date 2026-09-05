@@ -64,14 +64,15 @@
 //! `reconciliation.vaults_not_owner_only` is the finding that matters: a
 //! vault the group can read is an incident.
 //!
-//! Cargo uses the same fixed, metadata-only boundary. `cargo.home` lstat's
-//! `$HOME/.cargo`; `cargo.bin` lstat's its direct `bin` child only when the
-//! parent is a directory; and `cargo.entries` names every direct child,
-//! including dotfiles, with type, mode, numeric ownership, size, mtime, and
-//! symlink text. No operator path enters the script and no file body is
-//! opened. `complete` is false after any refused parent, unreadable or
-//! malformed metadata, sanitized name or link, partial walk, or output cap,
-//! so a prefix can never masquerade as the whole directory.
+//! Cargo uses the same fixed, metadata-only boundary. `cargo.home` uses lstat
+//! on `$HOME/.cargo` and preserves its link target; `cargo.bin` is the fixed
+//! direct `bin` child even when Cargo home is a symlink; and `cargo.entries`
+//! names every direct child, including dotfiles, with type, mode, numeric
+//! ownership, size, mtime, and symlink text. No operator path enters the
+//! script and no file body is opened. `complete` is false after any refused
+//! or partial traversal, unreadable or malformed metadata, sanitized name or
+//! link, or output cap, so a prefix can never masquerade as the whole
+//! directory.
 //!
 //! Reporting drift is not the same as failing on it. A host with a forward
 //! that was deliberately torn down is not a broken host, so `status` stays
@@ -396,9 +397,9 @@ emit_filesystem_metadata() {
     "$metadata_symlink_target_state"
 }
 
-# A parent path refused before traversal still gets one whole typed row. This
-# is distinct from `missing`: no claim was made about what sits below the
-# symlink or non-directory.
+# A non-directory parent refused before traversal still gets one whole typed
+# row. This is distinct from `missing`: no claim was made about what sits
+# below the non-directory.
 emit_refused_filesystem_metadata() {
   metadata_name="$1"
   metadata_state="$2"
@@ -622,24 +623,24 @@ fi
 
 # Cargo home metadata and complete bin membership belong to the typed host
 # inventory, not to `host exec`: the paths are fixed at the managed account's
-# own `$HOME`, names are sanitized, symlinks are lstat'd and never traversed,
-# and a cap is represented explicitly instead of pretending a prefix is whole.
+# own `$HOME`, names are sanitized, and each reported entry is lstat'd. A
+# symlink at `$HOME/.cargo` is itself reported with its link target, then its
+# fixed `bin` child is traversed: Cargo installations commonly place that
+# whole tree on a mounted cache, and this read-only inventory opens no child
+# contents.
 printf '],"cargo":{"home":'
 emit_filesystem_metadata "$cargo_home" '.cargo'
 cargo_home_complete=$metadata_complete
 cargo_home_kind=$metadata_kind
 printf ',"bin":'
 case "$cargo_home_kind" in
-  directory)
+  directory|symlink)
     emit_filesystem_metadata "$cargo_bin" 'bin'
     ;;
   missing)
     # If the fixed parent does not exist, its fixed child does not exist
     # either; no second filesystem traversal is needed to state that.
     emit_filesystem_metadata "$cargo_bin" 'bin'
-    ;;
-  symlink)
-    emit_refused_filesystem_metadata 'bin' refused_parent_symlink
     ;;
   *)
     emit_refused_filesystem_metadata 'bin' refused_parent_not_directory
@@ -653,10 +654,8 @@ cargo_entries_seen=0
 cargo_entries_emitted=0
 cargo_entries_complete=true
 cargo_entries_state=missing
-if [ "$cargo_home_kind" = symlink ]; then
-  cargo_entries_state=refused_parent_symlink
-  cargo_entries_complete=false
-elif [ "$cargo_home_kind" != directory ] && [ "$cargo_home_kind" != missing ]; then
+if [ "$cargo_home_kind" != directory ] && [ "$cargo_home_kind" != symlink ] && \
+   [ "$cargo_home_kind" != missing ]; then
   cargo_entries_state=refused_parent_not_directory
   cargo_entries_complete=false
 elif [ "$cargo_bin_kind" = symlink ]; then
@@ -1152,8 +1151,8 @@ pub struct CargoInventory {
     /// True only when `entries` names every child.
     pub entries_complete: bool,
     /// `read`, `missing`, `partial_traversal`, `refused_symlink`,
-    /// `refused_not_directory`, `refused_unreadable`, or a
-    /// `refused_parent_*` state.
+    /// `refused_not_directory`, `refused_unreadable`, or
+    /// `refused_parent_not_directory`.
     pub entries_state: String,
     /// True only when both fixed roots and every child were reported without
     /// truncation, sanitization, malformed metadata, or an unavailable read.
