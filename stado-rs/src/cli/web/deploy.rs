@@ -774,8 +774,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // The unit itself, rendered and installed by the same engine
     // `stado service ensure` uses. `ensure` rather than `deploy`, because
     // `stado web deploy` is how every subsequent release lands too: it
-    // installs the unit where the host does not have it, converges a drifted
-    // unit file in place, and never unloads a healthy job.
+    // installs the unit where the host does not have it, leaves matching
+    // loaded definitions alone, and reloads only an actual definition drift.
     let label = super::unit_label(name);
     let plan = service::plan_deploy_labelled(&target, name, &label, &program, &[], &environment)
         .map_err(click)?;
@@ -794,27 +794,40 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // authorizes it to hold them, and minting it afterwards would leave a
     // window in which the values are on the host and nothing says who may
     // read them.
-    let bearer = ensure_bearer(&target, &token_file, &runner).await?;
+    //
+    // A product that declares no secrets and no database needs no grant, and
+    // must not be given an empty one: Skarbiec refuses `token-mint` without
+    // capabilities (`token-mint requires --capabilities action:item[#field]`),
+    // so minting unconditionally made a static site undeployable —
+    // `preferences-landing`, which reads nothing, could not be installed at
+    // all. A consumer with nothing to read is the correct end state for it,
+    // and the narrowest one: no bearer, no capability, nothing to leak.
     let capabilities = grant_capabilities(&deliveries);
-    let grant = service::remint_consumer_grant_on_host(
-        &target,
-        declared.consumer(),
-        &capabilities,
-        &token_file,
-        VAULT_FILE,
-        GRANT_TTL_SECONDS,
-        declared.consumer(),
-        &runner,
-    )
-    .await
-    .map_err(click)?;
-    if !grant.succeeded("grant_synced") {
-        return Err(CmdError::click(format!(
-            "{host}: could not mint the Skarbiec grant for consumer {}: {}",
+    let bearer = if capabilities.is_empty() {
+        "none: this product declares no secrets".to_string()
+    } else {
+        let bearer = ensure_bearer(&target, &token_file, &runner).await?;
+        let grant = service::remint_consumer_grant_on_host(
+            &target,
             declared.consumer(),
-            grant.failure()
-        )));
-    }
+            &capabilities,
+            &token_file,
+            VAULT_FILE,
+            GRANT_TTL_SECONDS,
+            declared.consumer(),
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if !grant.succeeded("grant_synced") {
+            return Err(CmdError::click(format!(
+                "{host}: could not mint the Skarbiec grant for consumer {}: {}",
+                declared.consumer(),
+                grant.failure()
+            )));
+        }
+        bearer
+    };
 
     // One field of one item into one variable, over the host channel, for
     // every entry. The value is read through the isolated service-verifier

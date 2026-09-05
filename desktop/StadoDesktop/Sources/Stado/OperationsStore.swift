@@ -716,6 +716,9 @@ final class FleetServicesStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    /// The last complete apply document and the exact argv that produced it.
+    /// Ordinary service refreshes never clear mutation evidence.
+    @Published private(set) var convergenceReceipt: ServiceConvergeReceipt?
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
@@ -767,6 +770,19 @@ final class FleetServicesStore: ObservableObject {
         ["service", "deploy", name, "--host", host, "--json"]
     }
 
+    nonisolated static func repairRunnerRuntimeArguments(name: String, host: String) -> [String] {
+        ["service", "repair-runner-runtime", name, "--host", host, "--json"]
+    }
+
+    nonisolated static func convergeApplyArguments(host: String, binary: String?) -> [String] {
+        var arguments = ["service", "converge", host]
+        if let binary, !binary.isEmpty {
+            arguments.append(binary)
+        }
+        arguments.append(contentsOf: ["--apply", "--json"])
+        return arguments
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -798,11 +814,46 @@ final class FleetServicesStore: ObservableObject {
         lastUpdated = Date()
     }
 
+    /// Deliver the selected binary to the host's declaration through the
+    /// product converge command. Its decoded document is retained before the
+    /// normal refresh, including when the CLI exits non-zero after printing a
+    /// complete refusal or partial-apply report.
+    func converge(host: String, binary: String?) async {
+        guard !mutation.isWorking else { return }
+        let arguments = Self.convergeApplyArguments(host: host, binary: binary)
+        convergenceReceipt = nil
+        mutation = .working("Converging \(binary.map { "\($0) on " } ?? "")\(host)")
+        do {
+            let result = try await cli.jsonResult(
+                ServiceConvergeReport.self,
+                arguments: arguments,
+                // The product command owns bounded host stages, including a
+                // 30-minute archive stage. Desktop must not stop it sooner.
+                timeoutSeconds: nil
+            )
+            convergenceReceipt = ServiceConvergeReceipt(
+                arguments: arguments,
+                exitCode: result.exitCode,
+                report: result.value
+            )
+            mutation = result.exitCode == 0
+                ? .succeeded("Converged \(binary.map { "\($0) on " } ?? "")\(result.value.target).")
+                : .failed(
+                    "Convergence on \(result.value.target) exited \(result.exitCode). "
+                        + "The complete CLI receipt remains below."
+                )
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh(hosts: lastHosts)
+    }
+
     /// Deploy the declaration already stored in the canonical service
     /// directory. The operator supplies no program, args, artifact or digest
     /// here — those are the declaration's job, and a missing one is the CLI's
     /// refusal to carry verbatim.
     func deploy(_ entry: FleetServiceEntry) async {
+        guard !mutation.isWorking else { return }
         mutation = .working("Deploying \(entry.name) on \(entry.host)")
         do {
             let report = try await cli.json(
@@ -827,6 +878,7 @@ final class FleetServicesStore: ObservableObject {
     /// that exits zero but left the host outside the intended state is read
     /// off the payload's postcondition, in the same words the CLI prints.
     func restart(_ entry: FleetServiceEntry) async {
+        guard !mutation.isWorking else { return }
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         mutation = .working("Restarting \(unit) on \(entry.host)")
         do {
@@ -854,6 +906,7 @@ final class FleetServicesStore: ObservableObject {
     /// into retire + delete, because two commands an operator must order
     /// correctly are one command that cannot go wrong.
     func removeService(_ entry: FleetServiceEntry) async {
+        guard !mutation.isWorking else { return }
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         mutation = .working("Removing \(unit) on \(entry.host)")
         do {
@@ -876,8 +929,27 @@ final class FleetServicesStore: ObservableObject {
         await refresh(hosts: lastHosts)
     }
 
+    func repairRunnerRuntime(_ entry: FleetServiceEntry) async {
+        mutation = .working("Repairing runner runtime on \(entry.host)")
+        do {
+            let report = try await cli.json(
+                ServiceRunnerRuntimeReport.self,
+                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host),
+                timeoutSeconds: 360
+            )
+            mutation = .succeeded(report.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh(hosts: lastHosts)
+    }
+
     func clearMutation() {
         mutation = .idle
+    }
+
+    func clearConvergenceReceipt() {
+        convergenceReceipt = nil
     }
 
     private enum ListReading: Sendable {
@@ -935,6 +1007,106 @@ final class FleetServicesStore: ObservableObject {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(FleetServiceList.self, from: data)
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+}
+
+/// Live fixed-path filesystem inventory for the selected Hosts inspector row.
+///
+/// Reads go through the dashboard's authenticated typed HTTP API. One host is
+/// requested at a time: a full inventory reaches the target and must not become
+/// an implicit fleet-wide poll when the dashboard refreshes.
+@MainActor
+final class HostInventoryStore: ObservableObject {
+    @Published private(set) var cargoByHost: [String: HostCargoInventory] = [:]
+    @Published private(set) var failures: [String: String] = [:]
+    @Published private(set) var readingHosts: Set<String> = []
+
+    private let client: OperationsClient
+    private var addressString = DashboardEndpointPreference.localURL
+    private var authorizationToken: String?
+    private var requestGeneration = 0
+
+    init(client: OperationsClient = OperationsClient()) {
+        self.client = client
+    }
+
+    func configureAuthorization(token: String?) {
+        let next = token?.isEmpty == false ? token : nil
+        guard next != authorizationToken else { return }
+        requestGeneration &+= 1
+        authorizationToken = next
+        cargoByHost = [:]
+        failures = [:]
+        readingHosts = []
+    }
+
+    func configureEndpoint(_ endpoint: String?) {
+        let normalized = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard normalized != addressString else { return }
+        requestGeneration &+= 1
+        addressString = normalized
+        cargoByHost = [:]
+        failures = [:]
+        readingHosts = []
+    }
+
+    func cargo(for host: String) -> HostCargoInventory? {
+        cargoByHost[host]
+    }
+
+    func failure(for host: String) -> String? {
+        failures[host]
+    }
+
+    func isReading(_ host: String) -> Bool {
+        readingHosts.contains(host)
+    }
+
+    func refresh(host: String) async {
+        guard !host.isEmpty, !readingHosts.contains(host) else { return }
+        guard let address = try? OperationsDashboardAddress(addressString) else {
+            failures[host] = "No Stado endpoint is configured, so the inventory was not read."
+            return
+        }
+        let generation = requestGeneration
+        readingHosts.insert(host)
+        defer {
+            if requestGeneration == generation {
+                readingHosts.remove(host)
+            }
+        }
+        do {
+            let report = try await client.fetchHostInventory(
+                target: host,
+                from: address,
+                authorizationToken: authorizationToken
+            )
+            guard requestGeneration == generation, !Task.isCancelled else { return }
+            guard report.target == host else {
+                failures[host] = "inventory for \(host) answered for \(report.target)"
+                return
+            }
+            guard report.status == "inventory", let cargo = report.cargo else {
+                failures[host] = report.error ?? "\(host) did not complete its inventory"
+                return
+            }
+            cargoByHost[host] = cargo
+            failures.removeValue(forKey: host)
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
+        } catch {
+            guard requestGeneration == generation else { return }
+            failures[host] = Self.message(for: error)
+        }
     }
 
     private nonisolated static func message(for error: Error) -> String {
@@ -1251,6 +1423,125 @@ final class HostConnectionPathStore: ObservableObject {
             return description
         }
         return error.localizedDescription
+    }
+}
+
+/// The forward markers one host carries, read through `stado host inventory`.
+///
+/// Read-only, and per host on demand: the inventory read crosses the managed
+/// channel, so it runs when an operator opens a host rather than on every
+/// refresh of the list. A failure is shown as itself; the console never
+/// renders an empty marker list for a read that did not happen.
+@MainActor
+final class HostForwardStore: ObservableObject {
+    @Published private(set) var host: String?
+    @Published private(set) var markers: [HostForwardMarker] = []
+    @Published private(set) var problem: String?
+    @Published private(set) var isLoading = false
+
+    private let cli: StadoCLI
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    nonisolated static func arguments(host: String) -> [String] {
+        ["host", "inventory", host, "--json"]
+    }
+
+    func load(host name: String) async {
+        host = name
+        isLoading = true
+        problem = nil
+        do {
+            let report = try await cli.json(
+                InventoryReport.self,
+                arguments: Self.arguments(host: name),
+                timeoutSeconds: 240
+            )
+            markers = report.forwards
+        } catch {
+            markers = []
+            problem = Self.message(for: error)
+        }
+        isLoading = false
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+
+    private struct InventoryReport: Decodable, Sendable {
+        let forwards: [HostForwardMarker]
+    }
+}
+
+/// Which vault a selected host's credential operations resolve to, read
+/// through `stado host vaults <target>`.
+///
+/// Read-only and per host on demand. The console showed how many items a
+/// machine held and never which store answered, which is exactly the gap that
+/// let two vaults on one machine claim one owner for long enough to close the
+/// fleet's release publication boundary.
+@MainActor
+final class HostVaultStore: ObservableObject {
+    @Published private(set) var host: String?
+    @Published private(set) var vaults: [HostVault] = []
+    @Published private(set) var authority: HostVaultAuthority?
+    @Published private(set) var problem: String?
+    @Published private(set) var isLoading = false
+
+    private let cli: StadoCLI
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    nonisolated static func arguments(host: String) -> [String] {
+        ["host", "vaults", host, "--json"]
+    }
+
+    func load(host name: String) async {
+        host = name
+        isLoading = true
+        problem = nil
+        do {
+            let report = try await cli.json(
+                VaultReport.self,
+                arguments: Self.arguments(host: name),
+                timeoutSeconds: 300
+            )
+            let entry = report.hosts.first { $0.target == name } ?? report.hosts.first
+            vaults = entry?.vaults ?? []
+            authority = entry?.authority
+            problem = entry?.error
+        } catch {
+            vaults = []
+            authority = nil
+            problem = Self.message(for: error)
+        }
+        isLoading = false
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+
+    private struct VaultReport: Decodable, Sendable {
+        let hosts: [HostVaultEntry]
+    }
+
+    private struct HostVaultEntry: Decodable, Sendable {
+        let target: String?
+        let vaults: [HostVault]?
+        let authority: HostVaultAuthority?
+        let error: String?
     }
 }
 

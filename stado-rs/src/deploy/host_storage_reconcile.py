@@ -1,4 +1,4 @@
-import ctypes, datetime, fcntl, hashlib, json, os, stat, sys, time
+import ctypes, datetime, errno, fcntl, hashlib, json, os, stat, subprocess, sys, time
 
 phase = os.environ["STADO_RECONCILE_PHASE"]
 tx = os.environ["STADO_RECONCILE_TX"]
@@ -36,12 +36,100 @@ def fsync_dir(path):
         os.close(descriptor)
 
 
+def path_within(path, roots):
+    candidate = os.path.abspath(path)
+    return any(
+        candidate != os.path.abspath(root)
+        and os.path.commonpath((candidate, os.path.abspath(root))) == os.path.abspath(root)
+        for root in roots
+    )
+
+
+def confined_path(path, roots, label):
+    candidate = os.path.abspath(path)
+    if path_within(candidate, roots):
+        return candidate
+    fail(label + " escaped its captured transaction roots")
+
+
+def noninteractive_privileged(arguments, label):
+    inherited_lock = globals().get("lock_fd", -1)
+    if inherited_lock < 0:
+        fail(label + ": resident transaction lock descriptor is unavailable")
+    result = subprocess.run(
+        ["/usr/bin/sudo", "-n"] + arguments,
+        stdin=inherited_lock,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        close_fds=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        fail(label + ": " + (detail[-1] if detail else "privileged command failed"))
+    return result
+
+
+def privileged_digest(path):
+    if path_within(path, (primary, backup)):
+        source = confined_path(
+            path, (primary, backup), "privileged physical-root digest")
+        label = "cannot hash unreadable physical-root file"
+    elif path_within(path, (staging,)):
+        source = confined_path(
+            path, (staging,), "privileged transaction-staging digest")
+        label = "cannot hash interrupted privileged clone"
+    else:
+        fail("privileged digest escaped the live roots and transaction staging")
+    result = noninteractive_privileged(
+        ["/usr/bin/openssl", "dgst", "-sha256", "-r", source],
+        label,
+    )
+    encoded = result.stdout.strip().split(None, 1)
+    if (not encoded
+            or len(encoded[0]) != 64
+            or any(character not in "0123456789abcdef" for character in encoded[0])):
+        fail("privileged confined digest has invalid output")
+    return encoded[0]
+
+
+def recover_privileged_clone(destination):
+    destination = confined_path(
+        destination, (staging,), "privileged clone recovery destination")
+    info = os.lstat(destination)
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        fail("privileged clone recovery found a non-regular staging entry")
+    noninteractive_privileged(
+        ["/usr/bin/chflags", "nouchg,noschg", destination],
+        "cannot clear immutable flags on privileged clone",
+    )
+    noninteractive_privileged(
+        ["/usr/sbin/chown", str(os.getuid()) + ":" + str(os.getgid()), destination],
+        "cannot transfer privileged clone ownership",
+    )
+
+
+def privileged_clone(source, destination):
+    source = confined_path(
+        source, (primary, backup), "privileged copy-on-write clone source")
+    destination = confined_path(
+        destination, (staging,), "privileged copy-on-write clone destination")
+    noninteractive_privileged(
+        ["/bin/cp", "-c", "-p", source, destination],
+        "privileged copy-on-write clone failed",
+    )
+    recover_privileged_clone(destination)
+
+
 def digest(path):
     value = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                value.update(chunk)
+        return value.hexdigest()
+    except PermissionError:
+        return privileged_digest(path)
 
 
 def metadata_path(root, relative):
@@ -124,7 +212,17 @@ def clone_file(source, destination):
         hashlib.sha256(destination.encode("utf-8")).hexdigest(),
     )
     if os.path.lexists(temporary):
-        if regular_identity(temporary) != regular_identity(source):
+        temporary_identity = regular_identity(temporary)
+        temporary_info = os.lstat(temporary)
+        temporary_flags = getattr(temporary_info, "st_flags", 0)
+        immutable = (
+            getattr(stat, "UF_IMMUTABLE", 0)
+            | getattr(stat, "SF_IMMUTABLE", 0)
+        )
+        if (temporary_info.st_uid != os.getuid()
+                or temporary_flags & immutable):
+            recover_privileged_clone(temporary)
+        if temporary_identity != regular_identity(source):
             os.unlink(temporary)
     if not os.path.exists(temporary):
         libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
@@ -133,7 +231,11 @@ def clone_file(source, destination):
         clone.restype = ctypes.c_int
         if clone(os.fsencode(source), os.fsencode(temporary), 0) != 0:
             error = ctypes.get_errno()
-            fail("clonefile refused copy-on-write clone: " + os.strerror(error))
+            if error not in (errno.EACCES, errno.EPERM):
+                fail("clonefile refused copy-on-write clone: " + os.strerror(error))
+            if os.path.lexists(temporary):
+                fail("clonefile left a partial privileged clone destination")
+            privileged_clone(source, temporary)
     if digest(source) != digest(temporary):
         fail("copy-on-write clone verification failed")
     if hasattr(os, "chflags"):
@@ -153,6 +255,7 @@ def regular_identity(path):
     if not stat.S_ISREG(info.st_mode):
         fail("non-regular object: " + path)
     return {"bytes": info.st_size, "sha256": digest(path)}
+
 
 
 def object_paths(root):
@@ -386,11 +489,18 @@ if phase == "status":
 
 
 def inventory(root, paths):
-    return [{
-        "path": relative,
-        "body": regular_identity(os.path.join(root, relative)),
-        "metadata": regular_identity(metadata_path(root, relative)),
-    } for relative in paths]
+    result = []
+    for relative in paths:
+        body_path = os.path.join(root, relative)
+        body = regular_identity(body_path)
+        if body is None:
+            raise FileNotFoundError(body_path)
+        result.append({
+            "path": relative,
+            "body": body,
+            "metadata": regular_identity(metadata_path(root, relative)),
+        })
+    return result
 
 
 def validate_inventory(root, objects, label):
@@ -414,6 +524,36 @@ def validate_complete_inventory(root, objects, label):
     actual_metadata = metadata_paths(root)
     if actual_metadata != expected_metadata:
         fail(label + " metadata namespace changed")
+def complete_physical_inventory(root):
+    paths = object_paths(root)
+    return paths, inventory(root, paths), physical_inventory(root)
+
+
+def live_preflight_inventory(root, label):
+    for _ in range(30):
+        try:
+            return complete_physical_inventory(root)
+        except FileNotFoundError:
+            time.sleep(0.2)
+    fail(label + " inventory kept changing during identity reads")
+
+
+def stable_checkpoint_inventory(root, label):
+    previous = None
+    for _ in range(30):
+        try:
+            candidate = complete_physical_inventory(root)
+        except FileNotFoundError:
+            previous = None
+            time.sleep(0.2)
+            continue
+        if candidate == previous:
+            return candidate
+        previous = candidate
+        time.sleep(0.2)
+    fail(label + " did not reach two consecutive identical physical inventories")
+
+
 
 
 def checkpoint_tree(source, destination, snapshot):
@@ -453,17 +593,17 @@ def checkpoint_tree(source, destination, snapshot):
 
 
 if phase == "preflight":
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
-    backup_physical = physical_inventory(backup)
-    primary_physical = physical_inventory(primary)
+    backup_paths, backup_objects, backup_physical = live_preflight_inventory(
+        backup, "backup preflight")
+    primary_paths, primary_objects, primary_physical = live_preflight_inventory(
+        primary, "primary preflight")
     print("STADO_STORAGE_RECONCILE\t" + json.dumps({
         "schema": schema,
         "transaction": tx,
         "status": "observed",
         "observed_at": time.time(),
-        "backup_qualified": inventory(backup, backup_paths),
-        "primary_qualified": inventory(primary, primary_paths),
+        "backup_qualified": backup_objects,
+        "primary_qualified": primary_objects,
         "backup_physical": backup_physical,
         "primary_physical": primary_physical,
         "physical_snapshot_exclusions": [],
@@ -594,13 +734,11 @@ if phase == "checkpoint":
         raise SystemExit(0)
     if receipt is not None and receipt.get("status") != "checkpointing":
         fail("checkpoint receipt is not resumable: " + str(receipt.get("status")))
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
     if receipt is None:
-        backup_objects = inventory(backup, backup_paths)
-        primary_objects = inventory(primary, primary_paths)
-        backup_physical = physical_inventory(backup)
-        primary_physical = physical_inventory(primary)
+        backup_paths, backup_objects, backup_physical = stable_checkpoint_inventory(
+            backup, "backup")
+        primary_paths, primary_objects, primary_physical = stable_checkpoint_inventory(
+            primary, "primary")
         checkpoint_evidence = {
             "schema": "stado.storage-root-checkpoint-evidence.v1",
             "transaction": tx,
@@ -640,6 +778,8 @@ if phase == "checkpoint":
     else:
         backup_objects, primary_objects, backup_physical, primary_physical = (
             load_checkpoint_evidence(receipt))
+        backup_paths = object_paths(backup)
+        primary_paths = object_paths(primary)
         if [item.get("path") for item in backup_objects] != backup_paths:
             fail("backup qualified namespace no longer matches the interrupted checkpoint")
         if [item.get("path") for item in primary_objects] != primary_paths:

@@ -595,6 +595,19 @@ const WEB_HOSTING_TARGET_OPEN_FILES: &[&str] = &[
     "Documents/CodingProjects/Wisent/stado-web-hosting/stado-rs/target",
 ];
 
+const BRAMA_RUNNER_APPHOST_SIGNATURE: &[&str] = &[
+    "/usr/bin/codesign",
+    "-d",
+    "--entitlements",
+    ":-",
+    ".stado/actions-runner-brama/bin/Runner.Listener",
+];
+const BRAMA_RUNNER_CORECLR_SIGNATURE: &[&str] = &[
+    "/usr/bin/codesign",
+    "-dvvvv",
+    ".stado/actions-runner-brama/bin/libcoreclr.dylib",
+];
+
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
 ///
@@ -621,6 +634,8 @@ const HOME_ROOTED_READS: &[&[&str]] = &[
     JOB_PROGRESS_TARGET_OPEN_FILES,
     WEB_HOSTING_TARGET_SIZE,
     WEB_HOSTING_TARGET_OPEN_FILES,
+    BRAMA_RUNNER_APPHOST_SIGNATURE,
+    BRAMA_RUNNER_CORECLR_SIGNATURE,
 ];
 
 /// Is this entry's fixed argv one of the home-rooted reads?
@@ -1545,6 +1560,25 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               absent from this table and cannot be reached through it",
     },
     ApprovedCommand {
+        argv: &["/bin/cat", "/etc/ssh/sshd_config"],
+        why: "reads the Ubuntu OpenSSH server's fixed primary configuration file so a \
+              server-side command or session override can be attributed; the path is fixed, \
+              no included file or operator-supplied path is followed, and cat writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/journalctl",
+            "--unit",
+            "ssh.service",
+            "--lines",
+            "200",
+            "--no-pager",
+        ],
+        why: "reads the last 200 records owned by Ubuntu's active OpenSSH systemd unit, with \
+              a fixed unit and bound output; journalctl's read-only form neither changes the \
+              service nor follows future records",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/bin/systemctl",
             "list-unit-files",
@@ -1600,6 +1634,25 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               environment file was corrected. `cat` is read-only, the unit name and \
               no-pager flag are fixed, and no operator path or arbitrary argument reaches \
               systemd",
+    },
+    ApprovedCommand {
+        argv: BRAMA_RUNNER_APPHOST_SIGNATURE,
+        why: "reads the registered Brama runner's existing apphost signature and entitlements. \
+              CoreCLR error 0x8007000C can occur with a valid signature, so verification alone \
+              does not explain the loader failure. The path is fixed under the managed account; \
+              display mode changes no signature and requests no certificate or consent",
+    },
+    ApprovedCommand {
+        argv: BRAMA_RUNNER_CORECLR_SIGNATURE,
+        why: "reads the same runner's CoreCLR library signing identity so a loader failure can \
+              be compared with its apphost rather than guessed from the HRESULT. The fixed \
+              display-only invocation neither loads the library nor modifies it",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/csrutil", "status"],
+        why: "reads macOS System Integrity Protection status while diagnosing a CoreCLR \
+              memory-access refusal. This status-only invocation changes no boot setting, \
+              opens no consent window, and never reboots the host",
     },
 ];
 

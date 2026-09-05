@@ -976,12 +976,12 @@ pub enum ServiceCommands {
     /// not exist, the unit is rendered for launchd's system domain and
     /// installed as a daemon in /Library/LaunchDaemons.
     ///
-    /// An existing unit is only ever restarted in place (`kickstart -k`), never
-    /// unloaded and bootstrapped back: that sequence took the always-on host
-    /// down once already. A loaded unit whose definition names a different
-    /// program is refused rather than overwritten, because launchd holds the
-    /// definition it bootstrapped and a rewritten file under a live job changes
-    /// nothing an operator can see.
+    /// An existing matching definition is restarted in place with
+    /// `kickstart -k`. When launchd's retained Program or ProgramArguments
+    /// differs from the desired definition, ensure first validates the
+    /// replacement executable and complete rendered plist, then reloads that
+    /// definition once and verifies launchd's readback and running executable.
+    /// An unreadable retained definition is refused without touching the job.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
@@ -2654,7 +2654,31 @@ async fn update(
             install_from_artifact(&target, &directory, reference).await?,
             false,
         ),
-        (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
+        (None, Some(path)) => {
+            let marker = format!("/services/{directory}/");
+            let required = if let Some((_, rest)) = program.split_once(&marker) {
+                rest.split_once('/')
+                    .map(|(_, tail)| tail.to_string())
+                    .ok_or_else(|| {
+                        CmdError::click("managed service program has no archive member")
+                    })?
+            } else {
+                let executable = std::path::Path::new(program)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| CmdError::click("managed service program has no filename"))?;
+                format!("darwin-arm/{executable}")
+            };
+            if !std::path::Path::new(&required)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(CmdError::click(
+                    "managed service archive member is not relative",
+                ));
+            }
+            install_from_archive(&target, &directory, path, &required, &runner).await?
+        }
         (None, None) => {
             return Err(CmdError::click(
                 "update needs --from-artifact REF or --from-archive PATH",
@@ -7218,6 +7242,39 @@ pub(crate) async fn reconcile_after_config_change(name: &str, host: &str) -> Res
     restart(name, Some(host), None, None, false).await
 }
 
+/// A changed unit may own the registry API itself. Wait for an actual
+/// authoritative read after activation, not merely the new process's PID.
+/// Only reads are repeated; the host action and conditional write never are.
+async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
+    let mut last_error = None;
+    let ready = async {
+        loop {
+            match registry::fetch_versioned_document().await {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => {
+                    let code = error.failure.unwrap_or_else(|| {
+                        crate::failure::classify_message(
+                            error.message.as_deref().unwrap_or_default(),
+                        )
+                    });
+                    if !code.retryable() {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(30), ready).await {
+        Ok(result) => result,
+        Err(_) => Err(last_error.unwrap_or_else(|| {
+            CmdError::click("the registry did not answer within 30 seconds after unit activation")
+                .stating(crate::failure::FailureCode::InfraDown)
+        })),
+    }
+}
+
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh
@@ -7430,48 +7487,83 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     record.args = unit.args;
     record.env = unit_env.into_iter().collect();
     record.systemd_unit = unit.systemd_unit;
-    let generation = match &already {
-        // Declared, at the same file and running the same program, by the
-        // registry: the document already says what this pass just confirmed,
-        // so nothing is written to it.
-        Some(existing)
-            if existing.source == SOURCE_REGISTRY
-                && existing.path == record.path
-                && existing.kind == record.kind
-                && existing.program == record.program
-                && existing.args == record.args
-                && existing.env == record.env
-                && existing.systemd_unit == record.systemd_unit =>
-        {
+    let persisted = async {
+        let recovered_snapshot = if outcome.changed() {
+            Some(registry_after_host_change().await?)
+        } else {
             None
-        }
-        // Declared by the registry at a different file. The system-domain
-        // daemon path is not the per-login agent path, and a declaration
-        // naming a file the host does not have is one no later command can
-        // act on, so the declaration is corrected in one document write.
-        Some(existing) if existing.source == SOURCE_REGISTRY => {
-            // Expected generation: this read. `existing` and `record` were
-            // decided before it — the unit was already ensured on the host —
-            // so a lost race is reported instead of retried: re-running the
-            // correction would replace a declaration this pass never saw.
-            let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-            service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
-            service::add_service(&mut document, &record).map_err(click)?;
-            Some(registry::push_document_if(&document, &expected_generation).await?)
-        }
-        // Undeclared, or carried by the fixed host-recovery list. Both become
-        // an explicit registry declaration, which for the recovery case is
-        // exactly what `service adopt` is for.
-        _ => Some(record_declaration(&record).await?),
-    };
+        };
+        let generation = match &already {
+            // Declared, at the same file and running the same program, by the
+            // registry: the document already says what this pass just confirmed,
+            // so nothing is written to it.
+            Some(existing)
+                if existing.source == SOURCE_REGISTRY
+                    && existing.path == record.path
+                    && existing.kind == record.kind
+                    && existing.program == record.program
+                    && existing.args == record.args
+                    && existing.env == record.env
+                    && existing.systemd_unit == record.systemd_unit =>
+            {
+                None
+            }
+            // Declared by the registry at a different file. The system-domain
+            // daemon path is not the per-login agent path, and a declaration
+            // naming a file the host does not have is one no later command can
+            // act on, so the declaration is corrected in one document write.
+            Some(existing) if existing.source == SOURCE_REGISTRY => {
+                // Expected generation: this read. `existing` and `record` were
+                // decided before it — the unit was already ensured on the host —
+                // so a lost race is reported instead of retried: re-running the
+                // correction would replace a declaration this pass never saw.
+                let (mut document, expected_generation) = match recovered_snapshot {
+                    Some(snapshot) => snapshot,
+                    None => registry::fetch_versioned_document().await?,
+                };
+                service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
+                service::add_service(&mut document, &record).map_err(click)?;
+                Some(registry::push_document_if(&document, &expected_generation).await?)
+            }
+            // Undeclared, or carried by the fixed host-recovery list. Both become
+            // an explicit registry declaration, which for the recovery case is
+            // exactly what `service adopt` is for.
+            _ => Some(record_declaration(&record).await?),
+        };
 
-    // Recorded only when something actually changed. An audit trail that also
-    // records the passes which changed nothing is one nobody reads.
-    let audited = if outcome.changed() || generation.is_some() {
-        Some(record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref()).await?)
-    } else {
-        None
-    };
+        // Recorded only when something actually changed. An audit trail that also
+        // records the passes which changed nothing is one nobody reads.
+        let audited = if outcome.changed() || generation.is_some() {
+            Some(
+                record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref())
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok::<_, CmdError>(audited)
+    }
+    .await;
+    let audited = persisted.map_err(|mut error| {
+        let cause = error
+            .message
+            .as_deref()
+            .unwrap_or("registry operation failed");
+        error.failure = Some(
+            error
+                .failure
+                .unwrap_or_else(|| crate::failure::classify_message(cause)),
+        );
+        error.message = Some(format!(
+            "{host}: {} is running (action {}, pid {}), but recording the completed ensure \
+             failed: {cause}. No host action was repeated.",
+            options.name,
+            outcome.action,
+            outcome.pid.trim(),
+        ));
+        error.json = options.as_json;
+        error
+    })?;
 
     if options.as_json {
         // Exactly the contract's keys: a desktop client consumes this shape.
@@ -7826,10 +7918,14 @@ fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(
     ))
 }
 
+/// Extract beside the immutable version and confirm the declared executable
+/// before atomically replacing `current`. Never remove an installed version
+/// while extracting its replacement.
 async fn install_from_archive(
     target: &crate::targets::ComputeTarget,
     directory: &str,
     path: &str,
+    required: &str,
     runner: &crate::deploy::Runner,
 ) -> Result<(crate::deploy::artifact_install::InstalledArtifact, bool), CmdError> {
     let bytes = std::fs::read(path)?;
@@ -7891,11 +7987,12 @@ async fn install_from_archive(
     }
 
     let script = format!(
-        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\n{ARCHIVE_INSTALL_BODY}",
+        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\nrequired={}\n{ARCHIVE_INSTALL_BODY}",
         crate::deploy::shlex_quote(directory),
         crate::deploy::shlex_quote(&version),
         crate::deploy::shlex_quote(&digest),
         crate::deploy::shlex_quote(&staged),
+        crate::deploy::shlex_quote(required),
     );
     let output = host_channel::run_script(target, &script, runner)
         .await
@@ -7925,7 +8022,9 @@ const ARCHIVE_INSTALL_BODY: &str = r#"
 root="$HOME/.stado/services/$name"
 version_dir="$root/$version"
 archive="$HOME/$staged"
-trap 'rm -f "$archive"' EXIT
+incoming="$root/.$version.incoming.$$"
+link="$root/.current.new.$$"
+trap 'rm -f "$archive" "$link"; rm -rf "$incoming"' EXIT
 
 [ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; exit 1; }
 actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
@@ -7934,28 +8033,48 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+/bin/mkdir -p "$incoming/darwin-arm"
+/usr/bin/tar -xzf "$archive" -C "$incoming/darwin-arm"
+if [ ! -f "$incoming/$required" ] || [ ! -x "$incoming/$required" ]; then
+  printf '%s\n' "archive does not carry the declared executable $required; current is unchanged" >&2
+  exit 1
+fi
+if [ -e "$version_dir" ]; then
+  if ! /usr/bin/diff -qr "$incoming" "$version_dir" >/dev/null; then
+    printf '%s\n' "existing immutable version $version differs from its archive; current is unchanged" >&2
+    exit 1
+  fi
+  [ -x "$version_dir/$required" ] || {
+    printf '%s\n' "existing immutable version $version has no executable $required; current is unchanged" >&2
+    exit 1
+  }
+  rm -rf "$incoming"
+else
+  /usr/bin/python3 - "$incoming" "$version_dir" <<'PY'
+import os, sys
+os.rename(sys.argv[1], sys.argv[2])
+PY
+fi
+
 if [ -L "$root/current" ] &&
-   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ] &&
-   [ -d "$version_dir/darwin-arm" ]; then
+   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ]; then
   trap - EXIT
   rm -f "$archive"
   printf '%s\n' 'STADO_SERVICE_ARCHIVE already_active'
   exit 0
 fi
-rm -rf "$version_dir"
-/bin/mkdir -p "$version_dir/darwin-arm"
-/usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
 
 # `current` is a directory here on some hosts and a symlink on others; either
 # way the previous one is kept beside the new version rather than deleted, so a
 # rollback is a rename.
 if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
-  /bin/mv "$root/current" "$root/current.before-$version"
-else
-  rm -f "$root/current"
+  /bin/mv "$root/current" "$root/current.before-$version.$$"
 fi
-/bin/ln -sfn "$version_dir" "$root/.current.new"
-/bin/mv -f "$root/.current.new" "$root/current"
+/bin/ln -s "$version_dir" "$link"
+/usr/bin/python3 - "$link" "$root/current" <<'PY'
+import os, sys
+os.replace(sys.argv[1], sys.argv[2])
+PY
 trap - EXIT
 rm -f "$archive"
 printf '%s\n' "$version_dir"

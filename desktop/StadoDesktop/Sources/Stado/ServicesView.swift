@@ -34,6 +34,10 @@ struct ServicesView: View {
     @State private var restartCandidate: FleetServiceEntry?
     @State private var removeFileCandidate: FleetServiceEntry?
     @State private var deployCandidate: FleetServiceEntry?
+    @State private var showsConverge = false
+    @State private var convergeHost = ""
+    /// Empty means every binary the selected host declares.
+    @State private var convergeBinary = ""
 
     private var isRefreshing: Bool {
         store.isRefreshing || fleetStore.isRefreshing
@@ -49,6 +53,13 @@ struct ServicesView: View {
             scope: scope,
             freshness: "Read \(ConsoleFormat.relative(lastRead))",
             actions: [
+                WisentAction(
+                    "Converge…",
+                    symbol: "arrow.triangle.2.circlepath",
+                    isEnabled: !hosts.isEmpty && !fleetStore.mutation.isWorking
+                ) {
+                    prepareConvergence()
+                },
                 WisentAction("Declare service", symbol: "plus") {
                     showsDeclare = true
                 },
@@ -74,6 +85,9 @@ struct ServicesView: View {
             ServiceDeclareView(hosts: hosts) {
                 Task { await refresh() }
             }
+        }
+        .sheet(isPresented: $showsConverge) {
+            convergeSheet
         }
         .sheet(item: $restartCandidate) { entry in
             restartDialog(entry)
@@ -196,6 +210,9 @@ struct ServicesView: View {
     private var alarms: some View {
         VStack(spacing: WisentDesign.Space.x3) {
             WisentMutationBar(outcome: fleetStore.mutation) { fleetStore.clearMutation() }
+            if let receipt = fleetStore.convergenceReceipt {
+                convergenceReceiptPanel(receipt)
+            }
             if !fleetStore.failedServices.isEmpty {
                 WisentAlertPanel(
                     tone: .danger,
@@ -272,9 +289,143 @@ struct ServicesView: View {
         }
         .padding(.horizontal, WisentDesign.Space.x4)
         .padding(.top, store.mismatched.isEmpty && store.failures.isEmpty && store.unownedProblem == nil
-            && fleetStore.failedServices.isEmpty && fleetStore.failures.isEmpty && fleetStore.mutation == .idle
+            && fleetStore.failedServices.isEmpty && fleetStore.failures.isEmpty
+            && fleetStore.mutation == .idle && fleetStore.convergenceReceipt == nil
             ? 0
             : WisentDesign.Space.x4)
+    }
+
+    private func convergenceReceiptPanel(_ receipt: ServiceConvergeReceipt) -> some View {
+        WisentSectionBox(
+            title: "Convergence receipt",
+            detail: "The complete JSON answer Stado returned before exiting. Refreshing service state does not replace it.",
+            trailing: "exit \(receipt.exitCode)"
+        ) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                Text(verbatim: StadoCLI.commandLine(receipt.arguments))
+                    .font(WisentTypeScale.identifierSmall())
+                    .foregroundStyle(WisentDesign.ink)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(Array(convergenceReceiptLines(receipt.report).enumerated()), id: \.offset) { _, line in
+                    Text(verbatim: line)
+                        .font(WisentTypeScale.identifierSmall())
+                        .foregroundStyle(WisentDesign.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                WisentActionButton(
+                    action: WisentAction("Dismiss receipt", kind: .plain) {
+                        fleetStore.clearConvergenceReceipt()
+                    }
+                )
+            }
+        }
+    }
+
+    private func convergenceReceiptLines(_ report: ServiceConvergeReport) -> [String] {
+        var lines = ["target | \(report.target)", "applied | \(report.applied)"]
+        lines += report.releases.map {
+            "release | \($0.binary) | version \($0.version) | \($0.status) | \($0.detail)"
+        }
+        lines += report.undeliverable.map {
+            "undeliverable | \($0.binary) | \($0.detail)"
+        }
+        lines += report.refused.map {
+            "refused | \($0.binary) | declared \($0.declaredVersion) | installed \($0.installedVersion) | \($0.remediation)"
+        }
+        lines += report.units.map {
+            let processMatch = $0.binaryMatchesProcess.map(String.init) ?? "not reported"
+            return "binary | \($0.binary) | declared \(value($0.declaredVersion)) | installed \(value($0.installedVersion))"
+                + " | verdict \($0.verdict) | root \($0.root) | unit \($0.unit) | state \($0.state)"
+                + " | running \($0.runningBinary ?? "not reported") | process match \(processMatch) | \($0.detail)"
+        }
+        return lines
+    }
+
+    private var availableConvergeBinaries: [String] {
+        Array(Set(store.units.filter { $0.host == convergeHost }.map(\.unit.binary).filter { !$0.isEmpty }))
+            .sorted()
+    }
+
+    private func prepareConvergence() {
+        let selectedUnit = store.units.first { $0.id == selection }
+        let selectedFleetHost = fleetRows.first { $0.id == selection }.flatMap { row -> String? in
+            switch row {
+            case let .service(entry): entry.host
+            case let .unavailable(host, _): host
+            }
+        }
+        convergeHost = selectedUnit?.host ?? selectedFleetHost ?? hosts.first ?? ""
+        convergeBinary = selectedUnit?.unit.binary ?? ""
+        showsConverge = true
+    }
+
+    private var convergeSheet: some View {
+        let binary = convergeBinary.isEmpty ? nil : convergeBinary
+        let arguments = FleetServicesStore.convergeApplyArguments(host: convergeHost, binary: binary)
+        return VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                Text("Converge declared service binaries")
+                    .font(WisentTypeScale.screenTitle())
+                    .foregroundStyle(WisentDesign.ink)
+                Text("Choose the registry host and keep the selected binary, or apply every binary that host declares.")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
+            }
+            WisentSectionBox(
+                title: "Exact convergence request",
+                detail: "Stado owns delivery, refusal and final verification. Desktop runs this one product command and preserves its complete report."
+            ) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                    Picker("Host", selection: $convergeHost) {
+                        ForEach(hosts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Picker("Binary", selection: $convergeBinary) {
+                        Text("All declared binaries").tag("")
+                        ForEach(availableConvergeBinaries, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Text(verbatim: StadoCLI.commandLine(arguments))
+                        .font(WisentTypeScale.identifier())
+                        .foregroundStyle(WisentDesign.ink)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text("Convergence may replace installed programs and restart their services. A newer host version is refused rather than downgraded. The receipt remains visible even when only part of the request can be delivered.")
+                .font(WisentTypeScale.body())
+                .foregroundStyle(WisentDesign.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: WisentDesign.Space.x2) {
+                WisentActionButton(action: WisentAction("Cancel", kind: .primary) { showsConverge = false })
+                Spacer(minLength: 0)
+                WisentActionButton(
+                    action: WisentAction(
+                        "Apply convergence",
+                        symbol: "arrow.triangle.2.circlepath",
+                        kind: .destructive,
+                        isEnabled: !convergeHost.isEmpty && !fleetStore.mutation.isWorking
+                    ) {
+                        let host = convergeHost
+                        let binary = convergeBinary.isEmpty ? nil : convergeBinary
+                        showsConverge = false
+                        Task {
+                            await fleetStore.converge(host: host, binary: binary)
+                            await store.refresh(hosts: hosts)
+                        }
+                    }
+                )
+            }
+        }
+        .padding(WisentDesign.Space.x6)
+        .frame(minWidth: 680)
+        .onChange(of: convergeHost) { _, _ in
+            if !convergeBinary.isEmpty, !availableConvergeBinaries.contains(convergeBinary) {
+                convergeBinary = ""
+            }
+        }
     }
 
     private var mismatchDetail: String {
@@ -772,6 +923,18 @@ struct ServicesView: View {
             }
             deployAffordance(entry)
             restartAffordance(entry)
+            if entry.kind == "launchd" {
+                WisentActionButton(
+                    action: WisentAction(
+                        "Repair GitHub runner runtime",
+                        symbol: "wrench",
+                        kind: .secondary,
+                        isEnabled: !fleetStore.mutation.isWorking
+                    ) {
+                        Task { await fleetStore.repairRunnerRuntime(entry) }
+                    }
+                )
+            }
             removeFileAffordance(entry)
         }
     }

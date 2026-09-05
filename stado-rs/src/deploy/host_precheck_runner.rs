@@ -2204,6 +2204,15 @@ runner_signatures_valid() {
   root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Listener" >/dev/null 2>&1 &&
   root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Worker" >/dev/null 2>&1
 }
+resolve_runner_release() {
+  version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf '%s\n' 'runner version is malformed' >&2; exit 1; }
+  curl --fail --silent --show-error --location --max-time 60 \
+    "https://api.github.com/repos/actions/runner/releases/tags/v$version" -o "$staging/release.json"
+  expected=$(jq -er --arg name "actions-runner-osx-arm64-$version.tar.gz" \
+    '.assets | map(select(.name == $name)) | if length == 1 then .[0].digest | strings | select(startswith("sha256:")) | ltrimstr("sha256:") else error("runner artifact is ambiguous") end' "$staging/release.json")
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release has no SHA-256 digest' >&2; exit 1; }
+}
 fetch_runner_archive() {
   curl --fail --silent --show-error --location --max-time 120 \
     "https://github.com/actions/runner/releases/download/v$version/actions-runner-osx-arm64-$version.tar.gz" \
@@ -2218,7 +2227,7 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
-  for executable in Runner.Listener Runner.Worker; do
+  for executable in Runner.Worker Runner.Listener; do
     owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")
     replacement=$(root mktemp "$runner_root/bin/.$executable.stado.XXXXXX")
     root cp "$signed_runtime/bin/$executable" "$replacement"
@@ -2238,17 +2247,11 @@ if runner_signatures_valid; then
   printf '%s\n' 'runner apphost signatures are intact; no files changed'
   exit 0
 fi
-version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf '%s\n' 'runner version is malformed' >&2; exit 1; }
 mkdir -p "$HOME/.stado/work"
 staging=$(mktemp -d "$HOME/.stado/work/runner-runtime.XXXXXX")
 trap 'root rm -rf "$staging"' EXIT HUP INT TERM
 archive="$staging/runner.tar.gz"
-curl --fail --silent --show-error --location --max-time 60 \
-  "https://api.github.com/repos/actions/runner/releases/tags/v$version" -o "$staging/release.json"
-expected=$(jq -er --arg name "actions-runner-osx-arm64-$version.tar.gz" \
-  '.assets | map(select(.name == $name)) | if length == 1 then .[0].digest | strings | select(startswith("sha256:")) | ltrimstr("sha256:") else error("runner artifact is ambiguous") end' "$staging/release.json")
-[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release has no SHA-256 digest' >&2; exit 1; }
+resolve_runner_release
 fetch_runner_archive
 restore_runner_apphosts
 runner_signatures_valid
@@ -2303,13 +2306,12 @@ fi
 
 runner_registered=0
 if [ -f "$runner_root/.runner" ]; then runner_registered=1; fi
-# The verified GitHub artifact carries valid ad-hoc signatures. An older
-# installer stripped them, and current macOS kills the CoreCLR apphosts with
-# HRESULT 0x8007000C. Reconciliation repairs that installed state from the same
-# checksum-pinned artifact instead of manufacturing a replacement signature.
+# Preserve GitHub's signatures. A registered runner may have advanced beyond
+# the installer's pinned version, so restore apphosts from its own release.
 runtime_repaired=0
 if [ "$runner_registered" -eq 1 ] && ! runner_signatures_valid; then
   runtime_repaired=1
+  resolve_runner_release
 fi
 if [ "$runner_registered" -eq 0 ] || [ "$runtime_repaired" -eq 1 ]; then
   fetch_runner_archive

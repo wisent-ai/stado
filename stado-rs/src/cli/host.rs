@@ -3061,8 +3061,9 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 }
 
 /// `stado host inventory TARGET [--json]` — the stado-managed binaries,
-/// forward markers and loopback listeners of TARGET, and the verdict on
-/// whether each marker still matches a live listener.
+/// fixed Cargo-home metadata and bin membership, forward markers and loopback
+/// listeners of TARGET, and the verdict on whether each marker still matches
+/// a live listener.
 ///
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
@@ -3097,7 +3098,33 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         let answer = crate::deploy::fleet_vaults::collect_from(&resolved, &runner).await;
-        hosts.push(crate::deploy::fleet_vaults::attribute(name, answer));
+        let mut host = crate::deploy::fleet_vaults::attribute(name, answer);
+        // What the host itself declares, read from the host: the operator's
+        // laptop config is not the answer for a machine the operator is
+        // asking about. `None` means the field was not in the answer at all,
+        // which a release older than the key produces.
+        let declared = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
+            .await
+            .ok()
+            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok())
+            .and_then(|document| {
+                document
+                    .pointer("/resolved/skarbiec_vault_file")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if let Some(object) = host.as_object_mut() {
+            let list = object
+                .get("vaults")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            object.insert(
+                "authority".to_string(),
+                crate::credential_store::owner::authority(declared.as_deref(), &list),
+            );
+        }
+        hosts.push(host);
     }
     let summary = crate::deploy::fleet_vaults::summarize(&hosts);
     if json {
@@ -3119,10 +3146,26 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let authority = host.get("authority");
+        let chosen = authority
+            .and_then(|verdict| verdict.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         println!("{name}: {} vault(s)", list.len());
         for vault in list {
+            let path = vault.get("path").and_then(Value::as_str).unwrap_or("");
+            // The marked line is the one every owner write and authoritative
+            // read on that host goes through. Reading a count without it told
+            // an operator how much is held and nothing about which store
+            // answers.
+            let marker = if !chosen.is_empty() && path == chosen {
+                "*"
+            } else {
+                " "
+            };
             println!(
-                "  {:>5} items  {} recipients  {}",
+                "{marker} {:>5} items  {} recipients  {}",
                 vault
                     .get("items")
                     .and_then(Value::as_u64)
@@ -3131,7 +3174,17 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                     .get("recipients")
                     .and_then(Value::as_u64)
                     .unwrap_or_default(),
-                vault.get("path").and_then(Value::as_str).unwrap_or("")
+                path
+            );
+        }
+        if let Some(verdict) = authority {
+            println!(
+                "  authority: {} — {}",
+                verdict
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                verdict.get("detail").and_then(Value::as_str).unwrap_or("")
             );
         }
     }
@@ -3665,6 +3718,91 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect::<Vec<Vec<String>>>(),
+    );
+
+    // The fixed Cargo paths and their children are part of the same typed
+    // report in JSON and text. Keeping the table here avoids a second
+    // filesystem reader that could drift from the JSON document.
+    let cargo = report.get("cargo").and_then(Value::as_object);
+    let cargo_roots = [("$HOME/.cargo", "home"), ("$HOME/.cargo/bin", "bin")]
+        .iter()
+        .filter_map(|(path, key)| {
+            cargo.and_then(|value| value.get(*key)).map(|metadata| {
+                vec![
+                    (*path).to_string(),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+        })
+        .collect::<Vec<Vec<String>>>();
+    super::table::print(
+        &[
+            "CARGO PATH",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_roots,
+    );
+    let cargo_entries = cargo
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    super::table::print(
+        &[
+            "CARGO BIN ENTRY",
+            "NAME STATE",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_entries
+            .iter()
+            .map(|metadata| {
+                vec![
+                    cell(metadata.get("name")),
+                    cell(metadata.get("name_state")),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+    println!(
+        "Cargo bin membership: state={} listed={} seen={} entries_complete={} complete={}",
+        cell(cargo.and_then(|value| value.get("entries_state"))),
+        cargo_entries.len(),
+        cell(cargo.and_then(|value| value.get("entries_seen"))),
+        cell(cargo.and_then(|value| value.get("entries_complete"))),
+        cell(cargo.and_then(|value| value.get("complete"))),
     );
 
     let markers = section("forwards");
@@ -8331,18 +8469,44 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The fixed-script channel transports the checked-in helper verbatim. Its
-/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation; object recovery itself mutates only a listener whose
-/// authenticated protected read is unavailable.
+/// Storage authority changes belong to the resident storage-root transaction.
+/// This narrower repair shares its lock and never copies a backing store.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let script = format!(
+        r#"set -eu
+/usr/bin/python3 - <<'PY'
+import base64, fcntl, os, subprocess, sys
+work = os.path.join(os.path.expanduser("~"), ".stado", "recovery")
+os.makedirs(work, mode=0o700, exist_ok=True)
+descriptor = os.open(
+    os.path.join(work, "storage-root-reconcile.lock"),
+    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+    0o600,
+)
+with os.fdopen(descriptor, "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("storage authority recovery is already running on this host")
+    result = subprocess.run(
+        ["/bin/bash"],
+        input=base64.b64decode("{}"),
+        pass_fds=(lock.fileno(),),
+        check=False,
+    )
+    sys.exit(result.returncode)
+PY"#,
+        STANDARD.encode(include_str!("../../../deploy/recover_object_api.sh")),
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
-        include_str!("../../../deploy/recover_object_api.sh"),
-        std::time::Duration::from_secs(240),
+        &script,
+        std::time::Duration::from_secs(300),
         runner,
     )
     .await
@@ -10878,7 +11042,10 @@ pub async fn storage_root_reconcile(
             println!("verified objects: {count}");
         }
     }
-    report_outcome(&report, "ok")
+    // Mutating phases only acknowledge that the target-native owner was
+    // accepted. Their terminal result remains the durable STATUS receipt.
+    // Keep STATUS on the ordinary completed-report convention.
+    report_outcome(&report, if phase == "status" { "ok" } else { "accepted" })
 }
 pub async fn storage_root_reconcile_worker(
     target: &str,

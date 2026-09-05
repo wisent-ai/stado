@@ -30,8 +30,9 @@
 //!   allowlist, read-only apart from the declared provider sign-in
 //!   repairs. Not a shell.
 //! - [`host_inventory`] — `stado host inventory`: the stado-managed
-//!   binaries, forward markers and loopback listeners of one host, plus
-//!   the verdict on whether each marker still matches a live listener.
+//!   binaries, fixed Cargo-home metadata and bin membership, forward markers
+//!   and loopback listeners of one host, plus the verdict on whether each
+//!   marker still matches a live listener.
 //!   It is NOT an `host_exec` allowlist entry because it reduces and caps
 //!   every value it reads off the host; that table passes a program's
 //!   output through untouched.

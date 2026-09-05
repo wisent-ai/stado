@@ -26,7 +26,7 @@ use crate::release_pipeline::{
     WorkerRequest, PRODUCT_MANIFEST,
 };
 
-const OBJECT_API_SERVICE: &str = "stado-object-api";
+const OBJECT_API_CATALOG_SERVICE: &str = "stado";
 const OBJECT_API_REASON: &str =
     "release submission requires the canonical object store before its first write";
 
@@ -1315,12 +1315,19 @@ async fn enqueue(
         failure: None,
     })
 }
+async fn read_terminal_job(store: &JobStorage, id: &str) -> Result<Option<Job>, CmdError> {
+    for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+        if let Some(job) = store.read_job(prefix, id).await? {
+            return Ok(Some(job));
+        }
+    }
+    Ok(None)
+}
+
 async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
     loop {
-        for p in ["completed", "uploaded", "failed", "cancelled"] {
-            if let Some(j) = store.read_job(p, id).await? {
-                return Ok(j);
-            }
+        if let Some(job) = read_terminal_job(store, id).await? {
+            return Ok(job);
         }
         if store.read_job("queue", id).await?.is_some() {
             let queue_control = crate::queue::control::read(store)
@@ -1587,18 +1594,24 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     require_rollback_compatibility(&m, &args.version).await?;
     // An explicit endpoint may be a Stado-managed loopback forward to the
     // control host. Only an absent endpoint means this caller owns the local
-    // object daemon and must ensure it before publishing.
+    // object daemon and must ensure it before publishing. Address the service
+    // by its canonical catalog name: that entry owns both the stable object-API
+    // unit identity and its host-local storage environment.
     if crate::config::stado_api_url().is_empty()
         && crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
             != Some(crate::capabilities::StorageAdapter::Local)
     {
-        super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "cannot ensure required service {OBJECT_API_SERVICE}: {error}"
-                ))
-            })?;
+        super::service::ensure_local_dependency(
+            OBJECT_API_CATALOG_SERVICE,
+            OBJECT_API_REASON,
+            true,
+        )
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot ensure required service {OBJECT_API_CATALOG_SERVICE}: {error}"
+            ))
+        })?;
     }
     let (commit, archive) = snapshot(&root)?;
     // Reserve every platform coordinate before this submission can become the
@@ -1724,6 +1737,35 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 platform.artifact_sha256 = None;
                 platform.release_manifest_sha256 = None;
                 platform.qualification_uri = None;
+                platform.failure = None;
+                save(&mut run).await?;
+            }
+        }
+        if run
+            .platforms
+            .get(p)
+            .is_some_and(|platform| platform.state == PlatformRunState::Failed)
+        {
+            // A failed publication read is not a failed build. Inspect the
+            // original job before deriving another build identity.
+            let job_id = &run.platforms[p].job_id;
+            let retry = match read_terminal_job(&store, job_id).await? {
+                Some(job) => matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED),
+                None => {
+                    if store.read_job("running", job_id).await?.is_none()
+                        && store.read_job("queue", job_id).await?.is_none()
+                    {
+                        return Err(CmdError::click(format!(
+                            "release job {job_id} was not found in recorded states; \
+                             refusing a replacement without terminal failure"
+                        )));
+                    }
+                    false
+                }
+            };
+            if !retry {
+                let platform = run.platforms.get_mut(p).expect("checked above");
+                platform.state = PlatformRunState::Submitted;
                 platform.failure = None;
                 save(&mut run).await?;
             }

@@ -19,6 +19,8 @@ The host channel resolves the target from the canonical registry, checks its pin
 
 Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. Mutating workflows use their owning commands, such as `stado service file-sync`, `stado service secret-sync`, `stado release apply`, or `stado host reconcile-object-verifier`. Secret values are read and written on the target; they never appear in the remote argument list or command result.
 
+Set `RUST_LOG=stado::deploy::host_channel=trace` when the same operation needs OpenSSH's own transport diagnosis. Stado adds `-vvv` to the shared SSH invocation only while that existing tracing target is enabled; normal argv is unchanged, and the debug stream remains verbatim in the operation's existing stderr and status receipt.
+
 ### Bounded vault bearers
 
 Select a declared host in Stado Desktop and open **Fleet › Hosts › selected host
@@ -49,7 +51,6 @@ explicit raw mode shows the generated bearer together with its target and
 requested grant fields instead. Host-channel, vault, item, field, audience,
 capability, expiry, and existing-capability conflicts are shown using Stado's
 actual refusal detail rather than a generic command-failed message.
-
 
 An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
 
@@ -83,6 +84,10 @@ For an independently managed instance outside a release policy's target map,
 `registry doctor` accepts pinned environment only when both the registry record
 and the local unit file contain the product's exact required values. A remote
 unit that was not read is not treated as agreeing.
+The report distinguishes a missing delivery declaration (`untargeted-product-host`)
+from a pinned service whose native environment was not read
+(`unread-service-environment`) or disagrees (`service-environment-drift`).
+An unrelated product naming the host does not satisfy this product's target map.
 
 Run `stado host exec <target> -- stado registry doctor` to measure those
 host-local facts through Stado. The fixed read-only command uses the target's
@@ -146,7 +151,7 @@ When a host answers through one of those routes but its beacon is stale, `stado 
 
 Stado Desktop shows **Repair beacon publication** only for that repairable diagnosis. The action runs the same command and keeps its success or refusal on the Hosts screen; a stale host with a different publisher failure remains diagnostic-only until its own exact repair exists.
 
-`host exec`'s allowlist takes no operator-supplied path, so it reads no files. A managed unit's owner-controlled env file — the one a launcher `.`-sources, not the one the unit file declares — is read with `stado service env-show <service> --host <target> --env-file <path>`, through the same channel and the same `$HOME` confinement `stado service env-set` writes through. Values whose key looks like a credential, and URLs carrying userinfo, are withheld on the target and never cross the channel; endpoints, ports and variable references are shown, because those are what an operator must verify. `stado service endpoint-check` reconciles the loopback endpoints that file declares against the target's own socket table and exits non-zero when a declared dependency is dead.
+`host exec`'s allowlist takes no operator-supplied path and exposes no arbitrary shell. Entries that inspect a path fix that path and every flag in source. Fixed Cargo metadata is a typed `stado host inventory <target>` section instead: it uses lstat for the managed account's `$HOME/.cargo` and preserves that entry's link target, then follows only its fixed `bin` child and inventories every direct child including dotfiles with type, mode, numeric ownership, size, modification epoch, and symlink target. This supports the ordinary layout where Cargo home is a link to a mounted cache without accepting an operator-selected path or opening a file body. `entries_seen`, `entries_complete`, `entries_state`, and the enclosing `complete` field make truncation, a refused or partial traversal, malformed metadata, or a sanitized name explicit. The CLI tables the same fields, and Stado Desktop's Hosts inspector requests that typed report on demand for one selected canonical host through the authenticated `GET /api/host/inventory?target=…` route; it does not spawn the CLI. The content-reading exceptions remain exact: the fixed OpenSSH diagnosis reads only `/etc/ssh/sshd_config` and the last 200 records of `ssh.service`, with the file, unit, line bound and pager mode all fixed in source. A managed unit's owner-controlled env file — the one a launcher `.`-sources, not the one the unit file declares — is read with `stado service env-show <service> --host <target> --env-file <path>`, through the same channel and the same `$HOME` confinement `stado service env-set` writes through. Values whose key looks like a credential, and URLs carrying userinfo, are withheld on the target and never cross the channel; endpoints, ports and variable references are shown, because those are what an operator must verify. `stado service endpoint-check` reconciles the loopback endpoints that file declares against the target's own socket table and exits non-zero when a declared dependency is dead.
 
 A configuration surface Stado can write and cannot read is not a boundary, it is a blind spot: on 2026-08-30 a managed unit named a Skarbiec endpoint nothing served, two writes of the correct endpoint were reverted, and no command could show either fact. `stado service env-set` therefore reads the key back through the same channel after writing it and exits non-zero unless the file's effective assignment holds what it wrote. The comparison happens on the target, so a secret is verified exactly without its value returning.
 
@@ -216,11 +221,41 @@ stado service restart com.wisent.always-on.weles --host charless-mac-mini
 
 `retire` now handles the unit's real domain instead of assuming a per-login job. A system LaunchDaemon is stopped through the host account credential, then both `system/<label>` and its recovery job are disabled with privileged `launchctl`; a Linux user unit is stopped, disabled, and runtime-masked so an older coordinator cannot revive it from a stale read. `service remove` composes the same fenced retirement with deletion of the exact managed unit file, while `retire` keeps that file for an explicit rollback.
 
+### Repairing a macOS GitHub runner's apphost signatures
+
+Managed runner installation preserves the signatures shipped in GitHub's
+checksum-pinned archive. For an already adopted service that directly starts
+`runsvc.sh`, the same repair is available through the CLI and the **Services**
+inspector's **Repair GitHub runner runtime** action:
+
+```console
+stado service repair-runner-runtime actions.runner.wisent-ai-brama.charless-mac-mini-stado-release --host charless-mac-mini --json
+```
+
+The repair retains the installed version and registration, verifies the official
+archive's SHA-256 and both replacement apphosts, and replaces only those files.
+It does not restart the unit: GitHub's existing listener retry loop owns the
+next launch. An intact signature returns `runner apphost signatures are intact;
+no files changed`. That result describes the files, not a working runner.
+Use `service logs` to read the listener's actual failure.
+
+Linux services and units that do not directly launch `runsvc.sh` are refused.
+Missing registration, an ambiguous version, a missing release digest, a digest
+mismatch, or a failed signature check stops the repair before activation.
+The JSON receipt names the target, unit, runner root, output, and
+`restarted: false`; Desktop displays the same output or refusal.
+
 ### A live process still executing a binary that was replaced underneath it
 
 A launchd unit's process goes on executing the image it started with. Replacing the file the unit declares does not move it, and nothing on this fleet revisited a unit that was missed: `self_update::recycle_replaced_units` cycles units only inside the invocation that replaced their bytes, matches `argv[0]` by string equality, skips its own pid, defers any unit whose argv carries `agent`, and logs a failed `kickstart` without ever coming back to it. `com.wisent.compute.disk-cleanup.disk-cleanup` recorded `policy:ValueError` 8,348 times across thirteen days from a `--watch` process alive since 27 August, executing an inode its declared path no longer held; an unrelated restart is what ended it. The condition is not rare and not static — the installed binary went 0.13.50 to 0.14.8 inside one day, and measured hours apart on 2026-09-03 the stale set on `lukasz-macbook` lost `com.wisent.compute.agent.lukasz-macbook` to an unrelated restart and gained `com.wisent.stado-resolver` to a new release.
 
 `registry doctor` reports it as `stale-unit-image` when the running and declared files are different inodes, and `unread-unit-image` when the question could not be asked. The identity is `(st_dev, st_ino)` and never a path, because a path is exactly what does not change; `links: 0` distinguishes an unlinked image, where no copy of the running build survives to be diffed, from a replaced one that still exists somewhere. Both readings are local-only: which file a pid executes is answerable only on the machine holding that pid, so every other host gets an explicit unmeasured row rather than a silent pass. A replacement younger than `IMAGE_SETTLE_SECONDS` (300) is an installer mid-flight and is not a finding.
+
+On macOS, `/bin/sh` is a dispatcher, not necessarily the executable that remains
+running. The image reader observes the shell selected by a short-lived privileged
+`/bin/sh` process and compares that executable's installed identity. It does not
+assume Bash, duplicate Apple's selection defaults, or report normal dispatch to
+another shell as a replaced binary; an unreadable selection stays unknown.
 
 `stado service refresh-image <label>` is the operator verb: it refuses a unit that is not stale and names the identity it found, restarts through `launchctl kickstart -k`, then **re-reads the identity**. That second read is the whole discipline. On 2026-09-03 pid 49727 respawned under `KeepAlive` straight back onto the same unlinked inode it had just left, because launchd re-execs the declared PATH and the path was never the problem, so a restart that did not change the image exits non-zero rather than reporting success.
 
@@ -283,6 +318,18 @@ One defect found on the way is left named: the worker's model-router bearer and 
 The directory joins a producer, its endpoint, and declared consumers. `stado service directory show <service>` displays the resolved relationship. `stado service directory connect <service> --consumer <consumer>` establishes a declared connection. `stado service verify <service>` exercises reachability from the declared consumers instead of treating the producer's loopback listener as fleet reachability.
 
 A directory declaration is not proof of a live route. Verification records which consumer reached which endpoint and why a refusal occurred.
+
+### The marker holds the address that host dials
+
+Several products resolve a service from an owner-only file, `~/.stado/forwards/<service>.local`, rather than from an environment variable: Skarbiec's credential bridge reads `weles-admission.local` this way. `stado service directory publish` writes those files, and what it must write depends on where the service runs.
+
+- The host that SERVES the service gets the address it serves on, from `endpoints[<that host>]`.
+- Every other host gets its OWN resolver adapter for that service, from `service_resolver.adapters[]`, because the serving host's loopback port means something else — or nothing — on their machine.
+- A service whose resolver declares one adapter per consumer is refused by name, listing the consumers: the marker's filename carries no consumer, so nothing elects one consumer's socket for the rest.
+
+`publish` reports the source of every address it wrote (`directory-endpoint` or `resolver-adapter`), reports every marker no declaration accounts for as a fossil, and removes exactly those under `--prune`. `stado host inventory <host>` judges each marker against both declared sources and prints `declared_source` beside its verdict, and Stado Desktop's Hosts screen shows the same rows under **Service addresses this host dials**.
+
+Publishing skipped every service placed elsewhere until 2026-09-05, which left those markers as whatever last wrote them: `lukasz-macbook` carried `brama.local` at `127.0.0.1:8080`, Brama's port on the Mac mini and an unrelated service's port on the laptop, and `weles-admission.local` at `8788` while that host's adapter binds `17614`. A consumer reading either file dialled the wrong service, and the inventory called the correct address `undeclared` because it compared markers with `endpoints` alone.
 
 ## Object authorization
 
@@ -378,6 +425,27 @@ stado service grant-sync <service> \
 `stado host vault-item-put <target> <item> --type <kind>` stores one canonical item, reading the payload from stdin so no credential field enters a local or remote argument vector. `stado host vault-item-show <target> <item>` is its read: kind, schema, revision, tags, `updated_at`, and per field the name, byte length and SHA-256, narrowed with `--field <name>`. The decryption and the hashing both happen on the host, so comparing a digest against a local copy's answers "does the host hold what this declaration references" without either side sending the value.
 
 The read exists because its absence hid a whole migration's work in the wrong place. `skarbiec set-json` on a workstation writes that workstation's vault; the fleet reads the target's own live vault, and nothing pointed at the difference — `retag-vault-item` reports state, revision and tags but nothing about a payload, `stado credentials get` reads the local store, and `skarbiec get` is not a host-exec command. Seven environment bundles and twenty credential fields went into a laptop vault nothing on the fleet reads, and the only symptom was Brama answering `401` to a bearer it had never been told about.
+
+### Which vault a machine resolves
+
+A machine can hold several vault files, and exactly one of them answers its credential operations. `secrets.skarbiec.vault_file` declares which: `stado config set secrets.skarbiec.vault_file <path>` for the machine you are on, `stado host config-set <target> secrets.skarbiec.vault_file <path>` for a managed host. `SKARBIEC_VAULT_FILE` still overrides it for one process, which is how a build is exercised before it is installed.
+
+With nothing declared the machine discovers one, searching the paths Skarbiec's own `vaults` command searches, in its order: `~/.local/share/skarbiec/skarbiec.vault.json`, `~/.stado/skarbiec.vault.json`, `~/skarbiec.vault.json`. That is an answer only while one candidate is present, or while the candidates carry different owners.
+
+`stado credentials vault [--json]` reports the resolution for the machine it runs on, and `stado host vaults <target>` reports it for a managed host, marking the resolved vault with `*`. Stado Desktop shows the same on the Hosts screen as "Credential vault this host resolves". The states:
+
+| State | Meaning |
+|---|---|
+| `declared` | `secrets.skarbiec.vault_file` names a vault this machine holds |
+| `discovered` | one candidate, and no declaration was needed |
+| `ambiguous` | several candidates claim one owner: every owner write and authoritative read here is refused |
+| `declared-absent` | the declaration names a file this machine does not hold |
+| `none` | no candidate at all, so this machine cannot write credential items |
+| `unreadable` | that host's installed release has no such field, so its resolution cannot be read from here |
+
+Nothing is ever merged and no vault is ever created to resolve this: which items belong where is the operator's decision, and a second vault created quietly is the defect rather than the recovery.
+
+On 2026-09-05 `lukasz-macbook` held `~/.local/share/skarbiec/skarbiec.vault.json` with 660 items and `~/.stado/skarbiec.vault.json` with 626, both claiming owner `skarbiec-owner-charless-mini-20260804`, because the `skarbiec` CLI defaults to the first and Stado used to name the second. Twenty-two of the fleet's twenty-four declared release publishers were in both, two in only one. Every owner write on that machine was refused, so `stado host reconcile-release-verifier` could not extend the release verifier's grant, and `stado doctor --deployment-preflight` failed `object-auth` with seven publisher items missing — the fleet's release publication boundary, closed by a question nothing in the product asked out loud.
 
 ## Failure ownership
 

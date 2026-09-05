@@ -793,6 +793,7 @@ async fn stable_bind_answer(
     product: &str,
     generation: u64,
     active: &ProcessRecord,
+    readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     if !pid_alive(proxy_pid) {
         return Err(format!("stable release proxy pid {proxy_pid} is gone"));
@@ -829,24 +830,41 @@ async fn stable_bind_answer(
     }
 
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    let response = reqwest::Client::new()
-        .get(&url)
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                format!("{url} did not answer within 3s")
-            } else if error.is_connect() {
-                format!("{url} refused the connection")
-            } else {
-                format!("{url} failed: {error}")
-            }
-        })?;
-    if !response.status().is_success() {
-        return Err(format!("{url} answered HTTP {}", response.status()));
+    let client = reqwest::Client::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
+    let mut last_error = None;
+    loop {
+        if !pid_alive(proxy_pid) {
+            return Err(format!("stable release proxy pid {proxy_pid} is gone"));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "{url} did not become ready within {readiness_timeout_seconds}s; {}",
+                last_error
+                    .as_deref()
+                    .unwrap_or("no response before the deadline")
+            ));
+        }
+        last_error = Some(
+            match client
+                .get(&url)
+                .timeout(remaining.min(Duration::from_secs(3)))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => return Ok(()),
+                Ok(response) => format!("HTTP {}", response.status()),
+                Err(error) => format!("{error:#}"),
+            },
+        );
+        tokio::time::sleep(
+            deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .min(Duration::from_millis(200)),
+        )
+        .await;
     }
-    Ok(())
 }
 
 fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
@@ -947,6 +965,7 @@ async fn ensure_active_proxy(
     generation: u64,
     active: &ProcessRecord,
     state: &mut HostReleaseState,
+    readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     if !ready(active, &serving.readiness_path).await {
         return Err("active release lost readiness".to_string());
@@ -971,7 +990,6 @@ async fn ensure_active_proxy(
     } else {
         stop_legacy(target)?;
         let spawned_pid = start_proxy(target, serving, product, generation, active.port)?;
-        tokio::time::sleep(Duration::from_millis(200)).await;
         let proxy_pid = exact_proxy_pid(target, serving, product)
             .map_err(|why| format!("stable release proxy failed to start: {why}"))?
             .ok_or_else(|| "spawned stable release proxy is not live".to_string())?;
@@ -984,9 +1002,17 @@ async fn ensure_active_proxy(
     };
 
     state.proxy_pid = Some(proxy_pid);
-    stable_bind_answer(proxy_pid, target, serving, product, generation, active)
-        .await
-        .map_err(|why| format!("stable release proxy is invalid: {why}"))
+    stable_bind_answer(
+        proxy_pid,
+        target,
+        serving,
+        product,
+        generation,
+        active,
+        readiness_timeout_seconds,
+    )
+    .await
+    .map_err(|why| format!("stable release proxy is invalid: {why}"))
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
@@ -1552,6 +1578,7 @@ async fn rollback(
     target: &ReleaseTargetPolicy,
     state: &mut HostReleaseState,
     reason: String,
+    readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
     if let Some(record) = &failed {
@@ -1564,7 +1591,16 @@ async fn rollback(
         let serving = target.blue_green_serving()?;
         let product = state.product.clone();
         let generation = state.rollout_generation;
-        ensure_active_proxy(target, &serving, &product, generation, &previous, state).await?;
+        ensure_active_proxy(
+            target,
+            &serving,
+            &product,
+            generation,
+            &previous,
+            state,
+            readiness_timeout_seconds,
+        )
+        .await?;
         if let Some(record) = &failed {
             terminate(record);
         }
@@ -1980,11 +2016,18 @@ async fn reconcile_product(
                 desired.rollout_generation,
                 &active,
                 &mut state,
+                policy.strategy.readiness_timeout_seconds,
             )
             .await
             {
                 if policy.strategy.automatic_rollback {
-                    rollback(target, &mut state, reason).await?;
+                    rollback(
+                        target,
+                        &mut state,
+                        reason,
+                        policy.strategy.readiness_timeout_seconds,
+                    )
+                    .await?;
                 } else {
                     state.phase = RolloutPhase::Failed;
                     state.detail = reason;
@@ -2012,11 +2055,18 @@ async fn reconcile_product(
             desired.rollout_generation,
             &active,
             &mut state,
+            policy.strategy.readiness_timeout_seconds,
         )
         .await;
         if let Err(reason) = proxy_result {
             if policy.strategy.automatic_rollback {
-                rollback(target, &mut state, reason).await?;
+                rollback(
+                    target,
+                    &mut state,
+                    reason,
+                    policy.strategy.readiness_timeout_seconds,
+                )
+                .await?;
             } else {
                 state.phase = RolloutPhase::Failed;
                 state.detail = reason;
@@ -2039,6 +2089,7 @@ async fn reconcile_product(
                         target,
                         &mut state,
                         "candidate failed during drain".to_string(),
+                        policy.strategy.readiness_timeout_seconds,
                     )
                     .await?;
                 } else {
@@ -2216,11 +2267,18 @@ async fn reconcile_product(
         desired.rollout_generation,
         &process,
         &mut state,
+        policy.strategy.readiness_timeout_seconds,
     )
     .await;
     if let Err(reason) = proxy_result {
         if policy.strategy.automatic_rollback {
-            rollback(target, &mut state, reason).await?;
+            rollback(
+                target,
+                &mut state,
+                reason,
+                policy.strategy.readiness_timeout_seconds,
+            )
+            .await?;
         } else {
             state.phase = RolloutPhase::Failed;
             state.detail = reason;
@@ -2243,6 +2301,7 @@ async fn reconcile_product(
                 target,
                 &mut state,
                 "candidate failed during drain".to_string(),
+                policy.strategy.readiness_timeout_seconds,
             )
             .await?;
         } else {

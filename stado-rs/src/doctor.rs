@@ -606,6 +606,7 @@ pub async fn run(scope: RunScope) -> Report {
         release_check,
         integrity_check,
         template_check,
+        agent_skarbiec_check,
         identity_check,
         registry_check,
         control_check,
@@ -672,6 +673,13 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
             check_agent_template().await
         },),
+        selected(
+            scope,
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            AGENT_SKARBIEC_REMEDY,
+            async { check_agent_skarbiec().await },
+        ),
         selected(scope, IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
             check_vm_identity()
         },),
@@ -732,6 +740,7 @@ pub async fn run(scope: RunScope) -> Report {
         release_check,
         integrity_check,
         template_check,
+        agent_skarbiec_check,
         identity_check,
         registry_check,
         control_check,
@@ -2245,6 +2254,76 @@ async fn check_agent_template() -> Check {
         }
     }
     findings.into_check(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY)
+}
+
+const AGENT_SKARBIEC_ID: &str = "agent-skarbiec";
+const AGENT_SKARBIEC_TITLE: &str = "The agent's own Skarbiec broker answers";
+const AGENT_SKARBIEC_REMEDY: &str =
+    "point agent.skarbiec.url at a broker that is listening on this host, or start the one it \
+     names; a queue agent whose broker is unreachable can claim no job that declares secret_env";
+
+/// Whether this host's queue agent can reach the broker it is configured to
+/// read workload secrets through.
+///
+/// Nothing reported this. On 2026-09-05 this laptop's `agent.skarbiec.url`
+/// was `http://127.0.0.1:19096` with nothing listening — three brokers were
+/// running, on 9877, 8799 and 8787, none of them that one — and the only
+/// symptom was a `preferences` release job dying after it had been claimed:
+/// `cannot resolve job … secret GITHUB_TOKEN: error sending request for url
+/// (http://127.0.0.1:19096/v1/items/read)`. A misconfiguration that only
+/// surfaces as another product's failed build is one an operator cannot find.
+///
+/// Metadata only: `list_items` returns ids, never values.
+async fn check_agent_skarbiec() -> Check {
+    let url = config::agent_skarbiec_url();
+    if url.trim().is_empty() {
+        return Check::pass(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            "agent.skarbiec.url is unset, so the agent reads workload secrets through the \
+             configured store client and has no separate broker to reach"
+                .to_string(),
+            AGENT_SKARBIEC_REMEDY,
+        );
+    }
+    let token_file = config::agent_skarbiec_token_file();
+    let consumer = config::agent_skarbiec_consumer();
+    let client = match crate::skarbiec::Client::direct(
+        url,
+        consumer,
+        token_file,
+        crate::skarbiec::GrantMode::for_grant_file(token_file),
+    ) {
+        Ok(client) => client,
+        Err(error) => {
+            return Check::fail(
+                AGENT_SKARBIEC_ID,
+                AGENT_SKARBIEC_TITLE,
+                format!("agent consumer {consumer} cannot be configured against {url}: {error}"),
+                AGENT_SKARBIEC_REMEDY,
+            )
+        }
+    };
+    match client.list_items().await {
+        Ok(items) => Check::pass(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            format!(
+                "agent consumer {consumer} reaches {url} and its grant exposes {} item(s)",
+                items.len()
+            ),
+            AGENT_SKARBIEC_REMEDY,
+        ),
+        Err(error) => Check::fail(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            format!(
+                "agent consumer {consumer} cannot read through {url}: {error}. This host can \
+                 claim no job that declares secret_env"
+            ),
+            AGENT_SKARBIEC_REMEDY,
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
