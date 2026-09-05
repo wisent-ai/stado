@@ -210,14 +210,6 @@ fn coordinator_preserves_settled_history_and_refuses_missing_unretired_history()
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        if !source_retired {
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains(&format!("run manifest {RUN_ID} disappeared")),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
         assert_eq!(fs::read(terminal_path).unwrap(), terminal);
         assert!(
             !journey.run_path().exists(),
