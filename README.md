@@ -590,9 +590,45 @@ stado host backup-audit TARGET --object stado://probierz/queue/JOB.json --json
 ```
 
 Repeat `--object` to compare more coordinates. Exact-object mode reports each
-side's state, byte count, and SHA-256, and reports `deadline_unproven` if the
-existing read-only hashing budget expires. It cannot be combined with replica
-reclamation. Omitting `--object` retains the whole-replica classification.
+side's state, byte count, SHA-256, and effective metadata identity, and reports
+`deadline_unproven` if the existing read-only hashing budget expires.
+`--inventory-namespace NAME` instead lists backup-visible paths and size
+metadata in an explicitly selected namespace without reading object bodies.
+Neither mode can be combined with replica reclamation. Omitting both retains
+the whole-replica classification.
+Even exact equality at selected physical coordinates does not identify which
+root the running API serves; that requires the loaded service environment and
+process identity reported by `service label-print`.
+
+The command itself owns one three-phase durable transaction rather than using
+`object-relocate` (which is an in-store move):
+
+```console
+stado host storage-root-reconcile TARGET --transaction ID --phase checkpoint --json
+stado host storage-root-reconcile TARGET --transaction ID --phase apply --json
+stado host storage-root-reconcile TARGET --transaction ID --phase finalize --json
+```
+
+Checkpoint first records the canonical queue state and each local writer's
+loaded routing environment, process PID/start/image, and running state. It
+pauses and drains the queue, retains the host transport services, stops
+storage writers, rechecks those fences, and then takes verified immutable
+snapshots of both complete physical roots using clone-only filesystem
+operations. Typed recovery decisions come from the effective B-wins additive
+overlay, including A-only queued cancellations and transition companions.
+Apply refuses live-source, destination, namespace, or resume drift; copies B
+into A additively with normal live file modes; preserves unresolved A-only
+objects; and never prunes or changes B. Finalize restores the object API
+through its checked-in canonical recovery contract and reinstalls other
+previously running writers from their declared service configuration, then
+proves a fresh process image with A loaded as primary and B as backup, restores
+the prior queue pause state, and refuses completion until ordinary canonical
+transition, cancellation, and retained-outcome recovery has resolved every
+proven residue. The `0.16.9` release workflow runs this transaction from the
+exact staged candidate, after a fresh repository runner gate and before
+claiming or publishing any release coordinate; later service convergence
+therefore cannot activate the candidate ahead of the handoff. The immutable
+full A snapshot is the long-lived rollback coordinate.
 
 Provider resources are mutable only when their ownership and expected state
 match the approved plan. Report-only is the default autonomy level.

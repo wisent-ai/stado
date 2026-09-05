@@ -103,6 +103,7 @@ pub mod host_ping;
 pub mod host_precheck_runner;
 pub mod host_reboot;
 pub mod host_reclaim;
+pub mod host_storage_reconcile;
 pub mod host_recovery;
 pub mod host_recovery_release;
 pub mod host_release;

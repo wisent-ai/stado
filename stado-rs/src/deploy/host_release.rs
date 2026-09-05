@@ -91,13 +91,14 @@
 //!   `service restart` program. A product with no declared units is activated
 //!   and reported as having no units, not silently "restarted".
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
 use super::products::{self, Install, Product, Readback};
-use super::{host_channel, service};
+use super::{host_channel, service, service_label_print};
 use super::{shlex_quote, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -856,6 +857,9 @@ if [ "$binary" = stado ]; then
   /bin/mv -f "$release_version_incoming" "$bin_dir/stado.release-version"
 fi
 say activated "$version"
+active_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$active_path")
+active_sha256=${active_digest_line%% *}
+say active_sha256 "$active_sha256"
 
 # The receipt, beside the artefact it describes.
 #
@@ -1662,6 +1666,17 @@ pub async fn release_target(
         return Ok(fail(&mut report, stage.code, detail));
     }
     steps.push(step_entry("stage", "ok", None));
+    let mut prior_unit_state = BTreeMap::new();
+    for declared in &units {
+        let state = service_label_print::print_label(
+            target,
+            declared.unit_id(),
+            service::BootoutScope::Any,
+            runner,
+        )
+        .await?;
+        prior_unit_state.insert(declared.unit_id().to_string(), state);
+    }
 
     // Phase three: activate. Reached only because phase two verified.
     let activate = host_channel::run_script(target, &activate_script(&plan), runner).await?;
@@ -1677,6 +1692,18 @@ pub async fn release_target(
         return Ok(fail(&mut report, activate.code, detail));
     }
     steps.push(step_entry("activate", "ok", None));
+    let active_sha256 = marker(&activate_markers, "active_sha256").to_string();
+    if !plan.product.install.is_tree() && !is_sha256(&active_sha256) {
+        let detail = "activation did not report the exact installed program digest".to_string();
+        steps.push(step_entry(
+            "activate",
+            host_channel::FAILED_STATUS,
+            Some(detail.clone()),
+        ));
+        report.insert("steps".to_string(), json!(steps));
+        return Ok(fail(&mut report, activate.code, detail));
+    }
+    report.insert("active_sha256".to_string(), json!(active_sha256));
     if plan.product.install.is_tree() {
         // The paths this delivery actually replaced, as the host named them
         // one by one. An operator asking what a tree delivery touched gets
@@ -1687,7 +1714,22 @@ pub async fn release_target(
         );
     }
 
-    // Phase four: restart every declared unit that runs the installed binary.
+    // Phase four: restart every declared unit, then join the new init-system
+    // pid to the image digest activation just reported. The shared CLI's
+    // installed version is not evidence about a service process.
+    let mut unit_processes = Vec::new();
+    if units.is_empty() && plan.product.name == "stado" {
+        let detail =
+            "stado activation cannot prove a running image because no units are declared".to_string();
+        steps.push(step_entry(
+            "restart",
+            host_channel::FAILED_STATUS,
+            Some(detail.clone()),
+        ));
+        report.insert("steps".to_string(), json!(steps));
+        report.insert("activated".to_string(), json!(true));
+        return Ok(fail(&mut report, 1, detail));
+    }
     if units.is_empty() {
         steps.push(step_entry(
             "restart",
@@ -1703,7 +1745,53 @@ pub async fn release_target(
             let unit_id = declared.unit_id().to_string();
             match service::restart_service(target, declared, runner).await {
                 Ok(restarted) if restarted.succeeded("restarted") => {
-                    steps.push(step_entry("restart", "ok", Some(unit_id)));
+                    match service_label_print::print_label(
+                        target,
+                        declared.unit_id(),
+                        service::BootoutScope::Any,
+                        runner,
+                    )
+                    .await
+                    {
+                        Ok(current) => {
+                            let previous = prior_unit_state.get(&unit_id);
+                            let fresh = current.pid.is_some()
+                                && current.pid != previous.and_then(|state| state.pid.clone());
+                            let exact_image = current.process_executable.is_some()
+                                && (plan.product.install.is_tree()
+                                    || current.process_sha256.as_deref()
+                                        == Some(active_sha256.as_str()));
+                            if fresh && exact_image {
+                                let detail = format!(
+                                    "{unit_id} fresh pid {} image {} sha256 {}",
+                                    current.pid.as_deref().unwrap_or_default(),
+                                    current.process_executable.as_deref().unwrap_or_default(),
+                                    current.process_sha256.as_deref().unwrap_or_default()
+                                );
+                                steps.push(step_entry("restart", "ok", Some(detail)));
+                                unit_processes.push(current.to_json());
+                            } else {
+                                let detail = format!(
+                                    "{unit_id}: restart did not prove a fresh pid on the activated immutable image"
+                                );
+                                steps.push(step_entry(
+                                    "restart",
+                                    host_channel::FAILED_STATUS,
+                                    Some(detail.clone()),
+                                ));
+                                failures.push((1, detail));
+                            }
+                        }
+                        Err(error) => {
+                            let detail = format!("{unit_id}: process identity read failed: {error}");
+                            steps.push(step_entry(
+                                "restart",
+                                host_channel::FAILED_STATUS,
+                                Some(detail.clone()),
+                            ));
+                            failures.push((1, detail));
+                        }
+                    }
                 }
                 Ok(restarted) => {
                     let detail = format!("{unit_id}: {}", restarted.failure());
@@ -1733,13 +1821,12 @@ pub async fn release_target(
                 .collect::<Vec<_>>()
                 .join("; ");
             report.insert("steps".to_string(), json!(steps));
-            // The new binary IS active; only the named units still run the old
-            // image. Saying "failed" without saying that would send an
-            // operator looking for an artifact that is already in place.
+            report.insert("unit_processes".to_string(), json!(unit_processes));
             report.insert("activated".to_string(), json!(true));
             return Ok(fail(&mut report, exit_code, detail));
         }
     }
+    report.insert("unit_processes".to_string(), json!(unit_processes));
 
     // Every stable bind this host declares, proven listening before this
     // reports `ok`.

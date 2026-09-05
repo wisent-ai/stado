@@ -15,6 +15,7 @@
 //! deletion-only pass that retains nothing again, rewrites no `reaped_at`,
 //! and tolerates blobs that are already deleted.
 
+use std::collections::HashSet;
 use chrono::Utc;
 use serde_json::{Map, Value};
 
@@ -95,6 +96,68 @@ fn manifest_job_ids(manifest: &Value, run_id: &str) -> Result<Vec<String>, Stora
         })
         .collect()
 }
+/// A cleanup marker is portable and therefore cannot stand in for the
+/// retained outcomes themselves. Every entry must carry the exact terminal
+/// projection the normal retention path records before queue/running residue
+/// may be deleted on this destination.
+fn has_complete_retained_outcomes(manifest: &Value) -> bool {
+    let Some(entries) = manifest.get("entries").and_then(Value::as_array) else {
+        return false;
+    };
+    !entries.is_empty()
+        && entries.iter().all(|entry| {
+            let Some(job_id) = entry.get("job_id").and_then(Value::as_str) else {
+                return false;
+            };
+            let Some(outcome) = entry.get("outcome").and_then(Value::as_object) else {
+                return false;
+            };
+            let Some(prefix) = outcome.get("prefix").and_then(Value::as_str) else {
+                return false;
+            };
+            TERMINAL_PREFIXES.contains(&prefix)
+                && outcome
+                    .get("job")
+                    .and_then(Value::as_object)
+                    .is_some_and(|job| {
+                        job.get("job_id").and_then(Value::as_str) == Some(job_id)
+                            && job.get("state").and_then(Value::as_str) == Some(prefix)
+                    })
+        })
+}
+
+
+/// Collect lifecycle residue once per tick. Cleanup markers may be copied
+/// across stores, but proving their destination has residue must not turn N
+/// retained runs into N fresh prefix walks.
+async fn cleanup_residue_paths(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
+    let mut paths = HashSet::new();
+    for prefix in ALL_PREFIXES
+        .iter()
+        .copied()
+        .chain(["status", "queue_priority"])
+    {
+        paths.extend(store.list_paths(&format!("{prefix}/"), 0).await?);
+    }
+    Ok(paths)
+}
+
+fn retained_run_has_residue(paths: &HashSet<String>, job_ids: &[String]) -> bool {
+    job_ids.iter().any(|job_id| {
+        ALL_PREFIXES
+            .iter()
+            .any(|prefix| paths.contains(&format!("{prefix}/{job_id}.json")))
+            || paths
+                .iter()
+                .any(|path| path.starts_with(&format!("status/{job_id}/")))
+            || paths
+                .iter()
+                .any(|path| path.starts_with("queue_priority/")
+                    && path.ends_with(&format!("-{job_id}.json")))
+    })
+}
+
+
 
 /// Delete every lifecycle blob and status entry of a retained run, then record
 /// that the cleanup finished. Idempotent: a blob another pass already removed
@@ -108,6 +171,11 @@ async fn sweep_retained_run(
 ) -> Result<i64, StorageError> {
     let mut deleted = 0;
     for job_id in job_ids {
+        // A prepared transition is a lifecycle companion, not an independent
+        // source of truth. Resolve it through the canonical transition
+        // protocol against the retained terminal destination before removing
+        // any stale projection; never patch a job document here.
+        store.recover_job_transition(job_id).await?;
         for prefix in TERMINAL_PREFIXES
             .iter()
             .copied()
@@ -119,6 +187,7 @@ async fn sweep_retained_run(
                 deleted += 1;
             }
         }
+        store.repair_priority_markers(job_id, None).await?;
         delete_status_dir(store, job_id).await?;
     }
     let path = format!("{RUN_PREFIX}/{run_id}.json");
@@ -167,6 +236,7 @@ pub async fn reap_terminal_runs(
 ) -> Result<ReapSummary, StorageError> {
     let mut summary = ReapSummary::default();
     let mut touched = 0;
+    let cleanup_residue = cleanup_residue_paths(store).await?;
     for run_id in list_runs(store).await? {
         if read_run(store, &run_id).await?.is_none() {
             continue;
@@ -190,6 +260,22 @@ pub async fn reap_terminal_runs(
             .get(CLEANUP_COMPLETED_AT)
             .is_some_and(py_truthy)
         {
+            if !has_complete_retained_outcomes(&initial_manifest) {
+                summary.refused_runs.push(ReapRefusal {
+                    run_id,
+                    reason: "cleanup marker lacks complete retained terminal outcomes; retained without cleanup",
+                });
+                continue;
+            }
+            let job_ids = manifest_job_ids(&initial_manifest, &run_id)?;
+            if !retained_run_has_residue(&cleanup_residue, &job_ids) {
+                continue;
+            }
+            summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
+            touched += 1;
+            if limit > 0 && touched >= limit {
+                break;
+            }
             continue;
         }
         if initial_manifest.get(REAPED_AT).is_some_and(py_truthy) {

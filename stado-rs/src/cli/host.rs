@@ -10600,6 +10600,50 @@ pub async fn backup_audit(
     }
     Ok(())
 }
+/// Create or apply one durable, source-preserving reconciliation of the two
+/// fixed physical local-store roots on a host.
+pub async fn storage_root_reconcile(
+    target: &str,
+    transaction: &str,
+    phase: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_storage_reconcile::reconcile_host(
+        target,
+        transaction,
+        phase,
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        print_json(&report);
+    } else {
+        println!(
+            "{} storage-root reconciliation {}: {}",
+            target,
+            transaction,
+            report
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("failed")
+        );
+        if let Some(path) = report
+            .pointer("/receipt/snapshot")
+            .and_then(Value::as_str)
+        {
+            println!("checkpoint: {path}");
+        }
+        if let Some(count) = report
+            .pointer("/receipt/verified_objects")
+            .and_then(Value::as_u64)
+        {
+            println!("verified objects: {count}");
+        }
+    }
+    report_outcome(&report, "ok")
+}
 
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()

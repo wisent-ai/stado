@@ -116,11 +116,11 @@ const REMOTE_SCRIPT_TEMPLATE: &str = r#"set -u
 backup="$HOME/@BACKUP_ROOT@"
 primary="$HOME/@PRIMARY_ROOT@"
 if [ ! -d "$backup" ]; then
-  printf 'STADO_BACKUP_AUDIT_UNAVAILABLE\t%s\n' 'replica root is absent'
+  printf 'STADO_BACKUP_AUDIT_UNAVAILABLE\t%s\n' 'local-backup physical root is absent'
   exit 0
 fi
 if [ ! -d "$primary" ]; then
-  printf 'STADO_BACKUP_AUDIT_UNAVAILABLE\t%s\n' 'primary store root is absent'
+  printf 'STADO_BACKUP_AUDIT_UNAVAILABLE\t%s\n' 'local-storage physical root is absent'
   exit 0
 fi
 # Free space as the host itself measures it, on both sides of the pass. The

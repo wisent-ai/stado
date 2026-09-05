@@ -1961,6 +1961,26 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Checkpoint both fixed local roots with COW clones, then additively
+    /// reconcile local-backup into local-storage without pruning either set.
+    ///
+    /// `checkpoint`, `apply`, and `finalize` are separate invocations so the
+    /// immutable sets and typed lifecycle decisions can be reviewed before any
+    /// primary byte changes. Apply resumes after interruption; finalize proves
+    /// canonical cancellation and retained-outcome recovery after services resume.
+    #[command(name = "storage-root-reconcile")]
+    StorageRootReconcile {
+        target: String,
+        /// Stable transaction id used by the remote checkpoint and receipt.
+        #[arg(long)]
+        transaction: String,
+        /// Transaction phase: checkpoint, apply, or post-recovery finalize.
+        #[arg(long, value_parser = ["checkpoint", "apply", "finalize"])]
+        phase: String,
+        /// Emit the durable transaction receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -3465,6 +3485,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 )
                 .await
             }
+            HostCommands::StorageRootReconcile {
+                target,
+                transaction,
+                phase,
+                json,
+            } => host::storage_root_reconcile(&target, &transaction, &phase, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
