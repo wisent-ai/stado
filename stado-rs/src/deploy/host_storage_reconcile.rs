@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -585,10 +585,15 @@ fn service_role(label: &str, command: &str) -> &'static str {
     let executable = tokens
         .iter()
         .position(|token| executable_name(token) == "stado");
+    if executable.is_some_and(|index| {
+        tokens.get(index + 1).copied() == Some("release")
+            && tokens.get(index + 2).copied() == Some("agent")
+    }) {
+        return "release-agent";
+    }
     if let Some(index) = executable {
         return match tokens.get(index + 1).copied() {
             Some("resolver") => "transport",
-            Some("release-agent") => "release-agent",
             Some("coordinator" | "local-control-plane" | "cloud-control-plane") => "coordinator",
             Some("agent") => "agent",
             Some("disk-cleanup") => "disk-cleanup",
@@ -3147,18 +3152,19 @@ fn verify_resident_lock(transaction: &str) -> Result<(), DeployError> {
         .join("storage-root-reconcile.lock");
     let path_metadata = std::fs::metadata(&lock)
         .map_err(|error| DeployError(format!("cannot stat {}: {error}", lock.display())))?;
-    let descriptor_path = if cfg!(target_os = "linux") {
-        PathBuf::from(format!("/proc/self/fd/{fd}"))
-    } else {
-        PathBuf::from(format!("/dev/fd/{fd}"))
-    };
-    let descriptor_metadata = std::fs::metadata(&descriptor_path).map_err(|error| {
-        DeployError(format!(
-            "resident reconciliation lock descriptor {fd} is invalid: {error}"
-        ))
-    })?;
-    if path_metadata.dev() != descriptor_metadata.dev()
-        || path_metadata.ino() != descriptor_metadata.ino()
+    // Ask the descriptor itself. Darwin's fdesc filesystem does not promise
+    // that statting `/dev/fd/N` exposes the opened object's device and inode;
+    // the descriptor-authoritative `fstat(2)` does on every supported host.
+    // SAFETY: the worker-owned `operation_lock` remains alive until after the
+    // reconciliation outcome is recorded.
+    let descriptor_metadata = nix::sys::stat::fstat(unsafe { BorrowedFd::borrow_raw(fd) })
+        .map_err(|error| {
+            DeployError(format!(
+                "resident reconciliation lock descriptor {fd} is invalid: {error}"
+            ))
+        })?;
+    if path_metadata.dev() as nix::libc::dev_t != descriptor_metadata.st_dev
+        || path_metadata.ino() != descriptor_metadata.st_ino
     {
         return Err(DeployError(
             "resident reconciliation lock no longer maps the canonical transaction lock"

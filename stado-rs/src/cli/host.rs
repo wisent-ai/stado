@@ -10850,7 +10850,10 @@ pub async fn storage_root_reconcile(
             println!("verified objects: {count}");
         }
     }
-    report_outcome(&report, "ok")
+    // Mutating phases only acknowledge that the target-native owner was
+    // accepted. Their terminal result remains the durable STATUS receipt.
+    // Keep STATUS on the ordinary completed-report convention.
+    report_outcome(&report, if phase == "status" { "ok" } else { "accepted" })
 }
 pub async fn storage_root_reconcile_worker(
     target: &str,
