@@ -3070,10 +3070,58 @@ async fn reconcile_host_inner(
         let fence = read_fence(target, transaction, runner).await?;
         return report(target, transaction, phase, receipt, fence.as_ref());
     }
+    let existing = read_fence(target, transaction, runner).await?;
+    // The captured target keeps the host reachable across the outage. Its
+    // managed version is not a release declaration: a remote caller may have
+    // captured an older registry. Before fencing, resolve the resident host's
+    // authoritative declaration; afterwards, keep the staged coordinate pinned.
+    let runtime_version = match existing.as_ref() {
+        Some(fence) => {
+            if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
+                return Err(DeployError(
+                    "durable lifecycle fence belongs to another transaction".to_string(),
+                ));
+            }
+            Some(
+                fence
+                    .staged_runtime
+                    .as_ref()
+                    .ok_or_else(|| {
+                        DeployError(
+                            "durable lifecycle fence omitted its staged runtime".to_string(),
+                        )
+                    })?
+                    .request
+                    .version
+                    .clone(),
+            )
+        }
+        None if matches!(phase, RUN | RESUME) => {
+            let registry = crate::targets::fetch_registry_remote()
+                .await
+                .map_err(|error| DeployError(error.to_string()))?;
+            let declared = host_channel::resolve_target(&registry, &target.name)?;
+            Some(
+                declared
+                    .declared_version("stado")
+                    .ok_or_else(|| {
+                        DeployError("storage host has no declared Stado runtime".to_string())
+                    })?
+                    .to_string(),
+            )
+        }
+        None => None,
+    };
+    let mut runtime_target = target.clone();
+    if let Some(version) = runtime_version {
+        runtime_target
+            .managed_versions
+            .insert("stado".to_string(), version);
+    }
+    let target = &runtime_target;
     if phase == FINALIZE {
-        let mut fence = read_fence(target, transaction, runner)
-            .await?
-            .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+        let mut fence =
+            existing.ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
         refresh_resident_owner(target, transaction, &mut fence, runner).await?;
         if fence.status != "activated" {
             return Err(DeployError(format!(
@@ -3107,7 +3155,6 @@ async fn reconcile_host_inner(
         return report(target, transaction, phase, receipt, Some(&fence));
     }
 
-    let existing = read_fence(target, transaction, runner).await?;
     if existing
         .as_ref()
         .is_some_and(|fence| fence.status == "rolled_back")
@@ -4115,9 +4162,73 @@ async fn read_operation_owner(
         if encoded == "absent" {
             return Ok(None);
         }
-        return serde_json::from_str(encoded)
-            .map(Some)
-            .map_err(|error| DeployError(format!("operation owner is invalid: {error}")));
+        let mut owner: Value = serde_json::from_str(encoded)
+            .map_err(|error| DeployError(format!("operation owner is invalid: {error}")))?;
+        let label = owner
+            .pointer("/native_manager/service")
+            .and_then(Value::as_str)
+            .ok_or_else(|| DeployError("operation owner omitted its native service".to_string()))?;
+        let scope = match owner
+            .pointer("/native_manager/domain")
+            .and_then(Value::as_str)
+        {
+            Some("system") => service::BootoutScope::System,
+            Some(domain) if domain.starts_with("gui/") || domain.starts_with("user/") => {
+                service::BootoutScope::User
+            }
+            _ => service::BootoutScope::Any,
+        };
+        let observed = super::service_label_print::print_label(target, label, scope, runner).await;
+        let recorded_status = owner.get("status").cloned().unwrap_or(Value::Null);
+        let executing = recorded_status.as_str() == Some("executing");
+        let (observation, effective_status) = match observed {
+            Ok(state) => {
+                let owner_running = state
+                    .pid
+                    .as_deref()
+                    .and_then(|pid| pid.parse::<u64>().ok())
+                    .is_some_and(|pid| owner.get("pid").and_then(Value::as_u64) == Some(pid));
+                let effective_status = if !executing {
+                    recorded_status.clone()
+                } else if state.unsupported.is_some() {
+                    json!("unobserved")
+                } else if owner_running {
+                    recorded_status.clone()
+                } else {
+                    json!("interrupted")
+                };
+                (
+                    json!({
+                        "observed_at": Utc::now().to_rfc3339(),
+                        "loaded": state.loaded(),
+                        "domain": state.domain,
+                        "pid": state.pid,
+                        "state": state.state,
+                        "last_exit_code": state.last_exit_code,
+                        "unsupported": state.unsupported,
+                    }),
+                    effective_status,
+                )
+            }
+            Err(error) => (
+                json!({
+                    "observed_at": Utc::now().to_rfc3339(),
+                    "error": error.to_string(),
+                }),
+                if executing {
+                    json!("unobserved")
+                } else {
+                    recorded_status.clone()
+                },
+            ),
+        };
+        let fields = owner
+            .as_object_mut()
+            .ok_or_else(|| DeployError("operation owner is not an object".to_string()))?;
+        fields.insert("recorded_status".to_string(), recorded_status);
+        fields.insert("status".to_string(), effective_status);
+        fields.insert("native_manager_observation".to_string(), observation);
+        return Ok(Some(owner));
     }
     Err(DeployError(
         "operation owner reader returned no marker".to_string(),
