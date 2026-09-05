@@ -360,7 +360,10 @@ pub async fn converge(
         return report_gate(&rows);
     }
 
-    let pass = apply_releases(&resolved.name, &rows, &runner).await;
+    let mut pass = apply_releases(&resolved.name, &rows, &runner).await;
+    if declared.iter().any(|(name, _)| name == "stado") {
+        converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
+    }
     // Re-read rather than trust delivery's own word for it. A `host release`
     // that reports `released` has testified about its own work, which is the
     // one witness that cannot establish the fact being claimed; the version the
@@ -1380,6 +1383,44 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
         deliver(target, row, runner, &mut pass).await;
     }
     pass
+}
+
+/// Finish the runtime half even when the installed Stado file was already
+/// attested and at the declared version.
+///
+/// `install-local` may have replaced the root file and then failed while
+/// recycling one reader. A resumed `service converge --apply` must not read the
+/// matching file as completion and skip the still-old process. The target's
+/// installed binary owns the same kernel-identity implementation used during
+/// install, so this invokes that implementation rather than redelivering bytes.
+async fn converge_native_readers(
+    target: &ComputeTarget,
+    declared: &[(String, String)],
+    runner: &Runner,
+    pass: &mut AppliedPass,
+) {
+    let version = declared
+        .iter()
+        .find(|(name, _)| name == "stado")
+        .map(|(_, version)| version.clone())
+        .unwrap_or_default();
+    let script = "set -euo pipefail\n\"$HOME/.stado/bin/stado\" release \
+                  converge-local-readers --name stado\n";
+    let outcome = host_channel::run_script(target, script, runner).await;
+    let (status, detail) = match outcome {
+        Ok(output) if output.ok() => (COMPLETED, output.stdout.trim().to_string()),
+        Ok(output) => (
+            FAILED,
+            host_channel::last_error_line(&output, "native reader convergence failed"),
+        ),
+        Err(error) => (FAILED, error.to_string()),
+    };
+    pass.releases.push(Released {
+        binary: "stado-readers".to_string(),
+        version,
+        status,
+        detail,
+    });
 }
 
 /// One delivery, recorded. The only call site of

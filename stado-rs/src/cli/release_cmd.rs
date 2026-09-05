@@ -69,6 +69,9 @@ pub enum ReleaseCommands {
     /// Install a delivered release archive's binary on this very host.
     #[command(name = "install-local")]
     InstallLocal(ReleaseInstallLocalArgs),
+    /// Reconcile live readers of an already-installed native binary.
+    #[command(name = "converge-local-readers", hide = true)]
+    ConvergeLocalReaders(ReleaseConvergeLocalReadersArgs),
     /// Bind one immutable coordinate to exactly one source revision before
     /// anything is published into it.
     #[command(name = "claim-coordinate")]
@@ -117,6 +120,12 @@ pub struct ReleaseInstallLocalArgs {
     /// Installed name under $HOME/.stado/bin; defaults to the member's
     /// basename.
     #[arg(long, default_value = "")]
+    name: String,
+}
+
+#[derive(Args)]
+pub struct ReleaseConvergeLocalReadersArgs {
+    #[arg(long, default_value = "stado")]
     name: String,
 }
 
@@ -1553,7 +1562,21 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     );
     Ok(())
 }
-/// Claim one coordinate from the command line and report what was found.
+/// Reconcile every live reader of one already-installed native binary.
+async fn converge_local_readers(args: &ReleaseConvergeLocalReadersArgs) -> Result<(), CmdError> {
+    let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
+    let mut log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release converge-local-readers",
+        &directory,
+        std::slice::from_ref(&args.name),
+        &mut log,
+    )
+    .await
+    .map_err(CmdError::click)
+}
+
+/// Claim an immutable release coordinate before publication.
 async fn claim_coordinate(args: &ReleaseClaimCoordinateArgs) -> Result<(), CmdError> {
     let outcome = claim_release_coordinate(
         &args.product,
@@ -1614,6 +1637,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
+        ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
     }
 }
