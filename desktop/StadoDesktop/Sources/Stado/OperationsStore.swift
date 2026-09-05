@@ -1231,6 +1231,59 @@ final class HostConnectionPathStore: ObservableObject {
     }
 }
 
+/// The forward markers one host carries, read through `stado host inventory`.
+///
+/// Read-only, and per host on demand: the inventory read crosses the managed
+/// channel, so it runs when an operator opens a host rather than on every
+/// refresh of the list. A failure is shown as itself; the console never
+/// renders an empty marker list for a read that did not happen.
+@MainActor
+final class HostForwardStore: ObservableObject {
+    @Published private(set) var host: String?
+    @Published private(set) var markers: [HostForwardMarker] = []
+    @Published private(set) var problem: String?
+    @Published private(set) var isLoading = false
+
+    private let cli: StadoCLI
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    nonisolated static func arguments(host: String) -> [String] {
+        ["host", "inventory", host, "--json"]
+    }
+
+    func load(host name: String) async {
+        host = name
+        isLoading = true
+        problem = nil
+        do {
+            let report = try await cli.json(
+                InventoryReport.self,
+                arguments: Self.arguments(host: name),
+                timeoutSeconds: 240
+            )
+            markers = report.forwards
+        } catch {
+            markers = []
+            problem = Self.message(for: error)
+        }
+        isLoading = false
+    }
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+
+    private struct InventoryReport: Decodable, Sendable {
+        let forwards: [HostForwardMarker]
+    }
+}
+
 /// What is actually running on the fleet, as opposed to what is declared.
 ///
 /// Two readings, because two different things were invisible. `service

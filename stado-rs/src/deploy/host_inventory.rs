@@ -1503,6 +1503,35 @@ pub fn declared_endpoint<'a>(
         .map(|endpoint| endpoint.url.as_str())
 }
 
+/// The address this target dials for a service the directory places
+/// elsewhere: the bind of its own resolver adapter, as the target declares it.
+///
+/// The declared address of a marker has two sources, and reading only the
+/// first is what made this axis wrong for every non-serving host. The
+/// directory's `endpoints` map is the address a host SERVES on; a host that
+/// does not serve the service reaches it through its own adapter, and that is
+/// the address `service directory publish` writes into the marker. Comparing
+/// such a marker with `endpoints` alone reported a correct file as
+/// `undeclared` or `disagrees`.
+///
+/// One adapter is an address. Several are per consumer, and a marker names no
+/// consumer, so nothing here elects one: the marker stays judged against the
+/// directory alone, which is what `publish` also refuses to guess.
+pub fn declared_adapter(target: &ComputeTarget, service: &str) -> Option<String> {
+    let declared = target.extra.get("service_resolver")?;
+    let config: crate::service_resolution::ResolverConfig =
+        serde_json::from_value(declared.clone()).ok()?;
+    let mut matches = config
+        .adapters
+        .iter()
+        .filter(|adapter| adapter.service == service);
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(format!("http://{}", first.bind))
+}
+
 /// One marker's verdict against the REGISTRY: [`MATCHED`], [`DISAGREES`] or
 /// [`UNDECLARED`].
 ///
@@ -1602,8 +1631,19 @@ pub fn to_report(
             UNKNOWN => unknown += 1,
             _ => unreadable += 1,
         }
-        let declared_url = declared_endpoint(directory, target, &marker.name);
-        let declaration = declaration_verdict(marker, declared_url);
+        // Two declared sources, in the order `service directory publish`
+        // writes them: the endpoint this host serves on, then the adapter it
+        // dials when the service lives elsewhere. A marker is judged against
+        // whichever the host is entitled to, so a correct adapter address
+        // stops reading as `undeclared`.
+        let served = declared_endpoint(directory, target, &marker.name);
+        let adapter = if served.is_some() {
+            None
+        } else {
+            declared_adapter(target, &marker.name)
+        };
+        let declared_url = served.map(str::to_string).or_else(|| adapter.clone());
+        let declaration = declaration_verdict(marker, declared_url.as_deref());
         match declaration {
             DISAGREES => disagreeing_markers.push(&marker.name),
             UNDECLARED => undeclared_markers.push(&marker.name),
@@ -1616,6 +1656,13 @@ pub fn to_report(
             "port": port,
             "reconciliation": state,
             "declared_url": declared_url,
+            "declared_source": if served.is_some() {
+                "directory-endpoint"
+            } else if adapter.is_some() {
+                "resolver-adapter"
+            } else {
+                "undeclared"
+            },
             "declaration_verdict": declaration,
         }));
     }

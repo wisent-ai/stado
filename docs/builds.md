@@ -121,6 +121,32 @@ before sending `TERM` because it has no known service to restore.
 Only the pair on the release target authorizes that restore; a similarly named
 entry under `targets[].services` is never inferred as a fallback.
 
+## Wait for the stable release endpoint
+
+A blue-green candidate is not active merely because its own port answers.
+Stado also checks the stable proxy's process, immutable release identity,
+generation, upstream port, and declared readiness endpoint before routing is
+reported as complete. Activation, reconciliation, and rollback allow that
+endpoint to become ready within the product's
+`strategy.readiness_timeout_seconds`; they do not assume a newly spawned proxy
+has bound its socket after a fixed delay.
+
+An exited proxy fails immediately. When the deadline expires, the refusal names
+the stable URL, allowed seconds, and last connection error or HTTP status.
+Identity and generation mismatches still fail without waiting.
+
+Read the proxy's own output separately from the candidate's output:
+
+```console
+stado release logs brama --target charless-mac-mini --version proxy --stream both --json
+stado release logs brama --target charless-mac-mini --version 0.2.69 --stream both --json
+stado release quarantine list brama --target charless-mac-mini --json
+```
+
+After repairing the recorded cause, `release quarantine clear` retires only the
+exact digest named by `--digest` and records the required `--reason`. It does not
+rebuild or replace the signed release.
+
 ## Resolve the executable that is actually active
 
 ```console

@@ -40,6 +40,9 @@ struct HostsView: View {
     @ObservedObject var linkStore: HostLinkStore
     @ObservedObject var connectionPathStore: HostConnectionPathStore
     @ObservedObject var enrollmentStore: MachineEnrollmentStore
+    /// Read on demand for the selected host: what that machine dials for each
+    /// service, and whether the fleet declares that address.
+    @StateObject private var forwardStore = HostForwardStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -117,6 +120,10 @@ struct HostsView: View {
         }
         .task(id: focusedHost) {
             focusRoutedHost()
+        }
+        .task(id: selection) {
+            guard let host = selection else { return }
+            await forwardStore.load(host: host)
         }
         .sheet(isPresented: $showsEnrollment) {
             MachineEnrollmentView(
@@ -1101,6 +1108,16 @@ struct HostsView: View {
                     connectionPathsTarget = HostConnectionPathsTarget(host: link.host)
                 }
             )
+            // What this host DIALS, beside the routes that reach it. The two
+            // are different questions and only the first had a surface: a
+            // marker naming a port the fleet never declared is how a product
+            // on that machine ends up talking to the wrong service, or to
+            // nothing, with the file as the only statement of the address.
+            WisentField(
+                label: "Service addresses this host dials",
+                value: forwardDescription(link),
+                tone: forwardTone(link)
+            )
             // Whether anybody is logged in on the screen there, which had no
             // surface anywhere in the product: `ssh_reachable` above answers
             // "can this machine be reached", and this answers "is there a
@@ -1223,6 +1240,46 @@ struct HostsView: View {
             return "\(path.name) · \(labels.joined(separator: " · "))\n\(path.destination)"
         }
         .joined(separator: "\n")
+    }
+
+    /// The selected host's forward markers, one line each, or the reason the
+    /// read produced none.
+    private func forwardDescription(_ link: HostLink) -> String {
+        guard forwardStore.host == link.host else { return "Not read yet" }
+        if forwardStore.isLoading { return "Reading…" }
+        if let problem = forwardStore.problem { return problem }
+        guard !forwardStore.markers.isEmpty else {
+            return "This host publishes no service address markers"
+        }
+        return forwardStore.markers
+            .map { marker in
+                let declared: String
+                switch marker.declarationVerdict {
+                case "matches": declared = marker.declaredSource
+                case "disagrees":
+                    declared =
+                        "declared \(marker.declaredUrl ?? "elsewhere") (\(marker.declaredSource))"
+                default: declared = "undeclared"
+                }
+                return "\(marker.name): \(marker.url) — \(marker.reconciliation), \(declared)"
+            }
+            .joined(separator: "\n")
+    }
+
+    /// Danger for a marker that disagrees with the fleet's own declaration,
+    /// warning for one nothing answers at or one nothing declares, neutral
+    /// otherwise.
+    private func forwardTone(_ link: HostLink) -> WisentTone {
+        guard forwardStore.host == link.host, forwardStore.problem == nil else { return .neutral }
+        if forwardStore.markers.contains(where: { $0.declarationVerdict == "disagrees" }) {
+            return .danger
+        }
+        if forwardStore.markers.contains(where: {
+            $0.reconciliation != "matches" || $0.declarationVerdict == "undeclared"
+        }) {
+            return .warning
+        }
+        return .neutral
     }
 
     private func connectionPathsTone(_ link: HostLink) -> WisentTone {
