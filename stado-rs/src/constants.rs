@@ -29,7 +29,7 @@ pub const STALE_TRAINING_MAX_AGE_S: u64 = 3600;
 /// only workload admitted while a host is below its disk watermark: it replaces
 /// the agent binary that owns cleanup and admission.
 pub const RELEASE_DELIVERY_JOB_COMMAND: &str =
-    "/usr/bin/tar -xzf release.tar.gz && exec ./bin/stado release delivery-worker --request delivery-request.json";
+    "/usr/bin/tar -xzf release.tar.gz && exec ./stado release delivery-worker --request delivery-request.json";
 /// Exact queue command for delivering any product other than Stado. The
 /// installed Stado worker verifies and applies the product archive; product
 /// archives do not carry a second copy of Stado.
