@@ -355,8 +355,9 @@ async fn reconcile_unreachable(
 /// dead beacon dead forever, and with it the whole host unrepairable. The
 /// beacon unit is the one exception: the evidence for "the beacon is down" is
 /// the beacon's own absence, and the evidence that repair is possible is the
-/// host channel answering. `ensure` restarts in place and never unloads, so a
-/// beacon that is actually healthy but unheard is kicked, not destroyed.
+/// host channel answering. `ensure` leaves a matching retained definition
+/// loaded; only an actual definition drift takes its preflighted, rollback-
+/// guarded reload path.
 ///
 /// The registry is only written for a registry-sourced declaration; a
 /// recovery-sourced beacon stays owned by the fixed host-recovery program.
