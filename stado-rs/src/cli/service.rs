@@ -2599,8 +2599,11 @@ async fn update(
         let members = archive_members(path)?;
         refuse_archive_without_program(program, &members).map_err(CmdError::click)?;
     }
-    let installed = match (reference, archive) {
-        (Some(reference), None) => install_from_artifact(&target, &directory, reference).await?,
+    let (installed, already_active) = match (reference, archive) {
+        (Some(reference), None) => (
+            install_from_artifact(&target, &directory, reference).await?,
+            false,
+        ),
         (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
         (None, None) => {
             return Err(CmdError::click(
@@ -2613,6 +2616,31 @@ async fn update(
             ))
         }
     };
+    let running_active = if already_active {
+        service::inspect_process(&target, declared, &runner)
+            .await
+            .ok()
+            .and_then(|running| running.matches_process())
+            == Some(true)
+    } else {
+        false
+    };
+    if already_active && running_active {
+        if json {
+            print_json(&json!({
+                "host": host,
+                "service": name,
+                "unit_repointed": false,
+                "version": installed.version,
+                "sha256": installed.sha256,
+                "status": "already_active",
+                "effective": "already running from this archive tree",
+            }))?;
+        } else {
+            println!("{host}: {name} already uses {}", installed.version);
+        }
+        return Ok(());
+    }
     // A unit pinned to a version directory never sees an install: `current`
     // moves and the job keeps executing the path it was rendered with, so the
     // deployment reports success and the machine runs what it ran before. Point
@@ -7642,7 +7670,12 @@ fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(
         return Ok(());
     };
     let relative = normalize_member(relative);
-    let archive_relative = relative.strip_prefix("darwin-arm/").unwrap_or(&relative);
+    let Some(archive_relative) = relative.strip_prefix("darwin-arm/") else {
+        return Err(format!(
+            "refusing to relink `current`: the archive installer writes below \
+             current/darwin-arm, but the unit runs current/{relative}"
+        ));
+    };
     if archive_relative.is_empty() || members.iter().any(|member| member == archive_relative) {
         return Ok(());
     }
@@ -7674,7 +7707,7 @@ async fn install_from_archive(
     directory: &str,
     path: &str,
     runner: &crate::deploy::Runner,
-) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+) -> Result<(crate::deploy::artifact_install::InstalledArtifact, bool), CmdError> {
     let bytes = std::fs::read(path)?;
     let digest = {
         use sha2::{Digest, Sha256};
@@ -7750,11 +7783,18 @@ async fn install_from_archive(
             host_channel::last_error_line(&output, "the archive did not install")
         )));
     }
-    Ok(crate::deploy::artifact_install::InstalledArtifact {
-        program_path: format!("$HOME/.stado/services/{directory}/current"),
-        version,
-        sha256: digest,
-    })
+    let already_active = output
+        .stdout
+        .lines()
+        .any(|line| line == "STADO_SERVICE_ARCHIVE already_active");
+    Ok((
+        crate::deploy::artifact_install::InstalledArtifact {
+            program_path: format!("$HOME/.stado/services/{directory}/current"),
+            version,
+            sha256: digest,
+        },
+        already_active,
+    ))
 }
 
 const ARCHIVE_INSTALL_BODY: &str = r#"
@@ -7770,6 +7810,14 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+if [ -L "$root/current" ] &&
+   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ] &&
+   [ -d "$version_dir/darwin-arm" ]; then
+  trap - EXIT
+  rm -f "$archive"
+  printf '%s\n' 'STADO_SERVICE_ARCHIVE already_active'
+  exit 0
+fi
 rm -rf "$version_dir"
 /bin/mkdir -p "$version_dir/darwin-arm"
 /usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
@@ -8056,10 +8104,9 @@ mod tests {
         let members = archive_members(&path).expect("list members");
         assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
     }
-
     /// The exact 2026-09-04 outage: the object API unit runs
-    /// `current/darwin-arm/stado` but a product archive holds `bin/stado`.
-    /// The refusal must name both halves.
+    /// `current/darwin-arm/stado` and every published stado archive holds
+    /// `bin/stado`. The refusal must name both halves.
     #[test]
     fn an_archive_without_the_unit_program_is_refused_naming_both() {
         let members = vec!["bin/stado".to_string()];
@@ -8071,10 +8118,9 @@ mod tests {
         assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
         assert!(refusal.contains("bin/stado"), "{refusal}");
     }
-
     #[test]
     fn an_archive_carrying_the_unit_program_is_accepted() {
-        let members = vec!["stado".to_string(), "lib".to_string()];
+        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
         refuse_archive_without_program(
             "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
             &members,

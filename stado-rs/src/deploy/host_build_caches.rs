@@ -62,6 +62,8 @@ if [ -z "$tags" ]; then
 fi
 
 printf '%s\n' "$tags" |
+(
+failed=0
 while IFS= read -r tag; do
   [ -n "$tag" ] || continue
   dir=$(/usr/bin/dirname "$tag")
@@ -86,16 +88,18 @@ while IFS= read -r tag; do
   fi
   size=$(/usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
   if [ -n "$apply" ]; then
-    if /bin/rm -rf "$dir" 2>/dev/null; then
+    if /bin/rm -rf "$dir"; then
       printf 'STADO_BUILD_CACHE\tremoved\t%s\t%s\n' "$dir" "${size:--}"
     else
       printf 'STADO_BUILD_CACHE\tremove-failed\t%s\t%s\n' "$dir" "${size:--}"
+      failed=1
     fi
   else
     printf 'STADO_BUILD_CACHE\tcandidate\t%s\t%s\n' "$dir" "${size:--}"
   fi
 done
-exit
+exit "$failed"
+)
 "#;
 
 /// One reported directory: what happened to it, where, and its size in KiB.

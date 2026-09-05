@@ -2006,14 +2006,18 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Declare the exact version TARGET must run for one managed binary.
+    /// Set or remove the exact version TARGET must run for one managed binary.
     #[command(name = "declare-version")]
     DeclareVersion {
         target: String,
         #[arg(long)]
         binary: String,
-        #[arg(long)]
-        version: String,
+        /// Exact version to declare.
+        #[arg(long, required_unless_present = "unset", conflicts_with = "unset")]
+        version: Option<String>,
+        /// Remove this binary's declaration instead of setting a version.
+        #[arg(long, conflicts_with = "version")]
+        unset: bool,
         #[arg(long)]
         json: bool,
     },
@@ -3477,8 +3481,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 binary,
                 version,
+                unset,
                 json,
-            } => host::declare_version(&target, &binary, &version, json).await,
+            } => host::declare_version(&target, &binary, version.as_deref(), unset, json).await,
             HostCommands::PromoteVersion {
                 binary,
                 version,
