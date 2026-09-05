@@ -138,6 +138,8 @@ struct WriterFence {
     target: String,
     label: String,
     role: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    storage_evidence: Vec<String>,
     path: String,
     listener_port: Option<u16>,
     was_loaded: bool,
@@ -231,6 +233,8 @@ struct LifecycleFence {
     queue: QueueFence,
     writers: Vec<WriterFence>,
     transport_retained: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    non_storage_retained: Vec<Value>,
     staged_runtime: Option<super::host_release::StagedRelease>,
     preflight_evidence: ImmutableEvidenceReference,
     #[serde(default)]
@@ -556,6 +560,7 @@ struct ServiceCandidate {
     declared: service::ManagedService,
     loaded_domains: Vec<String>,
     observed_command: String,
+    storage_evidence: BTreeSet<String>,
 }
 
 fn command_tokens(command: &str) -> Vec<&str> {
@@ -568,6 +573,20 @@ fn command_tokens(command: &str) -> Vec<&str> {
 
 fn executable_name(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
+}
+
+fn storage_route_key(key: &str) -> bool {
+    matches!(
+        key,
+        "STADO_CONFIG"
+            | "WC_STORAGE_BACKEND"
+            | "WC_LOCAL_STORAGE_PATH"
+            | "WC_BACKUP_STORAGE_BACKEND"
+            | "WC_BACKUP_LOCAL_STORAGE_PATH"
+            | "WC_STADO_STORAGE_URL"
+            | "WC_STADO_STORAGE_NAMESPACE"
+            | "WC_STADO_STORAGE_TOKEN_FILE"
+    )
 }
 
 fn service_role(label: &str, command: &str) -> &'static str {
@@ -605,9 +624,11 @@ fn service_role(label: &str, command: &str) -> &'static str {
         .map(|token| executable_name(token))
         .unwrap_or_default()
     {
-        "caddy" | "tailscaled" | "skarbiec" | "skarbiec-control-plane" | "ssh" => "transport",
+        "caddy" | "cloudflared" | "tailscaled" | "skarbiec" | "skarbiec-control-plane" | "ssh" => {
+            "transport"
+        }
         "stado-fix" => "agent",
-        _ => "writer",
+        _ => "other",
     }
 }
 
@@ -696,6 +717,12 @@ async fn registry_services(
         if declared.unit_id() == resident_owner_unit {
             continue;
         }
+        let storage_evidence = declared
+            .env
+            .keys()
+            .filter(|key| storage_route_key(key))
+            .cloned()
+            .collect();
         candidates.insert(
             declared.unit_id().to_string(),
             ServiceCandidate {
@@ -706,6 +733,7 @@ async fn registry_services(
                     .join(" "),
                 declared,
                 loaded_domains: Vec::new(),
+                storage_evidence,
             },
         );
     }
@@ -729,6 +757,7 @@ async fn registry_services(
                     declared: managed_from_unit(storage_target, &label, &path, kind),
                     loaded_domains: Vec::new(),
                     observed_command: String::new(),
+                    storage_evidence: BTreeSet::new(),
                 });
         }
     }
@@ -757,8 +786,18 @@ async fn registry_services(
                 declared: managed_from_unit(storage_target, &label, &native.path, kind),
                 loaded_domains: Vec::new(),
                 observed_command: String::new(),
+                storage_evidence: BTreeSet::new(),
             }
         });
+        for key in native
+            .env_keys
+            .iter()
+            .chain(&native.script_reads)
+            .chain(&native.script_assigns)
+            .filter(|key| storage_route_key(key))
+        {
+            candidate.storage_evidence.insert(key.clone());
+        }
         if candidate.declared.path.is_empty() && !native.path.is_empty() {
             candidate.declared.path.clone_from(&native.path);
         }
@@ -1412,8 +1451,21 @@ async fn prepare_lifecycle_fence(
             let mut transport_retained = Vec::new();
             let mut api_already_forward = false;
             let mut owning_runner_found = false;
+            let mut non_storage_retained = Vec::new();
             let mut object_port = None;
             for candidate in &services {
+                let observed_role =
+                    service_role(candidate.declared.unit_id(), &candidate.observed_command);
+                if observed_role == "other" && candidate.storage_evidence.is_empty() {
+                    non_storage_retained.push(json!({
+                        "target": candidate.target.name.clone(),
+                        "label": candidate.declared.unit_id(),
+                        "loaded_domains": candidate.loaded_domains.clone(),
+                        "observed_command": candidate.observed_command.clone(),
+                        "reason": "no Stado/runner/object-API role or local-storage route evidence",
+                    }));
+                    continue;
+                }
                 let state = super::service_label_print::print_label(
                     &candidate.target,
                     candidate.declared.unit_id(),
@@ -1423,6 +1475,9 @@ async fn prepare_lifecycle_fence(
                 .await?;
                 let command = state.runs().unwrap_or(&candidate.observed_command);
                 let mut role = service_role(candidate.declared.unit_id(), command).to_string();
+                if role == "other" {
+                    role = "writer".to_string();
+                }
                 if role == "runner"
                     && current_runner.as_deref().is_some_and(|current| {
                         current_runner_candidate(candidate, command, current)
@@ -1563,6 +1618,7 @@ async fn prepare_lifecycle_fence(
                     target: candidate.target.name.clone(),
                     label: candidate.declared.unit_id().to_string(),
                     role,
+                    storage_evidence: candidate.storage_evidence.iter().cloned().collect(),
                     path: candidate.declared.path.clone(),
                     listener_port,
                     was_loaded,
@@ -1747,6 +1803,7 @@ async fn prepare_lifecycle_fence(
                 resident_owner,
                 writers,
                 transport_retained,
+                non_storage_retained,
                 staged_runtime,
                 preflight_evidence,
                 lease_acquisitions: Vec::new(),
