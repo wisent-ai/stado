@@ -373,6 +373,13 @@ stado capabilities --json
 
 See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
 
+For a loaded launchd label or systemd unit that the registry does not declare,
+`stado service bootout <exact-unit> --host <target> --domain system|user`
+retires only that exact init-system identity. Linux bootout disables and stops
+the unit and verifies it inactive without deleting its unit file; omitting the
+domain preserves system-first precedence. See
+[Channels](docs/channels.md#retiring-an-undeclared-init-system-unit).
+
 ### Weles mobile egress
 
 `stado egress mobile serve` is the data path for a Weles browser that must
@@ -567,9 +574,61 @@ See [Configuration and credentials](https://stado.wisent.com/docs/configuration)
 
 ### State and ownership
 
-One configured backend is canonical. A separately configured backup backend is
-a recovery destination, never an implicit fallback writer. Queue migrations
-use pause, drain, copy, verification, fencing, and explicit cutover.
+One configured backend is canonical. Client reads may consult a compatible
+backup only after a primary error; a successful absent answer from the primary
+is authoritative. Destructive janitor reads and object API server reads stay on
+the primary. Mutations commit there first and are then mirrored best-effort to
+the compatible backup, which is never promoted to writer. Queue migrations use
+pause, drain, copy, verification, fencing, and explicit cutover.
+
+To distinguish an authority switch from deletion without reading object
+content or walking either store, compare an existing coordinate in the fixed
+host roots:
+
+```console
+stado host backup-audit TARGET --object stado://probierz/queue/JOB.json --json
+```
+
+Repeat `--object` to compare more coordinates. Exact-object mode reports each
+side's state, byte count, SHA-256, and effective metadata identity, and reports
+`deadline_unproven` if the existing read-only hashing budget expires.
+`--inventory-namespace NAME` instead lists backup-visible paths and size
+metadata in an explicitly selected namespace without reading object bodies.
+Neither mode can be combined with replica reclamation. Omitting both retains
+the whole-replica classification.
+Even exact equality at selected physical coordinates does not identify which
+root the running API serves; that requires the loaded service environment and
+process identity reported by `service label-print`.
+
+The command itself owns one three-phase durable transaction rather than using
+`object-relocate` (which is an in-store move):
+
+```console
+stado host storage-root-reconcile TARGET --transaction ID --phase checkpoint --json
+stado host storage-root-reconcile TARGET --transaction ID --phase apply --json
+stado host storage-root-reconcile TARGET --transaction ID --phase finalize --json
+```
+
+Checkpoint first records the canonical queue state and each local writer's
+loaded routing environment, process PID/start/image, and running state. It
+pauses and drains the queue, retains the host transport services, stops
+storage writers, rechecks those fences, and then takes verified immutable
+snapshots of both complete physical roots using clone-only filesystem
+operations. Typed recovery decisions come from the effective B-wins additive
+overlay, including A-only queued cancellations and transition companions.
+Apply refuses live-source, destination, namespace, or resume drift; copies B
+into A additively with normal live file modes; preserves unresolved A-only
+objects; and never prunes or changes B. Finalize restores the object API
+through its checked-in canonical recovery contract and reinstalls other
+previously running writers from their declared service configuration, then
+proves a fresh process image with A loaded as primary and B as backup, restores
+the prior queue pause state, and refuses completion until ordinary canonical
+transition, cancellation, and retained-outcome recovery has resolved every
+proven residue. The `0.16.9` release workflow runs this transaction from the
+exact staged candidate, after a fresh repository runner gate and before
+claiming or publishing any release coordinate; later service convergence
+therefore cannot activate the candidate ahead of the handoff. The immutable
+full A snapshot is the long-lived rollback coordinate.
 
 Provider resources are mutable only when their ownership and expected state
 match the approved plan. Report-only is the default autonomy level.

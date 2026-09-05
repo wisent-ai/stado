@@ -820,7 +820,8 @@ fn measured_capacity(
         .map(|active| helpers::requested_cpu_cores(&active.slot.job))
         .sum();
     let total_cpu_cores = helpers::total_cpu_cores();
-    let available_cpu_cores = helpers::available_cpu_cores(requested_cpu);
+    let measured_cpu_cores = helpers::available_cpu_cores(requested_cpu);
+    let available_cpu_cores = measured_cpu_cores.unwrap_or(0);
     let memory = helpers::memory_gb();
     let free_ram_gb = memory.map(|(free, _)| free);
     let total_ram_gb = memory.map(|(_, total)| total);
@@ -837,6 +838,8 @@ fn measured_capacity(
         policy_reason
     } else if exclusive_running {
         Some("exclusive_job_running")
+    } else if measured_cpu_cores.is_none() {
+        Some("cpu_measurement_unavailable")
     } else if available_cpu_cores == 0 {
         Some("cpu_busy")
     } else if free_ram_gb.is_none() {

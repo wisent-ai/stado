@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url';
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
 const tests = [
-  'host_gates_use_live_resources_and_never_fixed_slots',
-  'registry_policy_rewrite_removes_legacy_fixed_capacity_declarations',
-  'live_resources_admit_two_jobs_despite_legacy_single_worker_limits',
+  'dry_run_reports_eligible_cache_without_deleting_or_persisting',
+  'enforce_deletes_only_tagged_cache_and_persists_reclaimed_progress',
+  'overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released',
+  'busy_lock_preserves_the_reclaim_hysteresis_and_scan_cursor',
+  'once_and_watch_are_refused_with_the_public_usage_sentence',
 ];
 const args = [
-  'test', '--locked', '--test', 'host_dynamic_capacity', '--test', 'capacity',
+  'test', '--locked', '--test', 'cleanup',
   '--', '--ignored', '--nocapture', '--test-threads=1',
 ];
 
@@ -40,11 +42,7 @@ assert.ok(mediaManifest, 'PROBIERZ_MEDIA_MANIFEST is required');
 
 const result = await run('cargo', args, {
   cwd: crate,
-  env: {
-    ...process.env,
-    CARGO_PROFILE_TEST_DEBUG: '0',
-    CARGO_INCREMENTAL: '0',
-  },
+  env: process.env,
   encoding: 'utf8',
   timeout: 10 * 60 * 1000,
   maxBuffer: 8 * 1024 * 1024,
@@ -53,9 +51,9 @@ const exitCode = result.error
   ? (Number.isInteger(result.error.code) ? result.error.code : null)
   : 0;
 const signal = result.error?.signal || null;
-const stdoutPath = join(artifacts, 'stado-host-dynamic-capacity.stdout.log');
-const stderrPath = join(artifacts, 'stado-host-dynamic-capacity.stderr.log');
-const tracePath = join(artifacts, 'stado-host-dynamic-capacity.trace.json');
+const stdoutPath = join(artifacts, 'stado-disk-cleanup.stdout.log');
+const stderrPath = join(artifacts, 'stado-disk-cleanup.stderr.log');
+const tracePath = join(artifacts, 'stado-disk-cleanup.trace.json');
 await mkdir(artifacts, { recursive: true });
 await Promise.all([
   writeFile(stdoutPath, result.stdout, { mode: 0o600 }),
@@ -71,7 +69,7 @@ assert.equal(statusResult.error, null, statusResult.stderr);
 await writeFile(tracePath, `${JSON.stringify({
   schemaVersion: 1,
   kind: 'probierz-stado-cli-trace',
-  journey: 'host-dynamic-capacity',
+  journey: 'disk-cleanup',
   runId: process.env.PROBIERZ_RUN_ID || null,
   status: exitCode === 0 ? 'completed' : 'failed',
   source: {
@@ -90,13 +88,13 @@ await writeFile(tracePath, `${JSON.stringify({
     stderr: { file: stderrPath, bytes: Buffer.byteLength(result.stderr), sha256: sha256(result.stderr) },
   },
   tests,
-  productionMutations: 'none: every story uses an isolated local Stado store and the worker runs only its submitted workloads',
+  productionMutations: 'none: every story creates a separate temporary home, cache root, and local Stado store',
   contracts: [
-    'host gates reports live CPU, RAM, VRAM, accelerator, and running-job capacity',
-    'the public JSON and human output contain no fixed slot count',
-    'a paused host is refused with its exact blocker sentence',
-    'a registry policy write removes retired fixed worker-cap declarations',
-    'a real worker runs both submitted workloads concurrently despite legacy caps of one and persists both completed job records',
+    'preview reports an eligible tagged cache without deleting it or persisting janitor state',
+    'enforcement deletes only the tagged cache and persists reclaimed progress',
+    'an overdue predecessor lock remains report-only until its kernel lock is released',
+    'a busy lock preserves reclaim hysteresis and the build-cache scan cursor',
+    'the CLI refuses simultaneous --once and --watch with exit code 2 and its public usage sentence',
   ],
   redaction: {
     status: 'verified_redacted',
@@ -113,7 +111,7 @@ await writeFile(
 
 process.stdout.write(result.stdout);
 process.stderr.write(result.stderr);
-assert.equal(result.error, null, `host-dynamic-capacity journey failed with exit ${exitCode ?? 'unknown'}${signal ? ` (${signal})` : ''}`);
+assert.equal(result.error, null, `disk-cleanup journey failed with exit ${exitCode ?? 'unknown'}${signal ? ` (${signal})` : ''}`);
 for (const test of tests) {
   assert.match(result.stdout, new RegExp(`test ${escapeRegExp(test)} \\.\\.\\. ok`));
 }

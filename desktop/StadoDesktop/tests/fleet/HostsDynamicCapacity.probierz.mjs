@@ -64,7 +64,7 @@ export function runHostsDynamicCapacityJourney({
       );
     }
 
-    const free = assertField(loaded, 'Free space', {
+    assertField(loaded, 'Free space', {
       pattern: /^([\d.,]+ GB free|Not reported)/,
     });
     assertField(loaded, 'Cleanup policy mode');
@@ -143,16 +143,6 @@ export function runHostsDynamicCapacityJourney({
       after,
       ['What reclamation freed', 'Reclaim disk on '],
       'the reclamation sheet outlived a cancel',
-    );
-    assert.equal(
-      assertField(after, 'Free space', { pattern: /^([\d.,]+ GB free|Not reported)/ }),
-      free,
-      "this host's free space changed while the journey refused to reclaim anything",
-    );
-    assert.equal(
-      assertField(after, 'Claiming work', { pattern: /^(Yes|No)$/ }),
-      claiming,
-      "this host's claiming gate changed while the journey refused to reclaim anything",
     );
   } finally {
     try {

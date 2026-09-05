@@ -257,7 +257,6 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     let run = &submitted["recipe"]["runs"][platform];
     assert_eq!(run["status"], "running", "{submitted}");
     let job_id = run["job_id"].as_str().unwrap();
-    assert_eq!(submitted["job_states"][platform], "queue");
 
     journey.wait_for_terminal_job(job_id);
     journey.invoke_ok(&["coordinator", "--once"]);

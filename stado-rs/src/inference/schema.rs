@@ -79,6 +79,18 @@ pub struct Registry {
     /// what the model was for, so nothing could refuse the binding.
     #[serde(default)]
     pub model_purposes: BTreeMap<String, String>,
+    /// Declared purpose per alias, for the aliases whose name does not carry
+    /// it. `wisent-backend/chat/primary` is the product's own roleplay chat and
+    /// its first segment is the consumer, not a purpose, so the namespace rule
+    /// alone cannot express what the operator decided twice: on 2026-08-19 that
+    /// this alias must serve Cydonia, and on 2026-08-26 that Cydonia must serve
+    /// nothing agentic. Declaring the alias's purpose keeps both — an agent
+    /// alias with no entry still falls back to its first segment and is still
+    /// refused. Do not populate this or `model_purposes` until every host runs
+    /// a release that models it: an older binary ignores the field, judges the
+    /// binding by namespace alone, and refuses the whole registry document.
+    #[serde(default)]
+    pub alias_purposes: BTreeMap<String, String>,
 }
 
 fn identifier(value: &str) -> bool {
@@ -436,6 +448,18 @@ pub fn validate(document: &Value) -> Result<(), String> {
             ));
         }
     }
+    for (alias, purpose) in &registry.alias_purposes {
+        if alias.split_once('/').is_none() || !identifier(purpose) {
+            return Err(format!(
+                "registry.inference.alias_purposes.{alias}: purpose must be a lowercase identifier for a route alias"
+            ));
+        }
+        if !registry.routes.contains_key(alias) {
+            return Err(format!(
+                "registry.inference.alias_purposes.{alias}: no route declares this alias"
+            ));
+        }
+    }
     // A destination names a model either directly (`provider/repo`) or through
     // a named deployment. When that model carries a declared purpose, the only
     // aliases allowed to select it are the ones living under that purpose
@@ -469,11 +493,19 @@ pub fn validate(document: &Value) -> Result<(), String> {
         let Some(purpose) = destination_purpose(destination) else {
             continue;
         };
-        let namespace = alias.split('/').next().unwrap_or_default();
+        // The alias's declared purpose, else the one its own name carries. An
+        // agent alias declares none, so it keeps the namespace rule and keeps
+        // being refused.
+        let namespace = registry
+            .alias_purposes
+            .get(alias)
+            .map(String::as_str)
+            .unwrap_or_else(|| alias.split('/').next().unwrap_or_default());
         if namespace != purpose {
             return Err(format!(
                 "registry.inference.{table}.{alias}: model '{destination}' is declared \
-                 {purpose}-only and may only serve aliases under '{purpose}/'"
+                 {purpose}-only and may only serve aliases under '{purpose}/' or an alias \
+                 declared {purpose} in registry.inference.alias_purposes"
             ));
         }
     }

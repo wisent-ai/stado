@@ -23,6 +23,42 @@ Set `RUST_LOG=stado::deploy::host_channel=trace` when the same operation needs O
 
 An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
 
+### Retiring an undeclared init-system unit
+
+`stado service bootout <exact-unit> --host <target> [--domain system|user]` is the declaration-independent stop path for a unit found by `service list --undeclared` or `service label-print`. It addresses the exact launchd label or systemd unit name supplied; it does not derive a prefix or add or remove a `.service` suffix. With no domain, Stado preserves system-first precedence and checks the calling account only when the system manager holds no exact unit by that name. Pass `--domain user` when the same or a related canonical name must remain running in system scope.
+
+On Linux, bootout uses the target account's explicit systemd user bus for `user` scope and the existing non-interactive privilege path for `system`. It runs `systemctl disable --now` for only the exact requested identity, then refuses unless that identity reads back inactive and not enabled. An absent identity is a retry-safe `absent`; manager, privilege, disable, identity, and postcondition failures are `refused`. On Darwin, the existing system or per-login launchd bootout and absence checks are unchanged. Neither platform branch deletes the unit definition; file removal remains a separate `stado host remove-file` operation.
+
+For example, the obsolete Ubuntu user unit `com.wisent.compute.service.stado-resolver.service.service.service` can be retired with an explicit user-domain bootout. The canonical `com.wisent.stado-resolver.service` is a different exact identity and is not selected or changed.
+
+### Keeping a service's non-secret environment
+
+`stado service ensure <name> --host <target> --env NAME=VALUE --reason <reason>`
+records each non-secret assignment in the managed service's `env` map and renders
+it into the host unit. Repeat `--env` for multiple keys; the last assignment wins.
+Recorded values override catalog defaults and survive subsequent `ensure` calls
+and automatic repairs. `$HOME`, `$STADO_HOST`, and `$STADO_PLATFORM` expand
+against the target, not the caller. Credentials still use `secret-sync`, never
+`--env`.
+
+If a loaded unit's arguments match but its rendered environment differs,
+`ensure` saves the prior definition and loads the new one. On macOS this requires
+bootout and bootstrap: kickstart alone would reuse launchd's old environment.
+If the new definition fails to start, `ensure` restores and starts the previous
+definition and reports failure; it never reports the requested environment as
+applied after rollback. A different executable or argument vector remains an
+explicit conflict on a loaded macOS unit.
+
+For an independently managed instance outside a release policy's target map,
+`registry doctor` accepts pinned environment only when both the registry record
+and the local unit file contain the product's exact required values. A remote
+unit that was not read is not treated as agreeing.
+
+Run `stado host exec <target> -- stado registry doctor` to measure those
+host-local facts through Stado. The fixed read-only command uses the target's
+installed binary and returns its own registry and executing-image findings;
+running the doctor on a workstation cannot establish them for another host.
+
 ### Release-controlled placement handoff
 
 A service placement unit has one exact lifecycle. Stado-managed units retain the existing shape:
@@ -40,6 +76,8 @@ A logical service whose process lifecycle belongs to the release controller inst
 The external shape must appear in every host template for that service and name one release product. The service directory still owns its route, active host, endpoint, consumers, and generation; the placement profile still owns state, routing units, and probes. Routing units remain ordinary Stado-managed units. Static validation requires the route's active host, endpoint, active-host probe, product, release target, and stable bind to agree; it rejects a target service row or any legacy launchd restore field on every target of the owning product. Resolution and verification therefore keep using the route without pretending the external process is a target-managed unit.
 
 Install 0.15.24 or newer on every registry reader and agent before publishing this shape. Then run `stado service handoff-release-control <service> --host <active-host> --product <product> --json` once. The command proves the committed desired release, active signed executable, stable proxy, readiness, inactive legacy unit, legacy file digests, and absence of an executable caller before one generation-bound compare-and-swap externalizes all templates, removes the active target row, removes the legacy restore identity, and advances the release and directory generations. It preserves the route, endpoints, consumers, profile state, routing units, and probes. Every placement mutation refuses a release-controlled member before a transaction or host action.
+A handoff invocation first fsyncs a version-scoped `prepared` receipt under `~/.stado/work/service-release/<product>/<version>/`, then performs the sole registry compare-and-swap and immediately advances that receipt to `registry_committed`. If the caller is interrupted, rerun the identical command: a matching prepared receipt is reused only after the same intent, exact legacy files, active release, and still-managed lifecycle are re-proved; a registry that already carries the intended handoff causes the command to skip the successful CAS, reacquire the same per-service lease, and finish the reconciler-report fence. Do not delete or replace the receipt, issue a different handoff, or infer completion from the registry shape alone; `handed_off` with a satisfied fence is the retirement boundary.
+
 
 After the successful handoff, retire the reported plist and convenience binary separately with `host retire-file`, plist first. Each handoff receipt supplies the unique transaction, SHA-256, byte count, and four-digit mode passed to the mutating command's four explicit binding flags; do not perform another dry-run or an unbound mutation. Each retirement reports `retired` or retry-safe `absent`, so a failure after the plist move preserves an exact partial-cleanup record and the binary operation remains independently resumable. Rollback after handoff is not a binary downgrade: it requires a new generation-bound registry change, restoration of both archived files, and proof that release-control is no longer serving. Older readers cannot parse the external shape and must not be reintroduced while it is published.
 
@@ -257,6 +295,38 @@ Release preflight proves the caller credential with an authenticated operation
 under the same product prefix. A public `releases/` stat proves neither boundary.
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
+
+### The object API runs the managed binary, since 2026-09-04
+
+`com.wisent.always-on.stado-object-api` used to execute a private service
+tree, `.../services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado`,
+which nothing in the release pipeline ever moved: the control-plane job
+delivers with `stado host declare-version` plus `stado service converge
+<host> stado --apply`, and that pair resolves one root per managed binary,
+`$HOME/.stado/bin/<binary>`. The object API was not on that root, so it was
+the one unit on the host frozen at whatever build last installed it by hand
+— on 2026-09-04, a build old enough that its release refusals carried no
+`reason` code, while every other unit on the host had rolled forward many
+times.
+
+It now runs `$HOME/.stado/bin/stado`, the same managed binary as the
+resolver, the control plane, the release agent and the queue agent, and it is
+listed among the `stado` product's units. So `stado host declare-version
+<host> --binary stado --version <v>` followed by `stado host release <host>
+--binary stado --version <v>` moves the object API with every roll and
+restarts it with the rest, and the `deploy-control-plane` job needs no step
+of its own for it.
+
+The corollary is worth stating because it caused an outage before it was
+understood: a unit's program and the archive a version arrives in must
+agree. `stado service update --from-archive` now reads the unit's declared
+program, inspects the archive's member list, and refuses when the program is
+not in it, naming both — `the unit runs current/darwin-arm/stado; the
+archive holds bin/stado`. Relinking `current` at a tree without the
+program does not fail at install time. It fails at launchd's next spawn,
+which cannot say why, and a KeepAlive job that cannot spawn leaves its
+domain, so the repair stops being a rollback and becomes a privileged
+bootstrap.
 
 ## Workload grants and service authentication
 

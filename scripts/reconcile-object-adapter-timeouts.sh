@@ -33,7 +33,7 @@ apply_timeouts() {
     | (.targets[] | select(.name == $control_host) | .services[] |
         select(.name == "com.wisent.always-on.stado-object-api")) |=
         (. + {
-          program: "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+          program: "/Users/charles/.stado/bin/stado",
           args: ["dashboard", "--bind", "127.0.0.1", "--port", "8765"]
         })
   ' "$before" > "$after"
@@ -51,7 +51,7 @@ apply_timeouts() {
   program_count="$(jq --arg control_host "$control_host" '[.targets[] |
     select(.name == $control_host) | .services[] |
     select(.name == "com.wisent.always-on.stado-object-api" and
-      .program == "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado" and
+      .program == "/Users/charles/.stado/bin/stado" and
       .args == ["dashboard", "--bind", "127.0.0.1", "--port", "8765"])] | length' "$after")"
   [ "$program_count" = 1 ] || { echo "object API service program is not declared once" >&2; exit 1; }
 }

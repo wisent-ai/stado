@@ -69,6 +69,9 @@ pub enum ReleaseCommands {
     /// Install a delivered release archive's binary on this very host.
     #[command(name = "install-local")]
     InstallLocal(ReleaseInstallLocalArgs),
+    /// Reconcile live readers of an already-installed native binary.
+    #[command(name = "converge-local-readers", hide = true)]
+    ConvergeLocalReaders(ReleaseConvergeLocalReadersArgs),
     /// Bind one immutable coordinate to exactly one source revision before
     /// anything is published into it.
     #[command(name = "claim-coordinate")]
@@ -117,6 +120,12 @@ pub struct ReleaseInstallLocalArgs {
     /// Installed name under $HOME/.stado/bin; defaults to the member's
     /// basename.
     #[arg(long, default_value = "")]
+    name: String,
+}
+
+#[derive(Args)]
+pub struct ReleaseConvergeLocalReadersArgs {
+    #[arg(long, default_value = "stado")]
     name: String,
 }
 
@@ -748,16 +757,44 @@ async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-pub(crate) async fn verified_artifact_with_archive(
+/// Every object a release verification reads, in order.
+///
+/// The archive is deliberately absent. Its digest and byte count are signed
+/// into the manifest, and the party that reproduces them is the party that
+/// consumes the bytes: the web install script and `install-stado.sh` both
+/// hash what they downloaded before unpacking it. Reading it here as well
+/// transferred up to half a gigabyte to whichever machine ran the command,
+/// only to compare a digest and drop the bytes — `verified_artifact` fetched
+/// the archive and then discarded it. On 2026-09-04 that made
+/// `stado web deploy preferences-landing` impossible to run: the product's
+/// archive is 104,787,538 bytes, the operator's resolver adapter closed the
+/// stream instantly on every attempt, and the deploy failed on this laptop
+/// while the host that actually needed the bytes was never asked. A host
+/// fetching its own release over loopback is the fast path; the operator
+/// relaying it is not a path at all.
+///
+/// The verification below is driven by this list, so it is the answer to
+/// "does this transfer the archive" rather than a description of it.
+fn verification_reads(base: &str) -> Vec<String> {
+    vec![
+        format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME),
+        format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME),
+    ]
+}
+
+/// One verified release reference: manifest identity, qualification,
+/// signature, and an archive that is actually published.
+pub(crate) async fn verified_artifact(
     product: &str,
     version: &str,
     platform: &str,
     control: &ReleaseControl,
-) -> Result<(ReleaseArtifactRef, Vec<u8>), CmdError> {
+) -> Result<ReleaseArtifactRef, CmdError> {
     let base =
         release_control::release_base(product, version, platform).map_err(CmdError::click)?;
-    let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
-    let signature_uri = format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME);
+    let reads = verification_reads(&base);
+    let manifest_uri = reads[usize::default()].clone();
+    let signature_uri = reads[usize::from(true)].clone();
     let archive_uri = format!("{base}/{}", release_control::RELEASE_ARCHIVE_NAME);
     let manifest_bytes = crate::cli::storage::fetch_object(&manifest_uri).await?;
     let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)?;
@@ -794,37 +831,24 @@ pub(crate) async fn verified_artifact_with_archive(
             .map_err(|_| CmdError::click("release signature is not UTF-8"))?,
     )
     .map_err(CmdError::click)?;
-    let archive = crate::cli::storage::fetch_object(&archive_uri).await?;
-    if archive.len() as u64 != manifest.artifact_bytes
-        || release_control::sha256_bytes(&archive) != manifest.artifact_sha256
-    {
-        return Err(CmdError::click(
-            "release archive differs from its signed manifest",
-        ));
+    // Presence, not bytes. `release_object_present` propagates an unanswered
+    // store as an error rather than as `false`, so a blip is never read as a
+    // half-published release.
+    if !crate::cli::storage::release_object_present(&archive_uri).await? {
+        return Err(CmdError::click(format!(
+            "{archive_uri} is not published, so its signed manifest describes an archive no host \
+             could fetch"
+        )));
     }
-    Ok((
-        ReleaseArtifactRef {
-            manifest_uri,
-            signature_uri,
-            archive_uri,
-            manifest_sha256: release_control::sha256_bytes(&manifest_bytes),
-            artifact_sha256: manifest.artifact_sha256,
-            source_revision: manifest.source_revision,
-            key_id: manifest.key_id,
-        },
-        archive,
-    ))
-}
-
-pub(crate) async fn verified_artifact(
-    product: &str,
-    version: &str,
-    platform: &str,
-    control: &ReleaseControl,
-) -> Result<ReleaseArtifactRef, CmdError> {
-    verified_artifact_with_archive(product, version, platform, control)
-        .await
-        .map(|(artifact, _)| artifact)
+    Ok(ReleaseArtifactRef {
+        manifest_uri,
+        signature_uri,
+        archive_uri,
+        manifest_sha256: release_control::sha256_bytes(&manifest_bytes),
+        artifact_sha256: manifest.artifact_sha256,
+        source_revision: manifest.source_revision,
+        key_id: manifest.key_id,
+    })
 }
 
 pub(crate) async fn verified_artifact_for_submit(
@@ -1359,6 +1383,93 @@ async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Install the same verified Stado archive into every registry-declared
+/// service-local Stado reader on this host.
+///
+/// `install-local` historically replaced only `$HOME/.stado/bin/stado`.
+/// Services such as the mini's coordinator execute an independently installed
+/// `.../.stado/services/<service>/current/darwin-arm/stado`, so the native
+/// delivery could report success while that long-running reader kept parsing
+/// the registry with an older schema. Invoke the existing `service update`
+/// operation with this delivery's exact archive rather than duplicating its
+/// checked install, relink, declared lifecycle, and kernel-image verification.
+async fn converge_service_local_stado_readers(archive: &str) -> Result<(), CmdError> {
+    let registry = super::registry::read_registry().await?;
+    let hostname = crate::providers::vast::system_hostname();
+    let target = registry
+        .lookup_self(&hostname)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "release install-local: no registry target names this machine ({hostname})"
+            ))
+        })?;
+    let mut readers: Vec<String> = crate::deploy::service::declared_services(target)
+        .into_iter()
+        .filter(|service| service.source == crate::deploy::service::SOURCE_REGISTRY)
+        .filter(|service| {
+            service.program.contains("/.stado/services/") && service.program.ends_with("/stado")
+        })
+        .map(|service| service.name)
+        .collect();
+    readers.sort();
+    for pair in readers.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(CmdError::click(format!(
+                "release install-local: registry target {} declares service-local Stado reader {} more than once",
+                target.name, pair[0]
+            )));
+        }
+    }
+    let executable = std::env::current_exe().map_err(|error| {
+        CmdError::click(format!(
+            "release install-local: cannot resolve the candidate Stado executable: {error}"
+        ))
+    })?;
+    for reader in readers {
+        println!(
+            "release install-local: converging service-local Stado reader {} on {}",
+            reader, target.name
+        );
+        let output = tokio::process::Command::new(&executable)
+            .args([
+                "service",
+                "update",
+                &reader,
+                "--host",
+                &target.name,
+                "--from-archive",
+                archive,
+                "--refresh-image",
+                "--json",
+            ])
+            .output()
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "release install-local: cannot start service-local reader convergence for {reader}: {error}"
+                ))
+            })?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        if !output.status.success() {
+            let detail = stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .or_else(|| stdout.lines().rev().find(|line| !line.trim().is_empty()))
+                .unwrap_or("service update returned no detail");
+            return Err(CmdError::click(format!(
+                "release install-local: service-local Stado reader {reader} on {} did not converge: {detail}",
+                target.name
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Verify the delivered archive against the delivery contract's digest,
 /// extract one member, and install it under `$HOME/.stado/bin` by rename —
 /// Linux refuses to write into a running executable (ETXTBSY) but allows
@@ -1545,14 +1656,32 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         std::slice::from_ref(&name),
         &mut recycle_log,
     )
-    .await;
+    .await
+    .map_err(CmdError::click)?;
+    if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
+        converge_service_local_stado_readers(&archive).await?;
+    }
     println!(
         "installed {} from the delivered release archive",
         destination.display()
     );
     Ok(())
 }
-/// Claim one coordinate from the command line and report what was found.
+/// Reconcile every live reader of one already-installed native binary.
+async fn converge_local_readers(args: &ReleaseConvergeLocalReadersArgs) -> Result<(), CmdError> {
+    let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
+    let mut log = |message: &str| println!("{message}");
+    crate::self_update::recycle_replaced_units(
+        "release converge-local-readers",
+        &directory,
+        std::slice::from_ref(&args.name),
+        &mut log,
+    )
+    .await
+    .map_err(CmdError::click)
+}
+
+/// Claim an immutable release coordinate before publication.
 async fn claim_coordinate(args: &ReleaseClaimCoordinateArgs) -> Result<(), CmdError> {
     let outcome = claim_release_coordinate(
         &args.product,
@@ -1613,6 +1742,45 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
+        ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE: &str = "stado://releases/preferences-landing/0.1.1/web";
+
+    /// The whole point: the archive URI is not in the set of objects a
+    /// verification reads, so no archive size can reach the machine that ran
+    /// the command. `verified_artifact` reads exactly this list and then asks
+    /// only whether the archive is present, so this is the behaviour rather
+    /// than a description of it.
+    #[test]
+    fn a_verification_never_reads_the_archive_body() {
+        let reads = verification_reads(BASE);
+        let archive = format!("{BASE}/{}", release_control::RELEASE_ARCHIVE_NAME);
+        assert!(!reads.contains(&archive), "{reads:?}");
+    }
+
+    /// It reads the manifest and then its signature, in that order: the
+    /// verification indexes those two positions.
+    #[test]
+    fn a_verification_reads_the_manifest_then_its_signature() {
+        assert_eq!(
+            verification_reads(BASE),
+            vec![
+                format!("{BASE}/{}", release_control::RELEASE_MANIFEST_NAME),
+                format!("{BASE}/{}", release_control::RELEASE_SIGNATURE_NAME),
+            ]
+        );
+    }
+
+    /// And nothing else: a third read would be a transfer nobody asked for.
+    #[test]
+    fn a_verification_reads_nothing_beyond_those_two() {
+        assert_eq!(verification_reads(BASE).len(), 2);
     }
 }

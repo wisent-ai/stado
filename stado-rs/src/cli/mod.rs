@@ -389,6 +389,10 @@ enum Commands {
         /// Continuously check at the canonical policy interval.
         #[arg(long)]
         watch: bool,
+        /// Run one bounded enforcing pass toward the declared target even when
+        /// the host is already above its low watermark.
+        #[arg(long)]
+        to_target: bool,
         /// Plan a pass and delete nothing: same policy, same scan, an
         /// `enforce` policy pinned to the janitor's own report mode.
         #[arg(long)]
@@ -536,7 +540,7 @@ enum Commands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect or change stado configuration: show | validate | init | set | unset.
+    /// Inspect or change stado configuration: show | validate | init | migrate | set | unset.
     Config {
         #[arg(default_value = "show")]
         sub: String,
@@ -1308,8 +1312,9 @@ enum HostPublisherRunnerCommands {
     /// Install or reconcile the desktop publisher and grant its release secrets.
     Install {
         target: String,
-        /// Repository that may consume the shared release secrets. Repeat as needed.
-        #[arg(long = "repository", required = true)]
+        /// Repository that receives the shared release secrets. Repeat as needed;
+        /// omit when reconciling only the installed runner.
+        #[arg(long = "repository")]
         repositories: Vec<String>,
         /// Emit the lifecycle report as JSON.
         #[arg(long)]
@@ -1412,6 +1417,21 @@ enum HostCommands {
     RecoverObjectApi {
         target: String,
         /// Emit the recovery report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Repair the bounded local-store ownership fault blocking release catalog writes.
+    ///
+    /// The checked-in helper runs on TARGET through Stado's fixed-script channel.
+    /// It considers only the named release-catalog object, its metadata sidecar,
+    /// its exact CAS lock, and the directories those writes require; foreign
+    /// owners and symlinks are refused.
+    #[command(name = "repair-release-store")]
+    RepairReleaseStore {
+        target: String,
+        /// Product whose one release-catalog coordinate is blocked.
+        product: String,
+        /// Emit the repair report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1919,6 +1939,22 @@ enum HostCommands {
     #[command(name = "backup-audit")]
     BackupAudit {
         target: String,
+        /// Compare only this exact object in the fixed local-storage and
+        /// local-backup roots; repeatable. Reports size and SHA-256, never content.
+        #[arg(
+            long = "object",
+            value_name = "STADO_URI",
+            conflicts_with = "reclaim_twins"
+        )]
+        objects: Vec<String>,
+        /// List backup-visible object paths and size metadata in this exact API
+        /// namespace without reading object bodies; repeatable.
+        #[arg(
+            long = "inventory-namespace",
+            value_name = "NAMESPACE",
+            conflicts_with = "reclaim_twins"
+        )]
+        inventory_namespaces: Vec<String>,
         /// Delete the twins this pass proves. Names them and deletes nothing
         /// without --apply.
         #[arg(long = "reclaim-twins")]
@@ -1929,6 +1965,38 @@ enum HostCommands {
         /// Emit the classification as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Run or resume the complete fenced A/B authority handoff, inspect its
+    /// durable state, explicitly roll back before data activation, or finalize
+    /// only after the ordinary coordinator has completed lifecycle cleanup.
+    #[command(name = "storage-root-reconcile")]
+    StorageRootReconcile {
+        target: String,
+        /// Stable transaction id used by the remote checkpoint and receipt.
+        #[arg(long)]
+        transaction: String,
+        /// Transaction action: run, resume, status, rollback, or finalize.
+        #[arg(long, value_parser = ["run", "resume", "status", "rollback", "finalize"])]
+        phase: String,
+        /// Emit the durable transaction receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(name = "storage-root-reconcile-worker", hide = true)]
+    StorageRootReconcileWorker {
+        target: String,
+        #[arg(long)]
+        target_config: String,
+        #[arg(long)]
+        transaction: String,
+        #[arg(long, value_parser = ["run", "resume", "rollback", "finalize"])]
+        phase: String,
+        #[arg(long)]
+        source_revision: String,
+        #[arg(long)]
+        tool_sha256: String,
+        #[arg(long)]
+        runner_gate: String,
     },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
@@ -1983,14 +2051,18 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Declare the exact version TARGET must run for one managed binary.
+    /// Set or remove the exact version TARGET must run for one managed binary.
     #[command(name = "declare-version")]
     DeclareVersion {
         target: String,
         #[arg(long)]
         binary: String,
-        #[arg(long)]
-        version: String,
+        /// Exact version to declare.
+        #[arg(long, required_unless_present = "unset", conflicts_with = "unset")]
+        version: Option<String>,
+        /// Remove this binary's declaration instead of setting a version.
+        #[arg(long, conflicts_with = "version")]
+        unset: bool,
         #[arg(long)]
         json: bool,
     },
@@ -2493,10 +2565,10 @@ enum HostCommands {
     /// The requirement is read from `browsers.json` inside the installed
     /// release, never hardcoded here, because Playwright pins an exact revision
     /// per component and a constant would verify the wrong path the moment the
-    /// release moved. Verification reports every component the release installs
-    /// by default; --repair installs only the ones named, defaulting to the one
-    /// Weles takes from that cache, so a repair never downloads browsers
-    /// nothing drives.
+    /// release moved. The report separately states whether the components
+    /// required by this invocation are present and whether any Chromium,
+    /// Firefox, or WebKit engine can open a page. --repair installs only the
+    /// components named, defaulting to ffmpeg.
     #[command(name = "weles-browser-runtime")]
     WelesBrowserRuntime {
         target: String,
@@ -2939,8 +3011,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::DiskCleanup {
             once,
             watch,
+            to_target,
             dry_run,
-        } => disk_cleanup::run(once, watch, dry_run).await,
+        } => disk_cleanup::run(once, watch, to_target, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
         Commands::Release(sub) => release_cmd::dispatch(sub).await,
@@ -3049,6 +3122,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RecoverObjectApi { target, json } => {
                 host::recover_object_api(&target, json).await
             }
+            HostCommands::RepairReleaseStore {
+                target,
+                product,
+                json,
+            } => host::repair_release_store(&target, &product, json).await,
             HostCommands::ResolverKey { target, json } => {
                 host::authorize_resolver_key(&target, json).await
             }
@@ -3413,10 +3491,48 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::verify_release_platform(&target, &repo, &revision, json).await,
             HostCommands::BackupAudit {
                 target,
+                objects,
+                inventory_namespaces,
                 reclaim_twins,
                 apply,
                 json,
-            } => host::backup_audit(&target, reclaim_twins, apply, json).await,
+            } => {
+                host::backup_audit(
+                    &target,
+                    &objects,
+                    &inventory_namespaces,
+                    reclaim_twins,
+                    apply,
+                    json,
+                )
+                .await
+            }
+            HostCommands::StorageRootReconcile {
+                target,
+                transaction,
+                phase,
+                json,
+            } => host::storage_root_reconcile(&target, &transaction, &phase, json).await,
+            HostCommands::StorageRootReconcileWorker {
+                target,
+                target_config,
+                transaction,
+                phase,
+                source_revision,
+                tool_sha256,
+                runner_gate,
+            } => {
+                host::storage_root_reconcile_worker(
+                    &target,
+                    &target_config,
+                    &transaction,
+                    &phase,
+                    &source_revision,
+                    &tool_sha256,
+                    &runner_gate,
+                )
+                .await
+            }
             HostCommands::ForwardLocal {
                 target,
                 name,
@@ -3448,8 +3564,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 binary,
                 version,
+                unset,
                 json,
-            } => host::declare_version(&target, &binary, &version, json).await,
+            } => host::declare_version(&target, &binary, version.as_deref(), unset, json).await,
             HostCommands::PromoteVersion {
                 binary,
                 version,

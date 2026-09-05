@@ -15,7 +15,9 @@
 //!
 //! `report` lists candidates with sizes; `prune` deletes them. Age and root
 //! arrive as explicit arguments, so the command carries no threshold of its
-//! own.
+//! own. A process snapshot plus `lsof +D` over the cache's owning project
+//! protects every candidate immediately before deletion, including when an
+//! operator explicitly overrides age.
 
 use std::time::Duration;
 
@@ -46,20 +48,58 @@ days="${STADO_CACHE_MIN_AGE_DAYS:-}"
 apply="${STADO_CACHE_APPLY:-}"
 force="${STADO_CACHE_FORCE:-}"
 signature='Signature: 8a477f597d28d172789f06886806bc55'
+snapshot=$(/bin/ps -Ao args= 2>/dev/null || true)
+lsof_bin=""
+for candidate in /usr/sbin/lsof /usr/bin/lsof; do
+  if [ -x "$candidate" ]; then lsof_bin="$candidate"; break; fi
+done
+
+process_absent() {
+  case "$snapshot" in
+    *"$1"*) return 1 ;;
+  esac
+  [ -n "$lsof_bin" ] || return 2
+  # Build processes normally keep their cwd at the project root, not inside
+  # `target`. Looking only below the tagged cache returned "idle" while Cargo
+  # was still writing it, and `rm` then raced those writes. The tag's parent is
+  # the narrow owner boundary that covers both cwd and cache files without
+  # treating an unrelated process elsewhere under the operator's scan root as
+  # a holder.
+  owner=$(/usr/bin/dirname "$1")
+  "$lsof_bin" -n +D "$owner" >/dev/null 2>&1
+  status=$?
+  case "$status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return 2 ;;
+  esac
+}
 
 if [ -z "$root" ] || [ ! -d "$root" ]; then
   printf 'STADO_BUILD_CACHE\troot-absent\t%s\t%s\n' "$root" -
   exit
 fi
 
-tags=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG 2>/dev/null || true)
+if ! tags=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG); then
+  printf 'STADO_BUILD_CACHE\tscan-failed\t%s\t%s\n' "$root" -
+  exit 1
+fi
+if [ -z "$tags" ]; then
+  printf 'STADO_BUILD_CACHE\tno-cache-tags\t%s\t%s\n' "$root" -
+  exit 0
+fi
 
 printf '%s\n' "$tags" |
+(
+failed=0
 while IFS= read -r tag; do
   [ -n "$tag" ] || continue
   dir=$(/usr/bin/dirname "$tag")
   case "$dir" in
-    "$root") continue ;;
+    "$root")
+      printf 'STADO_BUILD_CACHE\troot-protected\t%s\t%s\n' "$dir" -
+      continue
+      ;;
   esac
   if ! /usr/bin/grep -qxF "$signature" "$tag" 2>/dev/null; then
     printf 'STADO_BUILD_CACHE\tuntagged\t%s\t%s\n' "$dir" -
@@ -75,17 +115,29 @@ while IFS= read -r tag; do
     continue
   fi
   size=$(/usr/bin/du -sk "$dir" 2>/dev/null | /usr/bin/awk '{print $1}')
+  process_absent "$dir"
+  process_status=$?
+  if [ "$process_status" -eq 1 ]; then
+    printf 'STADO_BUILD_CACHE\tin-use\t%s\t%s\n' "$dir" "${size:--}"
+    continue
+  fi
+  if [ "$process_status" -ne 0 ]; then
+    printf 'STADO_BUILD_CACHE\tliveness-unavailable\t%s\t%s\n' "$dir" "${size:--}"
+    continue
+  fi
   if [ -n "$apply" ]; then
-    if /bin/rm -rf "$dir" 2>/dev/null; then
+    if /bin/rm -rf "$dir"; then
       printf 'STADO_BUILD_CACHE\tremoved\t%s\t%s\n' "$dir" "${size:--}"
     else
       printf 'STADO_BUILD_CACHE\tremove-failed\t%s\t%s\n' "$dir" "${size:--}"
+      failed=1
     fi
   else
     printf 'STADO_BUILD_CACHE\tcandidate\t%s\t%s\n' "$dir" "${size:--}"
   fi
 done
-exit
+exit "$failed"
+)
 "#;
 
 /// One reported directory: what happened to it, where, and its size in KiB.

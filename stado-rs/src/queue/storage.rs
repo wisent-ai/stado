@@ -51,7 +51,7 @@ pub struct JobStorage {
 
 const TRANSITION_PREFIX: &str = "job-transitions";
 const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
-const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
+pub(crate) const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,12 +70,24 @@ struct JobTransition {
     destination_job: Job,
 }
 
+/// Authoritative lifecycle verdict for one on-disk queue workdir candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkdirJobState {
+    Live,
+    Terminal,
+    Unknown,
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn transition_path(job_id: &str) -> String {
+pub(crate) fn transition_path(job_id: &str) -> String {
     format!("{TRANSITION_PREFIX}/{}.json", sha256_hex(job_id.as_bytes()))
+}
+
+pub(crate) fn transition_is_retired(state: &str) -> bool {
+    state == TRANSITION_RETIRED_STATE
 }
 
 fn prefix_state(prefix: &str) -> &str {
@@ -95,9 +107,67 @@ fn transition_fence_state(transition_id: &str) -> String {
 fn transition_cleaned_state(transition_id: &str) -> String {
     format!("{TRANSITION_CLEANED_PREFIX}{transition_id}")
 }
+fn cleaned_transition_id(state: &str) -> Option<&str> {
+    let transition_id = state.strip_prefix(TRANSITION_CLEANED_PREFIX)?;
+    (transition_id.len() == 64
+        && transition_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    .then_some(transition_id)
+}
 
 pub(crate) fn is_transition_sentinel_state(state: &str) -> bool {
     state.starts_with(TRANSITION_FENCE_PREFIX) || state.starts_with(TRANSITION_CLEANED_PREFIX)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TransitionSnapshotProof {
+    pub job_id: String,
+    pub retired: bool,
+}
+
+/// Parse one immutable transition snapshot through the production transition
+/// type and prove that its object key is the canonical digest key for its job.
+pub(crate) fn validate_transition_snapshot(
+    path: &str,
+    content: &str,
+) -> Result<TransitionSnapshotProof, StorageError> {
+    let transition: JobTransition = serde_json::from_str(content)?;
+    if transition.schema != TRANSITION_SCHEMA || path != transition_path(&transition.job_id) {
+        return Err(StorageError::Other(format!(
+            "invalid durable transition snapshot {path}"
+        )));
+    }
+    Ok(TransitionSnapshotProof {
+        job_id: transition.job_id,
+        retired: transition.state == TRANSITION_RETIRED_STATE,
+    })
+}
+
+pub(crate) fn validate_cancellation_snapshot(
+    job_id: &str,
+    content: &str,
+) -> Result<(), StorageError> {
+    let request: serde_json::Value = serde_json::from_str(content)?;
+    if request.get("job_id").and_then(serde_json::Value::as_str) != Some(job_id) {
+        return Err(StorageError::Other(format!(
+            "cancellation marker does not belong to {job_id}"
+        )));
+    }
+    let requested_at = request
+        .get("requested_at")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            StorageError::Other(format!(
+                "cancellation marker for {job_id} has no requested_at"
+            ))
+        })?;
+    chrono::DateTime::parse_from_rfc3339(requested_at).map_err(|error| {
+        StorageError::Other(format!(
+            "cancellation marker for {job_id} has invalid requested_at: {error}"
+        ))
+    })?;
+    Ok(())
 }
 
 fn merge_transition_destination(
@@ -195,33 +265,40 @@ impl JobStorage {
     pub async fn new() -> Result<Self, StorageError> {
         Self::with_bucket(config::bucket()).await
     }
-    /// Build the backing store used by the Stado API server itself.
+    /// Build a normal client store whose reads must remain on the configured
+    /// primary while writes retain the configured disaster-recovery mirror.
+    pub(crate) async fn for_primary_reads() -> Result<Self, StorageError> {
+        Self::with_bucket_read_mode(config::bucket(), super::failover::ReadMode::PrimaryOnly).await
+    }
+    /// Like [`JobStorage::for_primary_reads`] with an explicit bucket.
     ///
-    /// A client may select the `stado` adapter because it reaches this server,
-    /// but the server cannot route its own queue and registry reads back through
-    /// its listener before that listener has bound. In that topology the
-    /// independently declared backup endpoint is the server's direct backing
-    /// store. Any other primary remains unchanged.
+    /// Host-health readers keep the registry bucket's historical spelling on
+    /// GCS, but liveness observations still must not fall back to a
+    /// disaster-recovery copy and turn an unread primary into live state.
+    pub(crate) async fn with_bucket_primary_reads(bucket: &str) -> Result<Self, StorageError> {
+        Self::with_bucket_read_mode(bucket, super::failover::ReadMode::PrimaryOnly).await
+    }
+
+    /// Build the authoritative backing store used by the Stado API server.
+    ///
+    /// The server must be configured with a direct primary. A `stado` primary
+    /// names the API listener itself and cannot prove which direct store is its
+    /// authority; the separately configured backup is disaster-recovery state,
+    /// not an interchangeable primary. A valid direct primary is constructed
+    /// without read failover so an authority read can never silently come from
+    /// stale backup state.
     pub async fn for_server() -> Result<Self, StorageError> {
-        let primary = super::copy::Endpoint::configured_primary();
-        if primary.adapter() != Some(StorageAdapter::StadoObject) {
-            return Self::new().await;
-        }
-        let endpoint = super::copy::Endpoint::configured_backup().ok_or_else(|| {
-            StorageError::Other(
-                "WC_STORAGE_BACKEND=stado cannot back the Stado API server itself; configure a direct WC_BACKUP_STORAGE_BACKEND".to_string(),
-            )
-        })?;
-        if endpoint.adapter() == Some(StorageAdapter::StadoObject) {
+        if crate::capabilities::storage_adapter(config::wc_storage_backend())
+            == Some(StorageAdapter::StadoObject)
+        {
             return Err(StorageError::Other(
-                "the Stado API server backup backend must be direct, not stado".to_string(),
+                "the Stado API server requires a direct authoritative primary; \
+                 WC_STORAGE_BACKEND=stado names the server itself, and the backup \
+                 backend is not a primary substitute"
+                    .to_string(),
             ));
         }
-        let backend = endpoint.build().await?;
-        let storage =
-            Self::with_backend_and_bucket(backend, endpoint.kind.clone(), endpoint.bucket.clone());
-        storage.ensure_layout().await?;
-        Ok(storage)
+        Self::for_primary_reads().await
     }
 
     /// Like [`JobStorage::new`] but binds the "gcs" backend to an explicit
@@ -229,6 +306,13 @@ impl JobStorage {
     /// bucket for routing — it is rooted at `config::wc_local_storage_path()`
     /// — but keeps it as `bucket_name` like Python `JobStorage(bucket)`.
     pub async fn with_bucket(bucket: &str) -> Result<Self, StorageError> {
+        Self::with_bucket_read_mode(bucket, super::failover::ReadMode::Failover).await
+    }
+
+    async fn with_bucket_read_mode(
+        bucket: &str,
+        read_mode: super::failover::ReadMode,
+    ) -> Result<Self, StorageError> {
         // An unset backend with a configured local path is not a
         // misconfiguration to refuse; it is the local-only profile this machine
         // already runs. Erroring here turned every registry read into "the
@@ -278,11 +362,11 @@ impl JobStorage {
 
         let storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
         storage.ensure_layout().await?;
-        storage.with_configured_read_failover().await
+        storage.with_configured_read_failover(read_mode).await
     }
 
-    /// Attach the read-failover mirror, when the configured backup can hold a
-    /// replica of this primary at all.
+    /// Attach the configured disaster-recovery mirror using the selected read
+    /// authority, when the backup can hold a replica of this primary at all.
     ///
     /// This is the OTHER writer to the backup, and until now the unchecked
     /// one: `ReadFailoverBackend` copies every `upload_*` to the backup as it
@@ -302,7 +386,10 @@ impl JobStorage {
     /// them — and the store itself is fine. Read failover is dropped with it,
     /// which is honest, because a replica written at addresses nothing resolves
     /// could never have answered a read either.
-    async fn with_configured_read_failover(mut self) -> Result<Self, StorageError> {
+    async fn with_configured_read_failover(
+        mut self,
+        read_mode: super::failover::ReadMode,
+    ) -> Result<Self, StorageError> {
         let Some(endpoint) = super::copy::Endpoint::configured_backup() else {
             return Ok(self);
         };
@@ -318,6 +405,7 @@ impl JobStorage {
         self.backend = Arc::new(super::failover::ReadFailoverBackend::new(
             self.backend.clone(),
             backup,
+            read_mode,
         ));
         Ok(self)
     }
@@ -654,6 +742,93 @@ impl JobStorage {
         Ok(Some((transition, versioned.version)))
     }
 
+    /// Resolve one workdir candidate without exposing transition protocol
+    /// internals to the janitor.
+    ///
+    /// A terminal verdict requires this job's current typed transition to be
+    /// retired, its queue/running source documents to be the matching cleaned
+    /// sentinel (or absent), and its verified destination to remain in the
+    /// recorded terminal prefix. Every live, fenced, malformed, mismatched, or
+    /// otherwise unknown document is retained.
+    pub(crate) async fn workdir_job_state(
+        &self,
+        job_id: &str,
+    ) -> Result<WorkdirJobState, StorageError> {
+        let Some((transition, _)) = self.read_job_transition(job_id).await? else {
+            return Ok(WorkdirJobState::Unknown);
+        };
+        if transition.state != TRANSITION_RETIRED_STATE
+            || !crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str())
+            || transition.destination_job.job_id != job_id
+            || transition.destination_job.state != prefix_state(&transition.to_prefix)
+        {
+            return Ok(WorkdirJobState::Unknown);
+        }
+        let expected_projection =
+            crate::queue::submit::immutable_job_projection(&transition.destination_job);
+
+        for prefix in ["queue", "running"] {
+            let Some(versioned) = self
+                .read_text_versioned(&format!("{prefix}/{job_id}.json"))
+                .await?
+            else {
+                continue;
+            };
+            let job = match Job::from_json(&versioned.content) {
+                Ok(job) if job.job_id == job_id => job,
+                _ => return Ok(WorkdirJobState::Unknown),
+            };
+            if job.state == prefix_state(prefix) {
+                return Ok(WorkdirJobState::Live);
+            }
+            if crate::queue::submit::immutable_job_projection(&job) != expected_projection {
+                return Ok(WorkdirJobState::Unknown);
+            }
+            let Some(cleaned_id) = cleaned_transition_id(&job.state) else {
+                return Ok(WorkdirJobState::Unknown);
+            };
+            if prefix == transition.from_prefix && cleaned_id != transition.transition_id {
+                return Ok(WorkdirJobState::Unknown);
+            }
+        }
+
+        let mut terminal_destination = false;
+        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+            let Some(versioned) = self
+                .read_text_versioned(&format!("{prefix}/{job_id}.json"))
+                .await?
+            else {
+                continue;
+            };
+            let job = match Job::from_json(&versioned.content) {
+                Ok(job) if job.job_id == job_id => job,
+                _ => return Ok(WorkdirJobState::Unknown),
+            };
+            if job.state.starts_with(TRANSITION_FENCE_PREFIX) {
+                return Ok(WorkdirJobState::Unknown);
+            }
+            if crate::queue::submit::immutable_job_projection(&job) != expected_projection {
+                return Ok(WorkdirJobState::Unknown);
+            }
+            if prefix == transition.to_prefix && job.state == prefix_state(prefix) {
+                terminal_destination = true;
+            } else {
+                let Some(cleaned_id) = cleaned_transition_id(&job.state) else {
+                    return Ok(WorkdirJobState::Unknown);
+                };
+                if prefix == transition.from_prefix && cleaned_id != transition.transition_id {
+                    return Ok(WorkdirJobState::Unknown);
+                }
+            }
+        }
+
+        Ok(if terminal_destination {
+            WorkdirJobState::Terminal
+        } else {
+            WorkdirJobState::Unknown
+        })
+    }
+
     async fn set_transition_state(
         &self,
         expected: &JobTransition,
@@ -811,6 +986,22 @@ impl JobStorage {
                 "{destination_path} does not match completed transition {}",
                 transition.transition_id
             )));
+        }
+        // Older writers left completed transition records after removing the
+        // source. Recovery must retire that settled generation, not replay
+        // terminal retention against run history that may already be gone.
+        let source_path = format!("{}/{}.json", transition.from_prefix, transition.job_id);
+        let source_retired = match self.read_text_versioned(&source_path).await? {
+            None => true,
+            Some(versioned) => {
+                let source = Job::from_json(&versioned.content)?;
+                source.job_id == transition.job_id
+                    && source.state == transition_cleaned_state(&transition.transition_id)
+            }
+        };
+        if source_retired {
+            self.retire_transition_record(transition).await?;
+            return Ok(true);
         }
         if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
             crate::queue::runs::record_terminal_outcome(self, &destination, &transition.to_prefix)
@@ -1159,6 +1350,63 @@ impl JobStorage {
             "job {} remained contended during lifecycle transition",
             requested.job_id
         )))
+    }
+
+    /// Finish durable cancellation requests for jobs that remain in `queue/`.
+    ///
+    /// The cancellation marker is written before the lifecycle move, so a
+    /// caller that exits between those writes leaves work for the next
+    /// coordinator tick. Claiming deliberately refuses a marked job, but a
+    /// refusal alone strands its queued projection forever. Enumerating the
+    /// active queue first keeps this work bounded by pending jobs: historical
+    /// markers for terminal or absent jobs are neither downloaded nor parsed.
+    ///
+    /// Each relevant job's prepared transition is recovered before its fresh,
+    /// versioned queue body is read. The normal CAS lifecycle transition then
+    /// creates the durable `cancelled/` projection and retires `queue/`; the
+    /// request marker and independent `runs/` provenance remain untouched.
+    pub async fn settle_queued_cancellations(&self) -> Result<usize, StorageError> {
+        let mut settled = 0;
+        for job_id in self.list_job_ids("queue").await? {
+            self.recover_job_transition(&job_id).await?;
+            let queue_path = format!("queue/{job_id}.json");
+            let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
+                continue;
+            };
+            let mut job = Job::from_json(&versioned.content)?;
+            if job.job_id != job_id || job.state != crate::models::job_state::QUEUED {
+                continue;
+            }
+
+            let marker_path = format!("cancellations/{job_id}.json");
+            let Some(raw_request) = self.backend.download_text(&marker_path).await? else {
+                continue;
+            };
+            let request: serde_json::Value = serde_json::from_str(&raw_request)?;
+            if request.get("job_id").and_then(serde_json::Value::as_str) != Some(job_id.as_str()) {
+                return Err(StorageError::Other(format!(
+                    "{marker_path} does not name its own job id"
+                )));
+            }
+            let requested_at = request
+                .get("requested_at")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| StorageError::Other(format!("{marker_path} has no requested_at")))?;
+            chrono::DateTime::parse_from_rfc3339(requested_at).map_err(|error| {
+                StorageError::Other(format!("{marker_path} has invalid requested_at: {error}"))
+            })?;
+
+            job.state = crate::models::job_state::CANCELLED.to_string();
+            job.completed_at = Some(requested_at.to_string());
+            job.error = Some("cancelled".to_string());
+            if self
+                .transition_job_if_version(&job, "queue", "cancelled", Some(&versioned.version))
+                .await?
+            {
+                settled += 1;
+            }
+        }
+        Ok(settled)
     }
 
     /// Claim through a durable transition record. The running job is derived

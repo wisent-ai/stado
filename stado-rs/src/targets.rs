@@ -2666,18 +2666,27 @@ fn parse_extra(data: &Value) -> Map<String, Value> {
         .collect()
 }
 
+/// Parse a registry document from an already-decoded JSON value.
+///
+/// Kept crate-visible so a command that needs both the raw document and the
+/// typed registry can make one authority read and one JSON parse. Re-fetching
+/// the raw document after loading [`Registry`] can mix two generations.
+pub(crate) fn load_registry_from_value(data: &Value) -> Result<Registry, RegistryError> {
+    Ok(Registry {
+        targets: parse_targets(data)?,
+        coordinators: parse_coordinators(data)?,
+        service_directory: parse_service_directory(data)?,
+        placement_profiles: parse_placement_profiles(data)?,
+        extra: parse_extra(data),
+        staleness_seconds: None,
+    })
+}
+
 /// Parse a registry document from a JSON string.
 pub fn load_registry_from_str(text: &str) -> Result<Registry, RegistryError> {
     let data: Value =
         serde_json::from_str(text).map_err(|exc| RegistryError::Json(exc.to_string()))?;
-    Ok(Registry {
-        targets: parse_targets(&data)?,
-        coordinators: parse_coordinators(&data)?,
-        service_directory: parse_service_directory(&data)?,
-        placement_profiles: parse_placement_profiles(&data)?,
-        extra: parse_extra(&data),
-        staleness_seconds: None,
-    })
+    load_registry_from_value(&data)
 }
 
 /// Load a registry from a local JSON file. A missing file yields an empty
@@ -2742,22 +2751,22 @@ pub fn clear_registry_cache() {
 
 /// Read/write handle on the canonical registry document, backend-aware.
 ///
-/// NO Python original: Python pins every registry call site to GCS, which
-/// is exactly the failure this type removes. On the "gcs" backend the
-/// object is the bucket/blob of [`GCS_REGISTRY_URI`], reached through the
-/// crate's GCS JSON API (never gsutil) — byte-identical to the pinned code
-/// it replaces. On every other backend it is [`REGISTRY_BLOB`] in the
-/// store `config::wc_storage_backend()` selects, which is the same object
-/// `dashboard/policy.rs` compare-and-swaps the registry through.
+/// The registry is queue control-plane state, not product state. On the Stado
+/// object backend it therefore always addresses
+/// `stado://probierz/registry.json`, regardless of the product namespace in
+/// the caller's ambient configuration. The configured token is still used,
+/// so a caller without authority to read that namespace gets the real
+/// permission failure rather than a document from a namespace it can read.
 ///
-/// Readers that only want the parsed document use
-/// [`fetch_registry_remote`]. This type is for the WRITE side and for
-/// readers that need generation fencing: `cli/registry.rs::push`,
-/// `cli/host.rs::weles_recordings_dir` and
-/// `providers::local::disk_cleanup::fetch_canonical_registry` all fenced
-/// against a hardcoded GCS bucket before, so on an Azure-only deployment
-/// they could not repair the very registry the coordinator's survival
-/// check reads.
+/// On every backend reads are pinned to the configured primary. A
+/// disaster-recovery replica may lag the authority; silently accepting it as
+/// the canonical document makes a healthy registry look rolled back while
+/// [`registry_location`] continues to name the primary. Writes on direct
+/// backends retain the configured mirror through
+/// [`JobStorage::for_primary_reads`].
+///
+/// GCS keeps its historical dedicated object at [`GCS_REGISTRY_URI`]. Other
+/// direct backends hold [`REGISTRY_BLOB`] at their root.
 pub struct RegistryStore {
     backend: Arc<dyn BlobBackend>,
     blob: String,
@@ -2765,11 +2774,10 @@ pub struct RegistryStore {
 }
 
 impl RegistryStore {
-    /// Bind to the store that holds the canonical registry.
+    /// Bind to the one authoritative store that holds the canonical registry.
     pub async fn open() -> Result<Self, StorageError> {
-        let gcs_backend = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
-            == Some(crate::capabilities::StorageAdapter::Gcs);
-        if gcs_backend {
+        let adapter = crate::capabilities::storage_adapter(crate::config::wc_storage_backend());
+        if adapter == Some(crate::capabilities::StorageAdapter::Gcs) {
             let uri = GCS_REGISTRY_URI
                 .strip_prefix("gs://")
                 .unwrap_or(GCS_REGISTRY_URI);
@@ -2781,27 +2789,20 @@ impl RegistryStore {
                 location: GCS_REGISTRY_URI.to_string(),
             });
         }
-        let store = JobStorage::new().await?;
-        Ok(Self {
-            backend: Arc::clone(store.backend()),
-            blob: REGISTRY_BLOB.to_string(),
-            location: registry_location(),
-        })
-    }
-
-    /// Bind a server-local reader to the canonical registry's direct backing
-    /// store when clients normally route through the Stado object API.
-    ///
-    /// This is intentionally narrower than [`Self::open`]: only an explicitly
-    /// configured `stado` primary switches to the server's declared backup.
-    /// Every other adapter retains the canonical routing above.
-    pub async fn open_for_server() -> Result<Self, StorageError> {
-        if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
-            != Some(crate::capabilities::StorageAdapter::StadoObject)
-        {
-            return Self::open().await;
+        if adapter == Some(crate::capabilities::StorageAdapter::StadoObject) {
+            let backend = crate::queue::StadoObjectBackend::new(
+                crate::config::wc_stado_storage_url(),
+                crate::config::QUEUE_OBJECT_NAMESPACE,
+                crate::config::wc_stado_storage_token_file(),
+                crate::config::wc_stado_storage_ca_file(),
+            )?;
+            return Ok(Self {
+                backend: Arc::new(backend),
+                blob: REGISTRY_BLOB.to_string(),
+                location: registry_location(),
+            });
         }
-        let store = JobStorage::for_server().await?;
+        let store = JobStorage::for_primary_reads().await?;
         Ok(Self {
             backend: Arc::clone(store.backend()),
             blob: REGISTRY_BLOB.to_string(),
@@ -2951,19 +2952,22 @@ pub enum RegistryFetchError {
     },
 }
 
-/// Operator-facing location of the registry document: the canonical `gs://`
-/// URI on the "gcs" backend, else `<backend>:<blob>` for whichever store
-/// `WC_STORAGE_BACKEND` selects. Public so the CLI reports the object it
-/// actually wrote instead of a hardcoded bucket
-/// (`cli/registry.rs::push`).
+/// Operator-facing location of the canonical registry document.
+///
+/// The Stado object backend is namespace-addressed, so name the fixed queue
+/// namespace rather than the caller's ambient product namespace. Other
+/// backends keep their configured backend spelling; GCS retains its historical
+/// dedicated URI.
 pub fn registry_location() -> String {
     let backend = crate::config::wc_storage_backend();
-    if crate::capabilities::storage_adapter(backend)
-        == Some(crate::capabilities::StorageAdapter::Gcs)
-    {
-        GCS_REGISTRY_URI.to_string()
-    } else {
-        format!("{backend}:{REGISTRY_BLOB}")
+    match crate::capabilities::storage_adapter(backend) {
+        Some(crate::capabilities::StorageAdapter::Gcs) => GCS_REGISTRY_URI.to_string(),
+        Some(crate::capabilities::StorageAdapter::StadoObject) => format!(
+            "stado://{}/{}",
+            crate::config::QUEUE_OBJECT_NAMESPACE,
+            REGISTRY_BLOB
+        ),
+        _ => format!("{backend}:{REGISTRY_BLOB}"),
     }
 }
 

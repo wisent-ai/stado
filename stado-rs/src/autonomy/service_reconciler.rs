@@ -140,12 +140,23 @@ fn endpoint_states(
 fn resolved_plan(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
-) -> Result<(service::DeployPlan, String, Vec<String>), String> {
+) -> Result<(service::DeployPlan, String, Vec<String>, String), String> {
     let declared = &status.service;
     let mut unit =
         crate::cli::service::unit_program(&target.name, &declared.name, None, &[], Some(declared))
             .map_err(|error| error.to_string())?;
-    let mut unit_env: Vec<(String, String)> = Vec::new();
+    let home = crate::deploy::service_catalog::home_for(target);
+    let mut unit_env = crate::deploy::service_catalog::lookup(&declared.name)?
+        .map(|entry| {
+            crate::deploy::service_catalog::resolve_entry(
+                &entry,
+                &home,
+                Some(&target.release_platform),
+                &target.name,
+            )
+            .2
+        })
+        .unwrap_or_default();
     if unit.source == "catalog" {
         let entry = crate::deploy::service_catalog::CatalogService {
             name: declared.name.clone(),
@@ -165,6 +176,18 @@ fn resolved_plan(
         unit.args = args;
         unit_env = env;
     }
+    for (name, value) in &unit.env {
+        let value = crate::deploy::service_catalog::resolve_word(
+            value,
+            &home,
+            Some(&target.release_platform),
+            &target.name,
+        );
+        match unit_env.iter_mut().find(|(key, _)| key == name) {
+            Some((_, current)) => *current = value,
+            None => unit_env.push((name.clone(), value)),
+        }
+    }
     let mut plan = match unit
         .unit
         .as_deref()
@@ -178,13 +201,31 @@ fn resolved_plan(
             &unit.args,
             &unit_env,
         ),
-        None => service::plan_deploy(target, &declared.name, &unit.program, &unit.args),
+        None => service::plan_deploy_labelled(
+            target,
+            &declared.name,
+            &crate::deploy::local_install::label(service::DEPLOY_KIND, &declared.name),
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
     }
     .map_err(|error| error.to_string())?;
+    if !unit.systemd_unit.is_empty() {
+        if !target.release_platform.starts_with("linux") {
+            return Err(format!(
+                "{} declares a systemd unit definition on non-Linux platform {}",
+                declared.name, target.release_platform
+            ));
+        }
+        let definition = std::mem::take(&mut unit.systemd_unit);
+        unit.systemd_unit = service::retain_systemd_unit(&mut plan, &definition, &unit_env, false)
+            .map_err(|error| error.to_string())?;
+    }
     if service::UnitDomain::from_path(&declared.path).is_per_login() {
         plan.force_daemon = false;
     }
-    Ok((plan, unit.program, unit.args))
+    Ok((plan, unit.program, unit.args, unit.systemd_unit))
 }
 
 async fn replace_declaration(
@@ -192,6 +233,7 @@ async fn replace_declaration(
     mut corrected: ManagedService,
     program: String,
     args: Vec<String>,
+    systemd_unit: String,
 ) -> Result<bool, String> {
     corrected.name = existing.name.clone();
     corrected.host_heuristic = existing.host_heuristic.clone();
@@ -200,6 +242,8 @@ async fn replace_declaration(
     corrected.onboarding = existing.onboarding.clone();
     corrected.program = program;
     corrected.args = args;
+    corrected.env = existing.env.clone();
+    corrected.systemd_unit = systemd_unit;
     if corrected == *existing {
         return Ok(false);
     }
@@ -224,7 +268,7 @@ async fn reconcile_observed(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<(String, bool, String), String> {
-    let (plan, program, args) = resolved_plan(status, target)?;
+    let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let report = service::probe_service(target, status.service.unit_id(), runner)
         .await
         .map_err(|error| error.to_string())?;
@@ -258,7 +302,8 @@ async fn reconcile_observed(
             plan.label
         ));
     }
-    let changed = replace_declaration(&status.service, corrected, program, args).await?;
+    let changed =
+        replace_declaration(&status.service, corrected, program, args, systemd_unit).await?;
     let action = if changed { "adopted" } else { "confirmed" };
     Ok((
         action.to_string(),
@@ -275,7 +320,7 @@ async fn reconcile_unreachable(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<(String, bool, String), String> {
-    let (plan, program, args) = resolved_plan(status, target)?;
+    let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let outcome = service::ensure_service(target, &plan, runner)
         .await
         .map_err(|error| error.to_string())?;
@@ -292,7 +337,7 @@ async fn reconcile_unreachable(
         &status.service.managed_since,
     );
     let declaration_changed =
-        replace_declaration(&status.service, corrected, program, args).await?;
+        replace_declaration(&status.service, corrected, program, args, systemd_unit).await?;
     Ok((
         outcome.action.clone(),
         outcome.changed() || declaration_changed,
@@ -320,7 +365,7 @@ async fn reconcile_beacon(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<(String, bool, String), String> {
-    let (plan, program, args) = resolved_plan(status, target)?;
+    let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let outcome = service::ensure_service(target, &plan, runner)
         .await
         .map_err(|error| error.to_string())?;
@@ -339,7 +384,7 @@ async fn reconcile_beacon(
             &status.service.managed_since,
         );
         declaration_changed =
-            replace_declaration(&status.service, corrected, program, args).await?;
+            replace_declaration(&status.service, corrected, program, args, systemd_unit).await?;
     }
     Ok((
         outcome.action.clone(),
@@ -361,7 +406,7 @@ async fn reconcile_undeclared(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<(String, bool, String), String> {
-    let (plan, program, args) = resolved_plan(status, target)?;
+    let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let report = service::probe_service(target, status.service.unit_id(), runner)
         .await
         .map_err(|error| error.to_string())?;
@@ -387,7 +432,8 @@ async fn reconcile_undeclared(
         match running.matches_process() {
             Some(true) => {
                 let changed =
-                    replace_declaration(&status.service, corrected, program, args).await?;
+                    replace_declaration(&status.service, corrected, program, args, systemd_unit)
+                        .await?;
                 let action = if changed { "adopted" } else { "confirmed" };
                 return Ok((
                     action.to_string(),
@@ -435,7 +481,7 @@ async fn reconcile_undeclared(
         &status.service.managed_since,
     );
     let declaration_changed =
-        replace_declaration(&status.service, corrected, program, args).await?;
+        replace_declaration(&status.service, corrected, program, args, systemd_unit).await?;
     Ok((
         outcome.action.clone(),
         outcome.changed() || declaration_changed,
