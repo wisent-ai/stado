@@ -177,7 +177,8 @@ fn named_entries<'a>(
 }
 
 fn source_rejection(bytes: &[u8], reason: String) -> RegistryImportReceipt {
-    let mut receipt = RegistryImportReceipt::empty(digest(bytes), "rejected");
+    let mut receipt =
+        RegistryImportReceipt::empty(format!("{:x}", Sha256::digest(bytes)), "rejected");
     receipt.rejected.push(reason);
     receipt
 }
@@ -384,7 +385,7 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
         Ok(source) => source,
         Err(receipt) => return Ok(receipt),
     };
-    let source_sha256 = digest(bytes);
+    let source_sha256 = format!("{:x}", Sha256::digest(bytes));
     let store = RegistryStore::open().await?;
     let mut last_generation = None;
 
