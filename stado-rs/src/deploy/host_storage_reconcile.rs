@@ -260,7 +260,7 @@ fn bind_remote_script(phase: &str, transaction: &str) -> String {
     script.push_str(&shlex_quote(
         &RESIDENT_LOCK_FD.get().copied().unwrap_or(-1).to_string(),
     ));
-    script.push_str(" /usr/bin/python3 - <<'STADO_RECONCILE_EOF'\n");
+    script.push_str(" /usr/bin/python3 - 2>&1 <<'STADO_RECONCILE_EOF'\n");
     script.push_str(REMOTE_PYTHON);
     if !REMOTE_PYTHON.ends_with('\n') {
         script.push('\n');
@@ -280,12 +280,15 @@ fn parse_remote_payload(output: &super::CommandOutput) -> Result<Value, DeployEr
         }
     }
     if !output.ok() {
-        let detail = output.detail().trim();
-        return Err(DeployError(if detail.is_empty() {
-            "storage reconciliation host program failed".to_string()
-        } else {
-            detail.to_string()
-        }));
+        let stdout = output.stdout.trim();
+        let stderr = output.stderr.trim();
+        let detail = match (stdout.is_empty(), stderr.is_empty()) {
+            (true, true) => "storage reconciliation host program failed".to_string(),
+            (false, true) => stdout.to_string(),
+            (true, false) => stderr.to_string(),
+            (false, false) => format!("{stdout}\n{stderr}"),
+        };
+        return Err(DeployError(detail));
     }
     payload.ok_or_else(|| DeployError("storage reconciliation returned no payload".to_string()))
 }
