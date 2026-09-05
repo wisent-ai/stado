@@ -3514,11 +3514,17 @@ else
 fi
 ";
 
-/// `service env`: hand the unit file back verbatim and parse it locally.
+/// `service env`: fetch the complete unit definition, including systemd drop-ins.
 /// Parsing on this side keeps the remote program fixed and narrow, and
 /// keeps redaction in one place instead of trusting a shell pipeline to
 /// have caught every credential-shaped key.
-const UNIT_FILE_BODY: &str = "if [ -f \"$unit_path\" ]; then
+const UNIT_FILE_BODY: &str = "if [ \"$os\" = Linux ]; then
+  if ! content=$(stado_systemctl cat --no-pager \"$unit\" 2>&1); then
+    say 'unit_definition_unavailable' \"$content\"
+    exit 1
+  fi
+  printf 'STADO_UNITFILE\\t%s\\n%s\\n' \"$unit_path\" \"$content\"
+elif [ -f \"$unit_path\" ]; then
   printf 'STADO_UNITFILE\\t%s\\n' \"$unit_path\"
   /bin/cat \"$unit_path\"
 else
@@ -7963,7 +7969,7 @@ pub struct UnitFile {
     pub content: String,
 }
 
-/// `service env`'s fetch: the unit file exactly as the host holds it.
+/// `service env`'s fetch: the unit and its overriding definitions on the host.
 pub async fn fetch_unit_file(
     target: &ComputeTarget,
     service: &ManagedService,
@@ -8906,6 +8912,7 @@ pub fn parse_systemd_unit(text: &str) -> SystemdUnit {
                     }
                 }
             }
+            "EnvironmentFile" if value.trim().is_empty() => parsed.environment_files.clear(),
             "EnvironmentFile" => parsed.environment_files.push(value.trim().to_string()),
             _ => {}
         }
