@@ -2227,7 +2227,7 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
-  for executable in Runner.Listener Runner.Worker; do
+  for executable in Runner.Worker Runner.Listener; do
     owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")
     replacement=$(root mktemp "$runner_root/bin/.$executable.stado.XXXXXX")
     root cp "$signed_runtime/bin/$executable" "$replacement"
