@@ -1808,6 +1808,42 @@ struct HostConnectionPathProbe: Decodable, Identifiable, Sendable {
     var id: String { name }
 }
 
+/// One `~/.stado/forwards/<service>.url` marker as `stado host inventory`
+/// reports it: the address consumers on that host dial, whether anything
+/// answers there, and whether it is the address the fleet declares for them.
+///
+/// The console had no surface for these at all, and they are what a product
+/// on that host actually resolves a service through. On 2026-09-05
+/// `lukasz-macbook` carried `weles-admission` at `18794` while its own
+/// resolver adapter for that service binds `17614`; the file was the only
+/// statement of the address and nothing displayed it.
+struct HostForwardMarker: Decodable, Identifiable, Sendable {
+    let name: String
+    let url: String
+    /// `matches`, `stale`, `unreadable` or `unknown`: whether anything answers
+    /// where the marker points.
+    let reconciliation: String
+    /// The address the fleet declares for this host, when it declares one.
+    let declaredUrl: String?
+    /// `directory-endpoint` when this host serves the service,
+    /// `resolver-adapter` when it dials its own adapter, `undeclared` when the
+    /// fleet claims neither.
+    let declaredSource: String
+    /// `matches`, `disagrees` or `undeclared`.
+    let declarationVerdict: String
+
+    var id: String { name }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case url
+        case reconciliation
+        case declaredUrl = "declared_url"
+        case declaredSource = "declared_source"
+        case declarationVerdict = "declaration_verdict"
+    }
+}
+
 /// Why a reachable host stopped publishing beacons, read from the managed
 /// publisher's own declared log by `stado host link`.
 struct HostBeaconPublisherDiagnosis: Decodable, Sendable {

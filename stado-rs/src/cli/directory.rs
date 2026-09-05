@@ -664,6 +664,52 @@ fn endpoint_url<'a>(entry: &'a Value, target: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 
+/// What a host dials for a service the directory places somewhere else: the
+/// bind of its own resolver adapter, from the target's declared
+/// `service_resolver`.
+///
+/// The marker is the address consumers on THIS host use, and for a service
+/// served elsewhere that address is never the serving host's own loopback
+/// port. Publishing skipped those services entirely, so the file either did
+/// not exist or still held whatever wrote it last: on `lukasz-macbook`
+/// `brama.local` named `127.0.0.1:8080`, which on that machine belongs to an
+/// unrelated service, and `weles-admission.local` named `8788` while the
+/// documented answer for a non-serving host is its adapter at `17614`. Every
+/// consumer reading those files dialled the wrong thing for as long as they
+/// existed.
+///
+/// One adapter is an address; several are a question this function may not
+/// answer, because adapters are per consumer and the marker's name carries no
+/// consumer. `Err` names them so the caller reports the ambiguity instead of
+/// electing one consumer's socket for everybody.
+fn adapter_url(target_entry: &Value, service: &str) -> Result<Option<String>, String> {
+    let Some(declared) = target_entry.get("service_resolver") else {
+        return Ok(None);
+    };
+    let config: crate::service_resolution::ResolverConfig =
+        serde_json::from_value(declared.clone())
+            .map_err(|error| format!("target service_resolver is invalid: {error}"))?;
+    let mut matches = config
+        .adapters
+        .iter()
+        .filter(|adapter| adapter.service == service)
+        .peekable();
+    let Some(first) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.peek().is_some() {
+        let mut consumers: Vec<&str> = vec![first.consumer.as_str()];
+        consumers.extend(matches.map(|adapter| adapter.consumer.as_str()));
+        return Err(format!(
+            "this host's resolver declares {} {service} adapters, one per consumer ({}), and a \
+             marker names no consumer; read the address from the consumer's own adapter",
+            consumers.len(),
+            consumers.join(", ")
+        ));
+    }
+    Ok(Some(format!("http://{}", first.bind)))
+}
+
 /// Write `~/.stado/forwards/<service>.local` for every service the directory
 /// gives this machine an address for, and report every marker it does not.
 ///
@@ -721,22 +767,53 @@ async fn publish(
     std::fs::create_dir_all(&forwards)?;
     let mut published: Vec<Value> = Vec::new();
     let mut skipped: Vec<Value> = Vec::new();
+    // The target's own declaration, for the services the directory places
+    // elsewhere. Read once: the adapter set does not change inside one run,
+    // and a per-service read would ask the same document eight times.
+    let target_entry = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .and_then(|targets| {
+            targets.iter().find(|candidate| {
+                candidate.get("name").and_then(Value::as_str) == Some(target.as_str())
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let address_for =
+        |name: &str, entry: &Value| -> Result<Option<(String, &'static str)>, String> {
+            if let Some(url) = endpoint_url(entry, &target) {
+                return Ok(Some((url.to_string(), "directory-endpoint")));
+            }
+            Ok(adapter_url(&target_entry, name)?.map(|url| (url, "resolver-adapter")))
+        };
     for (name, entry) in services {
         if service.as_deref().is_some_and(|wanted| wanted != name) {
             continue;
         }
-        let Some(url) = endpoint_url(entry, &target) else {
+        let resolved = match address_for(name, entry) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                skipped.push(json!({ "service": name, "reason": reason }));
+                continue;
+            }
+        };
+        let Some((url, source)) = resolved else {
             skipped.push(json!({
                 "service": name,
-                "reason": format!("{DIRECTORY_KEY} declares no endpoint for {target}"),
+                "reason": format!(
+                    "{DIRECTORY_KEY} declares no endpoint for {target} and its resolver declares \
+                     no {name} adapter"
+                ),
             }));
             continue;
         };
         let marker = forwards.join(format!("{name}.local"));
-        write_forward_marker(&marker, url)?;
+        write_forward_marker(&marker, &url)?;
         published.push(json!({
             "service": name,
             "url": url,
+            "source": source,
             "marker": marker.display().to_string(),
         }));
     }
@@ -749,10 +826,12 @@ async fn publish(
     // The whole declared set, never the filtered one. `--service` narrows what
     // this run writes; it cannot narrow what the directory says, and a sweep
     // that mistook "not published just now" for "not declared" would report
-    // every live marker on the host as a fossil.
+    // every live marker on the host as a fossil. A service this host reaches
+    // through its own adapter is declared for it too: the marker is the
+    // address it dials, so sweeping it would delete a live answer.
     let declared: std::collections::BTreeSet<&str> = services
         .iter()
-        .filter(|(_, entry)| endpoint_url(entry, &target).is_some())
+        .filter(|(name, entry)| matches!(address_for(name.as_str(), entry), Ok(Some(_))))
         .map(|(name, _)| name.as_str())
         .collect();
     let sweep = sweep_markers(&forwards, &declared)?;

@@ -254,6 +254,18 @@ The directory joins a producer, its endpoint, and declared consumers. `stado ser
 
 A directory declaration is not proof of a live route. Verification records which consumer reached which endpoint and why a refusal occurred.
 
+### The marker holds the address that host dials
+
+Several products resolve a service from an owner-only file, `~/.stado/forwards/<service>.local`, rather than from an environment variable: Skarbiec's credential bridge reads `weles-admission.local` this way. `stado service directory publish` writes those files, and what it must write depends on where the service runs.
+
+- The host that SERVES the service gets the address it serves on, from `endpoints[<that host>]`.
+- Every other host gets its OWN resolver adapter for that service, from `service_resolver.adapters[]`, because the serving host's loopback port means something else — or nothing — on their machine.
+- A service whose resolver declares one adapter per consumer is refused by name, listing the consumers: the marker's filename carries no consumer, so nothing elects one consumer's socket for the rest.
+
+`publish` reports the source of every address it wrote (`directory-endpoint` or `resolver-adapter`), reports every marker no declaration accounts for as a fossil, and removes exactly those under `--prune`. `stado host inventory <host>` judges each marker against both declared sources and prints `declared_source` beside its verdict, and Stado Desktop's Hosts screen shows the same rows under **Service addresses this host dials**.
+
+Publishing skipped every service placed elsewhere until 2026-09-05, which left those markers as whatever last wrote them: `lukasz-macbook` carried `brama.local` at `127.0.0.1:8080`, Brama's port on the Mac mini and an unrelated service's port on the laptop, and `weles-admission.local` at `8788` while that host's adapter binds `17614`. A consumer reading either file dialled the wrong service, and the inventory called the correct address `undeclared` because it compared markers with `endpoints` alone.
+
 ## Object authorization
 
 The object API authorizes an action in two stages:
