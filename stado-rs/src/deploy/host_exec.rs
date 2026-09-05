@@ -911,6 +911,11 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               or change filesystem state",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/readlink", "-f", "/bin/ls"],
+        why: "resolves only the fixed /bin/ls path to the installed file whose package record \
+              must be queried; it accepts no operator path and changes no link or file",
+    },
+    ApprovedCommand {
         argv: &[
             "/bin/ps",
             "axww",
