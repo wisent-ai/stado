@@ -4275,6 +4275,19 @@ except BlockingIOError:
         raise SystemExit(0)
     raise SystemExit("native reconciliation lock is held without a manager-bound owner")
 
+# Manager visibility and the operation lock are one observation. A unit may
+# enter activating/running after the first manager read but before this
+# launcher wins the lock; that transition still forbids replacement.
+state = manager_state()
+if state["active"] or state["starting"]:
+    fcntl.flock(operation_lock, fcntl.LOCK_UN)
+    os.close(operation_lock)
+    owner = manager_bound_owner(state)
+    observation = owner if owner is not None else launch_observation(state)
+    print("STADO_RECONCILE_OWNER\t" + json.dumps(
+        observation, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
+
 lock_info = os.fstat(operation_lock)
 intent = {
     "schema": "stado.storage-root-launch.v1",
