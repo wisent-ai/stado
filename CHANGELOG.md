@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.16.23
 
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
+- **Object API recovery:** loaded process identity, storage root, and authenticated reads determine readiness, rather than the plist alone. Recovery shares the storage-handoff lock and refuses to change authority; `host storage-root-reconcile` remains the single snapshot, copy, and rollback implementation.
+- **Runtime storage identity:** `/api/state.json` reports the serving PID, version, backend, and local root. Direct-primary requirements and primary-only registry reads are preserved.
+- **Service archives:** extraction is staged beside an installed version, the declared executable must exist before activation, existing immutable contents remain intact, and `current` changes atomically. Replaying the active archive preserves the existing no-relink behavior.
 
 ## 0.16.22
 

@@ -32,6 +32,7 @@ pub struct JobStorage {
     backend: Arc<dyn BlobBackend>,
     backend_name: String,
     bucket_name: String,
+    local_path: Option<Arc<str>>,
     /// Where the last bounded claimable-scan stopped in the priority index.
     ///
     /// Reachability, and nothing else. A budgeted scan that always restarted
@@ -360,7 +361,9 @@ impl JobStorage {
         )
         .await?;
 
-        let storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
+        let mut storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
+        storage.local_path =
+            (adapter == StorageAdapter::Local).then(|| Arc::from(config::wc_local_storage_path()));
         storage.ensure_layout().await?;
         storage.with_configured_read_failover(read_mode).await
     }
@@ -456,6 +459,7 @@ impl JobStorage {
             backend,
             backend_name: backend_name.into(),
             bucket_name: bucket_name.into(),
+            local_path: None,
             scan_cursor: Arc::new(std::sync::Mutex::new(String::new())),
         }
     }
@@ -476,6 +480,12 @@ impl JobStorage {
         if let Ok(mut slot) = self.scan_cursor.lock() {
             *slot = cursor;
         }
+    }
+
+    /// The local root supplied when this facade constructed its backend.
+    /// Custom backends do not claim a location they did not disclose.
+    pub(crate) fn local_storage_path(&self) -> Option<&str> {
+        self.local_path.as_deref()
     }
 
     /// Configured storage backend name ("gcs" / "local").
