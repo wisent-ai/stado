@@ -1469,10 +1469,15 @@ async fn converge_native_readers(
     let outcome = host_channel::run_script(&reader_target, &script, runner).await;
     let (status, detail) = match outcome {
         Ok(output) if output.ok() => (COMPLETED, output.stdout.trim().to_string()),
-        Ok(output) => (
-            FAILED,
-            host_channel::last_error_line(&output, "native reader convergence failed"),
-        ),
+        Ok(output) => {
+            let captured = json!({
+                "operation": "native_reader_convergence",
+                "exit_code": output.code,
+                "stderr": output.stderr.trim(),
+                "stdout": output.stdout.trim(),
+            });
+            (FAILED, captured.to_string())
+        }
         Err(error) => (FAILED, error.to_string()),
     };
     pass.releases.push(Released {

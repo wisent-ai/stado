@@ -1404,6 +1404,7 @@ async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
 /// checked install, relink, declared lifecycle, and kernel-image verification.
 async fn converge_service_local_stado_readers(
     context: &str,
+    executable: &Path,
     archive: &Path,
 ) -> Result<(), CmdError> {
     let registry = super::registry::read_registry().await?;
@@ -1431,17 +1432,18 @@ async fn converge_service_local_stado_readers(
             )));
         }
     }
-    let executable = std::env::current_exe().map_err(|error| {
-        CmdError::click(format!(
-            "{context}: cannot resolve the candidate Stado executable: {error}"
-        ))
-    })?;
+    if !executable.is_file() {
+        return Err(CmdError::click(format!(
+            "{context}: installed Stado executable {} is unavailable",
+            executable.display()
+        )));
+    }
     for reader in readers {
         println!(
             "{context}: converging service-local Stado reader {} on {}",
             reader, target.name
         );
-        let output = tokio::process::Command::new(&executable)
+        let output = tokio::process::Command::new(executable)
             .args([
                 "service",
                 "update",
@@ -1464,19 +1466,71 @@ async fn converge_service_local_stado_readers(
         print!("{stdout}");
         eprint!("{stderr}");
         if !output.status.success() {
-            let detail = stderr
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty())
-                .or_else(|| stdout.lines().rev().find(|line| !line.trim().is_empty()))
-                .unwrap_or("service update returned no detail");
+            let captured_stdout = serde_json::from_str::<Value>(stdout.trim())
+                .unwrap_or_else(|_| json!(stdout.trim()));
+            let captured = json!({
+                "exit_code": output.status.code(),
+                "stderr": stderr.trim(),
+                "stdout": captured_stdout,
+            });
             return Err(CmdError::click(format!(
-                "{context}: service-local Stado reader {reader} on {} did not converge: {detail}",
+                "{context}: service-local Stado reader {reader} on {} did not converge: {captured}",
                 target.name
             )));
         }
     }
     Ok(())
+}
+
+/// Compare an installed executable with the already-verified archive payload
+/// without allocating a second copy of either file.
+fn regular_file_matches(path: &Path, expected: &[u8]) -> Result<bool, CmdError> {
+    use std::io::Read as _;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "cannot inspect installed executable {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    if !metadata.file_type().is_file() || metadata.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Ok(false);
+        }
+    }
+    let mut installed = std::fs::File::open(path).map_err(|error| {
+        CmdError::click(format!(
+            "cannot read installed executable {}: {error}",
+            path.display()
+        ))
+    })?;
+    let mut offset = 0usize;
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let count = installed.read(&mut buffer).map_err(|error| {
+            CmdError::click(format!(
+                "cannot compare installed executable {}: {error}",
+                path.display()
+            ))
+        })?;
+        if count == 0 {
+            return Ok(offset == expected.len());
+        }
+        let end = offset + count;
+        if expected.get(offset..end) != Some(&buffer[..count]) {
+            return Ok(false);
+        }
+        offset = end;
+    }
 }
 
 /// Verify the delivered archive against the delivery contract's digest,
@@ -1614,21 +1668,25 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         None
     };
     let destination = directory.join(&name);
-    if destination.exists() {
-        let stamp = chrono::Utc::now().format("%Y%m%d");
-        let backup = directory.join(format!("{name}.release-backup-{stamp}"));
-        if !backup.exists() {
-            std::fs::copy(&destination, &backup)
-                .map_err(|error| CmdError::click(format!("cannot back up {name}: {error}")))?;
-        }
-    }
+    let root_already_current = regular_file_matches(&destination, &content)?;
     let staged = directory.join(format!("{name}.release-incoming"));
-    std::fs::write(&staged, &content)
-        .map_err(|error| CmdError::click(format!("cannot stage {name}: {error}")))?;
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
-            .map_err(|error| CmdError::click(format!("cannot mark {name} executable: {error}")))?;
+    if !root_already_current {
+        if destination.exists() {
+            let stamp = chrono::Utc::now().format("%Y%m%d");
+            let backup = directory.join(format!("{name}.release-backup-{stamp}"));
+            if !backup.exists() {
+                std::fs::copy(&destination, &backup)
+                    .map_err(|error| CmdError::click(format!("cannot back up {name}: {error}")))?;
+            }
+        }
+        std::fs::write(&staged, &content)
+            .map_err(|error| CmdError::click(format!("cannot stage {name}: {error}")))?;
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
+                |error| CmdError::click(format!("cannot mark {name} executable: {error}")),
+            )?;
+        }
     }
     // Leave the receipt the fleet's provenance check reads, before the
     // install replaces the name.
@@ -1659,13 +1717,21 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         crate::self_update::platform_triple_short(),
     ) {
         (Some(version), Ok(platform)) => {
-            if let Err(error) =
-                crate::self_update::stage_for_attestation(&name, &version, platform, &staged)
-            {
+            let attestation_source = if root_already_current {
+                &destination
+            } else {
+                &staged
+            };
+            if let Err(error) = crate::self_update::stage_for_attestation(
+                &name,
+                &version,
+                platform,
+                attestation_source,
+            ) {
                 println!(
-                    "release install-local: {name} {version} installed but its attestation copy \
-                     could not be staged, so `stado service converge` will read it as \
-                     unattested: {error}"
+                    "release install-local: {name} {version} root bytes are verified but its \
+                     attestation copy could not be staged, so `stado service converge` will \
+                     read it as unattested: {error}"
                 );
             }
         }
@@ -1678,8 +1744,10 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
              attestation copy was staged for {name}"
         ),
     }
-    std::fs::rename(&staged, &destination)
-        .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
+    if !root_already_current {
+        std::fs::rename(&staged, &destination)
+            .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
+    }
     if let Some(staged_version) = release_version_stage {
         let installed_version = directory.join("stado.release-version");
         std::fs::rename(&staged_version, &installed_version).map_err(|error| {
@@ -1704,22 +1772,36 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
     // running every minute the whole way down.
     //
     // In place, and never the agent: see `self_update::recycle_replaced_units`.
-    let mut recycle_log = |message: &str| println!("{message}");
-    crate::self_update::recycle_replaced_units(
-        "release install-local",
-        &directory,
-        std::slice::from_ref(&name),
-        &mut recycle_log,
-    )
-    .await
-    .map_err(CmdError::click)?;
-    if stado_version.is_some() {
-        converge_service_local_stado_readers("release install-local", &reader_archive).await?;
+    if !root_already_current {
+        let mut recycle_log = |message: &str| println!("{message}");
+        crate::self_update::recycle_replaced_units(
+            "release install-local",
+            &directory,
+            std::slice::from_ref(&name),
+            &mut recycle_log,
+        )
+        .await
+        .map_err(CmdError::click)?;
     }
-    println!(
-        "installed {} from the delivered release archive",
-        destination.display()
-    );
+    if stado_version.is_some() {
+        converge_service_local_stado_readers(
+            "release install-local",
+            &destination,
+            &reader_archive,
+        )
+        .await?;
+    }
+    if root_already_current {
+        println!(
+            "verified {} already matches the delivered release archive",
+            destination.display()
+        );
+    } else {
+        println!(
+            "installed {} from the delivered release archive",
+            destination.display()
+        );
+    }
     Ok(())
 }
 /// Reconcile every live reader of one already-installed native binary.
@@ -1765,8 +1847,9 @@ async fn converge_local_readers(args: &ReleaseConvergeLocalReadersArgs) -> Resul
         )));
     }
 
+    let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
+    let executable = directory.join(&args.name);
     if !args.skip_global {
-        let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
         let mut log = |message: &str| println!("{message}");
         crate::self_update::recycle_replaced_units(
             "release converge-local-readers",
@@ -1777,8 +1860,12 @@ async fn converge_local_readers(args: &ReleaseConvergeLocalReadersArgs) -> Resul
         .await
         .map_err(CmdError::click)?;
     }
-    converge_service_local_stado_readers("release converge-local-readers", args.archive.as_path())
-        .await
+    converge_service_local_stado_readers(
+        "release converge-local-readers",
+        &executable,
+        args.archive.as_path(),
+    )
+    .await
 }
 
 /// Claim an immutable release coordinate before publication.
