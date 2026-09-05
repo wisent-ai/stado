@@ -514,10 +514,9 @@ pub(crate) fn stage_for_attestation(
 /// freed zero bytes across all of them, and the volume reached 100% with a
 /// janitor running every minute the whole way down.
 ///
-/// In place only. `launchctl kickstart -k` and `systemctl --user try-restart`
-/// replace the process without unloading the unit, so there is no window in
-/// which the job does not exist. The unload-and-bootstrap sequence took the
-/// always-on host down once already and is deliberately not reached from here.
+/// Prefer an in-place restart. A launchd definition whose program changed must
+/// be reloaded in its observed owner domain; a kick would reuse the stale argv.
+/// Both paths verify the resulting kernel image before delivery can succeed.
 ///
 /// A failed reader refresh fails delivery even though the binary has already
 /// been installed. Retrying delivery must finish the runtime half rather than
@@ -662,11 +661,13 @@ async fn recycle_launchd(
                 unit.loaded_domains.len()
             ));
         }
-        let service = crate::deploy::service::kickstart_local_unit(
+        let service = crate::deploy::service::restart_local_unit(
+            target,
             &unit.label,
             &unit.path,
             Some(&unit.loaded_domains[0]),
         )
+        .await
         .map_err(|error| {
             format!(
                 "{context}: {} was executing the replaced {program} and could not be restarted \
@@ -695,8 +696,8 @@ async fn recycle_launchd(
             ));
         }
         log_fn(&format!(
-            "{context}: restarted {service} in place; pid {pid} was running the replaced \
-             {program}, and pid {current_pid} now executes the installed inode"
+            "{context}: reconciled {service}; pid {pid} was running a different image, \
+             and pid {current_pid} now executes the installed inode at {program}"
         ));
         restarted += 1;
     }

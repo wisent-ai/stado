@@ -1090,7 +1090,7 @@ pub(crate) async fn revisit_once(
         &pick,
         AttemptOutcome::Attempting,
         &attempted_at,
-        "about to issue launchctl kickstart -k".to_string(),
+        "about to reconcile the observed launchd unit".to_string(),
     )
     .map_err(|error| {
         format!(
@@ -1100,7 +1100,7 @@ pub(crate) async fn revisit_once(
         )
     })?;
     let (outcome, service_target) =
-        match service::kickstart_local_unit(&pick.unit, &pick.unit_path, None) {
+        match service::restart_local_unit(target, &pick.unit, &pick.unit_path, None).await {
             Ok(service_target) => {
                 let after = settle(target, target_name, &pick.unit, pick.pid).await;
                 (
