@@ -1471,10 +1471,15 @@ pub fn marker_values<'a>(markers: &'a [(String, String)], key: &str) -> Vec<&'a 
 
 /// What went wrong in a program that did not finish.
 ///
-/// The last marker it managed to emit, which is always the one that decided
-/// to exit, falling back to the transport's own last word when the program
-/// never spoke at all.
+/// The remote program's stderr is its diagnostic channel. Keep its last line
+/// whenever one exists; a final progress marker such as `status failed` says
+/// only that the phase failed and must not replace the captured cause. The
+/// last marker remains the fallback for scripts that reported no stderr, and
+/// the transport fallback covers commands that produced neither.
 fn step_failure(markers: &[(String, String)], output: &CommandOutput) -> String {
+    if !output.stderr.trim().is_empty() {
+        return host_channel::last_error_line(output, "ssh failed");
+    }
     match markers.last() {
         Some((key, value)) => format!("{key} {value}"),
         None => host_channel::last_error_line(output, "ssh failed"),
