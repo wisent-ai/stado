@@ -568,15 +568,6 @@ const FIGMA_EXPORT_LOG_STAT: &[&str] = &[
 
 /// Total allocated KiB below the manual Figma export's fixed work tree.
 const FIGMA_EXPORT_WORK_TREE_SIZE: &[&str] = &["/usr/bin/du", "-sk", ".stado/work/figma-export"];
-/// Metadata for root's Cargo toolchain root and the complete membership of
-/// its binary directory.
-///
-/// `-d` keeps the first read on the `.cargo` directory entry itself, so a
-/// symlink is rendered with its target. `-a` makes the second read a complete
-/// directory inventory. Numeric ownership is stable across account names,
-/// and neither command opens file contents.
-const ROOT_CARGO_METADATA: &[&str] = &["/bin/ls", "-ldn", "/root/.cargo"];
-const ROOT_CARGO_BIN_METADATA: &[&str] = &["/bin/ls", "-lan", "/root/.cargo/bin"];
 
 /// Allocated size and open-file census for the two tagged Cargo trees that
 /// dominate the MacBook's cleanup inventory. Both roots are fixed: an
@@ -931,110 +922,6 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               work tree, and the command writes nothing",
     },
     ApprovedCommand {
-        argv: ROOT_CARGO_METADATA,
-        why: "reports root's fixed Cargo directory entry with type, mode, numeric uid and gid, \
-              size, timestamp, and symlink target without dereferencing it. The absolute path \
-              and portable ls flags are compile-time constants, so no operator-supplied path \
-              reaches the host and no file contents are opened",
-    },
-    ApprovedCommand {
-        argv: ROOT_CARGO_BIN_METADATA,
-        why: "lists the complete membership of root's fixed Cargo bin directory, including \
-              hidden entries, with type, mode, numeric uid and gid, size, timestamp and \
-              symlink targets. The absolute path and portable ls flags are compile-time \
-              constants, so no operator-supplied path reaches the host and no file contents \
-              are opened",
-    },
-    ApprovedCommand {
-        argv: &["/bin/ls", "--version"],
-        why: "prints the installed /bin/ls implementation and version without reading a \
-              directory or changing filesystem state; both the executable and its sole \
-              informational flag are fixed",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/file", "-L", "/bin/ls"],
-        why: "reports the fixed /bin/ls target's executable format while dereferencing only \
-              that source-fixed path; it does not execute the binary, accept an operator path, \
-              or change filesystem state",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/readlink", "-f", "/bin/ls"],
-        why: "resolves only the fixed /bin/ls path to the installed file whose package record \
-              must be queried; it accepts no operator path and changes no link or file",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--search", "/usr/bin/gnuls"],
-        why: "asks Ubuntu's installed-package database which package records the fixed file \
-              /bin/ls actually resolves to; it verifies no bytes, installs nothing, and accepts \
-              no operator path",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--search", "/usr/bin/ls"],
-        why: "asks Ubuntu's installed-package database which package records the standard ls \
-              path, for comparison with the resolved gnuls path; it verifies no bytes, installs \
-              nothing, and every argument is fixed",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--show", "coreutils"],
-        why: "reads the installed coreutils package name and version from Ubuntu's package \
-              database without verifying files, changing package state, or accepting a package \
-              selected by the operator",
-    },
-    ApprovedCommand {
-        argv: &[
-            "/usr/bin/grep",
-            "usr/bin/ls",
-            "/var/lib/dpkg/info/coreutils.md5sums",
-        ],
-        why: "reads only the standard ls entry from coreutils' fixed package-recorded checksum \
-              file; both the literal match and file path are fixed, and no installed file is \
-              verified or changed",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--status", "gnu-coreutils"],
-        why: "reads the installed gnu-coreutils package's recorded status, source metadata and \
-              description without verifying files, changing package state, or accepting an \
-              operator-selected package",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--status", "coreutils-from-gnu"],
-        why: "reads the installed coreutils-from-gnu package's recorded status, source metadata \
-              and description without verifying files, changing package state, or accepting an \
-              operator-selected package",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--listfiles", "gnu-coreutils"],
-        why: "lists only the paths the installed gnu-coreutils package records as its own; the \
-              package is fixed in source, and the query neither opens their contents nor changes \
-              package state",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/dpkg-query", "--listfiles", "coreutils-from-gnu"],
-        why: "lists only the paths the installed coreutils-from-gnu package records as its own; \
-              the package is fixed in source, and the query neither opens their contents nor \
-              changes package state",
-    },
-    ApprovedCommand {
-        argv: &[
-            "/usr/bin/grep",
-            "usr/bin/gnuls",
-            "/var/lib/dpkg/info/gnu-coreutils.md5sums",
-        ],
-        why: "reads only the gnuls entry from gnu-coreutils' fixed package-recorded checksum \
-              file; both the literal match and file path are fixed, and no installed file is \
-              verified or changed",
-    },
-    ApprovedCommand {
-        argv: &[
-            "/usr/bin/grep",
-            "usr/bin/ls",
-            "/var/lib/dpkg/info/coreutils-from-gnu.md5sums",
-        ],
-        why: "reads only the ls entry from coreutils-from-gnu's fixed package-recorded checksum \
-              file; both the literal match and file path are fixed, and no installed file is \
-              verified or changed",
-    },
-    ApprovedCommand {
         argv: JOB_PROGRESS_TARGET_SIZE,
         why: "reads allocated KiB below only the inactive job-progress probe's standard-tagged \
               Cargo target. The full host inventory times out before it reports this managed \
@@ -1126,12 +1013,6 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
     ApprovedCommand {
         argv: &["/usr/bin/id"],
         why: "prints the login user's uid, gid and groups; takes no argument and writes nothing",
-    },
-    ApprovedCommand {
-        argv: &["/usr/bin/getent", "passwd", "root"],
-        why: "reads root's public account record, including its configured home and login shell, \
-              from the system account database; it does not read the shadow password database \
-              and every lookup word is fixed",
     },
     ApprovedCommand {
         argv: &["/bin/date", "-u"],
