@@ -35,6 +35,14 @@ enum StadoCLIError: LocalizedError, Sendable {
 /// The executable is resolved once and remembered: an app launched from Finder
 /// inherits a four-entry PATH, so the search has to include the places the
 /// installers actually write to.
+/// A decoded JSON answer together with the CLI process verdict that produced
+/// it. Some commands intentionally print a complete document before exiting
+/// non-zero, so consumers that perform mutations must be able to retain both.
+struct StadoCLIJSONResult<Value: Sendable>: Sendable {
+    let value: Value
+    let exitCode: Int32
+}
+
 actor StadoCLI {
     private let configuredExecutable: String?
     private var resolvedExecutable: URL?
@@ -59,6 +67,18 @@ actor StadoCLI {
         arguments: [String],
         timeoutSeconds: Int = 120
     ) async throws -> T {
+        try await jsonResult(type, arguments: arguments, timeoutSeconds: timeoutSeconds).value
+    }
+
+    /// Run one JSON command while retaining its process exit status.
+    ///
+    /// A valid payload is always returned, including for a non-zero exit. Only
+    /// an absent or malformed payload falls back to the CLI refusal.
+    nonisolated func jsonResult<T: Decodable & Sendable>(
+        _ type: T.Type,
+        arguments: [String],
+        timeoutSeconds: Int = 120
+    ) async throws -> StadoCLIJSONResult<T> {
         let executable = try await executableURL()
         let completion = try await Self.capture(
             executable: executable,
@@ -66,7 +86,10 @@ actor StadoCLI {
             timeoutSeconds: timeoutSeconds
         )
         do {
-            return try JSONDecoder().decode(T.self, from: completion.output)
+            return StadoCLIJSONResult(
+                value: try JSONDecoder().decode(T.self, from: completion.output),
+                exitCode: completion.exitCode
+            )
         } catch {
             // No payload to read: now the exit status is the only answer there
             // is, and the CLI's own sentence is better than a decoding one.
@@ -90,6 +113,7 @@ actor StadoCLI {
     private struct Completion: Sendable {
         let output: Data
         let refusal: StadoCLIError?
+        let exitCode: Int32
     }
 
     private func executableURL() throws -> URL {
@@ -228,20 +252,22 @@ actor StadoCLI {
         process.waitUntilExit()
         drained.wait()
 
-        guard process.terminationStatus == 0 else {
+        let exitCode = process.terminationStatus
+        guard exitCode == 0 else {
             return Completion(
                 output: data,
                 refusal: refusal(
                     arguments: arguments,
-                    exitCode: process.terminationStatus,
+                    exitCode: exitCode,
                     stdout: data,
                     stderr: collected.text,
                     timedOut: invocation.didTimeOut,
                     timeoutSeconds: timeoutSeconds
-                )
+                ),
+                exitCode: exitCode
             )
         }
-        return Completion(output: data, refusal: nil)
+        return Completion(output: data, refusal: nil, exitCode: exitCode)
     }
 
     /// The sentence a non-zero exit refused with, in the CLI's own words.
