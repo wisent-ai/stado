@@ -1622,13 +1622,13 @@ struct ReleaseRow: Identifiable, Sendable {
 
 // MARK: - Typed host filesystem inventory
 
-/// `stado host inventory <target> --json`, narrowed to the fixed Cargo
-/// filesystem section the Hosts inspector renders.
+/// `GET /api/host/inventory?target=…`, narrowed to the fixed Cargo filesystem
+/// section the Hosts inspector renders.
 struct HostInventoryReport: Decodable, Sendable {
     let target: String
     let status: String
     let error: String?
-    let cargo: HostCargoInventory
+    let cargo: HostCargoInventory?
 }
 
 /// The managed account's `$HOME/.cargo` and fixed `bin` child.

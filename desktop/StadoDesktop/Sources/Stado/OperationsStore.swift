@@ -824,19 +824,42 @@ final class FleetServicesStore: ObservableObject {
 
 /// Live fixed-path filesystem inventory for the selected Hosts inspector row.
 ///
-/// Reads go through the product CLI's typed JSON client. One host is requested
-/// at a time: a full inventory reaches the target and must not become an
-/// implicit fleet-wide poll when the dashboard refreshes.
+/// Reads go through the dashboard's authenticated typed HTTP API. One host is
+/// requested at a time: a full inventory reaches the target and must not become
+/// an implicit fleet-wide poll when the dashboard refreshes.
 @MainActor
 final class HostInventoryStore: ObservableObject {
     @Published private(set) var cargoByHost: [String: HostCargoInventory] = [:]
     @Published private(set) var failures: [String: String] = [:]
     @Published private(set) var readingHosts: Set<String> = []
 
-    private let cli: StadoCLI
+    private let client: OperationsClient
+    private var addressString = DashboardEndpointPreference.localURL
+    private var authorizationToken: String?
+    private var requestGeneration = 0
 
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
+    init(client: OperationsClient = OperationsClient()) {
+        self.client = client
+    }
+
+    func configureAuthorization(token: String?) {
+        let next = token?.isEmpty == false ? token : nil
+        guard next != authorizationToken else { return }
+        requestGeneration &+= 1
+        authorizationToken = next
+        cargoByHost = [:]
+        failures = [:]
+        readingHosts = []
+    }
+
+    func configureEndpoint(_ endpoint: String?) {
+        let normalized = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard normalized != addressString else { return }
+        requestGeneration &+= 1
+        addressString = normalized
+        cargoByHost = [:]
+        failures = [:]
+        readingHosts = []
     }
 
     func cargo(for host: String) -> HostCargoInventory? {
@@ -851,30 +874,42 @@ final class HostInventoryStore: ObservableObject {
         readingHosts.contains(host)
     }
 
-    nonisolated static func inventoryArguments(host: String) -> [String] {
-        ["host", "inventory", host, "--json"]
-    }
-
     func refresh(host: String) async {
         guard !host.isEmpty, !readingHosts.contains(host) else { return }
+        guard let address = try? OperationsDashboardAddress(addressString) else {
+            failures[host] = "No Stado endpoint is configured, so the inventory was not read."
+            return
+        }
+        let generation = requestGeneration
         readingHosts.insert(host)
-        defer { readingHosts.remove(host) }
+        defer {
+            if requestGeneration == generation {
+                readingHosts.remove(host)
+            }
+        }
         do {
-            let report = try await cli.json(
-                HostInventoryReport.self,
-                arguments: Self.inventoryArguments(host: host)
+            let report = try await client.fetchHostInventory(
+                target: host,
+                from: address,
+                authorizationToken: authorizationToken
             )
+            guard requestGeneration == generation, !Task.isCancelled else { return }
             guard report.target == host else {
                 failures[host] = "inventory for \(host) answered for \(report.target)"
                 return
             }
-            guard report.status == "inventory" else {
+            guard report.status == "inventory", let cargo = report.cargo else {
                 failures[host] = report.error ?? "\(host) did not complete its inventory"
                 return
             }
-            cargoByHost[host] = report.cargo
+            cargoByHost[host] = cargo
             failures.removeValue(forKey: host)
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
         } catch {
+            guard requestGeneration == generation else { return }
             failures[host] = Self.message(for: error)
         }
     }
