@@ -489,11 +489,18 @@ if phase == "status":
 
 
 def inventory(root, paths):
-    return [{
-        "path": relative,
-        "body": regular_identity(os.path.join(root, relative)),
-        "metadata": regular_identity(metadata_path(root, relative)),
-    } for relative in paths]
+    result = []
+    for relative in paths:
+        body_path = os.path.join(root, relative)
+        body = regular_identity(body_path)
+        if body is None:
+            raise FileNotFoundError(body_path)
+        result.append({
+            "path": relative,
+            "body": body,
+            "metadata": regular_identity(metadata_path(root, relative)),
+        })
+    return result
 
 
 def validate_inventory(root, objects, label):
@@ -517,12 +524,25 @@ def validate_complete_inventory(root, objects, label):
     actual_metadata = metadata_paths(root)
     if actual_metadata != expected_metadata:
         fail(label + " metadata namespace changed")
+def complete_physical_inventory(root):
+    paths = object_paths(root)
+    return paths, inventory(root, paths), physical_inventory(root)
+
+
+def live_preflight_inventory(root, label):
+    for _ in range(30):
+        try:
+            return complete_physical_inventory(root)
+        except FileNotFoundError:
+            time.sleep(0.2)
+    fail(label + " inventory kept changing during identity reads")
+
+
 def stable_checkpoint_inventory(root, label):
     previous = None
     for _ in range(30):
         try:
-            paths = object_paths(root)
-            candidate = (paths, inventory(root, paths), physical_inventory(root))
+            candidate = complete_physical_inventory(root)
         except FileNotFoundError:
             previous = None
             time.sleep(0.2)
@@ -573,17 +593,17 @@ def checkpoint_tree(source, destination, snapshot):
 
 
 if phase == "preflight":
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
-    backup_physical = physical_inventory(backup)
-    primary_physical = physical_inventory(primary)
+    backup_paths, backup_objects, backup_physical = live_preflight_inventory(
+        backup, "backup preflight")
+    primary_paths, primary_objects, primary_physical = live_preflight_inventory(
+        primary, "primary preflight")
     print("STADO_STORAGE_RECONCILE\t" + json.dumps({
         "schema": schema,
         "transaction": tx,
         "status": "observed",
         "observed_at": time.time(),
-        "backup_qualified": inventory(backup, backup_paths),
-        "primary_qualified": inventory(primary, primary_paths),
+        "backup_qualified": backup_objects,
+        "primary_qualified": primary_objects,
         "backup_physical": backup_physical,
         "primary_physical": primary_physical,
         "physical_snapshot_exclusions": [],
