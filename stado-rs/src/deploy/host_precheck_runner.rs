@@ -197,6 +197,15 @@ fn macos_installer(
             ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
             ("__RUNNER_LABELS__", profile.labels.to_string()),
             (
+                "__RESTART_REGISTERED__",
+                if profile.kind == PUBLISHER.kind {
+                    "1"
+                } else {
+                    "0"
+                }
+                .to_string(),
+            ),
+            (
                 "__ORGANIZATION_URL__",
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
             ),
@@ -2078,6 +2087,7 @@ expected=__SHA256__
 token=__TOKEN__
 runner_name=__RUNNER_NAME__
 runner_group=__RUNNER_GROUP__
+restart_registered=__RESTART_REGISTERED__
 runner_user=stado-precheck
 runner_root=/Users/Shared/stado-precheck-runner
 archive=$(mktemp)
@@ -2223,11 +2233,12 @@ root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent
 rm -f "$plist"
 if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
   if [ "$service_changed" -eq 1 ] ||
+     [ "$restart_registered" -eq 1 ] ||
      ! root launchctl print system/com.wisent.stado-precheck-runner |
        grep -F 'state = running' >/dev/null; then
-    # KeepAlive jobs can stop after repeated upstream failures while remaining
-    # loaded. Reconciliation must recover that state without requiring a
-    # separate manual service cycle.
+    # RunnerService can survive while Runner.Listener remains disconnected
+    # after resource pressure. A typed publisher reconciliation deliberately
+    # replaces that process; ordinary pre-check reconciliation stays no-op.
     root launchctl kickstart -k system/com.wisent.stado-precheck-runner
   fi
 else
