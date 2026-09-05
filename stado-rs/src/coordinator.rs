@@ -589,9 +589,7 @@ pub async fn run_tick(
     // on 2026-09-05 a missing Spis run manifest made launchd restart this
     // coordinator before it could reap a dead release worker on every tick.
     match fire_due_schedules(store, log, Utc::now()).await {
-        Ok(n_fired) if n_fired > 0 => {
-            log(&format!("schedules: fired {n_fired} due schedule(s)"))
-        }
+        Ok(n_fired) if n_fired > 0 => log(&format!("schedules: fired {n_fired} due schedule(s)")),
         Ok(_) => {}
         Err(error) => log(&format!(
             "schedules: reconciliation degraded; continuing queue recovery: {error}"
@@ -630,10 +628,7 @@ pub async fn run_tick(
             "lease-reaper: completed {} release job(s) from durable output, requeued {} \
              phantom job(s), failed {} on second expiry, cleared {} silent-worker \
              assignment(s)",
-            reaped.release_completions,
-            reaped.requeued,
-            reaped.failed,
-            reaped.assignments_cleared
+            reaped.release_completions, reaped.requeued, reaped.failed, reaped.assignments_cleared
         ));
     }
     let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {

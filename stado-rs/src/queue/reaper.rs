@@ -247,10 +247,11 @@ async fn verified_release_completion(
         && inputs_match
         && receipt.status == crate::release_pipeline::StepStatus::Passed
         && receipt.build.status == crate::release_pipeline::StepStatus::Passed
-        && receipt
-            .quality
-            .iter()
-            .all(|step| step.status == crate::release_pipeline::StepStatus::Passed)
+        && receipt.build.exit_code == Some(0)
+        && receipt.failure.is_none()
+        && receipt.quality.iter().all(|step| {
+            step.status == crate::release_pipeline::StepStatus::Passed && step.exit_code == Some(0)
+        })
         && started.is_some_and(|started| completed >= started)
         && completed <= now;
     if !identity_matches {
