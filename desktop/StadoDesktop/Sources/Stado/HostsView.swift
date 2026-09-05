@@ -31,6 +31,13 @@ private struct HostConnectionPathsTarget: Identifiable {
     var id: String { host }
 }
 
+/// The selected registry target whose durable storage transaction is shown.
+private struct StorageReconciliationTarget: Identifiable {
+    let host: String
+
+    var id: String { host }
+}
+
 struct HostsView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var fleetStore: FleetControlStore
@@ -43,6 +50,7 @@ struct HostsView: View {
     /// Read on demand for the selected host: what that machine dials for each
     /// service, and whether the fleet declares that address.
     @StateObject private var forwardStore = HostForwardStore()
+    @StateObject private var reconciliationStore = StorageReconciliationStore.shared
     /// Which vault the selected host's credential operations resolve to, and
     /// whether that host can resolve one at all.
     @StateObject private var vaultStore = HostVaultStore()
@@ -62,6 +70,7 @@ struct HostsView: View {
     @State private var reclaimTarget: HostReclaimTarget?
 
     @State private var connectionPathsTarget: HostConnectionPathsTarget?
+    @State private var reconciliationTarget: StorageReconciliationTarget?
     var body: some View {
         WisentScreen(
             title: "Hosts",
@@ -162,6 +171,9 @@ struct HostsView: View {
                 store: connectionPathStore,
                 refresh: { await linkStore.refresh(hosts: [target.host]) }
             )
+        }
+        .sheet(item: $reconciliationTarget) { target in
+            StorageReconciliationSheet(host: target.host, store: reconciliationStore)
         }
     }
 
@@ -492,6 +504,17 @@ struct HostsView: View {
                     WisentField(label: "Availability", value: host.availabilityReason)
                 }
                 policySection(for: host)
+                WisentActionButton(
+                    action: WisentAction(
+                        "Reconcile storage roots…",
+                        symbol: "externaldrive",
+                        kind: .secondary,
+                        isEnabled: !reconciliationStore.isRunning
+                    ) {
+                        let target = host.targetName ?? host.displayName
+                        reconciliationTarget = StorageReconciliationTarget(host: target)
+                    }
+                )
             }
         } else {
             WisentInspector(eyebrow: "Selection", title: "No host selected") {
