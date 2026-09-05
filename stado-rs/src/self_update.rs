@@ -735,17 +735,14 @@ async fn recycle_systemd(
             "--no-legend",
             "--plain",
         ]);
-        let Some(listing) = command_stdout("systemctl", &list_args).await else {
-            if user {
-                log_fn(&format!(
-                    "{context}: no user systemd manager is available; that scope holds no running reader"
-                ));
-                continue;
-            }
-            return Err(format!(
-                "{context}: system systemd manager did not enumerate running services"
-            ));
-        };
+        let listing = command_stdout("systemctl", &list_args)
+            .await
+            .ok_or_else(|| {
+                format!(
+                    "{context}: {} systemd manager did not enumerate running services",
+                    if user { "user" } else { "system" }
+                )
+            })?;
         for line in listing.lines() {
             let Some(unit) = line.split_whitespace().next() else {
                 continue;
