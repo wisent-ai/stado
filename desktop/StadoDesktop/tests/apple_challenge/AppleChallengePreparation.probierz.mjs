@@ -38,7 +38,7 @@ function reportItemPattern(name, value) {
 function exactRefusal(view) {
   const lines = view.tree.split('\n');
   const marker = lines.findIndex((line) => (
-    line.includes('Apple code capture was not prepared')
+    line.includes('Apple code capture is unavailable')
     || /AX\w*Button \(Dismiss\)/.test(line)
   ));
   const start = marker < 0 ? Math.max(0, lines.length - 30) : Math.max(0, marker - 16);
@@ -54,7 +54,6 @@ function addFailure(current, error, context) {
 
 export function runAppleChallengePreparationJourney({
   assertField,
-  buttons,
   click,
   createEvidence,
   dumpWindows,
@@ -120,7 +119,7 @@ export function runAppleChallengePreparationJourney({
     );
     click(app.pid, app.windowId, matchingRows[0].label);
 
-    const selected = waitForScreen(
+    waitForScreen(
       app.pid,
       app.windowId,
       (tree) => tree.includes('Apple code capture') && tree.includes(expectedCommand),
@@ -128,6 +127,22 @@ export function runAppleChallengePreparationJourney({
     );
     const selectedEvidence = evidence.capture(app.pid, app.windowId, 'selected-host');
     assert.equal(assertField(selectedEvidence, 'Command'), expectedCommand);
+    click(app.pid, app.windowId, 'Read Apple readiness');
+    waitForScreen(
+      app.pid,
+      app.windowId,
+      (tree) => (
+        tree.includes(`Apple code capture status read on ${host}`)
+        || /AX\w*Button \(Dismiss\)/.test(tree)
+      ),
+      PREPARATION_MS,
+    );
+    const readiness = evidence.capture(app.pid, app.windowId, 'readiness-report');
+    assert.ok(
+      readiness.tree.includes(`Apple code capture status read on ${host}`),
+      `Stado Desktop refused the read-only readiness request:\n${exactRefusal(readiness)}`,
+    );
+    assert.equal(assertField(readiness, 'Reported host'), host);
 
 
     click(app.pid, app.windowId, 'Prepare Apple code capture');
@@ -136,8 +151,9 @@ export function runAppleChallengePreparationJourney({
       app.windowId,
       (tree) => (
         tree.includes(`Apple code capture is ready on ${host}`)
-        || tree.includes('Apple code capture was not prepared')
-        || /AX\w*Button \(Dismiss\)/.test(tree)
+        || tree.includes('Apple code capture is unavailable')
+        || (/AX\w*Button \(Dismiss\)/.test(tree)
+          && !tree.includes(`Apple code capture status read on ${host}`))
       ),
       PREPARATION_MS,
     );

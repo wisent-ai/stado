@@ -180,6 +180,35 @@ async fn apple_only_preparation_preserves_other_gui_state_and_works_through_the_
         .await
         .expect("read actual API readiness");
     assert_eq!(health.status(), reqwest::StatusCode::OK);
+    let response = http
+        .post(format!("{endpoint}/api/operator/run"))
+        .header("X-Stado-Action", "operator-command")
+        .json(&json!({
+            "args": ["host", "gui-automation", "status", &target, "--json"],
+            "timeout_seconds": 300
+        }))
+        .send()
+        .await
+        .expect("read real Apple readiness without mutation confirmation");
+    let status_code = response.status();
+    let body = response
+        .text()
+        .await
+        .expect("retain API readiness response");
+    eprintln!("API READINESS HTTP {status_code}\n{body}");
+    assert_eq!(status_code, reqwest::StatusCode::OK);
+    let result: Value = serde_json::from_str(&body).expect("decode API readiness result");
+    assert_eq!(result["exit_code"], 0, "{result}");
+    let observed: Report =
+        serde_json::from_str(result["stdout"].as_str().expect("capture readiness stdout"))
+            .expect("decode the actual host readiness receipt");
+    observed.assert_ready(&target);
+    assert_eq!(
+        observed.state(),
+        after_cli.state(),
+        "the read-only Desktop API changed observed host state"
+    );
+
     let args = [
         "host",
         "gui-automation",

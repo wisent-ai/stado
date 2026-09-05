@@ -543,6 +543,19 @@ struct HostsView: View {
             detail: "Prepares the signed Apple helper in the registry-bound macOS session. It leaves CuaDriver unchanged and does not sign in to Apple."
         ) {
             WisentField(
+                label: "Read-only command",
+                value: StadoCLI.commandLine(FleetControlStore.appleChallengeStatusArguments(host: target))
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Read Apple readiness",
+                    symbol: "arrow.clockwise",
+                    isEnabled: !fleetStore.appleChallengeMutation.isWorking
+                ) {
+                    Task { await fleetStore.readAppleChallenge(host: target) }
+                }
+            )
+            WisentField(
                 label: "Command",
                 value: StadoCLI.commandLine(FleetControlStore.appleChallengeArguments(host: target))
             )
@@ -570,7 +583,7 @@ struct HostsView: View {
                     if let error = receipt.error {
                         WisentAlertPanel(
                             tone: .warning,
-                            title: "Apple code capture was not prepared",
+                            title: "Apple code capture is unavailable",
                             detail: error
                         )
                     }

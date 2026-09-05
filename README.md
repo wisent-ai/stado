@@ -58,6 +58,10 @@ decides where and when to run it, then records what happened.
 
 - a provider-neutral queue and job lifecycle;
 - local workers on registered workstations and servers;
+- prompt-free preparation and observed readiness of the signed Apple code-capture
+  helper on a registered Mac, through both the CLI and the native Hosts screen;
+  [Apple preparation](https://stado.wisent.com/docs/desktop#prepare-apple-code-capture)
+  documents the separate read-only and `--apple-only` actions;
 - local filesystem queue/storage as the stable 0.5 execution path;
 - GCS, S3, and Azure Blob queue/storage adapters released as preview until
   their release-scoped live sandbox suites pass;
@@ -71,8 +75,9 @@ decides where and when to run it, then records what happened.
   references;
 - cost, capacity, quota, inventory, health, and ownership evidence where the
   selected provider adapter declares support;
-- a human CLI, versioned machine JSON interface, dashboard, and read-only MCP
-  interface;
+- a human CLI, versioned machine JSON interface, native macOS Desktop, and
+  read-only MCP interface; Desktop uses `WisentDesignSystem` from
+  `wisent-ai/wisent-components` for its visual tokens and SwiftUI primitives;
 - a loopback mobile-egress proxy whose upstream sockets are pinned to a named
   tether interface and whose process lifecycle is managed as a Stado service.
 
@@ -89,10 +94,6 @@ decides where and when to run it, then records what happened.
 - Local hosts are attached and scheduled; Stado does not provision physical
   machines or install their operating systems, GPU drivers, or workload
   runtimes.
-- The Swift desktop application is not a required 0.5 operations interface.
-  The CLI, machine API, dashboard, and MCP contracts are canonical.
-  Its visual tokens and reusable SwiftUI primitives come from
-  `wisent-ai/wisent-components` through `WisentDesignSystem`.
 - Stado does not make an optional provider, alert channel, dashboard identity
   provider, or artifact service mandatory for local execution.
 
