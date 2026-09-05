@@ -4,7 +4,9 @@
 
 - **Linux release readers:** a system-scoped queue worker now addresses its owner's user systemd manager with the same runtime directory and bus address as service operations. Release installation can refresh the running user resolver instead of failing to enumerate it after replacing the binary.
 - **Failure reporting:** failed systemd reader operations retain the command's exit status and stderr; delivery still fails unless each replaced reader maps the installed executable.
-- **Migration and rollback:** no stored data changes. Rolling back restores dependence on inherited login-session variables during Linux release delivery.
+- **Canonical archive layout:** both native recipes now stage `stado` at the archive root, matching the existing release workflow and declared `current/darwin-arm/stado` readers. The candidate bootstrap and all three host installers consume that same member; private services no longer need a differently packed archive.
+- **Existing native journeys:** build qualification checks the completed artifact without requiring a fleeting queued state. Stale-lock qualification retains its filesystem and persisted-outcome checks without assuming a policy mode before policy resolution; the integrated isolated registry fixture names its actual native platform.
+- **Migration and rollback:** no stored data changes. Rolling back restores inherited-login dependence during Linux delivery and the incompatible `bin/stado` layout of the earlier native pipeline; published coordinates are not rewritten.
 - **Platforms:** the existing signed `darwin-arm64` and `linux-amd64` build and delivery paths remain unchanged.
 
 ## 0.16.17
