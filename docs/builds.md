@@ -277,8 +277,6 @@ Run it by hand exactly as CI does:
 
 ```console
 $ bash scripts/quality_gate.sh --base origin/main
-platform: darwin-arm64
-.wisent-release.json declares 3 quality step(s) for darwin-arm64
 ```
 
 `--manifest` reads a different manifest and `--help` prints this contract. An
