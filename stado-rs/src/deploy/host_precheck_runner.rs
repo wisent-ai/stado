@@ -1983,9 +1983,11 @@ restart_registered=__RESTART_REGISTERED__
 runner_group=__RUNNER_GROUP__
 runner_user=stado-precheck
 runner_root=/opt/wisent/stado-precheck-runner
-archive=$(mktemp)
-token_file=$(mktemp)
-cleanup() { root rm -f "$archive" "$token_file"; }
+mkdir -p "$HOME/.stado/work"
+staging=$(mktemp -d "$HOME/.stado/work/runner-install.XXXXXX")
+archive=$(mktemp "$staging/archive.XXXXXX")
+token_file=$(mktemp "$staging/token.XXXXXX")
+cleanup() { root rm -f "$archive" "$token_file"; root rm -rf "$staging"; }
 trap cleanup EXIT HUP INT TERM
 
 if ! getent group "$runner_user" >/dev/null; then root /usr/sbin/groupadd --system "$runner_user"; fi
@@ -2044,7 +2046,7 @@ root chmod 555 "$runner_root/routes"
 root chmod 444 "$runner_root/routes/brama.url"
 root chmod 444 "$runner_root/routes/kronika-agent-id"
 
-hook=$(mktemp)
+hook=$(mktemp "$staging/hook.XXXXXX")
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
@@ -2053,7 +2055,7 @@ HOOK
 root install -o root -g root -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
 
-rules=$(mktemp)
+rules=$(mktemp "$staging/rules.XXXXXX")
 cat > "$rules" <<RULES
 table inet stado_precheck {
   chain output {
@@ -2077,7 +2079,7 @@ fi
 root systemctl enable nftables.service >/dev/null
 rm -f "$rules"
 
-unit=$(mktemp)
+unit=$(mktemp "$staging/unit.XXXXXX")
 cat > "$unit" <<UNIT
 [Unit]
 Description=Wisent isolated GitHub pre-check runner
@@ -2141,9 +2143,11 @@ runner_group=__RUNNER_GROUP__
 restart_registered=__RESTART_REGISTERED__
 runner_user=stado-precheck
 runner_root=/Users/Shared/stado-precheck-runner
-archive=$(mktemp)
-token_file=$(mktemp)
-cleanup() { root rm -f "$archive" "$token_file"; }
+mkdir -p "$HOME/.stado/work"
+staging=$(mktemp -d "$HOME/.stado/work/runner-install.XXXXXX")
+archive=$(mktemp "$staging/archive.XXXXXX")
+token_file=$(mktemp "$staging/token.XXXXXX")
+cleanup() { root rm -f "$archive" "$token_file"; root rm -rf "$staging"; }
 trap cleanup EXIT HUP INT TERM
 
 if ! dscl . -read /Groups/$runner_user >/dev/null 2>&1; then
@@ -2225,7 +2229,7 @@ root chmod 555 "$runner_root/routes"
 root chmod 444 "$runner_root/routes/brama.url"
 root chmod 444 "$runner_root/routes/kronika-agent-id"
 
-hook=$(mktemp)
+hook=$(mktemp "$staging/hook.XXXXXX")
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
@@ -2234,7 +2238,7 @@ HOOK
 root install -o root -g wheel -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
 
-anchor=$(mktemp)
+anchor=$(mktemp "$staging/anchor.XXXXXX")
 cat > "$anchor" <<RULES
 pass out quick proto tcp from any to 127.0.0.1 port __BRAMA_PORT__ user $runner_user
 block return out quick proto { tcp udp } from any to { __BLOCKED_NETWORKS__ } user $runner_user
@@ -2247,7 +2251,7 @@ rm -f "$anchor"
 service_changed=0
 if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
 
-launcher=$(mktemp)
+launcher=$(mktemp "$staging/launcher.XXXXXX")
 cat > "$launcher" <<LAUNCHER
 #!/bin/sh
 set -eu
@@ -2261,7 +2265,7 @@ fi
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"
 
-plist=$(mktemp)
+plist=$(mktemp "$staging/plist.XXXXXX")
 cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

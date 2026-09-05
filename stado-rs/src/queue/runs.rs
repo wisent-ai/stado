@@ -91,17 +91,21 @@ pub async fn read_run(
 ) -> Result<Option<Map<String, Value>>, StorageError> {
     crate::queue::submit::validate_run_id(run_id)
         .map_err(|error| StorageError::Other(error.to_string()))?;
-    let Some(versioned) = store
-        .read_text_versioned(&format!("{RUN_PREFIX}/{run_id}.json"))
-        .await?
-    else {
+    let path = format!("{RUN_PREFIX}/{run_id}.json");
+    let Some(versioned) = store.read_text_versioned(&path).await? else {
         return Ok(None);
     };
     let value: Value = serde_json::from_str(&versioned.content)?;
     let value = if value.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v2") {
-        crate::queue::submit::migrate_v2_run_manifest(store, run_id)
-            .await
-            .map_err(|error| StorageError::Other(error.to_string()))?
+        match crate::queue::submit::migrate_v2_run_manifest(store, run_id).await {
+            Ok(migrated) => migrated,
+            Err(crate::queue::submit::SubmitError::Storage(StorageError::NotFound(missing)))
+                if missing == path =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(StorageError::Other(error.to_string())),
+        }
     } else {
         value
     };

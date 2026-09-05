@@ -130,14 +130,32 @@ fn source_revision() -> String {
     }
 }
 
+fn compile_python(source: &Path, out_dir: &Path) {
+    println!("cargo:rerun-if-changed={}", source.display());
+    let cache = out_dir.join("python-cache");
+    std::fs::create_dir_all(&cache).expect("create the Python compilation cache");
+    let output = Command::new("python3")
+        .args(["-m", "py_compile"])
+        .arg(source)
+        .env("PYTHONPYCACHEPREFIX", &cache)
+        .output()
+        .expect("run the Python compiler for the embedded reconciliation program");
+    if !output.status.success() {
+        panic!(
+            "embedded reconciliation Python did not compile:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn main() {
+    let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
+    let out_dir = Path::new(&out_dir);
     let source = Path::new("..").join("deploy").join("join.sh");
     println!("cargo:rerun-if-changed={}", source.display());
     let script = std::fs::read_to_string(&source).unwrap_or_default();
-    let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
-    std::fs::write(Path::new(&out_dir).join("join.sh"), script)
-        .expect("write the embedded join script");
-
+    std::fs::write(out_dir.join("join.sh"), script).expect("write the embedded join script");
+    compile_python(Path::new("src/deploy/host_storage_reconcile.py"), out_dir);
     // Always set, in every build context, so the crate can read it with
     // `env!` and no consumer needs a fallback of its own.
     println!("cargo:rustc-env={REVISION_OVERRIDE}={}", source_revision());

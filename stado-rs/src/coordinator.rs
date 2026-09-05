@@ -679,19 +679,27 @@ pub async fn run_tick(
     }
     // By-run reaper: drop per-job blobs once a run is fully terminal so
     // completed/+failed/ stop accumulating thousands of orphaned records.
-    // Capped per tick to bound work on a large backlog.
-    let summary = reap_terminal_runs(store, config::RUN_REAP_PER_TICK).await?;
-    if summary.reaped_runs > 0 {
-        log(&format!(
-            "run-reaper: reaped {} run(s), deleted {} job blob(s)",
-            summary.reaped_runs, summary.deleted_jobs
-        ));
-    }
-    for refusal in &summary.refused_runs {
-        log(&format!(
-            "run-reaper: retained run {} without cleanup: {}",
-            refusal.run_id, refusal.reason
-        ));
+    // Capped per tick to bound work on a large backlog. Cleanup is not the
+    // scheduler: a manifest listed for cleanup can disappear between that
+    // listing and the cleanup reader's legacy-migration read. The race is
+    // reported, but it must not terminate the daemon after dispatch has
+    // completed and cause launchd to restart it in a tight loop.
+    match reap_terminal_runs(store, config::RUN_REAP_PER_TICK).await {
+        Ok(summary) => {
+            if summary.reaped_runs > 0 {
+                log(&format!(
+                    "run-reaper: reaped {} run(s), deleted {} job blob(s)",
+                    summary.reaped_runs, summary.deleted_jobs
+                ));
+            }
+            for refusal in &summary.refused_runs {
+                log(&format!(
+                    "run-reaper: retained run {} without cleanup: {}",
+                    refusal.run_id, refusal.reason
+                ));
+            }
+        }
+        Err(error) => log(&format!("run-reaper: cleanup degraded: {error}")),
     }
     if with_billing {
         // Billing-credits collector. Global (not per-provider), runs last

@@ -1451,21 +1451,39 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
             let status = report
                 .get("status")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+                .unwrap_or_default();
             let delivered = matches!(
-                status.as_str(),
+                status,
                 host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
             );
+            // `host release` reports host-side refusals as a structured
+            // `Ok(report)`, with any diagnostic in `error`. Reducing that
+            // report to its status discarded the only place a cause could be
+            // retained: historical trains printed only `detail: "failed"`,
+            // which does not establish whether the inner report had an error.
+            let detail = if delivered {
+                status.to_string()
+            } else {
+                report
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .filter(|detail| !detail.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        if status.is_empty() {
+                            String::from("the delivery reported neither a status nor an error")
+                        } else {
+                            format!(
+                                "delivery returned non-success status {status} without an error"
+                            )
+                        }
+                    })
+            };
             pass.releases.push(Released {
                 binary: row.binary.clone(),
                 version: row.declared.clone(),
                 status: if delivered { COMPLETED } else { FAILED },
-                detail: if status.is_empty() {
-                    String::from("the delivery reported no status")
-                } else {
-                    status
-                },
+                detail,
             });
         }
         Err(error) => pass.releases.push(Released {
