@@ -43,7 +43,6 @@ struct HostsView: View {
     /// Read on demand for the selected host: what that machine dials for each
     /// service, and whether the fleet declares that address.
     @StateObject private var forwardStore = HostForwardStore()
-    @StateObject private var appleChallengeStore = AppleChallengePreparationStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -545,22 +544,22 @@ struct HostsView: View {
         ) {
             WisentField(
                 label: "Command",
-                value: StadoCLI.commandLine(AppleChallengePreparationStore.arguments(host: target))
+                value: StadoCLI.commandLine(FleetControlStore.appleChallengeArguments(host: target))
             )
             WisentActionButton(
                 action: WisentAction(
                     "Prepare Apple code capture",
                     symbol: "key",
-                    isEnabled: !appleChallengeStore.mutation.isWorking
+                    isEnabled: !fleetStore.appleChallengeMutation.isWorking
                 ) {
-                    Task { await appleChallengeStore.prepare(host: target) }
+                    Task { await fleetStore.prepareAppleChallenge(host: target) }
                 }
             )
-            if appleChallengeStore.host == target {
-                WisentMutationBar(outcome: appleChallengeStore.mutation) {
-                    appleChallengeStore.clearMutation()
+            if fleetStore.appleChallengeHost == target {
+                WisentMutationBar(outcome: fleetStore.appleChallengeMutation) {
+                    fleetStore.clearAppleChallengeMutation()
                 }
-                if let receipt = appleChallengeStore.receipt {
+                if let receipt = fleetStore.appleChallengeReceipt {
                     WisentField(label: "Reported host", value: receipt.target)
                     WisentField(label: "Host-control destination", value: receipt.sshTarget)
                     ForEach(receipt.items.indices, id: \.self) { index in

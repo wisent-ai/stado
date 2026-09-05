@@ -482,8 +482,8 @@ enum Commands {
 
     /// Run the Stado API listener for the wisent-compute queue.
     ///
-    /// Serves the authenticated object, release, machine, service and
-    /// host-health routes plus the three enrollment routes over loopback
+    /// Serves native operator actions and the authenticated object, release,
+    /// machine, service, host-health and enrollment routes over loopback
     /// HTTP. It serves no HTML page; the operator workspace is Stado
     /// Desktop.
     ///
@@ -2683,7 +2683,12 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC, CuaDriver, and the signed
     /// Apple challenge helper for the registry-bound GUI user.
-    Status { target: String },
+    Status {
+        target: String,
+        /// Return the complete observed host state as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Configure the persistent GUI login, CuaDriver, the Apple challenge
     /// helper, runtime, and Accessibility grants.
     Enable { target: String },
@@ -3223,8 +3228,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
-                host::gui_automation_status(&target).await
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
+                host::gui_automation_status(&target, json).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
                 host::gui_automation_enable(&target).await

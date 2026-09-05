@@ -264,17 +264,26 @@ async fn drivable_session(
     binding: &IdentityBinding,
 ) -> Option<bool> {
     let declared = binding.user.as_deref()?;
+    let password = super::service::host_sudo_password(target).await.ok()?;
     let runner = crate::deploy::production_runner();
     if kind == APPLE_ACCOUNT {
         crate::deploy::host_gui_automation::apple_challenge_session_ready_for(
-            target, declared, &runner,
+            target,
+            declared,
+            password.as_deref(),
+            &runner,
         )
         .await
         .ok()
     } else {
-        crate::deploy::host_gui_automation::automated_session_ready_for(target, declared, &runner)
-            .await
-            .ok()
+        crate::deploy::host_gui_automation::automated_session_ready_for(
+            target,
+            declared,
+            password.as_deref(),
+            &runner,
+        )
+        .await
+        .ok()
     }
 }
 
@@ -516,6 +525,7 @@ pub async fn relay_apple_challenge(
             destinations.len()
         )));
     };
+    let password = super::service::host_sudo_password(holder_target).await?;
     let runner = crate::deploy::production_runner();
     let resource = format!("challenge:apple/{authorization_id}");
     let broker = crate::deploy::host_capability::resolve(
@@ -529,6 +539,7 @@ pub async fn relay_apple_challenge(
         crate::deploy::host_gui_automation::preflight_apple_challenge(
             holder_target,
             holder_user,
+            password.as_deref(),
             &runner,
         )
         .await
@@ -560,6 +571,7 @@ pub async fn relay_apple_challenge(
         holder_user,
         &authorization_id,
         90,
+        password.as_deref(),
         &runner,
     )
     .await

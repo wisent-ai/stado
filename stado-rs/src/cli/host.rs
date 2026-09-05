@@ -712,11 +712,13 @@ fn print_report(
 
 /// `stado host gui-automation status TARGET` — report autologin, remote
 /// management, VNC, automation artifacts and the console owner.
-pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
+pub async fn gui_automation_status(target: &str, json: bool) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
-    print_report(&report, false)
+    let report =
+        crate::deploy::host_gui_automation::status(&resolved, password.as_deref(), &runner).await;
+    print_report(&report, json)
 }
 
 /// `stado host gui-automation enable TARGET` — configure persistent GUI login,
@@ -744,10 +746,15 @@ pub async fn gui_automation_grant_accessibility(
     json: bool,
 ) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
     let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_gui_automation::grant_accessibility(&resolved, apple_only, &runner)
-            .await;
+    let report = crate::deploy::host_gui_automation::grant_accessibility(
+        &resolved,
+        apple_only,
+        password.as_deref(),
+        &runner,
+    )
+    .await;
     print_report(&report, json)
 }
 

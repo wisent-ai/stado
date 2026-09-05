@@ -89,3 +89,7 @@ path = "src/bin/stado_migrate/main.rs"
 [[test]]
 name = "channel"
 path = "tests/channel/main.rs"
+
+[[test]]
+name = "apple_challenge"
+path = "tests/apple_challenge/main.rs"
