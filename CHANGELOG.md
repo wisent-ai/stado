@@ -1,11 +1,21 @@
 # Changelog
 
-## 0.16.13
+## 0.16.14
 
 - **Canonical queue reachability:** the queue's HTTP client now uses the same Tailscale name-to-address map as artifact delivery. A broken system MagicDNS resolver no longer prevents submission, status, or cleanup from reaching the configured queue.
 - **Connection reuse:** pooled clients are keyed by origin host and CA configuration, so a connection pool cannot carry another origin's address pin. Bearers remain per-request headers; TLS hostname and certificate verification are unchanged.
 - **Migration and rollback:** no configuration or stored data changes. Rolling back restores dependence on the system resolver for queue operations.
 - **Platforms and evidence:** the native Probierz qualification covers `darwin-arm64` and `linux-amd64` and records the exact source revision.
+
+## 0.16.13
+
+- **Coordinator archive delivery:** `service update --from-archive` validates members against the fixed `darwin-arm/` directory the installer actually supplies, so canonical root `stado` satisfies a unit running `current/darwin-arm/stado`.
+- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target and retains ordinary `host release` convergence for each target's host-global Stado image. Native install identifies long-running direct or launcher-owned readers by kernel device and inode, restarts each replaced image, and fails unless its replacement process maps the installed inode. The fleet job also discovers every registry-declared service-local Stado reader, installs the target platform's canonical archive into each private version tree, and uses that same kernel identity to restart only readers not already on the delivered inode.
+- **Resumability:** `service converge --apply` runs the kernel-backed reader pass even when the installed file is already attested at the declared version, so a prior files-only delivery cannot become a false successful retry.
+- **Convergence verdict:** unread image identity, a failed restart, a replacement process that does not map the installed inode, or a failed release receipt remains a failed delivery even if a later installed-version read says the path is in sync.
+- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
+- **Migration and rollback:** no stored-state migration is required. Rolling back restores delivery that can stop after replacing only the root pathname while declared readers retain older mapped images.
+- **Platforms:** the native delivery and reader-verification path covers `darwin-arm64` and `linux-amd64`.
 
 ## 0.16.12
 
@@ -13,10 +23,6 @@
 - **Software inventory:** unsupported executables are not launched to discover their version. Catalogued version commands have a five-second deadline, helper classification overlaps bounded reads, and an unknown version no longer prevents other programs from being reported.
 - **Version declarations:** `host declare-version --unset` removes one obsolete product requirement with a generation-checked registry write; repeating it reports that the declaration is already absent.
 - **Cache cleanup failures:** a failed tagged-cache removal returns a nonzero exit status and retains the filesystem's stderr instead of reporting a successful command.
-- **Coordinator archive delivery:** `service update --from-archive` validates members against the fixed `darwin-arm/` directory the installer actually supplies, so canonical root `stado` satisfies a unit running `current/darwin-arm/stado`.
-- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target and retains ordinary `host release` convergence for each target's host-global Stado image. Native install identifies long-running direct or launcher-owned readers by kernel device and inode, restarts each replaced image, and fails unless its replacement process maps the installed inode. The fleet job also discovers every registry-declared service-local Stado reader, installs the target platform's canonical archive into each private version tree, and uses that same kernel identity to restart only readers not already on the delivered inode.
-- **Convergence verdict:** unread image identity, a failed restart, a replacement process that does not map the installed inode, or a failed release receipt remains a failed delivery even if a later installed-version read says the path is in sync.
-- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
 - **Migration and rollback:** no stored-state migration is required. Rolling back restores the duplicated staging path, unbounded version discovery, and the inability to remove one version declaration through the CLI.
 - **Platforms:** the existing `darwin-arm64` and `linux-amd64` release and delivery paths are unchanged.
 
