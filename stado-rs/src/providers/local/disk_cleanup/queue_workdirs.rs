@@ -204,7 +204,9 @@ pub fn candidate_job_ids(
 
     let legacy_root = Path::new(LEGACY_WORK_ROOT);
     if legacy_root.is_dir() && legacy_budget > 0 {
-        let legacy_fd = safefs::open_dir_path(legacy_root)?;
+        // macOS links /tmp to /private/tmp. Resolve only this trusted system
+        // root; opens beneath it still refuse symlinked job entries.
+        let legacy_fd = safefs::open_dir_path(&legacy_root.canonicalize()?)?;
         let mut legacy_remaining = legacy_budget;
         for name in safefs::DirEntries::open(legacy_fd.as_raw_fd())? {
             let name = name?;
@@ -453,7 +455,10 @@ pub fn scan_queue_workdirs(
                     return Ok(());
                 }
             };
-            let legacy_fd = match safefs::open_dir_path(legacy_root) {
+            let legacy_fd = match legacy_root
+                .canonicalize()
+                .and_then(|root| safefs::open_dir_path(&root))
+            {
                 Ok(fd) => fd,
                 Err(_) => {
                     report.skip_workdirs("legacy_root_unreadable", 1);

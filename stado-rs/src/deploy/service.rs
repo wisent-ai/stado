@@ -448,7 +448,7 @@ pub fn systemd_service(
 }
 
 /// Every unit Stado manages on one target: the registry-declared array
-/// first, then the fixed recovery agents that are not already declared. A
+/// first, then macOS recovery agents on hosts declared to run macOS. A
 /// declaration wins over the fixed list, because an operator who adopted a
 /// recovery label explicitly said what its path and name are.
 pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
@@ -469,6 +469,9 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
                 .collect()
         })
         .unwrap_or_default();
+    if !crate::targets::platform_accepts_job(&target.release_platform, "Darwin", "") {
+        return services;
+    }
     for (label, plist) in host_recovery::MANAGED_AGENTS {
         if services.iter().any(|service| service.matches(label)) {
             continue;
@@ -6103,25 +6106,29 @@ pub fn units_running_replaced_images(
 
 /// Restart one launchd unit on THIS machine, in place.
 ///
-/// `kickstart -k`, the same verb `self_update::recycle_launchd` uses, so the
-/// remediation and the delivery path stop a unit the same way. The domain
-/// comes off the unit-file path through [`UnitDomain`]: a system LaunchDaemon
-/// belongs to `system` and needs root, and a LaunchAgent belongs to a login.
-/// `gui/<uid>` is tried first and `user/<uid>` second, because a host with no
-/// graphical session has only the latter and `recycle_launchd`'s gui-only
-/// spelling is exactly why a unit there can be left behind.
+/// Without an observed owner, user units try `gui/<uid>` and then
+/// `user/<uid>`. Callers that already observed ownership supply its exact
+/// domain so it is selected before any mutation. System jobs use the same
+/// non-interactive `sudo -n` lifecycle path as the service installer and
+/// report refusal rather than prompting.
 ///
-/// Returns the service target that answered, so a report can name the domain
-/// the restart actually happened in rather than the one it assumed.
-pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, String> {
+/// The unit path first establishes the allowed domain set. An observed owner
+/// outside that set is rejected before `launchctl` runs, so discovery cannot
+/// mutate one job and diagnose a cross-domain mismatch afterwards. Returns the
+/// service target that answered.
+pub fn kickstart_local_unit(
+    label: &str,
+    unit_path: &str,
+    observed_domain: Option<&str>,
+) -> Result<String, String> {
     use std::os::unix::fs::MetadataExt;
-    let domain = UnitDomain::from_path(unit_path);
-    if matches!(domain, UnitDomain::Unknown) {
+    let unit_domain = UnitDomain::from_path(unit_path);
+    if matches!(unit_domain, UnitDomain::Unknown) {
         return Err(format!(
             "{unit_path} is in none of launchd's three unit directories, so no domain places it"
         ));
     }
-    let candidates: Vec<String> = if domain.requires_privileged_bootstrap() {
+    let mut candidates: Vec<String> = if unit_domain.requires_privileged_bootstrap() {
         vec!["system".to_string()]
     } else {
         let home = std::env::var_os("HOME").ok_or("this process has no HOME")?;
@@ -6130,13 +6137,29 @@ pub fn kickstart_local_unit(label: &str, unit_path: &str) -> Result<String, Stri
             .uid();
         vec![format!("gui/{uid}"), format!("user/{uid}")]
     };
+    if let Some(observed) = observed_domain {
+        if !candidates.iter().any(|candidate| candidate == observed) {
+            return Err(format!(
+                "{unit_path} permits {}, but launchd reports owner {observed}; refusing before restart",
+                candidates.join(" or ")
+            ));
+        }
+        candidates.retain(|candidate| candidate == observed);
+    }
     let mut refusals = Vec::new();
     for domain in candidates {
         let service = format!("{domain}/{label}");
-        let output = std::process::Command::new("/bin/launchctl")
-            .args(["kickstart", "-k", &service])
-            .output()
-            .map_err(|error| format!("/bin/launchctl did not run: {error}"))?;
+        let output = if unit_domain.requires_privileged_bootstrap() {
+            std::process::Command::new("/usr/bin/sudo")
+                .args(["-n", "/bin/launchctl", "kickstart", "-k", &service])
+                .output()
+                .map_err(|error| format!("/usr/bin/sudo did not run: {error}"))?
+        } else {
+            std::process::Command::new("/bin/launchctl")
+                .args(["kickstart", "-k", &service])
+                .output()
+                .map_err(|error| format!("/bin/launchctl did not run: {error}"))?
+        };
         if output.status.success() {
             return Ok(service);
         }
@@ -8422,6 +8445,139 @@ printf 'STADO_SERVICE\t%s\tgrant_synced\t%s\n' "$consumer" "$token_path"
         .replace("@TTL_SECONDS@", &ttl_seconds.to_string());
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
+}
+
+/// A systemd definition or one drop-in belonging to this declared unit.
+pub fn is_systemd_env_file(service: &ManagedService, path: &str) -> bool {
+    service.kind == KIND_SYSTEMD
+        && !service.path.is_empty()
+        && (path == service.path
+            || path
+                .strip_prefix(&service.path)
+                .and_then(|suffix| suffix.strip_prefix(".d/"))
+                .is_some_and(|name| {
+                    name.ends_with(".conf")
+                        && name.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+                        })
+                }))
+}
+
+/// Update a declared systemd environment assignment without cycling the unit.
+pub async fn set_unit_env_key_on_host(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    env_path: &str,
+    key: &str,
+    value: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    if !is_systemd_env_file(service, env_path) {
+        return Err(DeployError(
+            "environment file does not belong to this systemd unit".into(),
+        ));
+    }
+    let body = r###"stado_unit_env_writer() {
+  if [ "$scope" = system ]; then
+    stado_root "$@"
+  elif [ "$service_uid" = "$uid" ]; then
+    "$@"
+  else
+    "$sudo_bin" -n -u "$service_user" "$@"
+  fi
+}
+if ! changed=$(stado_unit_env_writer /usr/bin/python3 - "$service_uid" 2>&1 <<'STADO_UNIT_ENV'
+import base64, os, pathlib, re, shlex, stat, sys, tempfile
+
+def decode(value):
+    return base64.b64decode(value).decode("utf-8")
+
+raw_path = decode("@ENV_PATH_B64@")
+path = pathlib.Path(os.environ["HOME"]) / raw_path[6:] if raw_path.startswith("$HOME/") else pathlib.Path(raw_path)
+for component in (path, *path.parents):
+    if component.is_symlink():
+        raise RuntimeError("unit environment path cannot contain a symlink")
+before = path.stat()
+if not stat.S_ISREG(before.st_mode) or before.st_uid != int(sys.argv[1]):
+    raise RuntimeError("unit environment file must be regular and owned by the service account")
+key, value = decode("@KEY_B64@"), decode("@VALUE_B64@")
+original = path.read_text()
+entries, pending = [], []
+for line in original.splitlines(keepends=True):
+    pending.append(line)
+    if line.rstrip("\r\n").endswith("\\"):
+        continue
+    entries.append("".join(pending))
+    pending = []
+if pending:
+    entries.append("".join(pending))
+
+words = re.compile(r"""(?:[^\s"'\\]|\\.|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')+""")
+output, in_service, insertion = [], False, None
+for raw in entries:
+    logical = re.sub(r"\\\r?\n", " ", raw)
+    stripped = logical.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        if in_service:
+            insertion = len(output)
+        in_service = stripped == "[Service]"
+    assignment = re.match(r"^\s*Environment\s*=(.*)$", logical.rstrip("\r\n")) if in_service else None
+    if assignment and assignment.group(1).strip():
+        tokens = words.findall(assignment.group(1))
+        retained = [token for token in tokens if shlex.split(token)[0].partition("=")[0] != key]
+        if len(retained) != len(tokens):
+            if retained:
+                output.append("Environment=" + " ".join(retained) + "\n")
+            continue
+    output.append(raw)
+if in_service:
+    insertion = len(output)
+if insertion is None:
+    output.append("\n[Service]\n")
+    insertion = len(output)
+if insertion and not output[insertion - 1].endswith("\n"):
+    output[insertion - 1] += "\n"
+escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+output.insert(insertion, 'Environment="' + key + "=" + escaped + '"\n')
+updated = "".join(output)
+if updated == original:
+    print("unchanged")
+else:
+    fd, temporary = tempfile.mkstemp(prefix=".stado-unit-env.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            os.fchmod(stream.fileno(), stat.S_IMODE(before.st_mode))
+            os.fchown(stream.fileno(), before.st_uid, before.st_gid)
+            stream.write(updated)
+            stream.flush()
+            os.fsync(stream.fileno())
+        current = path.lstat()
+        if (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size) != (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size):
+            raise RuntimeError("unit environment file changed during the update")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print("changed")
+STADO_UNIT_ENV
+); then
+  say 'env_set_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
+  exit 1
+fi
+if [ "$changed" = changed ] || [ "$(stado_systemctl show -p NeedDaemonReload --value "$unit")" = yes ]; then
+  if ! stado_systemctl daemon-reload; then
+    say 'env_set_failed' 'unit environment changed but systemd could not reload it'
+    exit 1
+  fi
+fi
+say 'env_set' "$changed; systemd definition refreshed without restarting the unit"
+"###;
+    let body = body
+        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace("@KEY_B64@", &STANDARD.encode(key.as_bytes()))
+        .replace("@VALUE_B64@", &STANDARD.encode(value.as_bytes()));
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    run_remote(target, script, runner).await
 }
 
 /// Atomically replace one assignment in an owner-controlled remote env file.

@@ -301,6 +301,9 @@ pub enum ServiceCommands {
     RefreshImage {
         /// The host's own name for the unit: the launchd label.
         name: String,
+        /// Succeed without restarting when kernel image identity already matches.
+        #[arg(long)]
+        if_needed: bool,
         #[arg(long)]
         json: bool,
     },
@@ -345,6 +348,9 @@ pub enum ServiceCommands {
         /// Point `current` back at a version directory already on the host.
         #[arg(long, conflicts_with_all = ["from_artifact", "from_archive"])]
         rollback_to: Option<String>,
+        /// Reconcile and verify the live kernel image after installation.
+        #[arg(long)]
+        refresh_image: bool,
         #[arg(long)]
         json: bool,
     },
@@ -510,10 +516,12 @@ pub enum ServiceCommands {
         json: bool,
     },
 
-    /// Replace one key in a managed service's owner-controlled env file.
+    /// Replace one key in a managed runtime env file or systemd definition.
     ///
     /// The value is read from an owner-only local file and travels only inside
     /// the approved encrypted channel's request body.
+    /// A systemd unit or its own .conf drop-in is updated in place; the manager
+    /// reloads changed definitions without restarting the running service.
     EnvSet {
         /// Service whose host-local process reads the environment.
         name: String,
@@ -523,7 +531,7 @@ pub enum ServiceCommands {
         /// Exact environment variable name.
         #[arg(long)]
         key: String,
-        /// Environment file on the target, absolute or rooted at $HOME.
+        /// Runtime env file, or this service's exact systemd unit/drop-in path.
         #[arg(long)]
         env_file: String,
         /// Absolute owner-only local file containing the value.
@@ -1111,15 +1119,18 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
-        ServiceCommands::RefreshImage { name, json } => {
-            crate::cli::service_refresh_image::refresh_image(&name, json).await
-        }
+        ServiceCommands::RefreshImage {
+            name,
+            if_needed,
+            json,
+        } => crate::cli::service_refresh_image::refresh_image(&name, if_needed, json).await,
         ServiceCommands::Update {
             name,
             host,
             from_artifact,
             from_archive,
             rollback_to,
+            refresh_image,
             json,
         } => {
             update(
@@ -1128,6 +1139,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 from_artifact.as_deref(),
                 from_archive.as_deref(),
                 rollback_to.as_deref(),
+                refresh_image,
                 json,
             )
             .await
@@ -2533,6 +2545,7 @@ async fn update(
     reference: Option<&str>,
     archive: Option<&str>,
     rollback_to: Option<&str>,
+    refresh_image: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
@@ -2597,8 +2610,11 @@ async fn update(
         let members = archive_members(path)?;
         refuse_archive_without_program(program, &members).map_err(CmdError::click)?;
     }
-    let installed = match (reference, archive) {
-        (Some(reference), None) => install_from_artifact(&target, &directory, reference).await?,
+    let (installed, already_active) = match (reference, archive) {
+        (Some(reference), None) => (
+            install_from_artifact(&target, &directory, reference).await?,
+            false,
+        ),
         (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
         (None, None) => {
             return Err(CmdError::click(
@@ -2611,22 +2627,84 @@ async fn update(
             ))
         }
     };
-    // A unit pinned to a version directory never sees an install: `current`
-    // moves and the job keeps executing the path it was rendered with, so the
-    // deployment reports success and the machine runs what it ran before. Point
-    // it at `current`, which is what makes a later install or a rollback a
-    // relink rather than a redeploy.
-    let followed = follow_current(&target, declared, &directory, &runner).await?;
+    let followed = if already_active {
+        false
+    } else {
+        // A unit pinned to a version directory never sees an install: `current`
+        // moves and the job keeps executing the path it was rendered with.
+        follow_current(&target, declared, &directory, &runner).await?
+    };
+    let image_refresh = if refresh_image {
+        let units = service::loaded_units(&target, &runner)
+            .await
+            .map_err(click)?;
+        let before = units
+            .iter()
+            .find(|unit| unit.label == declared.unit_id())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{host}: {} is absent from the domain-bound launchd inventory",
+                    declared.unit_id()
+                ))
+            })?;
+        if before.pid.is_empty() {
+            if before.loaded_domains.len() != 1 {
+                return Err(CmdError::click(format!(
+                    "{host}: {} has no live pid and {} loaded domains; refusing to guess a lifecycle action",
+                    declared.unit_id(),
+                    before.loaded_domains.len()
+                )));
+            }
+            let started = service::restart_service(&target, declared, &runner)
+                .await
+                .map_err(click)?;
+            if !started.succeeded("restarted") {
+                return Err(CmdError::click(format!(
+                    "{host}: {} was confirmed loaded without a live pid and did not start: {}",
+                    declared.unit_id(),
+                    started.failure()
+                )));
+            }
+        }
+        let script = format!(
+            "set -euo pipefail\n\"$HOME/.stado/bin/stado\" service refresh-image {} \
+             --if-needed --json",
+            crate::deploy::shlex_quote(declared.unit_id()),
+        );
+        let output = host_channel::run_script(&target, &script, &runner)
+            .await
+            .map_err(click)?;
+        if !output.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: {}",
+                host_channel::last_error_line(&output, "the running image did not converge")
+            )));
+        }
+        serde_json::from_str::<Value>(output.stdout.trim()).map_err(|error| {
+            CmdError::click(format!(
+                "{host}: image refresh returned invalid JSON: {error}; stdout={}",
+                output.stdout.trim()
+            ))
+        })?
+    } else {
+        Value::Null
+    };
     if json {
         print_json(&json!({
             "host": host,
             "service": name,
+            "image_refresh": image_refresh,
             "unit_repointed": followed,
             "version": installed.version,
             "sha256": installed.sha256,
-            "status": "updated",
-            "effective": "on next restart",
+            "status": if already_active { "already_installed" } else { "updated" },
+            "effective": if refresh_image { "running image verified" } else { "on next restart" },
         }))?;
+    } else if refresh_image {
+        println!(
+            "{host}: {name} -> {} (running image verified)",
+            installed.version
+        );
     } else {
         println!(
             "{host}: {name} -> {} (takes effect on the next restart)",
@@ -2958,6 +3036,7 @@ async fn rollback_service_release(
         None,
         Some(previous),
         false,
+        false,
     )
     .await?;
     let report = if options.reload_unit {
@@ -3233,6 +3312,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         None,
         archive_path.to_str(),
         None,
+        false,
         false,
     )
     .await
@@ -3928,6 +4008,39 @@ async fn verify_env_write(
     })
 }
 
+async fn verify_unit_env_write(
+    target: &targets::ComputeTarget,
+    declared: &service::ManagedService,
+    key: &str,
+    value: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<ReadBack, CmdError> {
+    let unit = service::fetch_unit_file(target, declared, runner)
+        .await
+        .map_err(click)?;
+    let observed = service::parse_systemd_unit(&unit.content)
+        .env
+        .into_iter()
+        .rev()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.replace("%%", "%"));
+    let state = match observed.as_deref() {
+        Some(found) if found == value => service_env_file::EXPECT_MATCHED,
+        Some(_) => service_env_file::EXPECT_DIFFERS,
+        None => service_env_file::EXPECT_ABSENT,
+    };
+    Ok(ReadBack {
+        state,
+        chars: observed
+            .as_ref()
+            .map_or(0, |value| value.chars().count() as u32),
+        effective: observed.and_then(|value| {
+            (service::redact_secret_value(key, &value) != service::REDACTED).then_some(value)
+        }),
+        marker: None,
+    })
+}
+
 async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
     let EnvSetOptions {
         name,
@@ -3976,9 +4089,16 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let updated = service::set_env_key_on_host(&target, env_file, key, value, &runner)
-            .await
-            .map_err(click)?;
+        let unit_env = service::is_systemd_env_file(declared, env_file);
+        let updated = if unit_env {
+            service::set_unit_env_key_on_host(&target, declared, env_file, key, value, &runner)
+                .await
+                .map_err(click)?
+        } else {
+            service::set_env_key_on_host(&target, env_file, key, value, &runner)
+                .await
+                .map_err(click)?
+        };
         let wrote = updated.succeeded("env_set");
         if !wrote {
             failures.push(format!("{}: {}", declared.host, updated.failure()));
@@ -3988,7 +4108,11 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         // command reported `env_set` twice for a value a host-side reconciler
         // restored within seconds, and nothing said so.
         let verdict = if wrote {
-            let readback = verify_env_write(&target, env_file, key, value, &runner).await?;
+            let readback = if unit_env {
+                verify_unit_env_write(&target, declared, key, value, &runner).await?
+            } else {
+                verify_env_write(&target, env_file, key, value, &runner).await?
+            };
             if let Some(failure) = readback.failure(&declared.host, key) {
                 failures.push(failure);
             }
@@ -7578,13 +7702,16 @@ fn normalize_member(raw: &str) -> String {
         .to_string()
 }
 
-/// Refuse an archive that does not carry the file the unit executes.
+/// Refuse an archive that does not carry the file the unit executes after the
+/// installer adds its fixed `darwin-arm/` platform directory.
 ///
-/// The unit's program is an absolute path through `current`, so what the
-/// archive must hold is the part after it: a unit running
-/// `.../current/darwin-arm/stado` needs a member `darwin-arm/stado`. Both
-/// sides are named in the refusal, because the useful sentence is the
-/// mismatch, not the fact of one.
+/// The unit's program is an absolute path through `current`, while
+/// [`ARCHIVE_INSTALL_BODY`] extracts the archive inside
+/// `version_dir/darwin-arm`. A unit running
+/// `.../current/darwin-arm/stado` therefore needs a root archive member
+/// `stado`, not a second `darwin-arm/stado` nesting. Both sides are named in
+/// the refusal, because the useful sentence is the mismatch, not the fact of
+/// one.
 fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(), String> {
     let Some(relative) = program.split("/current/").nth(usize::from(true)) else {
         // A unit pinned to a version directory rather than `current` is a
@@ -7593,7 +7720,13 @@ fn refuse_archive_without_program(program: &str, members: &[String]) -> Result<(
         return Ok(());
     };
     let relative = normalize_member(relative);
-    if relative.is_empty() || members.iter().any(|member| member == &relative) {
+    let Some(archive_relative) = relative.strip_prefix("darwin-arm/") else {
+        return Err(format!(
+            "refusing to relink `current`: the archive installer writes below \
+             current/darwin-arm, but the unit runs current/{relative}"
+        ));
+    };
+    if archive_relative.is_empty() || members.iter().any(|member| member == archive_relative) {
         return Ok(());
     }
     let mut held: Vec<&str> = members
@@ -7624,7 +7757,7 @@ async fn install_from_archive(
     directory: &str,
     path: &str,
     runner: &crate::deploy::Runner,
-) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+) -> Result<(crate::deploy::artifact_install::InstalledArtifact, bool), CmdError> {
     let bytes = std::fs::read(path)?;
     let digest = {
         use sha2::{Digest, Sha256};
@@ -7700,11 +7833,18 @@ async fn install_from_archive(
             host_channel::last_error_line(&output, "the archive did not install")
         )));
     }
-    Ok(crate::deploy::artifact_install::InstalledArtifact {
-        program_path: format!("$HOME/.stado/services/{directory}/current"),
-        version,
-        sha256: digest,
-    })
+    let already_active = output
+        .stdout
+        .lines()
+        .any(|line| line == "STADO_SERVICE_ARCHIVE already_active");
+    Ok((
+        crate::deploy::artifact_install::InstalledArtifact {
+            program_path: format!("$HOME/.stado/services/{directory}/current"),
+            version,
+            sha256: digest,
+        },
+        already_active,
+    ))
 }
 
 const ARCHIVE_INSTALL_BODY: &str = r#"
@@ -7720,6 +7860,14 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+if [ -L "$root/current" ] &&
+   [ "$(/usr/bin/readlink "$root/current")" = "$version_dir" ] &&
+   [ -d "$version_dir/darwin-arm" ]; then
+  trap - EXIT
+  rm -f "$archive"
+  printf '%s\n' 'STADO_SERVICE_ARCHIVE already_active'
+  exit 0
+fi
 rm -rf "$version_dir"
 /bin/mkdir -p "$version_dir/darwin-arm"
 /usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
@@ -8006,7 +8154,6 @@ mod tests {
         let members = archive_members(&path).expect("list members");
         assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
     }
-
     /// The exact 2026-09-04 outage: the object API unit runs
     /// `current/darwin-arm/stado` and every published stado archive holds
     /// `bin/stado`. The refusal must name both halves.
@@ -8021,7 +8168,6 @@ mod tests {
         assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
         assert!(refusal.contains("bin/stado"), "{refusal}");
     }
-
     #[test]
     fn an_archive_carrying_the_unit_program_is_accepted() {
         let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];

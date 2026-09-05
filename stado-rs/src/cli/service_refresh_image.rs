@@ -60,8 +60,8 @@ const RESTART_WINDOW: Duration = Duration::from_secs(30);
 /// How often to re-read while waiting.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// `stado service refresh-image NAME [--json]`.
-pub async fn refresh_image(name: &str, json_output: bool) -> Result<(), CmdError> {
+/// `stado service refresh-image NAME [--if-needed] [--json]`.
+pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
     let hostname = crate::providers::vast::system_hostname();
     let local = registry
@@ -77,10 +77,35 @@ pub async fn refresh_image(name: &str, json_output: bool) -> Result<(), CmdError
     let host = local.name.clone();
 
     let before = observe(local, &host, name)?;
-    let (running, installed) = actionable(&before)?;
+    let (running, installed) = if if_needed {
+        match (&before.running, &before.installed) {
+            (Some(running), Some(installed)) if running.is_same_file(installed) => {
+                if json_output {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "host": host,
+                            "unit": name,
+                            "status": "already_active",
+                            "pid": before.pid,
+                            "running": running.describe(),
+                            "installed": installed.describe(),
+                        }))?
+                    );
+                } else {
+                    println!("{name} already executes {}", running.describe());
+                }
+                return Ok(());
+            }
+            (Some(running), Some(installed)) => (running.clone(), installed.clone()),
+            _ => actionable(&before)?,
+        }
+    } else {
+        actionable(&before)?
+    };
 
     let service =
-        service::kickstart_local_unit(&before.unit, &before.unit_path).map_err(|reason| {
+        service::kickstart_local_unit(&before.unit, &before.unit_path, None).map_err(|reason| {
             CmdError::click(format!("{} was not restarted: {reason}", before.unit))
         })?;
 

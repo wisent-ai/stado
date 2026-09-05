@@ -751,7 +751,9 @@ async fn declare_on_platform(
     }
     let mut declared_everywhere = true;
     for host in &hosts {
-        match crate::cli::host::declare_version(host, &product.name, version, false).await {
+        match crate::cli::host::declare_version(host, &product.name, Some(version), false, false)
+            .await
+        {
             Ok(()) => log(&format!(
                 "build {recipe}: declared {} {version} on {host} ({platform})",
                 product.name

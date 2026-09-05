@@ -145,12 +145,12 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-  # One measured capacity pass runs before either platform reaches the sole
-  # control-plane runner. It reclaims only product-declared host roots, clears
-  # this checkout's Cargo output separately, and requires the host's own
-  # post-reclaim disk reading to reach its declared target before compiling.
-  # Keeping this as a dependency instead of duplicating it inside both jobs
-  # prevents two release siblings from competing for the same disk.
+  # One serialized capacity transaction runs before either platform reaches
+  # the sole control-plane runner. The installed product restores enough
+  # declared capacity to admit the corrected candidate build; that candidate
+  # then completes canonical reclamation and must reach the full declared
+  # target before any release coordinate is claimed. Keeping this as a
+  # dependency prevents two release siblings from competing for the same disk.
   release-capacity:
     needs: identity
     runs-on: [self-hosted, stado-control-plane]
@@ -221,8 +221,6 @@ jobs:
               raise SystemExit(f"runner capacity remains below target: {free:.2f} < {target} GiB")
           print(f"runner capacity proved: {free:.2f} >= {target} GiB")
           '
-
-
 
       # Every call below first claims one create-only record at version scope,
       # then its platform record. The shared version write is the arbitration
@@ -923,7 +921,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Converge every required Stado delivery
+      - name: Converge every required Stado delivery and reader
         run: |
           set -euo pipefail
           stado_bin="$HOME/.stado/bin/stado"
@@ -946,6 +944,8 @@ jobs:
                 end
             ' .wisent-release.json
           )"
+          registry="$RUNNER_TEMP/registry-for-stado-delivery.json"
+          "$stado_bin" registry pull >"$registry"
           while IFS= read -r target; do
             test -n "$target"
             "$stado_bin" host declare-version "$target" \
@@ -953,4 +953,42 @@ jobs:
               --version "$STADO_VERSION" \
               --json
             "$stado_bin" service converge "$target" stado --apply --json
+
+            readers="$(
+              jq -r --arg target "$target" '
+                [
+                  .targets[]
+                  | select(.name == $target)
+                  | .services[]?
+                  | select((.program? | type) == "string")
+                  | select(
+                      (.program | contains("/.stado/services/")) and
+                      (.program | endswith("/stado"))
+                    )
+                  | .name
+                ]
+                | if length == (unique | length)
+                  then .[]?
+                  else error("declared service-local Stado reader names must be unique")
+                  end
+              ' "$registry"
+            )"
+            test -n "$readers" || continue
+            platform="$(
+              jq -er --arg target "$target" '
+                .targets[]
+                | select(.name == $target)
+                | .release_platform
+              ' "$registry"
+            )"
+            archive="$RUNNER_TEMP/stado-v$STADO_VERSION-$platform-$target.tar.gz"
+            "$stado_bin" storage get \
+              "stado://releases/stado/$STADO_VERSION/$platform/stado-v$STADO_VERSION-$platform.tar.gz" \
+              "$archive"
+              "$stado_bin" service update "$reader" \
+                --host "$target" \
+                --from-archive "$archive" \
+                --refresh-image \
+                --json
+            done <<<"$readers"
           done <<<"$targets"
