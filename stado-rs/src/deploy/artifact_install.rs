@@ -159,10 +159,44 @@ if [ "$actual" != "@SHA256@" ]; then
 fi
 
 chmod u+x "$program"
+previous_dir="$(cd "$root" 2>/dev/null && readlink current 2>/dev/null || true)"
 ln -sfn "$version_dir" "$root/.current.new"
 mv -f "$root/.current.new" "$root/current"
 echo "STADO_STATUS=installed"
 echo "STADO_DETAIL=$program"
+"#;
+
+/// Retire the version trees this install just made unreachable.
+///
+/// Every install stages one tree per version beside the one before it, and
+/// nothing ever removed the ones a rollback can no longer reach. Measured on
+/// `charless-mac-mini` on 2026-09-05: superseded trees under
+/// `~/.stado/services` for `stado-object-api` and `weles-admission` held about
+/// 6 GiB while the disk sat at 6.1 GiB against the janitor's 15 GiB low
+/// watermark, so the host claimed nothing and the space came back only because
+/// an operator ran `stado host reclaim` by hand - four times in one day. The
+/// janitor cannot reach these: its declared cleaners cover the release store,
+/// build caches, queue workdirs and browser clones, and a delivered service
+/// tree is none of those.
+///
+/// What a rollback or an operator can still reach is what stays: the tree
+/// `current` now points at, the tree it pointed at before this install
+/// (`stado service update --rollback-to` is a relink onto it), every
+/// operator-made `current.*` backup, and anything modified within the last
+/// day, which covers a delivery still in flight. The sweep runs after the
+/// install has already reported success and cannot fail it.
+const PRUNE_BODY: &str = r#"
+(
+  set +e
+  for entry in "$root"/*; do
+    [ -d "$entry" ] || continue
+    case "${entry##*/}" in current|current.*|.*) continue ;; esac
+    [ "$entry" = "$version_dir" ] && continue
+    [ -n "${previous_dir:-}" ] && [ "$entry" = "$previous_dir" ] && continue
+    [ -n "$(find "$entry" -maxdepth 0 -mtime +1 2>/dev/null)" ] || continue
+    rm -rf "$entry" && printf 'STADO_RETIRED_TREE=%s\n' "$entry"
+  done
+) || true
 "#;
 
 const INSTALL_ARCHIVE_BODY: &str = r#"
@@ -218,6 +252,7 @@ fi
 
 tar -xzf "$archive" -C "$dest"
 rm -f "$archive"
+previous_dir="$(cd "$root" 2>/dev/null && readlink current 2>/dev/null || true)"
 ln -sfn "$version_dir" "$root/.current.new"
 mv -f "$root/.current.new" "$root/current"
 echo "STADO_STATUS=installed"
@@ -273,7 +308,7 @@ pub async fn install_artifact(
         }
         None => INSTALL_BODY,
     };
-    let script = body
+    let script = format!("{body}{PRUNE_BODY}")
         .replace("@SERVICES_ROOT@", SERVICES_ROOT)
         .replace("@NAME@", name)
         .replace("@VERSION@", &version)
