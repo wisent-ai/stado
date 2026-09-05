@@ -10375,36 +10375,35 @@ pub async fn backup_audit(
                 )
             })
             .collect();
-        let render_object =
-            |object: &crate::deploy::host_backup_audit::ObjectComparison| {
-                json!({
-                    "path": object.path,
-                    // These names identify the two fixed physical roots. They
-                    // deliberately do not claim which one is authoritative.
+        let render_object = |object: &crate::deploy::host_backup_audit::ObjectComparison| {
+            json!({
+                "path": object.path,
+                // These names identify the two fixed physical roots. They
+                // deliberately do not claim which one is authoritative.
+                "local_storage": {
+                    "state": object.primary.state,
+                    "bytes": object.primary.bytes,
+                    "sha256": object.primary.sha256,
+                },
+                "local_backup": {
+                    "state": object.backup.state,
+                    "bytes": object.backup.bytes,
+                    "sha256": object.backup.sha256,
+                },
+                "metadata": {
                     "local_storage": {
-                        "state": object.primary.state,
-                        "bytes": object.primary.bytes,
-                        "sha256": object.primary.sha256,
+                        "state": object.primary_metadata.state,
+                        "bytes": object.primary_metadata.bytes,
+                        "sha256": object.primary_metadata.sha256,
                     },
                     "local_backup": {
-                        "state": object.backup.state,
-                        "bytes": object.backup.bytes,
-                        "sha256": object.backup.sha256,
+                        "state": object.backup_metadata.state,
+                        "bytes": object.backup_metadata.bytes,
+                        "sha256": object.backup_metadata.sha256,
                     },
-                    "metadata": {
-                        "local_storage": {
-                            "state": object.primary_metadata.state,
-                            "bytes": object.primary_metadata.bytes,
-                            "sha256": object.primary_metadata.sha256,
-                        },
-                        "local_backup": {
-                            "state": object.backup_metadata.state,
-                            "bytes": object.backup_metadata.bytes,
-                            "sha256": object.backup_metadata.sha256,
-                        },
-                    },
-                })
-            };
+                },
+            })
+        };
         let objects = audit.objects.iter().map(render_object).collect::<Vec<_>>();
         let inventory_objects = audit
             .inventory_objects
@@ -10476,11 +10475,9 @@ pub async fn backup_audit(
             );
         }
         if !audit.complete {
-            return Err(CmdError::click(
-                audit
-                    .unavailable
-                    .unwrap_or_else(|| "namespace inventory did not complete".to_string()),
-            ));
+            return Err(CmdError::click(audit.unavailable.unwrap_or_else(|| {
+                "namespace inventory did not complete".to_string()
+            })));
         }
         return Ok(());
     }
@@ -10617,14 +10614,10 @@ pub async fn storage_root_reconcile(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_storage_reconcile::reconcile_host(
-        target,
-        transaction,
-        phase,
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let report =
+        crate::deploy::host_storage_reconcile::reconcile_host(target, transaction, phase, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
     if json_output {
         print_json(&report);
     } else {
@@ -10637,10 +10630,7 @@ pub async fn storage_root_reconcile(
                 .and_then(Value::as_str)
                 .unwrap_or("failed")
         );
-        if let Some(path) = report
-            .pointer("/receipt/snapshot")
-            .and_then(Value::as_str)
-        {
+        if let Some(path) = report.pointer("/receipt/snapshot").and_then(Value::as_str) {
             println!("checkpoint: {path}");
         }
         if let Some(count) = report
@@ -10682,8 +10672,9 @@ pub async fn storage_root_reconcile_worker(
         None
     } else {
         Some(
-            serde_json::from_slice::<Value>(&decode("runner gate", runner_gate)?)
-                .map_err(|error| CmdError::click(format!("invalid resident runner gate: {error}")))?,
+            serde_json::from_slice::<Value>(&decode("runner gate", runner_gate)?).map_err(
+                |error| CmdError::click(format!("invalid resident runner gate: {error}")),
+            )?,
         )
     };
     let runner = crate::deploy::production_runner();

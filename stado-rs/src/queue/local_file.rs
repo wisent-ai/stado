@@ -73,11 +73,7 @@ impl LocalBackend {
         }
         let locks = root.join(".locks");
         let metadata = root.join(".metadata");
-        if !locks.is_dir()
-            || locks.is_symlink()
-            || !metadata.is_dir()
-            || metadata.is_symlink()
-        {
+        if !locks.is_dir() || locks.is_symlink() || !metadata.is_dir() || metadata.is_symlink() {
             return Err(StorageError::Other(format!(
                 "immutable local snapshot has no safe internal layout: {}",
                 root.display()

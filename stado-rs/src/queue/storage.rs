@@ -51,8 +51,7 @@ pub struct JobStorage {
 
 const TRANSITION_PREFIX: &str = "job-transitions";
 const TRANSITION_SCHEMA: &str = "stado.job-transition.v1";
-pub(crate) const TRANSITION_RETIRED_STATE: &str =
-    "retired:destination-verified-source-retired";
+pub(crate) const TRANSITION_RETIRED_STATE: &str = "retired:destination-verified-source-retired";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,7 +157,11 @@ pub(crate) fn validate_cancellation_snapshot(
     let requested_at = request
         .get("requested_at")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| StorageError::Other(format!("cancellation marker for {job_id} has no requested_at")))?;
+        .ok_or_else(|| {
+            StorageError::Other(format!(
+                "cancellation marker for {job_id} has no requested_at"
+            ))
+        })?;
     chrono::DateTime::parse_from_rfc3339(requested_at).map_err(|error| {
         StorageError::Other(format!(
             "cancellation marker for {job_id} has invalid requested_at: {error}"
@@ -1373,12 +1376,7 @@ impl JobStorage {
             job.completed_at = Some(requested_at.to_string());
             job.error = Some("cancelled".to_string());
             if self
-                .transition_job_if_version(
-                    &job,
-                    "queue",
-                    "cancelled",
-                    Some(&versioned.version),
-                )
+                .transition_job_if_version(&job, "queue", "cancelled", Some(&versioned.version))
                 .await?
             {
                 settled += 1;

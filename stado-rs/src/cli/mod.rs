@@ -389,6 +389,10 @@ enum Commands {
         /// Continuously check at the canonical policy interval.
         #[arg(long)]
         watch: bool,
+        /// Run one bounded enforcing pass toward the declared target even when
+        /// the host is already above its low watermark.
+        #[arg(long)]
+        to_target: bool,
         /// Plan a pass and delete nothing: same policy, same scan, an
         /// `enforce` policy pinned to the janitor's own report mode.
         #[arg(long)]
@@ -3002,8 +3006,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::DiskCleanup {
             once,
             watch,
+            to_target,
             dry_run,
-        } => disk_cleanup::run(once, watch, dry_run).await,
+        } => disk_cleanup::run(once, watch, to_target, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
         Commands::Release(sub) => release_cmd::dispatch(sub).await,

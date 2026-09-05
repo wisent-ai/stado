@@ -7471,8 +7471,9 @@ pub async fn label_autostart(
     label: &str,
     runner: &Runner,
 ) -> Result<BTreeMap<String, bool>, DeployError> {
-    let output = host_channel::run_script(target, &autostart_script(label, "inspect", "any")?, runner)
-        .await?;
+    let output =
+        host_channel::run_script(target, &autostart_script(label, "inspect", "any")?, runner)
+            .await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,

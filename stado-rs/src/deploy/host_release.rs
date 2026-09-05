@@ -1400,7 +1400,6 @@ pub fn stage_script(plan: &ReleasePlan) -> String {
             "{}{SANITIZE_PRELUDE}{FETCH_PRELUDE}{TREE_PRELUDE}{TREE_STAGE_BODY}",
             bindings(plan)
         ),
-
     }
 }
 /// Re-verify one already-staged program without consulting the release
@@ -1530,7 +1529,6 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
                     products::UNIT_SYSTEMD => service::systemd_service(
                         &target.name,
                         &label,
-
                         &path,
                         service::SOURCE_PRODUCT,
                         "",
@@ -1567,8 +1565,7 @@ pub async fn activate_staged_program(
     runner: &Runner,
 ) -> Result<String, DeployError> {
     let plan = plan(target, &staged.request, staged.self_store)?;
-    let recheck =
-        host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?;
+    let recheck = host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?;
     let recheck_markers = markers(&recheck.stdout);
     if !recheck.ok() || marker(&recheck_markers, "step") != "stage" {
         return Err(DeployError(step_failure(&recheck_markers, &recheck)));
@@ -1634,14 +1631,7 @@ pub async fn activate_staged_target(
             "pre-staged release digest is not a SHA-256".to_string(),
         ));
     }
-    release_target_inner(
-        target,
-        request,
-        self_store,
-        Some(staged_sha256),
-        runner,
-    )
-    .await
+    release_target_inner(target, request, self_store, Some(staged_sha256), runner).await
 }
 
 async fn release_target_inner(
@@ -1822,13 +1812,8 @@ async fn release_target_inner(
     let stage = if pre_staged_sha256.is_some() {
         host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?
     } else {
-        host_channel::run_script_with_timeout(
-            target,
-            &stage_script(&plan),
-            STAGE_TIMEOUT,
-            runner,
-        )
-        .await?
+        host_channel::run_script_with_timeout(target, &stage_script(&plan), STAGE_TIMEOUT, runner)
+            .await?
     };
     let stage_markers = markers(&stage.stdout);
     report.insert(
@@ -1999,7 +1984,8 @@ async fn release_target_inner(
                             }
                         }
                         Err(error) => {
-                            let detail = format!("{unit_id}: process identity read failed: {error}");
+                            let detail =
+                                format!("{unit_id}: process identity read failed: {error}");
                             steps.push(step_entry(
                                 "restart",
                                 host_channel::FAILED_STATUS,
