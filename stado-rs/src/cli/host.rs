@@ -57,84 +57,174 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     }
     Ok(())
 }
-/// Reconcile a collector's non-active systemd samples with the manager state
-/// that exists at publication time.
+/// Read a fixed set of non-secret systemd properties for one exact unit.
 ///
-/// A timer-triggered oneshot publishes while systemd calls it `activating`.
-/// The shell collector historically reduced that to `inactive`, so the
-/// publisher's own fresh heartbeat made `registry doctor` report the publisher
-/// as down. Only a successful, local manager read can promote a state; an
-/// unread unit keeps the collector's explicit non-active verdict.
-async fn refresh_locally_active_units(document: &mut Value, runner: &crate::deploy::Runner) {
+/// The manager scope comes from the collector's own unit entry. A missing
+/// scope, command failure, or timeout is unread state and returns `None`.
+async fn local_systemd_properties(
+    manager: &str,
+    unit: &str,
+    properties: &str,
+    runner: &crate::deploy::Runner,
+) -> Option<BTreeMap<String, String>> {
+    let mut argv = vec!["/usr/bin/systemctl".to_string()];
+    match manager {
+        "system" => {}
+        "user" => argv.push("--user".to_string()),
+        _ => return None,
+    }
+    argv.extend([
+        "show".to_string(),
+        format!("--property={properties}"),
+        "--".to_string(),
+        unit.to_string(),
+    ]);
+    let mut spec = crate::deploy::CommandSpec::new(argv);
+    spec.timeout = Some(std::time::Duration::from_secs(2));
+    let output = runner(spec).await.ok()?;
+    if !output.ok() {
+        return None;
+    }
+    Some(
+        output
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect(),
+    )
+}
+
+/// Reconcile a collector's non-active systemd sample with native lifecycle
+/// evidence that exists at publication time.
+///
+/// A timer-triggered oneshot is not a continuously active service. It becomes
+/// `scheduled` only when systemd proves its type, an active trigger, and either
+/// an execution underway or a completed successful run. Ordinary services
+/// become `active` only when their own native state is active or reloading.
+/// Any unread or incomplete evidence leaves the collector's explicit
+/// non-active state untouched.
+async fn refresh_local_unit_lifecycle(document: &mut Value, runner: &crate::deploy::Runner) {
     if !cfg!(target_os = "linux") {
         return;
     }
-    let pending: Vec<(String, String)> = document
+    let pending: Vec<(String, String, String)> = document
         .get("units")
         .and_then(Value::as_object)
         .into_iter()
         .flat_map(|units| units.iter())
         .filter_map(|(unit, entry)| {
-            let state = match entry {
-                Value::String(state) => Some(state.as_str()),
-                Value::Object(fields) => fields.get("state").and_then(Value::as_str),
-                _ => None,
-            }?;
-            (state != "active").then(|| (unit.clone(), state.to_string()))
+            let fields = entry.as_object()?;
+            let state = fields.get("state").and_then(Value::as_str)?;
+            let manager = fields.get("manager").and_then(Value::as_str)?;
+            (state != "active").then(|| {
+                (
+                    unit.clone(),
+                    state.to_string(),
+                    manager.to_string(),
+                )
+            })
         })
         .collect();
 
-    for (unit, collector_state) in pending {
-        let mut spec = crate::deploy::CommandSpec::new(vec![
-            "/usr/bin/systemctl".to_string(),
-            "show".to_string(),
-            "--property=LoadState,ActiveState".to_string(),
-            "--".to_string(),
-            unit.clone(),
-        ]);
-        spec.timeout = Some(std::time::Duration::from_secs(2));
-        let Ok(output) = runner(spec).await else {
-            continue;
-        };
-        if !output.ok() {
-            continue;
-        }
-        let property = |name: &str| {
-            output.stdout.lines().find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                (key == name).then_some(value)
-            })
-        };
-        let Some(manager_state @ ("active" | "activating" | "reloading")) =
-            property("ActiveState")
+    for (unit, collector_state, manager) in pending {
+        let Some(properties) = local_systemd_properties(
+            &manager,
+            &unit,
+            "LoadState,ActiveState,Type,Result,ExecMainStatus,ExecMainStartTimestamp,TriggeredBy",
+            runner,
+        )
+        .await
         else {
             continue;
         };
-        if property("LoadState") != Some("loaded") {
+        if properties.get("LoadState").map(String::as_str) != Some("loaded") {
             continue;
         }
+        let Some(native_state) = properties.get("ActiveState").map(String::as_str) else {
+            continue;
+        };
 
-        let Some(entry) = document
+        let triggers: Vec<String> = properties
+            .get("TriggeredBy")
+            .into_iter()
+            .flat_map(|value| value.split_whitespace())
+            .map(str::to_string)
+            .collect();
+        let oneshot = properties.get("Type").map(String::as_str) == Some("oneshot");
+        let scheduled_run = if oneshot && native_state == "activating" {
+            Some("running")
+        } else if oneshot
+            && properties.get("Result").map(String::as_str) == Some("success")
+            && properties.get("ExecMainStatus").map(String::as_str) == Some("0")
+            && properties
+                .get("ExecMainStartTimestamp")
+                .is_some_and(|stamp| !stamp.is_empty() && stamp != "n/a")
+            && matches!(native_state, "inactive" | "active" | "reloading")
+        {
+            Some("succeeded")
+        } else {
+            None
+        };
+        let mut active_trigger = None;
+        if scheduled_run.is_some() && !triggers.is_empty() {
+            for trigger in &triggers {
+                let Some(trigger_properties) = local_systemd_properties(
+                    &manager,
+                    trigger,
+                    "LoadState,ActiveState",
+                    runner,
+                )
+                .await
+                else {
+                    continue;
+                };
+                let trigger_state = trigger_properties.get("ActiveState");
+                if trigger_properties.get("LoadState").map(String::as_str) == Some("loaded")
+                    && trigger_state.is_some_and(|state| {
+                        matches!(state.as_str(), "active" | "activating" | "reloading")
+                    })
+                {
+                    active_trigger = trigger_state.map(|state| (trigger.clone(), state.clone()));
+                    break;
+                }
+            }
+        }
+
+        let published_state = if active_trigger.is_some() && scheduled_run.is_some() {
+            "scheduled"
+        } else if !oneshot && matches!(native_state, "active" | "reloading") {
+            "active"
+        } else {
+            continue;
+        };
+        let Some(fields) = document
             .get_mut("units")
             .and_then(Value::as_object_mut)
             .and_then(|units| units.get_mut(&unit))
+            .and_then(Value::as_object_mut)
         else {
             continue;
         };
-        match entry {
-            Value::Object(fields) => {
-                fields.insert("state".to_string(), json!("active"));
-                fields.insert("collector_state".to_string(), json!(collector_state));
-                fields.insert("manager_state".to_string(), json!(manager_state));
+        fields.insert("state".to_string(), json!(published_state));
+        fields.insert("collector_state".to_string(), json!(collector_state));
+        fields.insert("native_state".to_string(), json!(native_state));
+        if published_state == "scheduled" {
+            fields.insert("service_type".to_string(), json!("oneshot"));
+            fields.insert("run_state".to_string(), json!(scheduled_run));
+            fields.insert("triggered_by".to_string(), json!(triggers));
+            if scheduled_run == Some("succeeded") {
+                fields.insert("result".to_string(), json!("success"));
+                fields.insert("exec_main_status".to_string(), json!("0"));
+                fields.insert(
+                    "last_started_at".to_string(),
+                    json!(properties.get("ExecMainStartTimestamp")),
+                );
             }
-            Value::String(_) => {
-                *entry = json!({
-                    "state": "active",
-                    "collector_state": collector_state,
-                    "manager_state": manager_state,
-                });
+            if let Some((trigger, trigger_state)) = active_trigger {
+                fields.insert("active_trigger".to_string(), json!(trigger));
+                fields.insert("trigger_state".to_string(), json!(trigger_state));
             }
-            _ => {}
         }
     }
 }
@@ -201,7 +291,7 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
 
     if beacon_is_this_host(&host) {
         let runner = crate::deploy::production_runner();
-        refresh_locally_active_units(&mut document, &runner).await;
+        refresh_local_unit_lifecycle(&mut document, &runner).await;
         let link = crate::deploy::host_link::collect_link(&runner).await;
         if let Some(object) = document.as_object_mut() {
             object.insert("link".to_string(), serde_json::to_value(&link)?);

@@ -52,6 +52,11 @@ use super::CmdError;
 /// The state a live launchd/systemd unit reports
 /// (`deploy/host_health_beacon_macos.sh`, `deploy/host_health_beacon.sh`).
 const ACTIVE_STATE: &str = "active";
+/// A successful timer-triggered oneshot with an active native trigger.
+///
+/// This is intentionally distinct from [`ACTIVE_STATE`]: it proves scheduled
+/// lifecycle health, not a continuously running process.
+const SCHEDULED_STATE: &str = "scheduled";
 
 /// Exit code for a registry write refused because the document had already
 /// moved: `sysexits.h`'s `EX_TEMPFAIL`, "try again".
@@ -1240,6 +1245,64 @@ impl Beacon {
             other => Some(other.to_string()),
         }
     }
+
+    /// Whether a `scheduled` unit carries the complete native evidence the
+    /// publisher requires before assigning that state.
+    fn scheduled_unit_is_healthy(&self, unit: &str) -> bool {
+        let Some(fields) = self
+            .body
+            .as_ref()
+            .and_then(|body| body.get("units"))
+            .and_then(Value::as_object)
+            .and_then(|units| units.get(unit))
+            .and_then(Value::as_object)
+        else {
+            return false;
+        };
+        let common_evidence = fields.get("state").and_then(Value::as_str)
+            == Some(SCHEDULED_STATE)
+            && fields.get("service_type").and_then(Value::as_str) == Some("oneshot")
+            && fields
+                .get("manager")
+                .and_then(Value::as_str)
+                .is_some_and(|manager| matches!(manager, "system" | "user"))
+            && fields
+                .get("triggered_by")
+                .and_then(Value::as_array)
+                .is_some_and(|triggers| {
+                    fields
+                        .get("active_trigger")
+                        .and_then(Value::as_str)
+                        .is_some_and(|active| {
+                            triggers.iter().any(|trigger| trigger.as_str() == Some(active))
+                        })
+                })
+            && fields
+                .get("trigger_state")
+                .and_then(Value::as_str)
+                .is_some_and(|state| matches!(state, "active" | "activating" | "reloading"));
+        if !common_evidence {
+            return false;
+        }
+        match fields.get("run_state").and_then(Value::as_str) {
+            Some("running") => {
+                fields.get("native_state").and_then(Value::as_str) == Some("activating")
+            }
+            Some("succeeded") => {
+                fields
+                    .get("native_state")
+                    .and_then(Value::as_str)
+                    .is_some_and(|state| matches!(state, "inactive" | "active" | "reloading"))
+                    && fields.get("result").and_then(Value::as_str) == Some("success")
+                    && fields.get("exec_main_status").and_then(Value::as_str) == Some("0")
+                    && fields
+                        .get("last_started_at")
+                        .and_then(Value::as_str)
+                        .is_some_and(|stamp| !stamp.is_empty() && stamp != "n/a")
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Every beacon in the store, keyed by slug — the `<slug>.json` stem that
@@ -2252,17 +2315,22 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                     )
                     .about(declared.id.as_str()),
                 ),
-                Some(state) if state != ACTIVE_STATE => findings.push(
-                    Finding::new(
-                        "unit-not-active",
-                        &target.name,
-                        format!(
-                            "registry declares service {} ({}) but {} reports state={state}",
-                            declared.name, declared.id, beacon.path
-                        ),
+                Some(state)
+                    if state != ACTIVE_STATE
+                        && !beacon.scheduled_unit_is_healthy(&declared.id) =>
+                {
+                    findings.push(
+                        Finding::new(
+                            "unit-not-active",
+                            &target.name,
+                            format!(
+                                "registry declares service {} ({}) but {} reports state={state}",
+                                declared.name, declared.id, beacon.path
+                            ),
+                        )
+                        .about(declared.id.as_str()),
                     )
-                    .about(declared.id.as_str()),
-                ),
+                }
                 Some(_) => {}
             }
         }
