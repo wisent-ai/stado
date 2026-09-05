@@ -56,7 +56,7 @@ struct OperationsDashboardAddress: Equatable, Sendable {
 enum OperationsClientError: LocalizedError, Sendable {
     case invalidDashboardURL
     case invalidResponse
-    case server(Int)
+    case server(Int, String)
     case responseTooLarge
     case malformedState
     case malformedInventory
@@ -67,8 +67,8 @@ enum OperationsClientError: LocalizedError, Sendable {
             "Use HTTPS for remote dashboards. Plain HTTP is limited to IPv4 and IPv6 loopback addresses. Credentials, query parameters, and fragments are not accepted."
         case .invalidResponse:
             "The Stado dashboard returned an invalid response."
-        case let .server(status):
-            "The Stado dashboard returned HTTP \(status)."
+        case let .server(status, detail):
+            detail.isEmpty ? "The Stado dashboard returned HTTP \(status)." : detail
         case .responseTooLarge:
             "The Stado dashboard response exceeded the safe display limit."
         case .malformedState:
@@ -89,7 +89,7 @@ actor OperationsClient {
         configuration.httpShouldSetCookies = false
         configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 30
+        configuration.timeoutIntervalForResource = 120
         session = URLSession(configuration: configuration)
     }
 
@@ -157,11 +157,13 @@ actor OperationsClient {
         guard let http = response as? HTTPURLResponse else {
             throw OperationsClientError.invalidResponse
         }
-        guard http.statusCode == 200 else {
-            throw OperationsClientError.server(http.statusCode)
-        }
         guard data.count <= maximumResponseBytes else {
             throw OperationsClientError.responseTooLarge
+        }
+        guard http.statusCode == 200 else {
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let detail = object?["error"] as? String ?? ""
+            throw OperationsClientError.server(http.statusCode, detail)
         }
         return data
     }

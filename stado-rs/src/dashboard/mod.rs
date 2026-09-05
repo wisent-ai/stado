@@ -1288,7 +1288,15 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -2324,7 +2332,15 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -2677,7 +2693,15 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -2736,7 +2760,15 @@ impl Dashboard {
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
-            authorize_object(self, request, object.namespace(), object.key(), false, "delete").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "delete",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}

@@ -1256,7 +1256,9 @@ fn clamp_cargo_inventory(cargo: &mut CargoInventory) {
     let bin_exact = clamp_filesystem_metadata(&mut cargo.bin);
     let mut complete = home_exact && bin_exact;
     clamp(&mut cargo.entries_state);
-    cargo.entries.sort_by(|left, right| left.name.cmp(&right.name));
+    cargo
+        .entries
+        .sort_by(|left, right| left.name.cmp(&right.name));
     cargo.entries_seen = cargo.entries_seen.max(cargo.entries.len() as u64);
     cargo.entries.truncate(MAX_CARGO_BIN_ENTRIES);
     cargo.entries_complete &= matches!(cargo.entries_state.as_str(), "read" | "missing")
