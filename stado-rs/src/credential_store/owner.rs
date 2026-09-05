@@ -34,13 +34,18 @@ use crate::skarbiec::SkarbiecError;
 const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
 /// Envelope every owner write carries.
 const ITEM_SCHEMA: &str = "skarbiec.item.v2";
-/// Vaults the fleet's operator items may live in when nothing overrides it,
+/// Vaults the fleet's operator items may live in when nothing declares one,
 /// in the order `skarbiec`'s own `vaults` command searches them, so Stado and
 /// Skarbiec cannot answer "which vault" differently.
-const VAULT_CANDIDATES: &[&str] = &[
-    "$HOME/.local/share/skarbiec/skarbiec.vault.json",
-    "$HOME/.stado/skarbiec.vault.json",
-    "$HOME/skarbiec.vault.json",
+///
+/// Stated as tails rather than whole paths because the same rule is applied
+/// by a reader holding only a path from ANOTHER machine — `stado host vaults`
+/// judges a fleet report whose `$HOME` is not this process's, and a second
+/// hand-written list there is how the two would drift.
+pub const VAULT_CANDIDATE_TAILS: &[&str] = &[
+    "/.local/share/skarbiec/skarbiec.vault.json",
+    "/.stado/skarbiec.vault.json",
+    "/skarbiec.vault.json",
 ];
 
 fn home() -> Result<String, SkarbiecError> {
@@ -95,26 +100,32 @@ pub fn binary() -> Result<PathBuf, SkarbiecError> {
 /// When two candidates carry the SAME owner identity the machine has no
 /// single authoritative vault, and picking either silently is exactly the
 /// failure above. That is refused, naming both paths and their item counts,
-/// because an operator who is told can set `SKARBIEC_VAULT_FILE` and a
+/// because an operator who is told can declare the one they mean and a
 /// program that guesses cannot be corrected. The contents are never merged
 /// here: which items belong where is the operator's decision.
+///
+/// The answer is read from `secrets.skarbiec.vault_file`, so it is one
+/// declaration this and every later command shares —
+/// `SKARBIEC_VAULT_FILE` still overrides it, which is how a build is
+/// exercised before it is installed, but an environment variable answers for
+/// one process and the split brain outlives it.
 pub fn vault() -> Result<PathBuf, SkarbiecError> {
-    if let Ok(explicit) = std::env::var("SKARBIEC_VAULT_FILE") {
-        if !explicit.trim().is_empty() {
-            let path = PathBuf::from(explicit.trim());
-            if !path.is_file() {
-                return Err(SkarbiecError::Deployment(format!(
-                    "SKARBIEC_VAULT_FILE names no file: {}",
-                    path.display()
-                )));
-            }
-            return Ok(path);
+    let declared = crate::config::skarbiec_vault_file();
+    if !declared.trim().is_empty() {
+        let path = PathBuf::from(declared.trim());
+        if !path.is_file() {
+            return Err(SkarbiecError::Deployment(format!(
+                "the declared owner vault {} is not a file on this machine; \
+                 correct secrets.skarbiec.vault_file, or clear it to discover one",
+                path.display()
+            )));
         }
+        return Ok(path);
     }
     let home = home()?;
-    let candidates: Vec<PathBuf> = VAULT_CANDIDATES
+    let candidates: Vec<PathBuf> = VAULT_CANDIDATE_TAILS
         .iter()
-        .map(|candidate| PathBuf::from(candidate.replace("$HOME", home.as_str())))
+        .map(|tail| PathBuf::from(format!("{}{tail}", home.as_str())))
         .collect::<Vec<_>>();
     let present: Vec<(PathBuf, String, usize)> = candidates
         .iter()
@@ -133,8 +144,13 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
                 "this machine holds {} vaults that all claim owner {first_owner}: {described}. \
                  There is no single authoritative vault, so a credential write or an \
                  authoritative read here would silently pick one — which is how six real items \
-                 became invisible to the release verifier. Name the one you mean with \
-                 SKARBIEC_VAULT_FILE, or reconcile them; nothing is merged for you.",
+                 became invisible to the release verifier. Declare the one you mean, which \
+                 every later command then shares: `stado config set \
+                 secrets.skarbiec.vault_file <path>` locally, or `stado host config-set \
+                 <target> secrets.skarbiec.vault_file <path>` for a managed host. \
+                 `stado credentials vault` reports this state and each candidate's owner and \
+                 item count, and `stado host vaults <target>` reports the same for a managed \
+                 host. Nothing is merged for you.",
                 present.len()
             )));
         }
@@ -143,15 +159,140 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
         return Ok(path);
     }
     Err(SkarbiecError::Deployment(format!(
-        "no owner vault in {}; this machine cannot write credential items. \
-         Set SKARBIEC_VAULT_FILE, or run the write on the host that holds the vault \
-         (`stado host vaults` names them)",
+        "no owner vault in {}; this machine cannot write credential items. Declare one with \
+         `stado config set secrets.skarbiec.vault_file <path>`, or run the write on the host \
+         that holds the vault (`stado host vaults` names them)",
         candidates
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
             .join(", ")
     )))
+}
+
+/// Which of a host's vaults its own credential operations resolve to, given
+/// what that host declares in `secrets.skarbiec.vault_file`.
+///
+/// The counts were never the question an operator arrives with. `stado host
+/// vaults lukasz-macbook` answered "8 vault(s)" for months while two of them
+/// claimed one owner, and nothing in the report said that every owner write
+/// and every authoritative read on that machine was refused because of it —
+/// that surfaced only when `stado host reconcile-release-verifier` failed,
+/// with the fleet's release publication boundary already closed.
+///
+/// The three states are the resolution rule itself, and no item name is
+/// consulted to decide them: a declared path that is one of the host's own
+/// vaults, one candidate to discover, or several candidates under one owner,
+/// which is a refusal on that host until it declares which.
+pub fn authority(declared: Option<&str>, vaults: &[Value]) -> Value {
+    let path_of = |vault: &Value| {
+        vault
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    // A host whose installed release predates this key answers with no field
+    // at all, which is not the same fact as a host that declares nothing —
+    // reading the first as the second is how a reader older than a
+    // declaration reports a state the host is not in.
+    let Some(declared) = declared else {
+        return json!({
+            "state": "unreadable",
+            "path": Value::Null,
+            "detail": "this host's stado release has no secrets.skarbiec.vault_file field, \
+                       so what it resolves cannot be read from here",
+        });
+    };
+    let declared = declared.trim();
+    if !declared.is_empty() {
+        let held = vaults.iter().any(|vault| path_of(vault) == declared);
+        return json!({
+            "state": if held { "declared" } else { "declared-absent" },
+            "path": declared,
+            "detail": if held {
+                "declared in secrets.skarbiec.vault_file".to_string()
+            } else {
+                format!("secrets.skarbiec.vault_file names {declared}, which this host does not hold")
+            },
+        });
+    }
+    // Only the paths discovery actually searches can answer it. A host holds
+    // vaults discovery never looks at — a Weles worker's own store, a
+    // migration broker's, an operator's personal one — and counting those as
+    // rivals would report a refusal that the host does not make.
+    let candidates = vaults
+        .iter()
+        .filter(|vault| {
+            crate::credential_store::owner::VAULT_CANDIDATE_TAILS
+                .iter()
+                .any(|tail| path_of(vault).ends_with(tail))
+        })
+        .collect::<Vec<_>>();
+    let mut owners = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for vault in &candidates {
+        let owner = vault
+            .get("owner")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if owner.is_empty() {
+            continue;
+        }
+        owners.entry(owner).or_default().push(path_of(vault));
+    }
+    // Only a same-owner collision is ambiguous: two candidates with two
+    // owners are two machines' worth of items in one home, not a question
+    // about which one is this host's.
+    let contested = owners
+        .iter()
+        .filter(|(_, paths)| paths.len() > usize::from(true))
+        .map(|(owner, paths)| format!("{owner}: {}", paths.join(", ")))
+        .collect::<Vec<_>>();
+    if !contested.is_empty() {
+        return json!({
+            "state": "ambiguous",
+            "path": Value::Null,
+            "detail": format!(
+                "several vaults claim one owner ({}), so every owner write and \
+                 authoritative read on this host is refused until \
+                 secrets.skarbiec.vault_file names one",
+                contested.join("; ")
+            ),
+        });
+    }
+    match candidates.first() {
+        Some(vault) => json!({
+            "state": "discovered",
+            "path": path_of(vault),
+            "detail": "the only candidate this host holds",
+        }),
+        None => json!({
+            "state": "none",
+            "path": Value::Null,
+            "detail": "this host holds no vault discovery searches, so it cannot write credential items",
+        }),
+    }
+}
+
+/// This machine's own candidates, in discovery order, as the same shape a
+/// fleet report carries: one rule reads both.
+pub fn candidates_present() -> Result<Vec<Value>, SkarbiecError> {
+    let home = home()?;
+    Ok(VAULT_CANDIDATE_TAILS
+        .iter()
+        .map(|tail| PathBuf::from(format!("{home}{tail}")))
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            vault_identity(&path).map(|(owner, items)| {
+                json!({
+                    "path": path.display().to_string(),
+                    "owner": owner,
+                    "items": items,
+                })
+            })
+        })
+        .collect())
 }
 
 /// One candidate's owner identity and item count, or `None` when it is not a

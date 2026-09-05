@@ -1326,6 +1326,15 @@ impl Dashboard {
         None
     }
 
+    fn storage_write_guard(&self) -> Result<Option<std::fs::File>, StorageError> {
+        match self.store.local_storage_path() {
+            Some(root) => {
+                crate::queue::LocalBackend::write_guard_for_root(std::path::Path::new(root))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
         // The immutable release channel is the recovery root for every other
@@ -1335,11 +1344,7 @@ impl Dashboard {
         if path_no_query == "/api/release/object" {
             return match self.get_routes(request).await {
                 Ok(response) => response,
-                Err(_) => Response::text(
-                    http_status("500"),
-                    "Internal Server Error",
-                    "dashboard error",
-                ),
+                Err(error) => dashboard_error_response(error),
             };
         }
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
@@ -1392,6 +1397,14 @@ impl Dashboard {
                     .expect("dashboard boundary state lock");
                 (!boundaries.all_ready(), boundaries.state_json())
             };
+            let write_fence = self
+                .store
+                .local_storage_path()
+                .filter(|_| self.store.backend_name() == "local")
+                .map(|root| {
+                    crate::queue::LocalBackend::write_fence_state(std::path::Path::new(root))
+                        .unwrap_or_else(|error| json!({"error": error.to_string()}))
+                });
             return send_json(
                 http_status("200"),
                 &json!({
@@ -1402,6 +1415,13 @@ impl Dashboard {
                         "version": env!("CARGO_PKG_VERSION"),
                         "backend": self.store.backend_name(),
                         "local_path": self.store.local_storage_path(),
+                        "write_fence": write_fence,
+                        "backup": self.store.backup_endpoint().map(|endpoint| json!({
+                            "backend": endpoint.kind,
+                            "local_path": (endpoint.adapter()
+                                == Some(crate::capabilities::StorageAdapter::Local))
+                                .then_some(endpoint.path.as_str()),
+                        })),
                     },
                 }),
             );
@@ -1545,11 +1565,7 @@ impl Dashboard {
         }
         match self.get_routes(request).await {
             Ok(response) => response,
-            Err(_) => Response::text(
-                http_status("500"),
-                "Internal Server Error",
-                "dashboard error",
-            ),
+            Err(error) => dashboard_error_response(error),
         }
     }
 
@@ -2397,6 +2413,12 @@ impl Dashboard {
             }
         }
 
+        // Hold across publication, metadata, mirror writes and chunk cleanup:
+        // a handoff must not capture half of an accepted composition.
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         let mut staged = match tempfile::NamedTempFile::new() {
             Ok(staged) => staged,
             Err(error) => return object_compose_error(http_status("500"), error.to_string()),
@@ -2769,9 +2791,13 @@ impl Dashboard {
                 )
             }
         }
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         match self.put_object(request, &object, query).await {
             Ok(response) => response,
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => dashboard_error_response(error),
         }
     }
 
@@ -2836,13 +2862,17 @@ impl Dashboard {
                 )
             }
         }
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         let result = self.store.delete_blob(&object.storage_path()).await;
         match result {
             Ok(()) => send_json(
                 http_status("200"),
                 &json!({"state": "absent", "uri": object.to_string()}),
             ),
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => storage_error_response(error),
         }
     }
 
@@ -2930,7 +2960,7 @@ impl Dashboard {
                 http_status("200"),
                 &json!({"state": "stored", "host": host, "path": path}),
             ),
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => storage_error_response(error),
         }
     }
 
@@ -3214,13 +3244,11 @@ impl Response {
             200 => "OK",
             401 => "Unauthorized",
             409 => "Conflict",
+            500 => "Internal Server Error",
+            503 => "Service Unavailable",
             _ => "OK",
         };
         Self::new(status, reason, "application/json", body.as_bytes())
-    }
-
-    fn text(status: u16, reason: &str, body: &str) -> Self {
-        Self::new(status, reason, "text/plain; charset=utf-8", body.as_bytes())
     }
 }
 
@@ -3248,6 +3276,28 @@ fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usize)> {
 
 fn http_status(value: &str) -> u16 {
     value.parse().expect("static HTTP status is valid")
+}
+
+fn storage_error_status(error: &StorageError) -> u16 {
+    if matches!(error, StorageError::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock) {
+        http_status("503")
+    } else {
+        http_status("500")
+    }
+}
+
+fn storage_error_response(error: StorageError) -> Response {
+    send_json(
+        storage_error_status(&error),
+        &json!({"error": error.to_string()}),
+    )
+}
+
+fn dashboard_error_response(error: DashboardError) -> Response {
+    match error {
+        DashboardError::Storage(error) => storage_error_response(error),
+        other => send_json(http_status("500"), &json!({"error": other.to_string()})),
+    }
 }
 
 fn empty_response(status: u16, reason: &str) -> Response {

@@ -426,7 +426,7 @@ if phase == "read-fence":
         with open(fence_path, "r", encoding="utf-8") as handle:
             fence = json.load(handle)
     except FileNotFoundError:
-        fence = {"schema": "stado.storage-root-fence.v4", "transaction": tx,
+        fence = {"schema": "stado.storage-root-fence.v5", "transaction": tx,
                  "status": "absent", "writers": []}
     print("STADO_STORAGE_RECONCILE\t" +
           json.dumps(fence, sort_keys=True, separators=(",", ":")))
@@ -489,11 +489,18 @@ if phase == "status":
 
 
 def inventory(root, paths):
-    return [{
-        "path": relative,
-        "body": regular_identity(os.path.join(root, relative)),
-        "metadata": regular_identity(metadata_path(root, relative)),
-    } for relative in paths]
+    result = []
+    for relative in paths:
+        body_path = os.path.join(root, relative)
+        body = regular_identity(body_path)
+        if body is None:
+            raise FileNotFoundError(body_path)
+        result.append({
+            "path": relative,
+            "body": body,
+            "metadata": regular_identity(metadata_path(root, relative)),
+        })
+    return result
 
 
 def validate_inventory(root, objects, label):
@@ -517,21 +524,11 @@ def validate_complete_inventory(root, objects, label):
     actual_metadata = metadata_paths(root)
     if actual_metadata != expected_metadata:
         fail(label + " metadata namespace changed")
-def stable_checkpoint_inventory(root, label):
-    previous = None
-    for _ in range(30):
-        try:
-            paths = object_paths(root)
-            candidate = (paths, inventory(root, paths), physical_inventory(root))
-        except FileNotFoundError:
-            previous = None
-            time.sleep(0.2)
-            continue
-        if candidate == previous:
-            return candidate
-        previous = candidate
-        time.sleep(0.2)
-    fail(label + " did not reach two consecutive identical physical inventories")
+
+
+def complete_physical_inventory(root):
+    paths = object_paths(root)
+    return paths, inventory(root, paths), physical_inventory(root)
 
 
 
@@ -572,18 +569,51 @@ def checkpoint_tree(source, destination, snapshot):
     validate_physical_checkpoint(destination, snapshot, "sealed checkpoint")
 
 
+def require_storage_write_fence():
+    lock = os.path.join(home, ".stado", "recovery", "storage-root-writes.lock")
+    intent_path = os.path.join(home, ".stado", "recovery", "storage-root-write-fence.json")
+    try:
+        with open(fence_path, encoding="utf-8") as handle:
+            lifecycle = json.load(handle)
+        with open(intent_path, encoding="utf-8") as handle:
+            intent = json.load(handle)
+        effect = lifecycle.get("write_fence") or {}
+        if (lifecycle.get("schema") != "stado.storage-root-fence.v5"
+                or lifecycle.get("transaction") != tx
+                or effect.get("status") != "acquired"
+                or effect.get("intent") != intent
+                or intent.get("schema") != "stado.storage-root-write-fence.v1"
+                or intent.get("transaction") != tx
+                or not lifecycle.get("queue", {}).get("drained")):
+            fail("physical inventory requires the recorded drained storage write fence")
+        descriptor = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fail("storage write-fence intent has no active exclusive hold")
+        finally:
+            os.close(descriptor)
+    except Exception as error:
+        fail("storage write fence cannot be observed: " + str(error))
+
+
+if phase in ("preflight", "checkpoint", "apply", "arm-activation", "arm-rollback"):
+    require_storage_write_fence()
+
+
 if phase == "preflight":
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
-    backup_physical = physical_inventory(backup)
-    primary_physical = physical_inventory(primary)
+    backup_paths, backup_objects, backup_physical = complete_physical_inventory(backup)
+    primary_paths, primary_objects, primary_physical = complete_physical_inventory(primary)
     print("STADO_STORAGE_RECONCILE\t" + json.dumps({
         "schema": schema,
         "transaction": tx,
         "status": "observed",
         "observed_at": time.time(),
-        "backup_qualified": inventory(backup, backup_paths),
-        "primary_qualified": inventory(primary, primary_paths),
+        "backup_qualified": backup_objects,
+        "primary_qualified": primary_objects,
         "backup_physical": backup_physical,
         "primary_physical": primary_physical,
         "physical_snapshot_exclusions": [],
@@ -696,10 +726,12 @@ if phase == "checkpoint":
             fence = json.load(handle)
     except Exception as error:
         fail("durable lifecycle fence is absent or unreadable: " + str(error))
-    if (fence.get("schema") != "stado.storage-root-fence.v4"
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
             or fence.get("transaction") != tx or fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or not (fence.get("staged_runtime") or {}).get("staged_sha256")
+            or (fence.get("write_fence") or {}).get("status") != "acquired"
+            or not fence.get("preflight_evidence")
             or not fence.get("rechecked_at")):
         fail("durable lifecycle fence is incomplete")
     if any(item.get("status") != "stopped" for item in fence.get("writers", [])):
@@ -715,10 +747,8 @@ if phase == "checkpoint":
     if receipt is not None and receipt.get("status") != "checkpointing":
         fail("checkpoint receipt is not resumable: " + str(receipt.get("status")))
     if receipt is None:
-        backup_paths, backup_objects, backup_physical = stable_checkpoint_inventory(
-            backup, "backup")
-        primary_paths, primary_objects, primary_physical = stable_checkpoint_inventory(
-            primary, "primary")
+        backup_paths, backup_objects, backup_physical = complete_physical_inventory(backup)
+        primary_paths, primary_objects, primary_physical = complete_physical_inventory(primary)
         checkpoint_evidence = {
             "schema": "stado.storage-root-checkpoint-evidence.v1",
             "transaction": tx,
@@ -883,6 +913,9 @@ if phase == "arm-rollback":
         fail("rollback effects require every writer to remain stopped")
     validate_complete_inventory(backup, backup_objects, "live B before rollback")
     validate_physical_checkpoint(backup, backup_physical, "live physical B before rollback")
+    if (fence.get("roots") or {}).get("prior_primary") == primary:
+        validate_complete_inventory(primary, primary_objects, "live A before rollback")
+        validate_physical_checkpoint(primary, primary_physical, "live physical A before rollback")
     receipt["status"] = "rollback_effects_armed"
     receipt["rollback_effect_boundary_at"] = time.time()
     atomic_json(receipt_path, receipt)
@@ -997,10 +1030,11 @@ if phase == "activate":
         fail("activated lifecycle fence cannot be read: " + str(error))
     active_path = os.path.expanduser("~/.stado/bin/stado")
     expected_digest = fence.get("activation_sha256")
-    if (fence.get("schema") != "stado.storage-root-fence.v4"
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
             or fence.get("status") != "activated"
             or not fence.get("queue", {}).get("resumed")
             or not fence.get("restored_at")
+            or (fence.get("write_fence") or {}).get("status") != "released"
             or not isinstance(expected_digest, str)
             or len(expected_digest) != 64
             or os.path.islink(active_path)

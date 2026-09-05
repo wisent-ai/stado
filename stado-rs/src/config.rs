@@ -1068,6 +1068,16 @@ static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .to_string_lossy()
     .into_owned()
 });
+/// The vault this machine's owner writes go through, declared rather than
+/// discovered. Empty means "discover", which is correct on a host holding one
+/// vault and refused on a host holding two under one owner.
+static SKARBIEC_VAULT_FILE: LazyLock<String> = LazyLock::new(|| {
+    let declared = cfg("SKARBIEC_VAULT_FILE", "secrets.skarbiec.vault_file", "");
+    if declared.trim().is_empty() {
+        return String::new();
+    }
+    expand_tilde(declared.trim()).to_string_lossy().into_owned()
+});
 static AGENT_SKARBIEC_URL: LazyLock<String> =
     LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
 static AGENT_SKARBIEC_CONSUMER: LazyLock<String> =
@@ -3934,6 +3944,11 @@ pub fn skarbiec_consumer() -> &'static str {
 /// Owner-only file containing the scoped Skarbiec grant.
 pub fn skarbiec_token_file() -> &'static str {
     SKARBIEC_TOKEN_FILE.as_str()
+}
+
+/// The declared owner vault on this machine, empty when nothing declares one.
+pub fn skarbiec_vault_file() -> &'static str {
+    SKARBIEC_VAULT_FILE.as_str()
 }
 
 /// Exact private product namespace policies accepted by the object gateway.
