@@ -121,6 +121,52 @@ pub(crate) fn is_transition_sentinel_state(state: &str) -> bool {
     state.starts_with(TRANSITION_FENCE_PREFIX) || state.starts_with(TRANSITION_CLEANED_PREFIX)
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TransitionSnapshotProof {
+    pub job_id: String,
+    pub retired: bool,
+}
+
+/// Parse one immutable transition snapshot through the production transition
+/// type and prove that its object key is the canonical digest key for its job.
+pub(crate) fn validate_transition_snapshot(
+    path: &str,
+    content: &str,
+) -> Result<TransitionSnapshotProof, StorageError> {
+    let transition: JobTransition = serde_json::from_str(content)?;
+    if transition.schema != TRANSITION_SCHEMA || path != transition_path(&transition.job_id) {
+        return Err(StorageError::Other(format!(
+            "invalid durable transition snapshot {path}"
+        )));
+    }
+    Ok(TransitionSnapshotProof {
+        job_id: transition.job_id,
+        retired: transition.state == TRANSITION_RETIRED_STATE,
+    })
+}
+
+pub(crate) fn validate_cancellation_snapshot(
+    job_id: &str,
+    content: &str,
+) -> Result<(), StorageError> {
+    let request: serde_json::Value = serde_json::from_str(content)?;
+    if request.get("job_id").and_then(serde_json::Value::as_str) != Some(job_id) {
+        return Err(StorageError::Other(format!(
+            "cancellation marker does not belong to {job_id}"
+        )));
+    }
+    let requested_at = request
+        .get("requested_at")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| StorageError::Other(format!("cancellation marker for {job_id} has no requested_at")))?;
+    chrono::DateTime::parse_from_rfc3339(requested_at).map_err(|error| {
+        StorageError::Other(format!(
+            "cancellation marker for {job_id} has invalid requested_at: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
 fn merge_transition_destination(
     current: &Job,
     requested: &Job,

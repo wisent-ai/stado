@@ -8,12 +8,12 @@
 //! checkpoint retains conflicting primary bytes before the backup-winning
 //! value is installed.
 
-use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -36,8 +36,11 @@ pub const RUN: &str = "run";
 pub const RESUME: &str = "resume";
 const TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const PREFLIGHT: &str = "preflight";
+const RECORD_LIFECYCLE_DECISIONS: &str = "record-lifecycle-decisions";
 static RESIDENT_OWNER_TOKEN: OnceLock<String> = OnceLock::new();
 static RESIDENT_RUNNER_GATE: OnceLock<Value> = OnceLock::new();
+static RESIDENT_LOCK_FD: OnceLock<i32> = OnceLock::new();
+static RESIDENT_TARGET: OnceLock<crate::targets::ComputeTarget> = OnceLock::new();
 const ROLLBACK_OBJECT_API_SCRIPT: &str = r#"set -euo pipefail
 if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   printf 'unsupported_os\n' >&2
@@ -67,22 +70,24 @@ account=$(/usr/bin/id -un)
 /usr/bin/python3 - "$staged" "$label" "$program" "$store" "$backup_backend" "$backup_store" "$account" "$log" "$HOME" "$config" "$port" <<'PY'
 import plistlib, sys
 path, label, program, store, backup_backend, backup_store, account, log, home, config, port = sys.argv[1:]
+environment = {
+    "HOME": home,
+    "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "STADO_CONFIG": config,
+    "GNUPGHOME": f"{home}/.gnupg",
+    "SKARBIEC_VAULT_FILE": f"{home}/.stado/skarbiec.vault.json",
+    "WC_OBJECT_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-object-api-verifier-skarbiec-token",
+    "WC_RELEASE_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-release-api-verifier-skarbiec-token",
+    "WC_STORAGE_BACKEND": "local",
+    "WC_LOCAL_STORAGE_PATH": store,
+}
+if backup_store:
+    environment["WC_BACKUP_STORAGE_BACKEND"] = backup_backend
+    environment["WC_BACKUP_LOCAL_STORAGE_PATH"] = backup_store
 document = {
     "Label": label,
     "ProgramArguments": [program, "dashboard", "--bind", "127.0.0.1", "--port", port],
-    "EnvironmentVariables": {
-        "HOME": home,
-        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        "STADO_CONFIG": config,
-        "GNUPGHOME": f"{home}/.gnupg",
-        "SKARBIEC_VAULT_FILE": f"{home}/.stado/skarbiec.vault.json",
-        "WC_OBJECT_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-object-api-verifier-skarbiec-token",
-        "WC_RELEASE_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-release-api-verifier-skarbiec-token",
-        "WC_STORAGE_BACKEND": "local",
-        "WC_LOCAL_STORAGE_PATH": store,
-        "WC_BACKUP_STORAGE_BACKEND": backup_backend,
-        "WC_BACKUP_LOCAL_STORAGE_PATH": backup_store,
-    },
+    "EnvironmentVariables": environment,
     "RunAtLoad": True,
     "KeepAlive": True,
     "UserName": account,
@@ -101,7 +106,7 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 "#;
 
 const REMOTE_SCRIPT: &str = r#"set -u
-STADO_RECONCILE_PHASE=@PHASE@ STADO_RECONCILE_TX=@TRANSACTION@ STADO_RECONCILE_FENCE=@FENCE@ STADO_RECONCILE_OWNER_TOKEN=@OWNER_TOKEN@ /usr/bin/python3 - <<'STADO_RECONCILE_EOF'
+STADO_RECONCILE_PHASE=@PHASE@ STADO_RECONCILE_TX=@TRANSACTION@ STADO_RECONCILE_FENCE=@FENCE@ STADO_RECONCILE_OWNER_TOKEN=@OWNER_TOKEN@ STADO_RECONCILE_LOCK_FD=@LOCK_FD@ /usr/bin/python3 - <<'STADO_RECONCILE_EOF'
 import ctypes, datetime, fcntl, hashlib, json, os, stat, sys, time
 
 phase = os.environ["STADO_RECONCILE_PHASE"]
@@ -112,6 +117,7 @@ backup = os.path.join(home, ".stado", "local-backup")
 work = os.path.join(home, ".stado", "recovery", "storage-root-reconcile", tx)
 backup_snapshot = os.path.join(work, "local-backup.checkpoint")
 primary_snapshot = os.path.join(work, "local-storage.checkpoint")
+effective_lifecycle_snapshot = os.path.join(work, "effective-lifecycle.checkpoint")
 owner_path = os.path.join(work, "operation-owner.json")
 owner_token = os.environ.get("STADO_RECONCILE_OWNER_TOKEN", "")
 receipt_path = os.path.join(work, "receipt.json")
@@ -353,34 +359,31 @@ def load_receipt():
 
 
 os.makedirs(os.path.dirname(lock_path), mode=0o700, exist_ok=True)
-operation_lock = None
 if phase not in ("read-fence", "status"):
-    if owner_token:
-        try:
-            with open(owner_path, "r", encoding="utf-8") as handle:
-                owner = json.load(handle)
-            owner_pid = int(owner.get("pid"))
-            if (owner.get("schema") != "stado.storage-root-owner.v1"
-                    or owner.get("transaction") != tx
-                    or owner.get("token") != owner_token
-                    or owner.get("status") != "executing"):
-                fail("resident transaction owner does not authorize this effect")
-            os.kill(owner_pid, 0)
-        except Exception as error:
-            fail("resident transaction owner is unavailable: " + str(error))
-    else:
-        operation_lock = open(lock_path, "a+b")
-        try:
-            fcntl.flock(operation_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            fail("another storage-root reconciliation holds the transaction lock")
+    try:
+        lock_fd = int(os.environ.get("STADO_RECONCILE_LOCK_FD", "-1"))
+        descriptor = os.fstat(lock_fd)
+        canonical = os.lstat(lock_path)
+        with open(owner_path, "r", encoding="utf-8") as handle:
+            owner = json.load(handle)
+        if (lock_fd < 0
+                or descriptor.st_dev != canonical.st_dev
+                or descriptor.st_ino != canonical.st_ino
+                or owner.get("schema") != "stado.storage-root-owner.v1"
+                or owner.get("transaction") != tx
+                or owner.get("token") != owner_token
+                or owner.get("status") != "executing"):
+            fail("resident transaction owner and inherited OS lock do not authorize this effect")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception as error:
+        fail("resident transaction lock proof is unavailable: " + str(error))
 
 if phase == "read-fence":
     try:
         with open(fence_path, "r", encoding="utf-8") as handle:
             fence = json.load(handle)
     except FileNotFoundError:
-        fence = {"schema": "stado.storage-root-fence.v2", "transaction": tx,
+        fence = {"schema": "stado.storage-root-fence.v3", "transaction": tx,
                  "status": "absent", "writers": []}
     print("STADO_STORAGE_RECONCILE\t" +
           json.dumps(fence, sort_keys=True, separators=(",", ":")))
@@ -392,7 +395,7 @@ if phase == "record-fence":
         fence = json.loads(fence_payload)
     except Exception as error:
         fail("lifecycle fence payload is invalid: " + str(error))
-    if (fence.get("schema") != "stado.storage-root-fence.v2"
+    if (fence.get("schema") != "stado.storage-root-fence.v3"
             or fence.get("transaction") != tx):
         fail("lifecycle fence payload belongs to another transaction")
     atomic_json(fence_path, fence)
@@ -435,7 +438,7 @@ if phase == "status":
     if os.path.isfile(receipt_path):
         emit(load_receipt())
     else:
-        print("STADO_STORAGE_RECONCILE\\t" + json.dumps({
+        print("STADO_STORAGE_RECONCILE\t" + json.dumps({
             "schema": schema,
             "transaction": tx,
             "status": "absent",
@@ -516,7 +519,7 @@ if phase == "preflight":
     primary_paths = object_paths(primary)
     backup_physical = physical_inventory(backup)
     primary_physical = physical_inventory(primary)
-    print("STADO_STORAGE_RECONCILE\\t" + json.dumps({
+    print("STADO_STORAGE_RECONCILE\t" + json.dumps({
         "schema": schema,
         "transaction": tx,
         "status": "observed",
@@ -528,269 +531,70 @@ if phase == "preflight":
         "physical_snapshot_exclusions": [],
     }, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
-def lifecycle_decisions():
-    backup_paths = set(object_paths(backup_snapshot))
-    primary_paths = set(object_paths(primary_snapshot))
-    effective_paths = backup_paths | primary_paths
-    primary_only = primary_paths - backup_paths
-    lifecycle_names = {
-        "queue", "running", "completed", "uploaded", "failed", "cancelled",
-        "status", "queue_priority", "cancellations", "job-transitions", "runs",
-    }
-    terminal = {"completed", "uploaded", "failed", "cancelled"}
 
-    def effective_file(relative):
-        root = backup_snapshot if relative in backup_paths else primary_snapshot
-        return os.path.join(root, relative)
+def validate_effective_lifecycle(root, expected):
+    actual = []
+    for directory, dirs, files in os.walk(root):
+        dirs[:] = sorted(name for name in dirs if name not in (".locks", ".metadata"))
+        for name in sorted(files):
+            path = os.path.join(directory, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                fail("effective lifecycle snapshot contains a non-regular file: " + path)
+            actual.append(os.path.relpath(path, root))
+    if sorted(actual) != sorted(expected):
+        fail("effective lifecycle snapshot namespace differs from its qualified A/B union")
 
-    def document(relative):
-        try:
-            with open(effective_file(relative), "r", encoding="utf-8") as handle:
-                value = json.load(handle)
-        except Exception as error:
-            fail("invalid effective lifecycle document " + relative + ": " + str(error))
-        if not isinstance(value, dict):
-            fail("effective lifecycle document is not an object: " + relative)
-        return value
 
-    def parse_timestamp(value):
-        if not isinstance(value, str) or not value:
-            return None
-        try:
-            parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return parsed if parsed.utcoffset() is not None else None
-
-    def terminal_outcome_job(entry, run_id, index, manifest_created_at):
-        if not isinstance(entry, dict) or entry.get("state") not in {"terminal", "reaped"}:
-            return None
-        planned = entry.get("planned_job")
-        outcome = entry.get("outcome")
-        if (not isinstance(planned, dict) or not isinstance(outcome, dict)
-                or set(outcome) != {"prefix", "recorded_at", "job"}):
-            return None
-        job = outcome.get("job")
-        prefix = outcome.get("prefix")
-        job_id = entry.get("job_id")
-        if (not isinstance(job, dict) or prefix not in terminal
-                or job_id != planned.get("job_id") or job.get("job_id") != job_id
-                or job.get("state") != prefix
-                or planned.get("run_id") != run_id
-                or planned.get("submission_command_index") != index):
-            return None
-        exact_link = (
-            job.get("run_id") == run_id
-            and job.get("submission_request_digest") == planned.get("submission_request_digest")
-            and job.get("submission_command_index") == index
-        )
-        legacy_link = (
-            not job.get("run_id")
-            and not job.get("submission_request_digest")
-            and job.get("submission_command_index") is None
-        )
-        mutable = {
-            "state", "provider", "pin_to_provider", "started_at", "completed_at",
-            "lease_expires_at", "failed_at", "instance_ref", "restarts",
-            "last_restart", "error", "preempt_count", "priority",
-            "dispatch_attempts", "last_dispatch_attempt", "assigned_to",
-            "runtime_seconds_estimate", "gpu_mem_gb", "peak_vram_gb",
-            "peak_vram_per_gpu", "yield_count", "artifact_paths", "run_id",
-            "submission_request_digest", "submission_command_index",
-        }
-        planned_projection = {key: value for key, value in planned.items() if key not in mutable}
-        outcome_projection = {key: value for key, value in job.items() if key not in mutable}
-        recorded_at = parse_timestamp(outcome.get("recorded_at"))
-        terminal_at = parse_timestamp(
-            job.get("failed_at") if prefix == "failed" and job.get("completed_at") is None
-            else job.get("completed_at")
-            if prefix in {"completed", "uploaded", "cancelled"} and job.get("failed_at") is None
-            else None
-        )
-        if (not (exact_link or legacy_link) or planned_projection != outcome_projection
-                or recorded_at is None or terminal_at is None
-                or manifest_created_at is None
-                or terminal_at < manifest_created_at or terminal_at > recorded_at):
-            return None
-        return job
-
-    terminal_jobs = {}
-    for prefix in sorted(terminal):
-        start = lifecycle_root + prefix + "/"
-        for relative in sorted(effective_paths):
-            if not relative.startswith(start) or not relative.endswith(".json"):
-                continue
-            job_id = relative[len(start):-5]
-            job = document(relative)
-            if job.get("job_id") != job_id or job.get("state") != prefix:
-                fail("terminal lifecycle identity mismatch: " + relative)
-            terminal_jobs[job_id] = {"prefix": prefix, "path": relative, "job": job}
-
-    retained = {}
-    run_prefix = lifecycle_root + "runs/"
-    run_documents = {}
-    strict_retained_runs = set()
-    terminal_recovery_runs = set()
-    for relative in sorted(effective_paths):
-        if not relative.startswith(run_prefix) or not relative.endswith(".json"):
-            continue
-        manifest = document(relative)
-        run_documents[relative] = manifest
-        run_id = relative[len(run_prefix):-5]
-        entries = manifest.get("entries")
-        if (manifest.get("schema") != "stado.run-submission.v3"
-                or manifest.get("run_id") != run_id
-                or not isinstance(entries, list) or not entries):
-            continue
-        created_at = parse_timestamp(manifest.get("created_at"))
-        retained_jobs = []
-        for index, entry in enumerate(entries):
-            job = terminal_outcome_job(entry, run_id, index, created_at)
-            if job is None:
-                retained_jobs = []
-                break
-            retained_jobs.append(job["job_id"])
-        if retained_jobs:
-            strict_retained_runs.add(relative)
-            for job_id in retained_jobs:
-                retained[job_id] = {"run_id": run_id, "manifest": relative}
-            continue
-        entry_job_ids = [
-            entry.get("job_id") for entry in entries
-            if isinstance(entry, dict) and isinstance(entry.get("job_id"), str)
-        ]
-        if len(entry_job_ids) == len(entries) and all(job_id in terminal_jobs for job_id in entry_job_ids):
-            terminal_recovery_runs.add(relative)
-
-    queued_cancellations = set()
-    cancellation_prefix = lifecycle_root + "cancellations/"
-    for relative in sorted(effective_paths):
-        if not relative.startswith(cancellation_prefix) or not relative.endswith(".json"):
-            continue
-        job_id = relative[len(cancellation_prefix):-5]
-        marker = document(relative)
-        requested_at = marker.get("requested_at")
-        if marker.get("job_id") != job_id or parse_timestamp(requested_at) is None:
-            fail("invalid cancellation marker: " + relative)
-        queued = lifecycle_root + "queue/" + job_id + ".json"
-        if queued in effective_paths:
-            queued_job = document(queued)
-            if queued_job.get("job_id") == job_id and queued_job.get("state") == "queued":
-                queued_cancellations.add(job_id)
-
-    grouped = {}
-    for relative in sorted(primary_only):
-        tail = relative[len(lifecycle_root):] if relative.startswith(lifecycle_root) else ""
-        family = tail.split("/", 1)[0]
-        if family not in lifecycle_names:
-            continue
-        job_id = None
-        value = None
-        if family in {"queue", "running", "completed", "uploaded", "failed", "cancelled"}:
-            if not tail.endswith(".json"):
-                fail("invalid lifecycle object name: " + relative)
-            job_id = tail.split("/", 1)[1][:-5]
-            value = document(relative)
-            if value.get("job_id") != job_id or value.get("state") != family:
-                fail("lifecycle job identity mismatch: " + relative)
-        elif family == "cancellations":
-            if not tail.endswith(".json"):
-                fail("invalid cancellation marker name: " + relative)
-            job_id = tail.split("/", 1)[1][:-5]
-            value = document(relative)
-            if value.get("job_id") != job_id or parse_timestamp(value.get("requested_at")) is None:
-                fail("invalid cancellation marker: " + relative)
-        elif family == "status":
-            parts = tail.split("/")
-            if len(parts) != 3 or parts[2] not in {"status", "heartbeat"}:
-                fail("invalid status lifecycle path: " + relative)
-            job_id = parts[1]
-        elif family == "queue_priority":
-            value = document(relative)
-            job_id = value.get("job_id")
-            priority = value.get("priority")
-            if (not isinstance(job_id, str) or not job_id
-                    or not isinstance(priority, int) or isinstance(priority, bool)):
-                fail("invalid priority marker: " + relative)
-            queued = lifecycle_root + "queue/" + job_id + ".json"
-            if queued in effective_paths and document(queued).get("priority") != priority:
-                fail("priority marker disagrees with queued job: " + relative)
-        elif family == "job-transitions":
-            value = document(relative)
-            job_id = value.get("job_id")
-            digest_name = tail.split("/", 1)[1][:-5] if tail.endswith(".json") else ""
-            if (not isinstance(job_id, str)
-                    or hashlib.sha256(job_id.encode("utf-8")).hexdigest() != digest_name
-                    or value.get("schema") != "stado.job-transition.v1"
-                    or not isinstance(value.get("state"), str)):
-                fail("transition lifecycle identity mismatch: " + relative)
-        elif family == "runs":
-            if relative in strict_retained_runs:
-                kind = "preserve_historical_run"
-                reason = "strict complete retained outcomes"
-            elif relative in terminal_recovery_runs:
-                kind = "terminal_run_recovery"
-                reason = "all run jobs are terminal and require canonical retention"
-            else:
-                kind = "block_unclassified_live"
-                reason = "run manifest can still describe live or invalid work"
-            grouped[(kind, relative)] = {
-                "kind": kind,
-                "path": relative,
-                "reason": reason,
-                "primary_only_paths": [relative],
-                "transition_companions": [],
-            }
-            continue
-
-        if job_id in queued_cancellations and family in {"queue", "cancellations", "queue_priority"}:
-            key = ("queued_cancellation", job_id)
-            detail = {"kind": key[0], "job_id": job_id}
-        elif job_id in retained and family in {
-            "queue", "running", "completed", "uploaded", "failed", "cancelled",
-            "status", "queue_priority", "job-transitions"
-        }:
-            proof = retained[job_id]
-            key = ("retained_outcome_cleanup", proof["run_id"])
-            detail = {
-                "kind": key[0],
-                "run_id": proof["run_id"],
-                "manifest": proof["manifest"],
-                "job_ids": [],
-            }
-        elif family in terminal and job_id in terminal_jobs:
-            key = ("preserve_historical", relative)
-            detail = {"kind": key[0], "path": relative, "job_id": job_id}
-        elif family in {"status", "queue_priority", "cancellations"} and job_id in terminal_jobs:
-            key = ("preserve_historical", relative)
-            detail = {"kind": key[0], "path": relative, "job_id": job_id}
-        elif (family == "job-transitions" and isinstance(value, dict)
-              and value.get("state") == transition_retired_state
-              and job_id in terminal_jobs):
-            key = ("preserve_historical_transition", relative)
-            detail = {"kind": key[0], "path": relative, "job_id": job_id}
-        else:
-            key = ("block_unclassified_live", relative)
-            detail = {
-                "kind": key[0],
-                "path": relative,
-                "job_id": job_id,
-                "reason": "A-only lifecycle state lacks strict terminal history or canonical recovery proof",
-            }
-        decision = grouped.setdefault(
-            key,
-            {**detail, "primary_only_paths": [], "transition_companions": []},
-        )
-        if family == "job-transitions" and key[0] == "retained_outcome_cleanup":
-            decision["transition_companions"].append(relative)
-        else:
-            decision["primary_only_paths"].append(relative)
-        if job_id and key[0] == "retained_outcome_cleanup":
-            decision["job_ids"].append(job_id)
-    for decision in grouped.values():
-        if "job_ids" in decision:
-            decision["job_ids"] = sorted(set(decision["job_ids"]))
-    return list(grouped.values())
+def checkpoint_effective_lifecycle(primary_objects, backup_objects):
+    selected = {}
+    for source_root, objects in (
+            (primary_snapshot, primary_objects), (backup_snapshot, backup_objects)):
+        for item in objects:
+            relative = item["path"]
+            if relative.startswith(lifecycle_root):
+                selected[relative[len(lifecycle_root):]] = (source_root, relative, item)
+    expected = sorted(selected)
+    if os.path.isdir(effective_lifecycle_snapshot):
+        validate_sealed_tree(effective_lifecycle_snapshot)
+        validate_effective_lifecycle(effective_lifecycle_snapshot, expected)
+        for relative, (_, source_relative, item) in selected.items():
+            if regular_identity(os.path.join(effective_lifecycle_snapshot, relative)) != item["body"]:
+                fail("effective lifecycle body differs from the immutable overlay: " + source_relative)
+            if regular_identity(metadata_path(effective_lifecycle_snapshot, relative)) != item["metadata"]:
+                fail("effective lifecycle metadata differs from the immutable overlay: " + source_relative)
+        return
+    building = effective_lifecycle_snapshot + ".building"
+    os.makedirs(os.path.join(building, ".locks"), mode=0o700, exist_ok=True)
+    os.makedirs(os.path.join(building, ".metadata"), mode=0o700, exist_ok=True)
+    for relative, (source_root, source_relative, item) in selected.items():
+        destination = os.path.join(building, relative)
+        if regular_identity(destination) != item["body"]:
+            if os.path.lexists(destination):
+                os.unlink(destination)
+            clone_file(os.path.join(source_root, source_relative), destination)
+        source_metadata = metadata_path(source_root, source_relative)
+        destination_metadata = metadata_path(building, relative)
+        if regular_identity(destination_metadata) != item["metadata"]:
+            if os.path.lexists(destination_metadata):
+                os.unlink(destination_metadata)
+            if item["metadata"] is not None:
+                clone_file(source_metadata, destination_metadata)
+        if regular_identity(destination) != item["body"]:
+            fail("effective lifecycle body did not verify: " + source_relative)
+        if regular_identity(destination_metadata) != item["metadata"]:
+            fail("effective lifecycle metadata did not verify: " + source_relative)
+    validate_effective_lifecycle(building, expected)
+    for directory, dirs, files in os.walk(building, topdown=False):
+        for name in files:
+            os.chmod(os.path.join(directory, name), 0o400)
+        for name in dirs:
+            os.chmod(os.path.join(directory, name), 0o500)
+        os.chmod(directory, 0o500)
+    os.replace(building, effective_lifecycle_snapshot)
+    fsync_dir(os.path.dirname(effective_lifecycle_snapshot))
+    seal_tree(effective_lifecycle_snapshot)
+    validate_sealed_tree(effective_lifecycle_snapshot)
+    validate_effective_lifecycle(effective_lifecycle_snapshot, expected)
 
 
 for fixed_root in (primary, backup):
@@ -805,10 +609,9 @@ if phase == "checkpoint":
             fence = json.load(handle)
     except Exception as error:
         fail("durable lifecycle fence is absent or unreadable: " + str(error))
-    if (fence.get("schema") != "stado.storage-root-fence.v2"
+    if (fence.get("schema") != "stado.storage-root-fence.v3"
             or fence.get("transaction") != tx or fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
-            or not fence.get("transport_retained")
             or not (fence.get("staged_runtime") or {}).get("staged_sha256")
             or not fence.get("rechecked_at")):
         fail("durable lifecycle fence is incomplete")
@@ -816,7 +619,7 @@ if phase == "checkpoint":
         fail("durable lifecycle fence does not stop every recorded writer")
     receipt = load_receipt() if os.path.exists(receipt_path) else None
     if receipt is not None and receipt.get("status") in (
-        "checkpoint_ready", "applying", "applied_pending_activation",
+        "checkpoint_ready", "applying", "data_committed_pending_activation",
         "activated_pending_lifecycle", "complete"
     ):
         emit(receipt)
@@ -838,6 +641,7 @@ if phase == "checkpoint":
             "destination": primary,
             "backup_checkpoint": backup_snapshot,
             "primary_checkpoint": primary_snapshot,
+            "effective_lifecycle_checkpoint": effective_lifecycle_snapshot,
             "checkpoint_started_at": time.time(),
             "writer_fence": fence,
             "backup_objects": backup_objects,
@@ -874,7 +678,7 @@ if phase == "checkpoint":
     validate_physical_checkpoint(primary, primary_physical, "primary after checkpoint")
     validate_complete_inventory(backup, backup_objects, "backup qualified namespace after checkpoint")
     validate_complete_inventory(primary, primary_objects, "primary qualified namespace after checkpoint")
-    receipt["lifecycle_decisions"] = lifecycle_decisions()
+    checkpoint_effective_lifecycle(primary_objects, backup_objects)
     receipt["status"] = "checkpoint_ready"
     receipt["checkpointed_at"] = time.time()
     atomic_json(receipt_path, receipt)
@@ -891,11 +695,61 @@ if not isinstance(backup_objects, list) or not isinstance(primary_objects, list)
     fail("checkpoint receipt has no complete object inventories")
 validate_complete_inventory(backup_snapshot, backup_objects, "backup checkpoint")
 validate_complete_inventory(primary_snapshot, primary_objects, "primary checkpoint")
+if phase == "record-lifecycle-decisions":
+    if receipt.get("status") not in (
+            "checkpoint_ready", "applying", "data_committed_pending_activation"):
+        fail("lifecycle decisions require an immutable checkpoint before runtime activation")
+    try:
+        decisions = json.loads(fence_payload)
+    except Exception as error:
+        fail("typed lifecycle decisions are invalid: " + str(error))
+    if not isinstance(decisions, list):
+        fail("typed lifecycle decisions are not a list")
+    encoded_decisions = json.dumps(decisions, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    decision_sha256 = hashlib.sha256(encoded_decisions).hexdigest()
+    existing_decisions = receipt.get("lifecycle_decisions")
+    existing_validation = receipt.get("lifecycle_validation")
+    if existing_decisions is not None and existing_decisions != decisions:
+        fail("typed lifecycle decisions changed after their durable result")
+    if existing_validation is not None and (
+            existing_validation.get("engine") != "stado.typed-lifecycle-snapshot.v1"
+            or existing_validation.get("sha256") != decision_sha256):
+        fail("typed lifecycle validation proof changed after its durable result")
+    receipt["lifecycle_decisions"] = decisions
+    if existing_validation is None:
+        receipt["lifecycle_validation"] = {
+            "engine": "stado.typed-lifecycle-snapshot.v1",
+            "sha256": decision_sha256,
+            "validated_at": time.time(),
+        }
+    atomic_json(receipt_path, receipt)
+    emit(receipt)
+    raise SystemExit(0)
+
+
+def prove_live_additive_union(label):
+    backup_by_path = {item["path"]: item for item in backup_objects}
+    primary_by_path = {item["path"]: item for item in primary_objects}
+    expected_paths = set(primary_by_path) | set(backup_by_path)
+    validate_complete_inventory(backup, backup_objects, "live B " + label)
+    if set(object_paths(primary)) != expected_paths:
+        fail("primary namespace does not equal the additive checkpoint union " + label)
+    for relative in sorted(expected_paths):
+        expected = backup_by_path.get(relative) or primary_by_path[relative]
+        if regular_identity(os.path.join(primary, relative)) != expected["body"]:
+            fail("primary body differs from additive checkpoint " + label + ": " + relative)
+        if regular_identity(metadata_path(primary, relative)) != expected["metadata"]:
+            fail("primary metadata differs from additive checkpoint " + label + ": " + relative)
+    return backup_by_path, primary_by_path, expected_paths
+
+
 
 if phase == "apply":
-    if receipt.get("status") not in ("checkpoint_ready", "applying", "applied_pending_activation"):
+    if receipt.get("status") not in (
+            "checkpoint_ready", "applying", "data_committed_pending_activation"):
         fail("checkpoint receipt is not applicable: " + str(receipt.get("status")))
-    if receipt.get("status") == "applied_pending_activation":
+    if receipt.get("status") == "data_committed_pending_activation":
+        prove_live_additive_union("while resuming committed data")
         emit(receipt)
         raise SystemExit(0)
     try:
@@ -907,6 +761,10 @@ if phase == "apply":
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))
             or fence.get("rechecked_at", 0) < receipt.get("checkpointed_at", 0)):
         fail("lifecycle fence was not rechecked after checkpoint")
+    validation = receipt.get("lifecycle_validation")
+    if (not isinstance(validation, dict)
+            or validation.get("engine") != "stado.typed-lifecycle-snapshot.v1"):
+        fail("typed Rust lifecycle validation is absent")
     blockers = [item for item in receipt.get("lifecycle_decisions", [])
                 if item.get("kind") == "block_unclassified_live"]
     if blockers:
@@ -963,17 +821,9 @@ if phase == "apply":
             fail("destination body did not verify: " + relative)
         if regular_identity(destination_meta) != item["metadata"]:
             fail("destination metadata did not verify: " + relative)
-    validate_complete_inventory(backup, backup_objects, "live B after apply")
-    if set(object_paths(primary)) != expected_paths:
-        fail("primary namespace does not equal the additive checkpoint union")
-    for relative in sorted(expected_paths):
-        expected = backup_by_path.get(relative) or primary_by_path[relative]
-        if regular_identity(os.path.join(primary, relative)) != expected["body"]:
-            fail("final primary body differs from additive checkpoint: " + relative)
-        if regular_identity(metadata_path(primary, relative)) != expected["metadata"]:
-            fail("final primary metadata differs from additive checkpoint: " + relative)
-    receipt["status"] = "applied_pending_activation"
-    receipt["applied_at"] = time.time()
+    prove_live_additive_union("after apply")
+    receipt["status"] = "data_committed_pending_activation"
+    receipt["data_committed_at"] = time.time()
     receipt["verified_objects"] = len(backup_objects)
     receipt["primary_only_preserved"] = True
     receipt["backup_objects_not_written"] = True
@@ -983,10 +833,11 @@ if phase == "apply":
 
 if phase == "activate":
     if receipt.get("status") == "activated_pending_lifecycle":
+        prove_live_additive_union("while resuming activated lifecycle")
         emit(receipt)
         raise SystemExit(0)
-    if receipt.get("status") != "applied_pending_activation":
-        fail("reconciliation is not awaiting runtime activation: " + str(receipt.get("status")))
+    if receipt.get("status") != "data_committed_pending_activation":
+        fail("reconciliation has no committed data proof for runtime activation: " + str(receipt.get("status")))
     try:
         with open(fence_path, "r", encoding="utf-8") as handle:
             fence = json.load(handle)
@@ -994,7 +845,7 @@ if phase == "activate":
         fail("activated lifecycle fence cannot be read: " + str(error))
     active_path = os.path.expanduser("~/.stado/bin/stado")
     expected_digest = fence.get("activation_sha256")
-    if (fence.get("schema") != "stado.storage-root-fence.v2"
+    if (fence.get("schema") != "stado.storage-root-fence.v3"
             or fence.get("status") != "activated"
             or not fence.get("queue", {}).get("resumed")
             or not fence.get("restored_at")
@@ -1002,11 +853,11 @@ if phase == "activate":
             or len(expected_digest) != 64
             or os.path.islink(active_path)
             or not os.path.isfile(active_path)
-            or sha256(active_path) != expected_digest):
+            or digest(active_path) != expected_digest):
         fail("runtime activation and lifecycle restoration are not durably proved")
-    if any(item.get("status") != "restored" for item in fence.get("writers", [])
-           if item.get("was_loaded") or item.get("was_runnable")):
-        fail("activated fence does not restore every prior runnable service")
+    if any(item.get("status") != "restored" for item in fence.get("writers", [])):
+        fail("activated fence does not restore every captured native service state")
+    prove_live_additive_union("after activation")
     receipt["status"] = "activated_pending_lifecycle"
     receipt["activated_at"] = fence.get("activated_at")
     receipt["activated_sha256"] = expected_digest
@@ -1077,9 +928,24 @@ emit(receipt)
 STADO_RECONCILE_EOF
 "#;
 
-const FENCE_SCHEMA: &str = "stado.storage-root-fence.v2";
+const FENCE_SCHEMA: &str = "stado.storage-root-fence.v3";
 const RECORD_FENCE: &str = "record-fence";
 const READ_FENCE: &str = "read-fence";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct FileSnapshot {
+    body_base64: String,
+    sha256: String,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PreparedScript {
+    body: String,
+    sha256: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WriterFence {
@@ -1096,10 +962,21 @@ struct WriterFence {
     #[serde(skip_serializing_if = "Option::is_none")]
     prior_started_at: Option<String>,
     prior_loaded_environment: BTreeMap<String, String>,
+    registry_declared_environment: BTreeMap<String, String>,
+    unit_declared_environment: BTreeMap<String, String>,
     prior_executable: Option<String>,
     prior_sha256: Option<String>,
     prior_device: Option<u64>,
     prior_inode: Option<u64>,
+    unit_snapshot: Option<FileSnapshot>,
+    prior_native_state: Option<String>,
+    prior_last_exit_code: Option<String>,
+    prior_restart: Option<String>,
+    prior_triggers: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forward_object_recovery: Option<PreparedScript>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollback_object_recovery: Option<PreparedScript>,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     restored_pid: Option<String>,
@@ -1115,6 +992,8 @@ struct WriterFence {
     restored_device: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     restored_inode: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restored_route: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1122,6 +1001,14 @@ struct QueueFence {
     was_paused: bool,
     drained: bool,
     resumed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeaseAcquisition {
+    subject_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease: Option<crate::autonomy::storage::PlacementLease>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1134,7 +1021,8 @@ struct LifecycleFence {
     transport_retained: Vec<Value>,
     staged_runtime: Option<super::host_release::StagedRelease>,
     preflight: Value,
-    leases: Vec<crate::autonomy::storage::PlacementLease>,
+    #[serde(default)]
+    lease_acquisitions: Vec<LeaseAcquisition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     repository_runner_gate: Option<Value>,
     prepared_at: i64,
@@ -1155,6 +1043,16 @@ fn bind_remote_script(phase: &str, transaction: &str, fence: &str) -> String {
         .replace(
             "@OWNER_TOKEN@",
             &shlex_quote(RESIDENT_OWNER_TOKEN.get().map(String::as_str).unwrap_or("")),
+        )
+        .replace(
+            "@LOCK_FD@",
+            &shlex_quote(
+                &RESIDENT_LOCK_FD
+                    .get()
+                    .copied()
+                    .unwrap_or(-1)
+                    .to_string(),
+            ),
         )
         .replace(
             "@TRANSITION_RETIRED_STATE@",
@@ -1224,19 +1122,25 @@ async fn repository_runner_gate() -> Result<Option<Value>, DeployError> {
     if let Some(gate) = RESIDENT_RUNNER_GATE.get() {
         return Ok(Some(gate.clone()));
     }
-    let repository = std::env::var("GITHUB_REPOSITORY")
-        .map_err(|_| DeployError("GITHUB_REPOSITORY is required for runner fencing".to_string()))?;
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return Ok(None);
+    }
+    let required = |name: &str| {
+        std::env::var(name).map_err(|_| {
+            DeployError(format!(
+                "{name} is required when storage reconciliation owns an Actions runner"
+            ))
+        })
+    };
+    let repository = required("GITHUB_REPOSITORY")?;
     let owner = repository
         .split_once('/')
         .map(|(owner, _)| owner)
         .filter(|owner| !owner.is_empty())
         .ok_or_else(|| DeployError("GITHUB_REPOSITORY is not owner/repository".to_string()))?;
-    let current_runner = std::env::var("RUNNER_NAME")
-        .map_err(|_| DeployError("RUNNER_NAME is required for runner fencing".to_string()))?;
-    let run_id = std::env::var("GITHUB_RUN_ID")
-        .map_err(|_| DeployError("GITHUB_RUN_ID is required for runner fencing".to_string()))?;
-    let source_sha = std::env::var("GITHUB_SHA")
-        .map_err(|_| DeployError("GITHUB_SHA is required for runner fencing".to_string()))?;
+    let current_runner = required("RUNNER_NAME")?;
+    let run_id = required("GITHUB_RUN_ID")?;
+    let source_sha = required("GITHUB_SHA")?;
     let token = super::host_precheck_runner::github_credential().await?;
     let client = reqwest::Client::new();
     let request = |endpoint: String| {
@@ -1590,7 +1494,13 @@ async fn renew_fence_leases(
     fence: &mut LifecycleFence,
 ) -> Result<(), DeployError> {
     const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
-    for lease in &mut fence.leases {
+    for acquisition in &mut fence.lease_acquisitions {
+        let lease = acquisition.lease.as_mut().ok_or_else(|| {
+            DeployError(format!(
+                "placement lease acquisition for {} has no durable result",
+                acquisition.subject_id
+            ))
+        })?;
         *lease = crate::autonomy::storage::renew_placement_lease(
             store,
             &lease.subject_id,
@@ -1606,6 +1516,7 @@ async fn renew_fence_leases(
                 lease.subject_id
             ))
         })?;
+        acquisition.status = "acquired".to_string();
     }
     Ok(())
 }
@@ -1665,26 +1576,233 @@ fn qualified_copy_required(preflight: &Value) -> Result<bool, DeployError> {
             != Some(item)
     }))
 }
+fn physical_file_identity<'a>(
+    preflight: &'a Value,
+    inventory: &str,
+    path: &str,
+) -> Option<&'a Value> {
+    preflight
+        .get(inventory)?
+        .get("files")?
+        .as_array()?
+        .iter()
+        .find(|item| item.get("path").and_then(Value::as_str) == Some(path))
+        .and_then(|item| item.get("body"))
+}
 
+async fn snapshot_unit_file(
+    target: &crate::targets::ComputeTarget,
+    path: &str,
+    runner: &Runner,
+) -> Result<Option<FileSnapshot>, DeployError> {
+    let script = format!(
+        "STADO_UNIT_PATH={} /usr/bin/python3 - <<'PY'\n\
+import base64, hashlib, json, os, stat\n\
+path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))\n\
+try:\n\
+    info = os.lstat(path)\n\
+except FileNotFoundError:\n\
+    print('STADO_UNIT_SNAPSHOT\\tabsent')\n\
+    raise SystemExit(0)\n\
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):\n\
+    raise SystemExit('unit path is not a regular non-symlink file')\n\
+with open(path, 'rb') as handle:\n\
+    body = handle.read()\n\
+print('STADO_UNIT_SNAPSHOT\\t' + json.dumps({{\n\
+    'body_base64': base64.b64encode(body).decode('ascii'),\n\
+    'sha256': hashlib.sha256(body).hexdigest(),\n\
+    'mode': stat.S_IMODE(info.st_mode),\n\
+    'uid': info.st_uid,\n\
+    'gid': info.st_gid,\n\
+}}, sort_keys=True, separators=(',', ':')))\n\
+PY",
+        shlex_quote(path)
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "unit file could not be snapshotted",
+        )));
+    }
+    let value = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_UNIT_SNAPSHOT\t"))
+        .ok_or_else(|| DeployError("unit snapshot returned no marker".to_string()))?;
+    if value == "absent" {
+        return Ok(None);
+    }
+    serde_json::from_str(value)
+        .map(Some)
+        .map_err(|error| DeployError(format!("unit snapshot is invalid: {error}")))
+}
+fn unit_declared_environment(
+    candidate: &ServiceCandidate,
+    snapshot: Option<&FileSnapshot>,
+) -> Result<BTreeMap<String, String>, DeployError> {
+    let Some(snapshot) = snapshot else {
+        return Ok(BTreeMap::new());
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&snapshot.body_base64)
+        .map_err(|error| DeployError(format!("unit snapshot base64 is invalid: {error}")))?;
+    let content = String::from_utf8(bytes)
+        .map_err(|error| DeployError(format!("unit snapshot is not UTF-8: {error}")))?;
+    let kind = if candidate.declared.path.ends_with(".service") {
+        service::KIND_SYSTEMD
+    } else {
+        service::KIND_LAUNCHD
+    };
+    let unit = service::UnitFile {
+        host: candidate.target.name.clone(),
+        unit: candidate.declared.unit_id().to_string(),
+        path: candidate.declared.path.clone(),
+        kind,
+        content,
+    };
+    let parsed = service::unit_environment(&unit)?;
+    Ok(parsed.env.into_iter().collect())
+}
+
+fn prepared_script(body: String) -> PreparedScript {
+    PreparedScript {
+        sha256: hex::encode(Sha256::digest(body.as_bytes())),
+        body,
+    }
+}
+async fn correlate_served_store(
+    target: &crate::targets::ComputeTarget,
+    port: u16,
+    preflight: &Value,
+    primary_after_commit: bool,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let payload = serde_json::to_vec(&json!({
+        "primary": preflight.get("primary_qualified"),
+        "backup": preflight.get("backup_qualified"),
+        "primary_physical": preflight.get("primary_physical"),
+        "backup_physical": preflight.get("backup_physical"),
+        "primary_after_commit": primary_after_commit,
+    }))
+    .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
+    let script = format!(
+        "STADO_CORRELATION={} STADO_OBJECT_PORT={} /usr/bin/python3 - <<'PY'\n\
+import base64, hashlib, json, os, urllib.parse, urllib.request\n\
+payload = json.loads(base64.b64decode(os.environ['STADO_CORRELATION']))\n\
+port = int(os.environ['STADO_OBJECT_PORT'])\n\
+token_path = os.path.expanduser('~/.stado/queue-object-api-token')\n\
+with open(token_path, encoding='utf-8') as handle:\n\
+    token = handle.read().strip()\n\
+if not token:\n\
+    raise SystemExit('object API correlation token is empty')\n\
+headers = {{'Authorization': 'Bearer ' + token}}\n\
+base = 'http://127.0.0.1:' + str(port)\n\
+request = urllib.request.Request(base + '/api/object/list?namespace=probierz&prefix=', headers=headers)\n\
+with urllib.request.urlopen(request, timeout=30) as response:\n\
+    listed = json.load(response)\n\
+keys = sorted(item.get('key') for item in listed.get('objects', []) if isinstance(item.get('key'), str))\n\
+def identities(name):\n\
+    result = {{}}\n\
+    prefix = 'ecosystem/probierz/'\n\
+    for item in payload[name]:\n\
+        path = item.get('path', '')\n\
+        if not path.startswith(prefix):\n\
+            continue\n\
+        result[path[len(prefix):]] = item.get('body')\n\
+    return result\n\
+primary_before = identities('primary')\n\
+backup = identities('backup')\n\
+primary = dict(primary_before)\n\
+if payload.get('primary_after_commit'):\n\
+    primary.update(backup)\n\
+served = {{}}\n\
+for key in keys:\n\
+    uri = 'stado://probierz/' + key\n\
+    url = base + '/api/object?uri=' + urllib.parse.quote(uri, safe='')\n\
+    request = urllib.request.Request(url, headers=headers)\n\
+    digest = hashlib.sha256()\n\
+    size = 0\n\
+    with urllib.request.urlopen(request, timeout=60) as response:\n\
+        while True:\n\
+            chunk = response.read(1024 * 1024)\n\
+            if not chunk:\n\
+                break\n\
+            digest.update(chunk)\n\
+            size += len(chunk)\n\
+    served[key] = {{'sha256': digest.hexdigest(), 'size': size}}\n\
+matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)\n\
+matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)\n\
+if not matches_primary and not matches_backup:\n\
+    raise SystemExit('object API does not serve either complete physical qualified root')\n\
+authority = 'identical' if matches_primary and matches_backup else 'A' if matches_primary else 'B'\n\
+def physical_identity(name, path):\n\
+    for item in payload[name].get('files', []):\n\
+        if item.get('path') == path:\n\
+            return item.get('body')\n\
+    return None\n\
+object_mappings = [{{\n\
+    'backend': 'stado-object-api', 'namespace': 'probierz', 'key': key,\n\
+    'physical_path': 'ecosystem/probierz/' + key, 'identity': served[key],\n\
+}} for key in keys]\n\
+registry_mappings = [\n\
+    {{'root': 'A', 'backend': 'local', 'namespace': None, 'key': 'registry.json',\n\
+      'physical_path': 'registry.json',\n\
+      'identity': physical_identity('primary_physical', 'registry.json')}},\n\
+    {{'root': 'B', 'backend': 'local', 'namespace': None, 'key': 'registry.json',\n\
+      'physical_path': 'registry.json',\n\
+      'identity': physical_identity('backup_physical', 'registry.json')}},\n\
+    {{'root': 'served', 'backend': 'stado-object', 'namespace': None,\n\
+      'key': 'registry.json', 'physical_path': None,\n\
+      'observation': 'client namespace was not observable from the object API'}},\n\
+]\n\
+print('STADO_SERVED_STORE\\t' + json.dumps({{\n\
+    'object_authority': authority,\n\
+    'endpoint': base,\n\
+    'object_store': {{'backend': 'stado-object-api', 'namespace': 'probierz',\n\
+                     'objects': object_mappings}},\n\
+    'registry_store': {{'mappings': registry_mappings}},\n\
+    'primary_root': os.path.expanduser('~/.stado/local-storage'),\n\
+    'backup_root': os.path.expanduser('~/.stado/local-backup'),\n\
+}}, sort_keys=True, separators=(',', ':')))\n\
+PY",
+        shlex_quote(&encoded),
+        port
+    );
+    let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "object API physical-store correlation failed",
+        )));
+    }
+    output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_SERVED_STORE\t"))
+        .ok_or_else(|| DeployError("object API correlation returned no evidence".to_string()))
+        .and_then(|body| {
+            serde_json::from_str(body)
+                .map_err(|error| DeployError(format!("object API correlation is invalid: {error}")))
+        })
+}
 async fn prepare_lifecycle_fence(
     storage_target: &crate::targets::ComputeTarget,
     transaction: &str,
     runner: &Runner,
 ) -> Result<LifecycleFence, DeployError> {
-    let services = registry_services(storage_target, runner).await?;
     let mut fence = match read_fence(storage_target, transaction, runner).await? {
         Some(existing) => existing,
         None => {
-            let preflight = remote_phase(storage_target, transaction, PREFLIGHT, runner).await?;
+            let services = registry_services(storage_target, runner).await?;
+            let mut preflight = remote_phase(storage_target, transaction, PREFLIGHT, runner).await?;
             let repository_runner_gate = repository_runner_gate().await?;
             let current_runner = repository_runner_gate
                 .as_ref()
                 .and_then(|gate| gate.get("current_runner"))
                 .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    DeployError("runner gate omitted the current runner identity".to_string())
-                })?
-                .to_string();
+                .map(str::to_string);
             let store = crate::queue::JobStorage::new()
                 .await
                 .map_err(|error| DeployError(format!("cannot read queue before fencing: {error}")))?;
@@ -1694,6 +1812,8 @@ async fn prepare_lifecycle_fence(
             let mut writers = Vec::new();
             let mut transport_retained = Vec::new();
             let mut api_already_forward = false;
+            let mut owning_runner_found = false;
+            let mut object_port = None;
             for candidate in &services {
                 let state = super::service_label_print::print_label(
                     &candidate.target,
@@ -1705,9 +1825,12 @@ async fn prepare_lifecycle_fence(
                 let command = state.runs().unwrap_or(&candidate.observed_command);
                 let mut role = service_role(candidate.declared.unit_id(), command).to_string();
                 if role == "runner"
-                    && current_runner_candidate(candidate, command, &current_runner)
+                    && current_runner.as_deref().is_some_and(|current| {
+                        current_runner_candidate(candidate, command, current)
+                    })
                 {
                     role = "current-runner".to_string();
+                    owning_runner_found = true;
                 }
                 let autostart =
                     service::label_autostart(&candidate.target, candidate.declared.unit_id(), runner)
@@ -1723,38 +1846,52 @@ async fn prepare_lifecycle_fence(
                         || state.process_device.is_none()
                         || state.process_inode.is_none()
                         || state.process_sha256.is_none()
-                        || state
-                            .loaded_environment
-                            .get("WC_STORAGE_BACKEND")
-                            .map(String::as_str)
-                            != Some("local")
-                        || state
-                            .loaded_environment
-                            .get("WC_LOCAL_STORAGE_PATH")
-                            .is_none_or(String::is_empty)
-                        || state
-                            .loaded_environment
-                            .get("STADO_CONFIG")
-                            .is_none_or(String::is_empty)
-                        || backup_backend.is_some() != backup_path.is_some()
                     {
                         return Err(DeployError(format!(
-                            "{} cannot be fenced without exact loaded routing and a mapped-inode image identity",
+                            "{} cannot be fenced without a mapped-inode image identity",
                             candidate.declared.unit_id()
                         )));
                     }
-                    let primary_path = state
+                    let loaded_routing_observed = state
                         .loaded_environment
-                        .get("WC_LOCAL_STORAGE_PATH")
+                        .get("WC_STORAGE_BACKEND")
                         .map(String::as_str)
-                        .unwrap_or_default();
-                    api_already_forward = primary_path.ends_with("/.stado/local-storage")
+                        == Some("local")
+                        && state
+                            .loaded_environment
+                            .get("WC_LOCAL_STORAGE_PATH")
+                            .is_some_and(|path| !path.is_empty())
+                        && state
+                            .loaded_environment
+                            .get("STADO_CONFIG")
+                            .is_some_and(|path| !path.is_empty())
+                        && backup_backend.is_some() == backup_path.is_some();
+                    if state.loaded_environment.contains_key("WC_STORAGE_BACKEND")
+                        && !loaded_routing_observed
+                    {
+                        return Err(DeployError(format!(
+                            "{} reported an incomplete loaded storage route",
+                            candidate.declared.unit_id()
+                        )));
+                    }
+                    api_already_forward = loaded_routing_observed
+                        && state
+                            .loaded_environment
+                            .get("WC_LOCAL_STORAGE_PATH")
+                            .is_some_and(|path| path.ends_with("/.stado/local-storage"))
                         && backup_backend.map(String::as_str) == Some("local")
                         && backup_path
                             .map(String::as_str)
                             .is_some_and(|path| path.ends_with("/.stado/local-backup"));
+                    object_port = command_u16_option(command, "--port");
                 }
-                if role == "transport" {
+                if matches!(role.as_str(), "transport" | "current-runner") {
+                    if role == "current-runner" && state.pid.is_none() {
+                        return Err(DeployError(
+                            "Actions runner gate did not map its owning live native process"
+                                .to_string(),
+                        ));
+                    }
                     if state.pid.is_some()
                         && (state.process_started_at.is_none()
                             || state.process_device.is_none()
@@ -1789,6 +1926,7 @@ async fn prepare_lifecycle_fence(
                     return Err(DeployError(format!(
                         "{} cannot be fenced without a mapped-inode process identity",
                         candidate.declared.unit_id()
+
                     )));
                 }
                 if (was_loaded || was_runnable) && candidate.declared.path.is_empty() {
@@ -1797,11 +1935,9 @@ async fn prepare_lifecycle_fence(
                         candidate.declared.unit_id()
                     )));
                 }
-                let listener_port = if role == "object-api" {
-                    command_u16_option(command, "--port")
-                } else {
-                    None
-                };
+                let listener_port = (role == "object-api")
+                    .then_some(object_port)
+                    .flatten();
                 if role == "object-api" && listener_port.is_none() {
                     return Err(DeployError(
                         "object API listener port is absent from its loaded argv".to_string(),
@@ -1809,6 +1945,16 @@ async fn prepare_lifecycle_fence(
                 }
                 let pending =
                     was_loaded || was_runnable || autostart.values().copied().any(|enabled| enabled);
+                let unit_snapshot =
+                    snapshot_unit_file(&candidate.target, &candidate.declared.path, runner).await?;
+                if pending && unit_snapshot.is_none() {
+                    return Err(DeployError(format!(
+                        "{} has no exact unit bytes for restoration",
+                        candidate.declared.unit_id()
+                    )));
+                }
+                let unit_declared_environment =
+                    unit_declared_environment(candidate, unit_snapshot.as_ref())?;
                 writers.push(WriterFence {
                     target: candidate.target.name.clone(),
                     label: candidate.declared.unit_id().to_string(),
@@ -1822,10 +1968,19 @@ async fn prepare_lifecycle_fence(
                     prior_pid: state.pid,
                     prior_started_at: state.process_started_at,
                     prior_loaded_environment: state.loaded_environment,
+                    registry_declared_environment: candidate.declared.env.clone(),
+                    unit_declared_environment,
                     prior_executable: state.process_executable,
                     prior_sha256: state.process_sha256,
                     prior_device: state.process_device,
                     prior_inode: state.process_inode,
+                    unit_snapshot,
+                    prior_native_state: state.state,
+                    prior_last_exit_code: state.last_exit_code,
+                    prior_restart: state.restart,
+                    prior_triggers: state.triggers,
+                    forward_object_recovery: None,
+                    rollback_object_recovery: None,
                     status: if pending { "pending" } else { "stopped" }.to_string(),
                     restored_pid: None,
                     restored_started_at: None,
@@ -1834,6 +1989,7 @@ async fn prepare_lifecycle_fence(
                     restored_sha256: None,
                     restored_device: None,
                     restored_inode: None,
+                    restored_route: None,
                 });
             }
             writers.sort_by_key(|writer| stop_priority(&writer.role));
@@ -1842,37 +1998,100 @@ async fn prepare_lifecycle_fence(
                     "fleet service inventory did not resolve the canonical object API".to_string(),
                 ));
             }
-            if writers
-                .iter()
-                .filter(|writer| writer.role == "current-runner")
-                .count()
-                != 1
-            {
+            if repository_runner_gate.is_some() && !owning_runner_found {
                 return Err(DeployError(
-                    "runner gate did not map exactly one current native runner service".to_string(),
+                    "runner gate did not map its owning native runner service".to_string(),
                 ));
             }
-            let already_reconciled = !qualified_copy_required(&preflight)? && api_already_forward;
-            let staged_runtime = if already_reconciled {
-                None
-            } else {
-                Some(
-                    super::host_release::stage_declared_release(
-                        &storage_target.name,
-                        "stado",
-                        storage_target
-                            .managed_versions
-                            .get("stado")
-                            .ok_or_else(|| {
-                                DeployError(
-                                    "target has no current declared Stado runtime".to_string(),
-                                )
-                            })?,
-                        runner,
-                    )
-                    .await?,
-                )
-            };
+            let correlation = correlate_served_store(
+                storage_target,
+                object_port.ok_or_else(|| {
+                    DeployError("object API listener port is absent from its loaded argv".to_string())
+                })?,
+                &preflight,
+                false,
+                runner,
+            )
+            .await?;
+            preflight
+                .as_object_mut()
+                .ok_or_else(|| DeployError("preflight report is not an object".to_string()))?
+                .insert("served_store".to_string(), correlation.clone());
+            let staged_runtime = super::host_release::stage_declared_release(
+                &storage_target.name,
+                "stado",
+                storage_target.managed_versions.get("stado").ok_or_else(|| {
+                    DeployError("target has no current declared Stado runtime".to_string())
+                })?,
+                runner,
+            )
+            .await?;
+            let primary_root = correlation
+                .get("primary_root")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DeployError("served-store evidence omitted A root".to_string()))?;
+            let backup_root = correlation
+                .get("backup_root")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DeployError("served-store evidence omitted B root".to_string()))?;
+            let object_writer = writers
+                .iter_mut()
+                .find(|writer| writer.role == "object-api")
+                .expect("canonical object API writer was required above");
+            object_writer.forward_object_recovery = Some(object_recovery_script(
+                object_writer,
+                primary_root,
+                Some(backup_root),
+            )?);
+            object_writer.rollback_object_recovery =
+                Some(object_recovery_script(object_writer, backup_root, None)?);
+            let raw_registry_identity =
+                physical_file_identity(&preflight, "primary_physical", "registry.json").cloned();
+            let configuration_evidence = json!({
+                "object_api": {
+                    "loaded_environment_status": if object_writer
+                        .prior_loaded_environment
+                        .contains_key("WC_STORAGE_BACKEND")
+                    {
+                        "observed"
+                    } else {
+                        "unavailable"
+                    },
+                    "observed_loaded_environment": object_writer.prior_loaded_environment.clone(),
+                    "unit_declaration": object_writer.unit_declared_environment.clone(),
+                    "registry_declaration":
+                        object_writer.registry_declared_environment.clone(),
+                },
+                "dashboard_registry_store": {
+                    "backend": if api_already_forward { Value::from("local") } else { Value::Null },
+                    "namespace": Value::Null,
+                    "key": "registry.json",
+                    "physical_root": if api_already_forward { Value::from("A") } else { Value::Null },
+                    "identity": raw_registry_identity,
+                },
+                "remote_registry_store_mapping": {
+                    "backend": "stado-object",
+                    "namespace": Value::Null,
+                    "key": "registry.json",
+                    "physical_path": Value::Null,
+                    "observation": "client namespace was not observed",
+                },
+            });
+            preflight
+                .as_object_mut()
+                .expect("preflight report was validated as an object")
+                .insert("effective_configuration".to_string(), configuration_evidence);
+            let object_runtime_matches = writers
+                .iter()
+                .find(|writer| writer.role == "object-api")
+                .and_then(|writer| writer.prior_sha256.as_deref())
+                == Some(staged_runtime.staged_sha256.as_str());
+            let already_reconciled = !qualified_copy_required(&preflight)?
+                && api_already_forward
+                && physical_file_identity(&preflight, "primary_physical", "registry.json").is_some()
+                && correlation.get("object_authority").and_then(Value::as_str) == Some("A")
+                && object_runtime_matches;
+            let staged_runtime = Some(staged_runtime);
             let initial = LifecycleFence {
                 schema: FENCE_SCHEMA.to_string(),
                 transaction: transaction.to_string(),
@@ -1891,7 +2110,7 @@ async fn prepare_lifecycle_fence(
                 transport_retained,
                 staged_runtime,
                 preflight,
-                leases: Vec::new(),
+                lease_acquisitions: Vec::new(),
                 repository_runner_gate,
                 prepared_at: Utc::now().timestamp(),
                 rechecked_at: 0,
@@ -1924,10 +2143,30 @@ async fn prepare_lifecycle_fence(
     let store = crate::queue::JobStorage::new()
         .await
         .map_err(|error| DeployError(format!("cannot open queue for fencing: {error}")))?;
-    if fence.leases.is_empty() {
-        const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
-        for writer in &fence.writers {
-            let subject = format!("storage-root-service:{}:{}", writer.target, writer.label);
+    const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
+    let subjects = fence
+        .writers
+        .iter()
+        .map(|writer| format!("service:{}:{}", writer.target, writer.label))
+        .collect::<Vec<_>>();
+    for subject in subjects {
+        let index = match fence
+            .lease_acquisitions
+            .iter()
+            .position(|entry| entry.subject_id == subject)
+        {
+            Some(index) => index,
+            None => {
+                fence.lease_acquisitions.push(LeaseAcquisition {
+                    subject_id: subject.clone(),
+                    status: "acquire_intent".to_string(),
+                    lease: None,
+                });
+                write_fence(storage_target, transaction, &fence, runner).await?;
+                fence.lease_acquisitions.len() - 1
+            }
+        };
+        if fence.lease_acquisitions[index].lease.is_none() {
             let lease = crate::autonomy::storage::acquire_placement_lease(
                 &store,
                 &subject,
@@ -1939,13 +2178,13 @@ async fn prepare_lifecycle_fence(
             .await
             .map_err(|error| DeployError(format!("cannot acquire {subject}: {error}")))?
             .ok_or_else(|| DeployError(format!("active placement lease blocks {subject}")))?;
-            fence.leases.push(lease);
+            fence.lease_acquisitions[index].lease = Some(lease);
+            fence.lease_acquisitions[index].status = "acquired".to_string();
+            write_fence(storage_target, transaction, &fence, runner).await?;
         }
-        write_fence(storage_target, transaction, &fence, runner).await?;
-    } else {
-        renew_fence_leases(&store, &mut fence).await?;
-        write_fence(storage_target, transaction, &fence, runner).await?;
     }
+    renew_fence_leases(&store, &mut fence).await?;
+    write_fence(storage_target, transaction, &fence, runner).await?;
 
     if !fence.queue.drained {
         let current = crate::queue::control::read(&store)
@@ -1978,7 +2217,8 @@ async fn prepare_lifecycle_fence(
         fence.queue.drained = true;
         write_fence(storage_target, transaction, &fence, runner).await?;
     }
-    for writer in &fence.writers {
+    for index in 0..fence.writers.len() {
+        let writer = &fence.writers[index];
         let current = super::service_label_print::print_label(
             storage_target,
             &writer.label,
@@ -1988,26 +2228,54 @@ async fn prepare_lifecycle_fence(
         .await?;
         let current_autostart =
             service::label_autostart(storage_target, &writer.label, runner).await?;
-        if current.loaded() != writer.was_loaded
-            || current.pid.as_deref() != writer.prior_pid.as_deref()
-            || current.process_started_at.as_deref() != writer.prior_started_at.as_deref()
-            || current.process_executable.as_deref() != writer.prior_executable.as_deref()
-            || current.process_device != writer.prior_device
-            || current.process_inode != writer.prior_inode
-            || current.process_sha256.as_deref() != writer.prior_sha256.as_deref()
-            || current.loaded_environment != writer.prior_loaded_environment
-            || current_autostart != writer.autostart
-        {
-            return Err(DeployError(format!(
-                "{} changed after preflight and before native fencing",
-                writer.label
-            )));
+        let process_matches_prior = current.loaded() == writer.was_loaded
+            && current.pid.as_deref() == writer.prior_pid.as_deref()
+            && current.process_started_at.as_deref() == writer.prior_started_at.as_deref()
+            && current.process_executable.as_deref() == writer.prior_executable.as_deref()
+            && current.process_device == writer.prior_device
+            && current.process_inode == writer.prior_inode
+            && current.process_sha256.as_deref() == writer.prior_sha256.as_deref()
+            && current.loaded_environment == writer.prior_loaded_environment;
+        match writer.status.as_str() {
+            "pending" if process_matches_prior && current_autostart == writer.autostart => {}
+            "stop_intent" if !current.loaded() && current.pid.is_none() => {
+                if writer
+                    .autostart
+                    .iter()
+                    .any(|(scope, enabled)| *enabled && current_autostart.get(scope) != Some(&false))
+                {
+                    return Err(DeployError(format!(
+                        "{} stopped after an interrupted fence but remained enabled",
+                        writer.label
+                    )));
+                }
+                fence.writers[index].status = "stopped".to_string();
+                write_fence(storage_target, transaction, &fence, runner).await?;
+            }
+            "stop_intent"
+                if process_matches_prior
+                    && writer.autostart.iter().all(|(scope, prior)| {
+                        current_autostart
+                            .get(scope)
+                            .is_some_and(|current| current == prior || (*prior && !*current))
+                    }) => {}
+            "stopped" if !current.loaded() && current.pid.is_none() => {}
+            state => {
+                return Err(DeployError(format!(
+                    "{} native state does not match resumable fence state {state:?}",
+                    writer.label
+                )));
+            }
         }
     }
 
     for index in 0..fence.writers.len() {
         if fence.writers[index].status == "stopped" {
             continue;
+        }
+        if fence.writers[index].status == "pending" {
+            fence.writers[index].status = "stop_intent".to_string();
+            write_fence(storage_target, transaction, &fence, runner).await?;
         }
         renew_fence_leases(&store, &mut fence).await?;
         write_fence(storage_target, transaction, &fence, runner).await?;
@@ -2027,7 +2295,7 @@ async fn prepare_lifecycle_fence(
                 "{label} remained enabled after persistent lifecycle disable"
             )));
         }
-        if fence.writers[index].was_loaded {
+        if fence.writers[index].was_loaded || fence.writers[index].was_runnable {
             let (state, detail) =
                 service::bootout_label(storage_target, &label, service::BootoutScope::Any, runner)
                     .await?;
@@ -2129,6 +2397,31 @@ async fn recheck_lifecycle_fence(
                 "retained transport {label} is no longer a runnable mapped image"
             )));
         }
+        let prior = retained
+            .get("state")
+            .and_then(Value::as_object)
+            .ok_or_else(|| DeployError(format!("retained transport {label} has no prior state")))?;
+        let current = state.to_json();
+        for field in [
+            "pid",
+            "process_started_at",
+            "process_executable",
+            "process_device",
+            "process_inode",
+            "process_sha256",
+        ] {
+            if current.get(field) != prior.get(field) {
+                return Err(DeployError(format!(
+                    "retained transport {label} changed mapped identity field {field}"
+                )));
+            }
+        }
+        let autostart = service::label_autostart(storage_target, label, runner).await?;
+        if retained.get("autostart") != Some(&json!(autostart)) {
+            return Err(DeployError(format!(
+                "retained transport {label} changed native autostart state"
+            )));
+        }
     }
     fence.rechecked_at = Utc::now().timestamp();
     write_fence(storage_target, transaction, &fence, runner).await?;
@@ -2159,45 +2452,229 @@ fn managed_writer(
     managed_from_unit(target, &writer.label, &writer.path, kind)
 }
 
-fn rollback_object_api_script(writer: &WriterFence) -> Result<String, DeployError> {
-    let environment = &writer.prior_loaded_environment;
-    if environment.get("WC_STORAGE_BACKEND").map(String::as_str) != Some("local") {
+fn object_recovery_script(
+    writer: &WriterFence,
+    primary: &str,
+    backup: Option<&str>,
+) -> Result<PreparedScript, DeployError> {
+    if primary.is_empty() || backup == Some("") {
         return Err(DeployError(
-            "captured object API did not use a direct local primary".to_string(),
+            "prepared object recovery contains an empty physical root".to_string(),
         ));
     }
-    let primary = environment
-        .get("WC_LOCAL_STORAGE_PATH")
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| DeployError("captured object API primary path is absent".to_string()))?;
-    let backup_backend = environment
-        .get("WC_BACKUP_STORAGE_BACKEND")
-        .map(String::as_str)
-        .unwrap_or("");
-    let backup = environment
-        .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-        .map(String::as_str)
-        .unwrap_or("");
-    if (backup_backend.is_empty() && !backup.is_empty())
-        || (!backup_backend.is_empty() && (backup_backend != "local" || backup.is_empty()))
-    {
-        return Err(DeployError(
-            "captured object API backup route is incomplete or not direct local".to_string(),
-        ));
-    }
-    let config = environment
+    let config = writer
+        .prior_loaded_environment
         .get("STADO_CONFIG")
+        .or_else(|| writer.unit_declared_environment.get("STADO_CONFIG"))
+        .or_else(|| writer.registry_declared_environment.get("STADO_CONFIG"))
         .filter(|path| !path.is_empty())
-        .ok_or_else(|| DeployError("captured object API STADO_CONFIG is absent".to_string()))?;
+        .ok_or_else(|| {
+            DeployError(
+                "object API has neither observed nor declared STADO_CONFIG for recovery".to_string(),
+            )
+        })?;
     let port = writer
         .listener_port
         .ok_or_else(|| DeployError("captured object API port is absent".to_string()))?;
-    Ok(ROLLBACK_OBJECT_API_SCRIPT
+    let body = ROLLBACK_OBJECT_API_SCRIPT
         .replace("@PRIMARY@", &shlex_quote(primary))
-        .replace("@BACKUP_BACKEND@", &shlex_quote(backup_backend))
-        .replace("@BACKUP@", &shlex_quote(backup))
+        .replace(
+            "@BACKUP_BACKEND@",
+            &shlex_quote(if backup.is_some() { "local" } else { "" }),
+        )
+        .replace("@BACKUP@", &shlex_quote(backup.unwrap_or("")))
         .replace("@CONFIG@", &shlex_quote(config))
-        .replace("@PORT@", &port.to_string()))
+        .replace("@PORT@", &port.to_string());
+    Ok(prepared_script(body))
+}
+
+fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
+    for writer in &fence.writers {
+        if let Some(snapshot) = &writer.unit_snapshot {
+            let body = base64::engine::general_purpose::STANDARD
+                .decode(&snapshot.body_base64)
+                .map_err(|error| DeployError(format!("{} unit snapshot is invalid: {error}", writer.label)))?;
+            if hex::encode(Sha256::digest(&body)) != snapshot.sha256 {
+                return Err(DeployError(format!(
+                    "{} unit snapshot digest does not match its exact bytes",
+                    writer.label
+                )));
+            }
+        }
+        for script in [
+            writer.forward_object_recovery.as_ref(),
+            writer.rollback_object_recovery.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if hex::encode(Sha256::digest(script.body.as_bytes())) != script.sha256 {
+                return Err(DeployError(format!(
+                    "{} prepared recovery script digest changed",
+                    writer.label
+                )));
+            }
+        }
+        if writer.role == "object-api"
+            && (writer.forward_object_recovery.is_none()
+                || writer.rollback_object_recovery.is_none())
+        {
+            return Err(DeployError(
+                "object API has no immutable forward and B-only rollback configurations"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn restore_unit_snapshot(
+    target: &crate::targets::ComputeTarget,
+    writer: &WriterFence,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    let snapshot = writer.unit_snapshot.as_ref().ok_or_else(|| {
+        DeployError(format!("{} has no captured exact unit bytes", writer.label))
+    })?;
+    let script = format!(
+        "STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'\n\
+import base64, hashlib, os, stat, subprocess, tempfile\n\
+path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))\n\
+body = base64.b64decode(os.environ['STADO_UNIT_BODY'])\n\
+expected = os.environ['STADO_UNIT_SHA']\n\
+if hashlib.sha256(body).hexdigest() != expected:\n\
+    raise SystemExit('captured unit bytes fail their digest')\n\
+work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')\n\
+os.makedirs(work, mode=0o700, exist_ok=True)\n\
+fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)\n\
+try:\n\
+    with os.fdopen(fd, 'wb') as handle:\n\
+        handle.write(body)\n\
+        handle.flush()\n\
+        os.fsync(handle.fileno())\n\
+    command = ['/usr/bin/sudo', '-n', '/usr/bin/install',\n\
+               '-m', os.environ['STADO_UNIT_MODE'],\n\
+               '-o', os.environ['STADO_UNIT_UID'],\n\
+               '-g', os.environ['STADO_UNIT_GID'], temporary, path]\n\
+    result = subprocess.run(command, stdin=subprocess.DEVNULL,\n\
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n\
+                            text=True, close_fds=False)\n\
+    if result.returncode != 0:\n\
+        raise SystemExit((result.stderr or result.stdout).strip())\n\
+finally:\n\
+    try:\n\
+        os.unlink(temporary)\n\
+    except FileNotFoundError:\n\
+        pass\n\
+info = os.lstat(path)\n\
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):\n\
+    raise SystemExit('restored unit is not a regular file')\n\
+with open(path, 'rb') as handle:\n\
+    if hashlib.sha256(handle.read()).hexdigest() != expected:\n\
+        raise SystemExit('restored unit digest mismatch')\n\
+print('STADO_UNIT_RESTORED\\t' + expected)\n\
+PY",
+        shlex_quote(&writer.path),
+        shlex_quote(&snapshot.body_base64),
+        shlex_quote(&snapshot.sha256),
+        snapshot.mode,
+        snapshot.uid,
+        snapshot.gid,
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
+    if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "exact unit bytes were not restored",
+        )));
+    }
+    Ok(())
+}
+
+fn restored_state_matches(
+    writer: &WriterFence,
+    state: &super::service_label_print::LabelState,
+    autostart: &BTreeMap<String, bool>,
+    active_sha256: &str,
+    forward_primary: &str,
+    forward_backup: &str,
+    rollback: bool,
+) -> bool {
+    if autostart != &writer.autostart {
+        return false;
+    }
+    let should_be_loaded = writer.was_loaded || writer.was_runnable;
+    if state.loaded() != should_be_loaded {
+        return false;
+    }
+    if !should_be_loaded {
+        return state.pid.is_none();
+    }
+    if let Some(pid) = state.pid.as_deref() {
+        if pid == "0"
+            || state.process_started_at.is_none()
+            || state.process_executable.is_none()
+            || state.process_device.is_none()
+            || state.process_inode.is_none_or(|inode| inode == 0)
+        {
+            return false;
+        }
+        let expected_sha256 = if writer.role == "object-api"
+            || writer
+                .prior_executable
+                .as_deref()
+                .is_some_and(|path| executable_name(path) == "stado")
+        {
+            Some(active_sha256)
+        } else {
+            writer.prior_sha256.as_deref()
+        };
+        if state.process_sha256.as_deref() != expected_sha256 {
+            return false;
+        }
+    } else if writer.role == "object-api"
+        || (state.state.is_none()
+            && state.last_exit_code.is_none()
+            && state.restart.is_none()
+            && state.triggers.is_none())
+    {
+        return false;
+    }
+    if writer.role != "object-api" {
+        return true;
+    }
+    let loaded = &state.loaded_environment;
+    if !loaded.contains_key("WC_STORAGE_BACKEND") {
+        return true;
+    }
+    let expected_config = writer
+        .prior_loaded_environment
+        .get("STADO_CONFIG")
+        .or_else(|| writer.unit_declared_environment.get("STADO_CONFIG"))
+        .or_else(|| writer.registry_declared_environment.get("STADO_CONFIG"))
+        .map(String::as_str);
+    if loaded.get("WC_STORAGE_BACKEND").map(String::as_str) != Some("local")
+        || loaded.get("STADO_CONFIG").map(String::as_str) != expected_config
+    {
+        return false;
+    }
+    if rollback {
+        loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(forward_backup)
+            && loaded
+                .get("WC_BACKUP_STORAGE_BACKEND")
+                .is_none_or(String::is_empty)
+            && loaded
+                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
+                .is_none_or(String::is_empty)
+    } else {
+        loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(forward_primary)
+            && loaded.get("WC_BACKUP_STORAGE_BACKEND").map(String::as_str) == Some("local")
+            && loaded
+                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
+                .map(String::as_str)
+                == Some(forward_backup)
+    }
 }
 
 async fn activate_lifecycle_fence(
@@ -2209,6 +2686,22 @@ async fn activate_lifecycle_fence(
     let mut fence = read_fence(storage_target, transaction, runner)
         .await?
         .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+    validate_prepared_fence(&fence)?;
+    let served = fence
+        .preflight
+        .get("served_store")
+        .and_then(Value::as_object)
+        .ok_or_else(|| DeployError("fence has no physical/API correlation evidence".to_string()))?;
+    let forward_primary = served
+        .get("primary_root")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DeployError("served-store evidence omitted A root".to_string()))?
+        .to_string();
+    let forward_backup = served
+        .get("backup_root")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DeployError("served-store evidence omitted B root".to_string()))?
+        .to_string();
     let final_status = if rollback { "rolled_back" } else { "activated" };
     let admissible = if rollback {
         matches!(
@@ -2231,207 +2724,216 @@ async fn activate_lifecycle_fence(
     if fence.status == final_status {
         return Ok(fence);
     }
-    fence.status = if rollback { "rolling_back" } else { "activating" }.to_string();
-    write_fence(storage_target, transaction, &fence, runner).await?;
+    if !matches!(fence.status.as_str(), "activating" | "restoring") {
+        fence.status = if rollback { "rolling_back" } else { "activating" }.to_string();
+        write_fence(storage_target, transaction, &fence, runner).await?;
+    }
 
     let staged_runtime = fence
         .staged_runtime
-        .as_ref()
+        .clone()
         .ok_or_else(|| DeployError("lifecycle fence has no staged declared runtime".to_string()))?;
     let active_sha256 =
-        super::host_release::activate_staged_program(storage_target, staged_runtime, runner).await?;
+        super::host_release::activate_staged_program(storage_target, &staged_runtime, runner)
+            .await?;
+    if fence
+        .activation_sha256
+        .as_deref()
+        .is_some_and(|digest| digest != active_sha256)
+    {
+        return Err(DeployError(
+            "persisted activation digest differs from the adopted active runtime".to_string(),
+        ));
+    }
     fence.activation_sha256 = Some(active_sha256.clone());
-    fence.activated_at = Some(Utc::now().timestamp());
+    fence.activated_at.get_or_insert_with(|| Utc::now().timestamp());
     fence.status = "restoring".to_string();
     write_fence(storage_target, transaction, &fence, runner).await?;
 
     let mut order = (0..fence.writers.len()).collect::<Vec<_>>();
     order.sort_by_key(|index| restore_priority(&fence.writers[*index].role));
+    let mut restored_store = None;
     for index in order {
-        if fence.writers[index].status == "restored" {
-            continue;
-        }
-        let writer = &fence.writers[index];
-        let label = writer.label.clone();
-        let requires_load = writer.was_loaded || writer.was_runnable;
-        if !requires_load {
-            for (scope, enabled) in writer.autostart.clone() {
-                service::set_label_autostart(storage_target, &label, &scope, enabled, runner)
-                    .await?;
-            }
-            let current = super::service_label_print::print_label(
-                storage_target,
-                &label,
-                service::BootoutScope::Any,
-                runner,
-            )
-            .await?;
-            if current.loaded() || current.pid.is_some() {
-                return Err(DeployError(format!(
-                    "{label} was not loaded before the transaction but became loaded during restore"
-                )));
-            }
-            fence.writers[index].status = "restored".to_string();
-            write_fence(storage_target, transaction, &fence, runner).await?;
-            continue;
-        }
-
-        if !writer.autostart.values().copied().any(|enabled| enabled) {
-            let scope = writer
-                .loaded_domains
-                .first()
-                .map(String::as_str)
-                .or_else(|| writer.autostart.keys().next().map(String::as_str))
-                .ok_or_else(|| {
-                    DeployError(format!(
-                        "{label} has no recorded init-system scope for exact restoration"
-                    ))
-                })?;
-            service::set_label_autostart(storage_target, &label, scope, true, runner).await?;
-        } else {
-            for (scope, enabled) in &writer.autostart {
-                if *enabled {
-                    service::set_label_autostart(storage_target, &label, scope, true, runner)
-                        .await?;
-                }
-            }
-        }
-
-        if writer.role == "object-api" {
-            let object_api_script = if rollback {
-                rollback_object_api_script(writer)?
-            } else {
-                include_str!("../../../deploy/recover_object_api.sh").to_string()
-            };
-            let recovered = host_channel::run_script_with_timeout(
-                storage_target,
-                &object_api_script,
-                Duration::from_secs(240),
-                runner,
-            )
-            .await?;
-            if !recovered.ok() {
-                return Err(DeployError(format!(
-                    "{label} did not restore through canonical object recovery: {}",
-                    host_channel::last_error_line(&recovered, "remote command failed")
-                )));
-            }
-        } else {
-            let declared = managed_writer(storage_target, writer);
-            let restarted = service::restart_service(storage_target, &declared, runner).await?;
-            if !restarted.succeeded("restarted") {
-                return Err(DeployError(format!(
-                    "{label} did not restore: {}",
-                    restarted.failure()
-                )));
-            }
-        }
-
-        for (scope, enabled) in writer.autostart.clone() {
-            service::set_label_autostart(storage_target, &label, &scope, enabled, runner).await?;
-        }
-        let restored_autostart =
-            service::label_autostart(storage_target, &label, runner).await?;
-        if writer
-            .autostart
-            .iter()
-            .any(|(scope, enabled)| restored_autostart.get(scope) != Some(enabled))
-        {
-            return Err(DeployError(format!(
-                "{label} did not restore its exact persistent lifecycle state"
-            )));
-        }
-        let state = super::service_label_print::print_label(
+        let label = fence.writers[index].label.clone();
+        let mut state = super::service_label_print::print_label(
             storage_target,
             &label,
             service::BootoutScope::Any,
             runner,
         )
         .await?;
-        let fresh = {
-            let prior_pid = writer.prior_pid.as_deref();
-            let prior_start = writer.prior_started_at.as_deref();
-            let current_pid = state.pid.as_deref();
-            let current_start = state.process_started_at.as_deref();
-            current_pid.is_some()
-                && current_start.is_some()
-                && (current_pid != prior_pid || current_start != prior_start)
+        let mut autostart = service::label_autostart(storage_target, &label, runner).await?;
+        let unit_matches = if fence.writers[index].role == "object-api" {
+            true
+        } else {
+            snapshot_unit_file(storage_target, &fence.writers[index].path, runner).await?
+                == fence.writers[index].unit_snapshot
         };
-        if !state.loaded() || state.pid.is_some() != writer.was_runnable {
+        let adopted = unit_matches
+            && restored_state_matches(
+                &fence.writers[index],
+                &state,
+                &autostart,
+                &active_sha256,
+                &forward_primary,
+                &forward_backup,
+                rollback,
+            );
+        if fence.writers[index].status == "restored" && !adopted {
             return Err(DeployError(format!(
-                "{label} did not restore its exact loaded/runnable state"
+                "{label} drifted after its durable restored result"
             )));
         }
-        if writer.was_runnable {
-            let expected_sha256 = if writer.role == "object-api"
-                || writer
-                    .prior_executable
-                    .as_deref()
-                    .is_some_and(|path| executable_name(path) == "stado")
+        if !adopted {
+            if fence.writers[index].status != "restore_intent" {
+                fence.writers[index].status = "restore_intent".to_string();
+                write_fence(storage_target, transaction, &fence, runner).await?;
+            }
+            if fence.writers[index].role != "object-api"
+                && fence.writers[index].unit_snapshot.is_some()
             {
-                Some(active_sha256.as_str())
-            } else {
-                writer.prior_sha256.as_deref()
-            };
-            if !fresh
-                || state.process_device.is_none()
-                || state.process_inode.is_none_or(|inode| inode == 0)
-                || state.process_sha256.as_deref() != expected_sha256
+                restore_unit_snapshot(storage_target, &fence.writers[index], runner).await?;
+            }
+            let requires_load =
+                fence.writers[index].was_loaded || fence.writers[index].was_runnable;
+            if requires_load {
+                if fence.writers[index].role == "object-api" {
+                    let prepared = if rollback {
+                        fence.writers[index].rollback_object_recovery.as_ref()
+                    } else {
+                        fence.writers[index].forward_object_recovery.as_ref()
+                    }
+                    .ok_or_else(|| {
+                        DeployError(format!("{label} has no prepared recovery configuration"))
+                    })?;
+                    let recovered = host_channel::run_script_with_timeout(
+                        storage_target,
+                        &prepared.body,
+                        Duration::from_secs(240),
+                        runner,
+                    )
+                    .await?;
+                    if !recovered.ok() {
+                        return Err(DeployError(format!(
+                            "{label} did not restore through its prepared configuration: {}",
+                            host_channel::last_error_line(&recovered, "remote command failed")
+                        )));
+                    }
+                } else {
+                    let writer = &fence.writers[index];
+                    if !writer.autostart.values().copied().any(|enabled| enabled) {
+                        let scope = writer
+                            .loaded_domains
+                            .first()
+                            .map(String::as_str)
+                            .or_else(|| writer.autostart.keys().next().map(String::as_str))
+                            .ok_or_else(|| {
+                                DeployError(format!(
+                                    "{label} has no captured init-system scope for restoration"
+                                ))
+                            })?;
+                        service::set_label_autostart(storage_target, &label, scope, true, runner)
+                            .await?;
+                    }
+                    let declared = managed_writer(storage_target, writer);
+                    let restarted =
+                        service::restart_service(storage_target, &declared, runner).await?;
+                    if !restarted.succeeded("restarted") {
+                        return Err(DeployError(format!(
+                            "{label} did not restore: {}",
+                            restarted.failure()
+                        )));
+                    }
+                }
+            }
+            for (scope, enabled) in fence.writers[index].autostart.clone() {
+                service::set_label_autostart(storage_target, &label, &scope, enabled, runner)
+                    .await?;
+            }
+            state = super::service_label_print::print_label(
+                storage_target,
+                &label,
+                service::BootoutScope::Any,
+                runner,
+            )
+            .await?;
+            autostart = service::label_autostart(storage_target, &label, runner).await?;
+            if !restored_state_matches(
+                &fence.writers[index],
+                &state,
+                &autostart,
+                &active_sha256,
+                &forward_primary,
+                &forward_backup,
+                rollback,
+            ) {
+                return Err(DeployError(format!(
+                    "{label} does not match its captured lifecycle and prepared runtime"
+                )));
+            }
+            if fence.writers[index].role != "object-api"
+                && snapshot_unit_file(storage_target, &fence.writers[index].path, runner).await?
+                    != fence.writers[index].unit_snapshot
             {
                 return Err(DeployError(format!(
-                    "{label} did not restore on a fresh mapped executable image"
+                    "{label} unit definition differs from its captured exact bytes"
                 )));
             }
         }
-        if writer.role == "object-api" {
-            let loaded = &state.loaded_environment;
-            let primary = loaded
-                .get("WC_LOCAL_STORAGE_PATH")
-                .map(String::as_str)
+        let restored_route = if fence.writers[index].role == "object-api" {
+            let port = fence.writers[index].listener_port.ok_or_else(|| {
+                DeployError("object API listener port is absent from its fence".to_string())
+            })?;
+            let correlation = correlate_served_store(
+                storage_target,
+                port,
+                &fence.preflight,
+                !rollback,
+                runner,
+            )
+            .await?;
+            let authority = correlation
+                .get("object_authority")
+                .and_then(Value::as_str)
                 .unwrap_or_default();
-            let backup_backend = loaded
-                .get("WC_BACKUP_STORAGE_BACKEND")
-                .map(String::as_str);
-            let backup = loaded
-                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-                .map(String::as_str);
-            let route_matches = if rollback {
-                Some(primary)
-                    == writer
-                        .prior_loaded_environment
-                        .get("WC_LOCAL_STORAGE_PATH")
-                        .map(String::as_str)
-                    && backup_backend
-                        == writer
-                            .prior_loaded_environment
-                            .get("WC_BACKUP_STORAGE_BACKEND")
-                            .map(String::as_str)
-                    && backup
-                        == writer
-                            .prior_loaded_environment
-                            .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-                            .map(String::as_str)
+            let accepted = if rollback {
+                matches!(authority, "B" | "identical")
             } else {
-                primary.ends_with("/.stado/local-storage")
-                    && backup_backend == Some("local")
-                    && backup.is_some_and(|path| path.ends_with("/.stado/local-backup"))
+                matches!(authority, "A" | "identical")
             };
-            if loaded.get("WC_STORAGE_BACKEND").map(String::as_str) != Some("local")
-                || !route_matches
-                || (rollback
-                    && loaded.get("STADO_CONFIG").map(String::as_str)
-                        != writer
-                            .prior_loaded_environment
-                            .get("STADO_CONFIG")
-                            .map(String::as_str))
-                || loaded.get("STADO_CONFIG").is_none_or(String::is_empty)
-            {
+            if !accepted {
                 return Err(DeployError(format!(
-                    "object API did not restore with the declared {} route",
-                    if rollback { "captured prior" } else { "A-primary/B-backup" }
+                    "{label} serves {authority:?} after {} recovery",
+                    if rollback { "B-only" } else { "forward A+B" }
                 )));
             }
-        }
+            let prepared_sha256 = if rollback {
+                fence.writers[index]
+                    .rollback_object_recovery
+                    .as_ref()
+            } else {
+                fence.writers[index]
+                    .forward_object_recovery
+                    .as_ref()
+            }
+            .map(|script| script.sha256.clone());
+            Some(json!({
+                "configuration": {
+                    "prepared_script_sha256": prepared_sha256,
+                    "loaded_environment_observed": state
+                        .loaded_environment
+                        .contains_key("WC_STORAGE_BACKEND"),
+                    "observed_loaded_environment": state.loaded_environment.clone(),
+                    "unit_declared_environment":
+                        fence.writers[index].unit_declared_environment.clone(),
+                    "registry_declared_environment":
+                        fence.writers[index].registry_declared_environment.clone(),
+                },
+                "served_store": correlation,
+            }))
+        } else {
+            None
+        };
         fence.writers[index].restored_pid = state.pid;
         fence.writers[index].restored_started_at = state.process_started_at;
         fence.writers[index].restored_loaded_environment = state.loaded_environment;
@@ -2439,14 +2941,53 @@ async fn activate_lifecycle_fence(
         fence.writers[index].restored_sha256 = state.process_sha256;
         fence.writers[index].restored_device = state.process_device;
         fence.writers[index].restored_inode = state.process_inode;
+        fence.writers[index].restored_route = restored_route;
         fence.writers[index].status = "restored".to_string();
         write_fence(storage_target, transaction, &fence, runner).await?;
+        if fence.writers[index].role == "object-api" {
+            let endpoint = fence.writers[index]
+                .restored_route
+                .as_ref()
+                .and_then(|proof| proof.get("served_store"))
+                .and_then(|proof| proof.get("endpoint"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    DeployError("recovered object API proof omitted its endpoint".to_string())
+                })?;
+            let backend = crate::queue::StadoObjectBackend::new(
+                endpoint,
+                "probierz",
+                "~/.stado/queue-object-api-token",
+                "",
+            )
+            .map_err(|error| {
+                DeployError(format!("cannot bind lease renewal to recovered object API: {error}"))
+            })?;
+            let store = crate::queue::JobStorage::with_backend(
+                std::sync::Arc::new(backend),
+                "recovered-stado-object",
+            );
+            renew_fence_leases(&store, &mut fence).await?;
+            write_fence(storage_target, transaction, &fence, runner).await?;
+            restored_store = Some(store);
+        } else if restored_store.is_none() {
+            return Err(DeployError(
+                "a writer would resume before the object API restored A and renewed every lease"
+                    .to_string(),
+            ));
+        }
     }
 
-    let store = crate::queue::JobStorage::new()
-        .await
-        .map_err(|error| DeployError(format!("cannot restore queue state: {error}")))?;
-    for lease in &fence.leases {
+    let store = restored_store.ok_or_else(|| {
+        DeployError("object API did not establish the recovered A queue".to_string())
+    })?;
+    for acquisition in &fence.lease_acquisitions {
+        let lease = acquisition.lease.as_ref().ok_or_else(|| {
+            DeployError(format!(
+                "placement lease acquisition for {} has no result",
+                acquisition.subject_id
+            ))
+        })?;
         let released = crate::autonomy::storage::release_placement_lease(
             &store,
             &lease.subject_id,
@@ -2528,6 +3069,68 @@ async fn remote_phase(
     })
 }
 
+async fn typed_lifecycle_decisions(
+    transaction: &str,
+    receipt: &Value,
+) -> Result<Vec<Value>, DeployError> {
+    let backup_paths = receipt
+        .get("backup_objects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("checkpoint receipt omitted backup objects".to_string()))?
+        .iter()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let primary_only = receipt
+        .get("primary_objects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("checkpoint receipt omitted primary objects".to_string()))?
+        .iter()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .filter(|path| !backup_paths.contains(path))
+        .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
+    if receipt
+        .get("effective_lifecycle_checkpoint")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        != Some(snapshot.as_path())
+    {
+        return Err(DeployError(
+            "checkpoint receipt does not name the resident immutable lifecycle snapshot"
+                .to_string(),
+        ));
+    }
+    let backend = crate::queue::LocalBackend::open_existing(&snapshot)
+        .map_err(|error| DeployError(format!("cannot open lifecycle checkpoint: {error}")))?;
+    let store = crate::queue::JobStorage::with_backend(
+        std::sync::Arc::new(backend),
+        "immutable-local-snapshot",
+    );
+    crate::monitor::reap::classify_reconciliation_snapshot(&store, &primary_only)
+        .await
+        .map_err(|error| DeployError(format!("typed lifecycle snapshot refused: {error}")))
+}
+
+async fn record_typed_lifecycle_decisions(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    decisions: &[Value],
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let encoded = serde_json::to_string(decisions)
+        .map_err(|error| DeployError(format!("cannot encode typed lifecycle decisions: {error}")))?;
+    let output = host_channel::run_script_with_timeout(
+        target,
+        &bind_remote_script(RECORD_LIFECYCLE_DECISIONS, transaction, &encoded),
+        TIMEOUT,
+        runner,
+    )
+    .await?;
+    parse_remote_payload(&output)
+}
+
 fn report(
     target: &crate::targets::ComputeTarget,
     transaction: &str,
@@ -2563,7 +3166,15 @@ async fn reconcile_host_inner(
             "phase must be {RUN}, {RESUME}, {STATUS}, {ROLLBACK}, or {FINALIZE}, not {phase:?}"
         )));
     }
-    let target = host_channel::canonical_target(target_name).await?;
+    let target = match RESIDENT_TARGET.get() {
+        Some(target) => target.clone(),
+        None => host_channel::canonical_target(target_name).await?,
+    };
+    if target.name != target_name {
+        return Err(DeployError(
+            "captured resident target does not match the transaction target".to_string(),
+        ));
+    }
     if phase == STATUS {
         let receipt = remote_phase(&target, transaction, STATUS, runner).await?;
         let fence = read_fence(&target, transaction, runner).await?;
@@ -2625,14 +3236,76 @@ async fn reconcile_host_inner(
         return report(&target, transaction, phase, receipt, Some(&fence));
     }
     if fence.status == "fenced" {
-        remote_phase(&target, transaction, CHECKPOINT, runner).await?;
-        remote_phase(&target, transaction, APPLY, runner).await?;
+        let checkpoint = remote_phase(&target, transaction, CHECKPOINT, runner).await?;
+        let checkpoint_decisions = typed_lifecycle_decisions(transaction, &checkpoint).await?;
+        record_typed_lifecycle_decisions(
+            &target,
+            transaction,
+            &checkpoint_decisions,
+            runner,
+        )
+        .await?;
+        recheck_lifecycle_fence(&target, transaction, runner).await?;
+        let committed = remote_phase(&target, transaction, APPLY, runner).await?;
+        let committed_decisions = typed_lifecycle_decisions(transaction, &committed).await?;
+        if committed_decisions != checkpoint_decisions {
+            return Err(DeployError(
+                "typed lifecycle decisions changed between checkpoint and data commit".to_string(),
+            ));
+        }
+        record_typed_lifecycle_decisions(
+            &target,
+            transaction,
+            &committed_decisions,
+            runner,
+        )
+        .await?;
+        fence = recheck_lifecycle_fence(&target, transaction, runner).await?;
+        verify_resident_lock(transaction)?;
+        validate_prepared_fence(&fence)?;
         fence = activate_lifecycle_fence(&target, transaction, runner, false).await?;
     } else if fence.status != "activated" {
+        let committed = remote_phase(&target, transaction, APPLY, runner).await?;
+        let decisions = typed_lifecycle_decisions(transaction, &committed).await?;
+        record_typed_lifecycle_decisions(&target, transaction, &decisions, runner).await?;
+        verify_resident_lock(transaction)?;
+        validate_prepared_fence(&fence)?;
         fence = activate_lifecycle_fence(&target, transaction, runner, false).await?;
     }
     let receipt = remote_phase(&target, transaction, ACTIVATE, runner).await?;
     report(&target, transaction, phase, receipt, Some(&fence))
+}
+fn verify_resident_lock(transaction: &str) -> Result<(), DeployError> {
+    let fd = RESIDENT_LOCK_FD
+        .get()
+        .copied()
+        .ok_or_else(|| DeployError("resident reconciliation lock descriptor is absent".to_string()))?;
+    let lock = transaction_directory(transaction)?
+        .parent()
+        .and_then(Path::parent)
+        .expect("validated transaction directory has a recovery parent")
+        .join("storage-root-reconcile.lock");
+    let path_metadata = std::fs::metadata(&lock)
+        .map_err(|error| DeployError(format!("cannot stat {}: {error}", lock.display())))?;
+    let descriptor_path = if cfg!(target_os = "linux") {
+        PathBuf::from(format!("/proc/self/fd/{fd}"))
+    } else {
+        PathBuf::from(format!("/dev/fd/{fd}"))
+    };
+    let descriptor_metadata = std::fs::metadata(&descriptor_path).map_err(|error| {
+        DeployError(format!(
+            "resident reconciliation lock descriptor {fd} is invalid: {error}"
+        ))
+    })?;
+    if path_metadata.dev() != descriptor_metadata.dev()
+        || path_metadata.ino() != descriptor_metadata.ino()
+    {
+        return Err(DeployError(
+            "resident reconciliation lock no longer maps the canonical transaction lock"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn transaction_directory(transaction: &str) -> Result<PathBuf, DeployError> {
@@ -2691,20 +3364,26 @@ fn atomic_owner(path: &Path, owner: &Value) -> Result<(), DeployError> {
 }
 
 pub async fn reconcile_host_worker(
-    target_name: &str,
+    target: crate::targets::ComputeTarget,
     transaction: &str,
     phase: &str,
     source_revision: &str,
     tool_sha256: &str,
     runner_gate: Option<Value>,
-    lock_fd: i32,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
+    use fs2::FileExt;
+
     validate_transaction(transaction)?;
     if !matches!(phase, RUN | RESUME | ROLLBACK | FINALIZE) {
         return Err(DeployError(format!(
             "resident worker action must be {RUN}, {RESUME}, {ROLLBACK}, or {FINALIZE}"
         )));
+    }
+    if !host_channel::target_is_this_host(&target) {
+        return Err(DeployError(
+            "native reconciliation worker is not resident on its captured target".to_string(),
+        ));
     }
     if source_revision != crate::build_identity::SOURCE_REVISION
         || source_revision == crate::build_identity::UNKNOWN_REVISION
@@ -2722,32 +3401,64 @@ pub async fn reconcile_host_worker(
             "resident transaction tool digest differs from launch request".to_string(),
         ));
     }
-    if lock_fd < 0 {
-        return Err(DeployError(
-            "resident transaction worker did not inherit the target lock".to_string(),
-        ));
-    }
-    // SAFETY: the private launcher passes this descriptor through `pass_fds`
-    // and transfers its ownership to this worker exactly once.
-    let operation_lock = unsafe { std::fs::File::from_raw_fd(lock_fd) };
     let directory = transaction_directory(transaction)?;
     let lock_path = directory
         .parent()
         .and_then(Path::parent)
         .expect("validated transaction directory has a recovery parent")
         .join("storage-root-reconcile.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| DeployError(format!("cannot create {}: {error}", parent.display())))?;
+    }
+    let operation_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(&lock_path)
+        .map_err(|error| DeployError(format!("cannot open native transaction lock: {error}")))?;
+    operation_lock
+        .try_lock_exclusive()
+        .map_err(|error| DeployError(format!("another reconciliation owns the native lock: {error}")))?;
+    let descriptor = operation_lock.as_raw_fd();
+    // SAFETY: `descriptor` is owned by `operation_lock`; F_GETFD/F_SETFD do
+    // not consume it. Clearing CLOEXEC deliberately carries the same locked
+    // open-file description through every locally spawned lifecycle effect.
+    let flags = unsafe { nix::libc::fcntl(descriptor, nix::libc::F_GETFD) };
+    if flags < 0
+        || unsafe {
+            nix::libc::fcntl(
+                descriptor,
+                nix::libc::F_SETFD,
+                flags & !nix::libc::FD_CLOEXEC,
+            )
+        } < 0
+    {
+        return Err(DeployError(format!(
+            "cannot make native transaction lock inheritable: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
     let lock_metadata = std::fs::metadata(&lock_path)
-        .map_err(|error| DeployError(format!("cannot stat inherited lock path: {error}")))?;
+        .map_err(|error| DeployError(format!("cannot stat native lock path: {error}")))?;
     let descriptor_metadata = operation_lock
         .metadata()
-        .map_err(|error| DeployError(format!("cannot stat inherited lock descriptor: {error}")))?;
+        .map_err(|error| DeployError(format!("cannot stat native lock descriptor: {error}")))?;
     if lock_metadata.dev() != descriptor_metadata.dev()
         || lock_metadata.ino() != descriptor_metadata.ino()
     {
         return Err(DeployError(
-            "inherited descriptor is not the canonical reconciliation lock".to_string(),
+            "opened descriptor is not the canonical reconciliation lock".to_string(),
         ));
     }
+    RESIDENT_LOCK_FD
+        .set(descriptor)
+        .map_err(|_| DeployError("resident lock descriptor was already initialized".to_string()))?;
+    RESIDENT_TARGET
+        .set(target.clone())
+        .map_err(|_| DeployError("resident target was already initialized".to_string()))?;
     let token = uuid::Uuid::new_v4().to_string();
     RESIDENT_OWNER_TOKEN
         .set(token.clone())
@@ -2767,7 +3478,7 @@ pub async fn reconcile_host_worker(
     let mut owner = json!({
         "schema": "stado.storage-root-owner.v1",
         "transaction": transaction,
-        "target": target_name,
+        "target": target.name.clone(),
         "action": phase,
         "status": "executing",
         "pid": std::process::id(),
@@ -2775,12 +3486,15 @@ pub async fn reconcile_host_worker(
         "source_revision": source_revision,
         "tool_path": executable,
         "tool_sha256": actual_sha256,
+        "lock_device": descriptor_metadata.dev(),
+        "lock_inode": descriptor_metadata.ino(),
+        "native_service": format!("com.wisent.stado-storage-root-reconcile.{transaction}"),
         "revision": revision,
         "started_at": Utc::now().to_rfc3339(),
         "updated_at": Utc::now().to_rfc3339(),
     });
     atomic_owner(&owner_path, &owner)?;
-    let outcome = reconcile_host_inner(target_name, transaction, phase, runner).await;
+    let outcome = reconcile_host_inner(&target.name, transaction, phase, runner).await;
     let fields = owner
         .as_object_mut()
         .expect("resident operation owner is an object");
@@ -2810,63 +3524,170 @@ fn launch_worker_script(
     let arguments = serde_json::to_vec(arguments)
         .map_err(|error| DeployError(format!("cannot encode worker arguments: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(arguments);
-    Ok(format!(
-        "STADO_WORKER_ARGS={} STADO_STAGED_TOOL={} STADO_CANONICAL_TOOL={} STADO_TOOL_SHA256={} STADO_TRANSACTION={} /usr/bin/python3 - <<'PY'\n\
-import base64, fcntl, hashlib, json, os, subprocess, time\n\
-tx = os.environ['STADO_TRANSACTION']\n\
-staged = os.path.expanduser(os.environ['STADO_STAGED_TOOL'])\n\
-tool = os.path.expanduser(os.environ['STADO_CANONICAL_TOOL'])\n\
-expected = os.environ['STADO_TOOL_SHA256']\n\
-work = os.path.dirname(tool)\n\
-owner_path = os.path.join(work, 'operation-owner.json')\n\
-lock_path = os.path.join(os.path.dirname(os.path.dirname(work)), 'storage-root-reconcile.lock')\n\
-os.makedirs(work, mode=0o700, exist_ok=True)\n\
-if os.path.islink(staged) or not os.path.isfile(staged):\n\
-    raise SystemExit('staged transaction tool is not a regular file')\n\
-with open(staged, 'rb') as handle:\n\
-    if hashlib.sha256(handle.read()).hexdigest() != expected:\n\
-        raise SystemExit('staged transaction tool digest mismatch')\n\
-lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)\n\
-try:\n\
-    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n\
-except BlockingIOError:\n\
-    raise SystemExit('resident reconciliation worker is already active')\n\
-os.chmod(staged, 0o700)\n\
-os.replace(staged, tool)\n\
-directory_fd = os.open(work, os.O_RDONLY)\n\
-os.fsync(directory_fd)\n\
-os.close(directory_fd)\n\
-argv = json.loads(base64.b64decode(os.environ['STADO_WORKER_ARGS']))\n\
-argv.extend(['--lock-fd', str(lock_fd)])\n\
-log = open(os.path.join(work, 'transaction-worker.log'), 'ab', buffering=0)\n\
-process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log,\n\
-                           pass_fds=(lock_fd,), start_new_session=True, close_fds=True)\n\
-deadline = time.monotonic() + 15\n\
-while time.monotonic() < deadline:\n\
-    try:\n\
-        with open(owner_path, encoding='utf-8') as handle:\n\
-            owner = json.load(handle)\n\
-        if (owner.get('schema') == 'stado.storage-root-owner.v1'\n\
-                and owner.get('transaction') == tx\n\
-                and owner.get('pid') == process.pid\n\
-                and owner.get('tool_sha256') == expected):\n\
-            owner.pop('token', None)\n\
-            print('STADO_RECONCILE_OWNER\\t' + json.dumps(owner, sort_keys=True, separators=(',', ':')))\n\
-            os.close(lock_fd)\n\
-            raise SystemExit(0)\n\
-    except (FileNotFoundError, json.JSONDecodeError):\n\
-        pass\n\
-    if process.poll() is not None:\n\
-        raise SystemExit('resident reconciliation worker exited before recording ownership')\n\
-    time.sleep(0.1)\n\
-raise SystemExit('resident reconciliation worker did not record ownership')\n\
-PY",
-        shlex_quote(&encoded),
-        shlex_quote(staged_tool),
-        shlex_quote(canonical_tool),
-        shlex_quote(tool_sha256),
-        shlex_quote(transaction),
-    ))
+    Ok(r##"set -euo pipefail
+STADO_WORKER_ARGS=@ARGS@ STADO_STAGED_TOOL=@STAGED@ STADO_CANONICAL_TOOL=@TOOL@ STADO_TOOL_SHA256=@SHA@ STADO_TRANSACTION=@TX@ /usr/bin/python3 - <<'PY'
+import base64, hashlib, json, os, platform, plistlib, re, shlex, stat, subprocess, time
+tx = os.environ["STADO_TRANSACTION"]
+staged = os.path.expanduser(os.path.expandvars(os.environ["STADO_STAGED_TOOL"]))
+tool = os.path.expanduser(os.path.expandvars(os.environ["STADO_CANONICAL_TOOL"]))
+expected = os.environ["STADO_TOOL_SHA256"]
+work = os.path.dirname(tool)
+home = os.path.expanduser("~")
+owner_path = os.path.join(work, "operation-owner.json")
+label = "com.wisent.stado-storage-root-reconcile." + tx
+log_path = os.path.join(work, "transaction-worker.log")
+system = platform.system()
+os.makedirs(work, mode=0o700, exist_ok=True)
+arguments = json.loads(base64.b64decode(os.environ["STADO_WORKER_ARGS"]))
+argv = [tool] + arguments
+
+def checked(argv, accepted=(0,)):
+    result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, close_fds=True)
+    if result.returncode not in accepted:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise SystemExit(detail[-1] if detail else "native service command failed")
+    return result
+
+def manager_pid():
+    if system == "Darwin":
+        result = subprocess.run(
+            ["/usr/bin/sudo", "-n", "/bin/launchctl", "print", "system/" + label],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, close_fds=True)
+        if result.returncode != 0:
+            return None
+        match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", result.stdout)
+        return int(match.group(1)) if match else None
+    if system == "Linux":
+        result = subprocess.run(
+            ["/usr/bin/sudo", "-n", "/bin/systemctl", "show",
+             "--property=MainPID", "--value", label + ".service"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, close_fds=True)
+        value = result.stdout.strip()
+        return int(value) if result.returncode == 0 and value.isdigit() and int(value) > 0 else None
+    raise SystemExit("native reconciliation worker requires Darwin launchd or Linux systemd")
+
+try:
+    with open(owner_path, encoding="utf-8") as handle:
+        prior_owner = json.load(handle)
+    prior_pid = int(prior_owner.get("pid", 0))
+    if (prior_owner.get("schema") == "stado.storage-root-owner.v1"
+            and prior_owner.get("transaction") == tx
+            and prior_owner.get("status") == "executing"
+            and prior_owner.get("tool_sha256") == expected
+            and manager_pid() == prior_pid):
+        prior_owner.pop("token", None)
+        print("STADO_RECONCILE_OWNER\t" + json.dumps(
+            prior_owner, sort_keys=True, separators=(",", ":")))
+        raise SystemExit(0)
+except (FileNotFoundError, ValueError, json.JSONDecodeError):
+    pass
+
+info = os.lstat(staged)
+if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+    raise SystemExit("staged transaction tool is not a regular file")
+with open(staged, "rb") as handle:
+    if hashlib.sha256(handle.read()).hexdigest() != expected:
+        raise SystemExit("staged transaction tool digest mismatch")
+os.chmod(staged, 0o700)
+os.replace(staged, tool)
+directory_fd = os.open(work, os.O_RDONLY)
+os.fsync(directory_fd)
+os.close(directory_fd)
+
+if system == "Darwin":
+    unit = {
+        "Label": label,
+        "ProgramArguments": argv,
+        "EnvironmentVariables": {
+            "HOME": home,
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+        "WorkingDirectory": home,
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        "ProcessType": "Background",
+        "UserName": checked(["/usr/bin/id", "-un"]).stdout.strip(),
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+    prepared = os.path.join(work, "native-worker.plist")
+    with open(prepared + ".new", "wb") as handle:
+        plistlib.dump(unit, handle, fmt=plistlib.FMT_XML, sort_keys=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(prepared + ".new", prepared)
+    unit_path = "/Library/LaunchDaemons/" + label + ".plist"
+    checked(["/usr/bin/sudo", "-n", "/usr/bin/install", "-m", "644",
+             "-o", "root", "-g", "wheel", prepared, unit_path])
+    checked(["/usr/bin/sudo", "-n", "/bin/launchctl", "bootout", "system/" + label],
+            accepted=(0, 3, 113))
+    checked(["/usr/bin/sudo", "-n", "/bin/launchctl", "enable", "system/" + label])
+    checked(["/usr/bin/sudo", "-n", "/bin/launchctl", "bootstrap", "system", unit_path])
+    checked(["/usr/bin/sudo", "-n", "/bin/launchctl", "kickstart", "system/" + label])
+else:
+    wrapper = os.path.join(work, "native-worker")
+    with open(wrapper + ".new", "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\nexec " + shlex.join(argv) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(wrapper + ".new", 0o700)
+    os.replace(wrapper + ".new", wrapper)
+    unit_path = "/etc/systemd/system/" + label + ".service"
+    prepared = os.path.join(work, "native-worker.service")
+    unit = "\n".join([
+        "[Unit]",
+        "Description=Stado storage authority reconciliation " + tx,
+        "After=network-online.target",
+        "[Service]",
+        "Type=simple",
+        "User=" + checked(["/usr/bin/id", "-un"]).stdout.strip(),
+        "Environment=HOME=" + home,
+        "WorkingDirectory=" + home,
+        "ExecStart=" + wrapper,
+        "Restart=no",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "",
+    ])
+    with open(prepared + ".new", "w", encoding="utf-8") as handle:
+        handle.write(unit)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(prepared + ".new", prepared)
+    checked(["/usr/bin/sudo", "-n", "/usr/bin/install", "-m", "644",
+             "-o", "root", "-g", "root", prepared, unit_path])
+    checked(["/usr/bin/sudo", "-n", "/bin/systemctl", "daemon-reload"])
+    checked(["/usr/bin/sudo", "-n", "/bin/systemctl", "enable", label + ".service"])
+    checked(["/usr/bin/sudo", "-n", "/bin/systemctl", "restart", label + ".service"])
+
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    try:
+        with open(owner_path, encoding="utf-8") as handle:
+            owner = json.load(handle)
+        owner_pid = int(owner.get("pid", 0))
+        if (owner.get("schema") == "stado.storage-root-owner.v1"
+                and owner.get("transaction") == tx
+                and owner.get("status") == "executing"
+                and owner.get("tool_sha256") == expected
+                and manager_pid() == owner_pid):
+            owner.pop("token", None)
+            print("STADO_RECONCILE_OWNER\t" + json.dumps(
+                owner, sort_keys=True, separators=(",", ":")))
+            raise SystemExit(0)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        pass
+    time.sleep(0.1)
+raise SystemExit("native reconciliation worker did not record manager-bound ownership")
+PY"##
+        .replace("@ARGS@", &shlex_quote(&encoded))
+        .replace("@STAGED@", &shlex_quote(staged_tool))
+        .replace("@TOOL@", &shlex_quote(canonical_tool))
+        .replace("@SHA@", &shlex_quote(tool_sha256))
+        .replace("@TX@", &shlex_quote(transaction)))
 }
 
 async fn read_operation_owner(
@@ -2975,11 +3796,16 @@ pub async fn reconcile_host(
         .map_err(|error| DeployError(format!("cannot encode runner gate: {error}")))?
         .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
         .unwrap_or_default();
+    let target_config = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::to_vec(&target)
+            .map_err(|error| DeployError(format!("cannot encode resident target: {error}")))?,
+    );
     let arguments = vec![
-        canonical_tool.clone(),
         "host".to_string(),
         "storage-root-reconcile-worker".to_string(),
         target_name.to_string(),
+        "--target-config".to_string(),
+        target_config,
         "--transaction".to_string(),
         transaction.to_string(),
         "--phase".to_string(),

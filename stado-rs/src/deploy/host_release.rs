@@ -1578,6 +1578,14 @@ pub async fn activate_staged_program(
             "staged runtime digest changed before activation".to_string(),
         ));
     }
+    let probe = host_channel::run_script(target, &probe_script(&plan), runner).await?;
+    let probe_markers = markers(&probe.stdout);
+    if probe.ok()
+        && marker(&probe_markers, "step") == "probe"
+        && marker(&probe_markers, "active_sha256") == staged.staged_sha256
+    {
+        return Ok(staged.staged_sha256.clone());
+    }
     let activated = host_channel::run_script(target, &activate_script(&plan), runner).await?;
     let activate_markers = markers(&activated.stdout);
     if !activated.ok() || marker(&activate_markers, "step") != "activate" {
@@ -1751,6 +1759,7 @@ async fn release_target_inner(
     // the retained staged image and every declared program unit must map it.
     // A proven match returns without restarting; stale or unobservable units
     // fall through to the ordinary stage/activate/restart path.
+    let mut already_proven_units = BTreeMap::<String, Value>::new();
     if active_version == plan.version && !plan.reinstall {
         if plan.product.install.is_tree() {
             report.insert("steps".to_string(), json!(steps));
@@ -1761,9 +1770,7 @@ async fn release_target_inner(
         let active_sha256 = marker(&probe_markers, "active_sha256");
         let staged_sha256 = marker(&probe_markers, "staged_sha256");
         let mut unit_processes = Vec::new();
-        let mut exact_image = is_sha256(active_sha256)
-            && active_sha256 == staged_sha256
-            && (plan.product.name != "stado" || !units.is_empty());
+        let mut exact_image = is_sha256(active_sha256) && active_sha256 == staged_sha256;
         if exact_image {
             for declared in &units {
                 let state = service_label_print::print_label(
@@ -1773,23 +1780,19 @@ async fn release_target_inner(
                     runner,
                 )
                 .await?;
-                let pid = state.pid.as_deref();
-                let started = state.process_started_at.as_deref();
-                let image = state.process_executable.as_deref();
-                let digest = state.process_sha256.as_deref();
-                let mapped_device = state.process_device;
-                let mapped_inode = state.process_inode;
-                if pid.is_none()
-                    || started.is_none()
-                    || image.is_none()
-                    || mapped_device.is_none()
-                    || mapped_inode.is_none_or(|inode| inode == 0)
-                    || digest != Some(active_sha256)
-                {
+                let mapped = state.pid.is_some()
+                    && state.process_started_at.is_some()
+                    && state.process_executable.is_some()
+                    && state.process_device.is_some()
+                    && state.process_inode.is_some_and(|inode| inode != 0)
+                    && state.process_sha256.as_deref() == Some(active_sha256);
+                if mapped {
+                    let evidence = state.to_json();
+                    unit_processes.push(evidence.clone());
+                    already_proven_units.insert(declared.unit_id().to_string(), evidence);
+                } else {
                     exact_image = false;
-                    break;
                 }
-                unit_processes.push(state.to_json());
             }
         }
         if exact_image {
@@ -1924,18 +1927,6 @@ async fn release_target_inner(
     // pid to the image digest activation just reported. The shared CLI's
     // installed version is not evidence about a service process.
     let mut unit_processes = Vec::new();
-    if units.is_empty() && plan.product.name == "stado" {
-        let detail =
-            "stado activation cannot prove a running image because no units are declared".to_string();
-        steps.push(step_entry(
-            "restart",
-            host_channel::FAILED_STATUS,
-            Some(detail.clone()),
-        ));
-        report.insert("steps".to_string(), json!(steps));
-        report.insert("activated".to_string(), json!(true));
-        return Ok(fail(&mut report, 1, detail));
-    }
     if units.is_empty() {
         steps.push(step_entry(
             "restart",
@@ -1949,6 +1940,17 @@ async fn release_target_inner(
         let mut failures = Vec::new();
         for declared in &units {
             let unit_id = declared.unit_id().to_string();
+            if let Some(evidence) = already_proven_units.get(&unit_id) {
+                steps.push(step_entry(
+                    "restart",
+                    "already_mapped",
+                    Some(format!(
+                        "{unit_id} already maps the activated immutable image"
+                    )),
+                ));
+                unit_processes.push(evidence.clone());
+                continue;
+            }
             match service::restart_service(target, declared, runner).await {
                 Ok(restarted) if restarted.succeeded("restarted") => {
                     match service_label_print::print_label(

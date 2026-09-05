@@ -1981,6 +1981,8 @@ enum HostCommands {
     StorageRootReconcileWorker {
         target: String,
         #[arg(long)]
+        target_config: String,
+        #[arg(long)]
         transaction: String,
         #[arg(long, value_parser = ["run", "resume", "rollback", "finalize"])]
         phase: String,
@@ -1990,8 +1992,6 @@ enum HostCommands {
         tool_sha256: String,
         #[arg(long)]
         runner_gate: String,
-        #[arg(long)]
-        lock_fd: i32,
     },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
@@ -3505,21 +3505,21 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::storage_root_reconcile(&target, &transaction, &phase, json).await,
             HostCommands::StorageRootReconcileWorker {
                 target,
+                target_config,
                 transaction,
                 phase,
                 source_revision,
                 tool_sha256,
                 runner_gate,
-                lock_fd,
             } => {
                 host::storage_root_reconcile_worker(
                     &target,
+                    &target_config,
                     &transaction,
                     &phase,
                     &source_revision,
                     &tool_sha256,
                     &runner_gate,
-                    lock_fd,
                 )
                 .await
             }

@@ -459,7 +459,13 @@ pub fn parse_label_print(host: &str, label: &str, stdout: &str) -> LabelState {
                     continue;
                 }
                 match (*key).trim() {
-                    "pid" => state.pid = Some(value),
+                    "pid" => {
+                        state.pid = value
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|pid| *pid != 0)
+                            .map(|pid| pid.to_string());
+                    }
                     "state" => state.state = Some(value),
                     "last exit code" => state.last_exit_code = Some(value),
                     "runs" => state.runs = Some(value),

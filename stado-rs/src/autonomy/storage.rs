@@ -416,7 +416,7 @@ pub async fn acquire_placement_lease(
         )));
     }
     if prior.active_at(now) {
-        return Ok(None);
+        return Ok((prior.decision_id == decision_id && prior.holder == holder).then_some(prior));
     }
     match store
         .compare_and_swap_text(&path, &current.version, &content)

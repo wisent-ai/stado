@@ -10654,35 +10654,46 @@ pub async fn storage_root_reconcile(
 }
 pub async fn storage_root_reconcile_worker(
     target: &str,
+    target_config: &str,
     transaction: &str,
     phase: &str,
     source_revision: &str,
     tool_sha256: &str,
     runner_gate: &str,
-    lock_fd: i32,
 ) -> Result<(), CmdError> {
     use base64::Engine;
 
+    let decode = |label: &str, encoded: &str| {
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| CmdError::click(format!("invalid resident {label}: {error}")))
+    };
+    let target_config = serde_json::from_slice::<crate::targets::ComputeTarget>(&decode(
+        "target config",
+        target_config,
+    )?)
+    .map_err(|error| CmdError::click(format!("invalid resident target config: {error}")))?;
+    if target_config.name != target {
+        return Err(CmdError::click(
+            "resident target config belongs to another target",
+        ));
+    }
     let runner_gate = if runner_gate.is_empty() {
         None
     } else {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(runner_gate)
-            .map_err(|error| CmdError::click(format!("invalid resident runner gate: {error}")))?;
         Some(
-            serde_json::from_slice::<Value>(&bytes)
+            serde_json::from_slice::<Value>(&decode("runner gate", runner_gate)?)
                 .map_err(|error| CmdError::click(format!("invalid resident runner gate: {error}")))?,
         )
     };
     let runner = crate::deploy::production_runner();
     crate::deploy::host_storage_reconcile::reconcile_host_worker(
-        target,
+        target_config,
         transaction,
         phase,
         source_revision,
         tool_sha256,
         runner_gate,
-        lock_fd,
         &runner,
     )
     .await

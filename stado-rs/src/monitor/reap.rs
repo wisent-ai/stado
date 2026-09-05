@@ -41,6 +41,393 @@ pub struct ReapSummary {
     pub refused_runs: Vec<ReapRefusal>,
 }
 
+fn snapshot_full_path(relative: &str) -> String {
+    format!("ecosystem/probierz/{relative}")
+}
+
+async fn required_snapshot_text(
+    store: &JobStorage,
+    path: &str,
+) -> Result<String, StorageError> {
+    store
+        .download_text(path)
+        .await?
+        .ok_or_else(|| StorageError::NotFound(path.to_string()))
+}
+
+async fn terminal_snapshot_present(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<bool, StorageError> {
+    for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+        if store
+            .read_job(prefix, job_id)
+            .await?
+            .is_some_and(|job| job.job_id == job_id && job.state == prefix)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Classify destination-only lifecycle objects from a sealed B-winning A/B
+/// snapshot using the queue's production job, transition, cancellation, run,
+/// and retained-outcome contracts. This function is read-only by construction:
+/// callers bind `store` to an immutable local checkpoint.
+pub(crate) async fn classify_reconciliation_snapshot(
+    store: &JobStorage,
+    primary_only_paths: &[String],
+) -> Result<Vec<Value>, StorageError> {
+    let mut retained_jobs = std::collections::BTreeMap::<String, String>::new();
+    let mut run_documents = std::collections::BTreeMap::<String, Value>::new();
+    for run_id in crate::queue::runs::list_runs(store).await? {
+        let path = format!("runs/{run_id}.json");
+        let raw = required_snapshot_text(store, &path).await?;
+        let document: Value = serde_json::from_str(&raw)?;
+        if document.get("schema").and_then(Value::as_str)
+            == Some("stado.run-submission.v3")
+        {
+            crate::queue::submit::validate_stored_run_manifest(&document, &run_id)
+                .map_err(|error| StorageError::Other(error.to_string()))?;
+            if has_complete_retained_outcomes(&document) {
+                for entry in document
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(job_id) = entry.get("job_id").and_then(Value::as_str) {
+                        retained_jobs.insert(job_id.to_string(), run_id.clone());
+                    }
+                }
+            }
+        }
+        run_documents.insert(run_id, document);
+    }
+
+    let mut queued_cancellations = HashSet::new();
+    for path in store.list_paths("cancellations/", 0).await? {
+        let Some(job_id) = path
+            .strip_prefix("cancellations/")
+            .and_then(|tail| tail.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let marker = required_snapshot_text(store, &path).await?;
+        crate::queue::storage::validate_cancellation_snapshot(job_id, &marker)?;
+        if store
+            .read_job("queue", job_id)
+            .await?
+            .is_some_and(|job| job.state == crate::models::job_state::QUEUED)
+        {
+            queued_cancellations.insert(job_id.to_string());
+        }
+    }
+
+    let mut decisions = Vec::new();
+    let mut emitted_cancellations = HashSet::new();
+    for relative in primary_only_paths {
+        let Some((family, tail)) = relative.split_once('/') else {
+            decisions.push(serde_json::json!({
+                "kind": "block_unclassified_live",
+                "path": snapshot_full_path(relative),
+                "reason": "lifecycle object has no canonical family key",
+            }));
+            continue;
+        };
+        let full_path = snapshot_full_path(relative);
+        if family == "runs" {
+            let Some(run_id) = tail.strip_suffix(".json") else {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "reason": "run manifest key is not canonical",
+                }));
+                continue;
+            };
+            let document = run_documents.get(run_id).ok_or_else(|| {
+                StorageError::NotFound(format!("runs/{run_id}.json"))
+            })?;
+            if document.get("schema").and_then(Value::as_str)
+                != Some("stado.run-submission.v3")
+            {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical_run",
+                    "path": full_path,
+                    "reason": "pre-v3 run history is retained without destructive validation",
+                }));
+            } else if has_complete_retained_outcomes(document) {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical_run",
+                    "path": full_path,
+                    "reason": "strict retained terminal outcomes",
+                }));
+            } else {
+                let status = crate::queue::runs::run_status(store, run_id)
+                    .await?
+                    .ok_or_else(|| StorageError::NotFound(format!("runs/{run_id}.json")))?;
+                decisions.push(if status.all_terminal {
+                    serde_json::json!({
+                        "kind": "terminal_run_recovery",
+                        "path": full_path,
+                        "run_id": run_id,
+                    })
+                } else {
+                    serde_json::json!({
+                        "kind": "block_unclassified_live",
+                        "path": full_path,
+                        "run_id": run_id,
+                        "reason": "validated v3 run still has live or missing work",
+                    })
+                });
+            }
+            continue;
+        }
+
+        if family == "job-transitions" {
+            let raw = required_snapshot_text(store, relative).await?;
+            let transition =
+                crate::queue::storage::validate_transition_snapshot(relative, &raw)?;
+            if !transition.retired {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "job_id": transition.job_id,
+                    "reason": "canonical transition is not retired",
+                }));
+            } else if let Some(run_id) = retained_jobs.get(&transition.job_id) {
+                decisions.push(serde_json::json!({
+                    "kind": "retained_outcome_cleanup",
+                    "run_id": run_id,
+                    "job_id": transition.job_id,
+                    "primary_only_paths": [],
+                    "transition_companions": [full_path],
+                }));
+            } else {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical_transition",
+                    "path": full_path,
+                    "job_id": transition.job_id,
+                }));
+            }
+            continue;
+        }
+
+        if crate::queue::runs::ALL_PREFIXES.contains(&family) {
+            let Some(job_id) = tail.strip_suffix(".json") else {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "reason": "job key is not canonical",
+                }));
+                continue;
+            };
+            let raw = required_snapshot_text(store, relative).await?;
+            let job = crate::models::Job::from_json(&raw)?;
+            if job.job_id != job_id {
+                return Err(StorageError::Other(format!(
+                    "{relative} contains a different job identity"
+                )));
+            }
+            if queued_cancellations.contains(job_id)
+                && matches!(family, "queue" | "cancellations" | "queue_priority")
+            {
+                if emitted_cancellations.insert(job_id.to_string()) {
+                    decisions.push(serde_json::json!({
+                        "kind": "queued_cancellation",
+                        "job_id": job_id,
+                    }));
+                }
+                continue;
+            }
+            if let Some(run_id) = retained_jobs.get(job_id) {
+                decisions.push(serde_json::json!({
+                    "kind": "retained_outcome_cleanup",
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "primary_only_paths": [full_path],
+                    "transition_companions": [],
+                }));
+                continue;
+            }
+            let expected_state = if family == "queue" {
+                crate::models::job_state::QUEUED
+            } else {
+                family
+            };
+            if crate::queue::runs::TERMINAL_PREFIXES.contains(&family)
+                && job.state == expected_state
+            {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical",
+                    "path": full_path,
+                    "job_id": job_id,
+                }));
+            } else if crate::queue::storage::is_transition_sentinel_state(&job.state)
+                && store.workdir_job_state(job_id).await?
+                    == crate::queue::storage::WorkdirJobState::Terminal
+            {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical_transition",
+                    "path": full_path,
+                    "job_id": job_id,
+                }));
+            } else {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "job_id": job_id,
+                    "reason": "typed job state is live or lacks canonical terminal transition proof",
+                }));
+            }
+            continue;
+        }
+
+        if family == "cancellations" {
+            let Some(job_id) = tail.strip_suffix(".json") else {
+                return Err(StorageError::Other(format!(
+                    "invalid cancellation key {relative}"
+                )));
+            };
+            let raw = required_snapshot_text(store, relative).await?;
+            crate::queue::storage::validate_cancellation_snapshot(job_id, &raw)?;
+            if queued_cancellations.contains(job_id) {
+                if emitted_cancellations.insert(job_id.to_string()) {
+                    decisions.push(serde_json::json!({
+                        "kind": "queued_cancellation",
+                        "job_id": job_id,
+                    }));
+                }
+            } else if let Some(run_id) = retained_jobs.get(job_id) {
+                decisions.push(serde_json::json!({
+                    "kind": "retained_outcome_cleanup",
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "primary_only_paths": [full_path],
+                    "transition_companions": [],
+                }));
+            } else if terminal_snapshot_present(store, job_id).await? {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical",
+                    "path": full_path,
+                    "job_id": job_id,
+                }));
+            } else {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "job_id": job_id,
+                    "reason": "cancellation marker has neither queued nor terminal job proof",
+                }));
+            }
+            continue;
+        }
+
+        if family == "queue_priority" {
+            if !crate::queue::listing::is_marker(relative) {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical",
+                    "path": full_path,
+                    "reason": "canonical priority-index bookkeeping marker",
+                }));
+                continue;
+            }
+            let raw = required_snapshot_text(store, relative).await?;
+            let marker: Value = serde_json::from_str(&raw)?;
+            let job_id = marker
+                .get("job_id")
+                .and_then(Value::as_str)
+                .filter(|job_id| !job_id.is_empty())
+                .ok_or_else(|| StorageError::Other(format!("{relative} has no job_id")))?;
+            let priority = marker
+                .get("priority")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| StorageError::Other(format!("{relative} has no integer priority")))?;
+            let queued = store.read_job("queue", job_id).await?;
+            if let Some(job) = queued.as_ref() {
+                if job.priority != priority
+                    || crate::queue::listing::marker_path(job) != *relative
+                {
+                    return Err(StorageError::Other(format!(
+                        "{relative} disagrees with its typed queued job"
+                    )));
+                }
+            }
+            if queued_cancellations.contains(job_id) {
+                if emitted_cancellations.insert(job_id.to_string()) {
+                    decisions.push(serde_json::json!({
+                        "kind": "queued_cancellation",
+                        "job_id": job_id,
+                    }));
+                }
+            } else if let Some(run_id) = retained_jobs.get(job_id) {
+                decisions.push(serde_json::json!({
+                    "kind": "retained_outcome_cleanup",
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "primary_only_paths": [full_path],
+                    "transition_companions": [],
+                }));
+            } else if queued.is_none() && terminal_snapshot_present(store, job_id).await? {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical",
+                    "path": full_path,
+                    "job_id": job_id,
+                }));
+            } else {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "job_id": job_id,
+                    "reason": "priority marker still belongs to live queued work",
+                }));
+            }
+            continue;
+        }
+
+        if family == "status" {
+            let parts = tail.split('/').collect::<Vec<_>>();
+            if parts.len() != 2 || !matches!(parts[1], "status" | "heartbeat") {
+                return Err(StorageError::Other(format!(
+                    "invalid status lifecycle key {relative}"
+                )));
+            }
+            let job_id = parts[0];
+            if let Some(run_id) = retained_jobs.get(job_id) {
+                decisions.push(serde_json::json!({
+                    "kind": "retained_outcome_cleanup",
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "primary_only_paths": [full_path],
+                    "transition_companions": [],
+                }));
+            } else if terminal_snapshot_present(store, job_id).await? {
+                decisions.push(serde_json::json!({
+                    "kind": "preserve_historical",
+                    "path": full_path,
+                    "job_id": job_id,
+                }));
+            } else {
+                decisions.push(serde_json::json!({
+                    "kind": "block_unclassified_live",
+                    "path": full_path,
+                    "job_id": job_id,
+                    "reason": "status object belongs to live or unclassified work",
+                }));
+            }
+            continue;
+        }
+
+        decisions.push(serde_json::json!({
+            "kind": "block_unclassified_live",
+            "path": full_path,
+            "reason": "lifecycle companion has no production typed reconciliation contract",
+        }));
+    }
+    Ok(decisions)
+}
+
 /// Python truthiness for the `manifest.get("reaped_at")` skip check.
 fn py_truthy(v: &Value) -> bool {
     match v {

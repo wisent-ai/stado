@@ -60,6 +60,36 @@ impl LocalBackend {
         })
     }
 
+    /// Open a previously materialized local store without creating or repairing
+    /// any directory. Immutable recovery snapshots use this constructor so a
+    /// validator cannot turn an absent internal directory into evidence.
+    pub(crate) fn open_existing(root: &Path) -> Result<Self, StorageError> {
+        let root = normalize(root);
+        if !root.is_dir() || root.is_symlink() {
+            return Err(StorageError::Other(format!(
+                "immutable local snapshot is absent or unsafe: {}",
+                root.display()
+            )));
+        }
+        let locks = root.join(".locks");
+        let metadata = root.join(".metadata");
+        if !locks.is_dir()
+            || locks.is_symlink()
+            || !metadata.is_dir()
+            || metadata.is_symlink()
+        {
+            return Err(StorageError::Other(format!(
+                "immutable local snapshot has no safe internal layout: {}",
+                root.display()
+            )));
+        }
+        Ok(Self {
+            root,
+            locks,
+            metadata,
+        })
+    }
+
     /// Resolve a blob path against the deployment root, rejecting escapes
     /// (Python `ValueError("storage path escapes deployment root")`).
     fn path(&self, path: &str) -> Result<PathBuf, StorageError> {
