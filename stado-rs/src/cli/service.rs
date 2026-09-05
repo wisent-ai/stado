@@ -308,6 +308,16 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Restore upstream signed macOS GitHub runner apphosts without restarting.
+    RepairRunnerRuntime {
+        /// An adopted service that directly launches GitHub's runsvc.sh.
+        name: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Restart one managed unit, without a full host-recovery pass.
     Restart {
         /// Service name, or the host's own name for the unit.
@@ -1173,6 +1183,23 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
+        ServiceCommands::RepairRunnerRuntime { name, host, json } => {
+            let services = declared_matching(&name, Some(&host)).await?;
+            let target = host_channel::canonical_target(&host).await.map_err(click)?;
+            let runner = production_runner();
+            for managed in &services {
+                let report =
+                    crate::deploy::host_precheck_runner::repair_runtime(&target, managed, &runner)
+                        .await
+                        .map_err(click)?;
+                if json {
+                    print_json(&report)?;
+                } else {
+                    print!("{}", report["stdout"].as_str().unwrap_or_default());
+                }
+            }
+            Ok(())
+        }
         ServiceCommands::Stop {
             name,
             host,
