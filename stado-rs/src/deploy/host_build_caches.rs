@@ -52,14 +52,24 @@ if [ -z "$root" ] || [ ! -d "$root" ]; then
   exit
 fi
 
-tags=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG 2>/dev/null || true)
+if ! tags=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG); then
+  printf 'STADO_BUILD_CACHE\tscan-failed\t%s\t%s\n' "$root" -
+  exit 1
+fi
+if [ -z "$tags" ]; then
+  printf 'STADO_BUILD_CACHE\tno-cache-tags\t%s\t%s\n' "$root" -
+  exit 0
+fi
 
 printf '%s\n' "$tags" |
 while IFS= read -r tag; do
   [ -n "$tag" ] || continue
   dir=$(/usr/bin/dirname "$tag")
   case "$dir" in
-    "$root") continue ;;
+    "$root")
+      printf 'STADO_BUILD_CACHE\troot-protected\t%s\t%s\n' "$dir" -
+      continue
+      ;;
   esac
   if ! /usr/bin/grep -qxF "$signature" "$tag" 2>/dev/null; then
     printf 'STADO_BUILD_CACHE\tuntagged\t%s\t%s\n' "$dir" -
