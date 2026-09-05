@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# Restore the Stado object API when its own client route is unavailable.
+# Restore the Stado object API without trusting a successful read alone.
 #
-# The listener is the authority for stado:// objects, so both of its storage
-# backends must be direct. It runs the host's canonical delivered Stado binary,
-# whose version is governed by the target's `managed_versions.stado`, rather
-# than an independently retained service image. If either backend inherits the
-# operator profile's `storage.backend=stado`, startup calls its own unopened
-# port and launchd loops forever. This helper gives the system daemon explicit
-# local primary and backup stores, preserves the prior plist, and only unloads
-# a drifted job after proving that an authenticated protected object read is
-# unavailable.
+# launchd's loaded job and its plist are separate facts. Recovery proves the
+# loaded storage route and authenticated reads before reporting readiness.
+# A different authority requires `host storage-root-reconcile`, which owns the
+# snapshots, writer fence, namespace-qualified copy, and rollback. This helper
+# repairs only the same-root listener using the host's canonical delivered Stado.
 set -euo pipefail
 
 label="com.wisent.always-on.stado-object-api"
@@ -27,28 +23,44 @@ if [ ! -x "$program" ]; then
   printf 'program_missing %s\n' "$program" >&2
   exit 66
 fi
-store="$HOME/.stado/local-storage"
-backup_store="$HOME/.stado/local-backup"
+
+store="${WC_LOCAL_STORAGE_PATH:-$HOME/.stado/local-storage}"
+backup_store="${WC_BACKUP_LOCAL_STORAGE_PATH:-$HOME/.stado/local-backup}"
 if [ -r "$config" ]; then
   configured=$(/usr/bin/python3 - "$config" <<'PY'
 import json, os, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
 value = ((document.get("storage") or {}).get("local") or {}).get("path") or ""
-print(os.path.abspath(os.path.expanduser(value)) if value else "")
+print(os.path.realpath(os.path.abspath(os.path.expanduser(value))) if value else "")
 PY
 )
-  if [ -n "$configured" ]; then store="$configured"; fi
+  if [ -z "${WC_LOCAL_STORAGE_PATH:-}" ] && [ -n "$configured" ]; then
+    store="$configured"
+  fi
   configured_backup=$(/usr/bin/python3 - "$config" <<'PY'
 import json, os, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     document = json.load(handle)
 value = ((((document.get("storage") or {}).get("backup") or {}).get("local") or {}).get("path") or "")
-print(os.path.abspath(os.path.expanduser(value)) if value else "")
+print(os.path.realpath(os.path.abspath(os.path.expanduser(value))) if value else "")
 PY
 )
-  if [ -n "$configured_backup" ]; then backup_store="$configured_backup"; fi
+  if [ -z "${WC_BACKUP_LOCAL_STORAGE_PATH:-}" ] &&
+    [ -n "$configured_backup" ]; then
+    backup_store="$configured_backup"
+  fi
 fi
+store=$(/usr/bin/python3 - "$store" <<'PY'
+import os, sys
+print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
+PY
+)
+backup_store=$(/usr/bin/python3 - "$backup_store" <<'PY'
+import os, sys
+print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
+PY
+)
 object_url="http://127.0.0.1:8765"
 object_namespace="probierz"
 object_token_file="$HOME/.stado/queue-object-api-token"
@@ -560,9 +572,219 @@ boundary = ((document.get("boundaries") or {}).get("object") or {})
 raise SystemExit(0 if boundary.get("ready") is True and not boundary.get("last_error") else 1)
 PY
 }
-reconcile_skarbiec_bootstrap
-healthy=0
-if authenticated_object_ready; then healthy=1; fi
+
+# Resolve the route a loaded job was given, rather than the route in the file
+# launchd may read next time. The legacy server selected the configured backup
+# whenever its client profile selected `stado`; that promotion is made explicit
+# here so a healthy read from local-backup cannot certify local-storage.
+inspect_route() {
+  mode=$1
+  source=$2
+  /usr/bin/python3 - "$mode" "$source" "$config" "$HOME" "$staged" \
+    "$work/$label.runtime-state.json" <<'PY'
+import json, os, plistlib, re, sys
+
+mode, source, default_config, default_home, expected_path, runtime_path = sys.argv[1:]
+with open(expected_path, "rb") as handle:
+    expected = plistlib.load(handle).get("EnvironmentVariables") or {}
+
+state = "-"
+pid = "-"
+if mode == "launchctl":
+    with open(source, encoding="utf-8", errors="strict") as handle:
+        lines = handle.readlines()
+    environment = {}
+    in_environment = False
+    for line in lines:
+        if re.match(r"^\s*environment = \{\s*$", line):
+            in_environment = True
+            continue
+        if in_environment:
+            if re.match(r"^\s*\}\s*$", line):
+                in_environment = False
+                continue
+            match = re.match(r"^\s*([^=\s]+)\s+=>\s+(.*?)\s*$", line)
+            if match:
+                environment[match.group(1)] = match.group(2)
+            continue
+        match = re.match(r"^\s*state = (.*?)\s*$", line)
+        if match and state == "-":
+            state = match.group(1)
+        match = re.match(r"^\s*pid = ([0-9]+)\s*$", line)
+        if match and pid == "-":
+            pid = match.group(1)
+else:
+    with open(source, "rb") as handle:
+        document = plistlib.load(handle)
+    environment = document.get("EnvironmentVariables") or {}
+
+if not isinstance(environment, dict) or any(
+    not isinstance(key, str) or not isinstance(value, str)
+    for key, value in environment.items()
+):
+    raise SystemExit("object API recovery refused: invalid environment dictionary")
+
+home = environment.get("HOME") or default_home
+config_path = environment.get("STADO_CONFIG") or default_config
+
+def expand_path(value, fallback=""):
+    value = value or fallback
+    if not value:
+        return ""
+    if value == "~":
+        value = home
+    elif value.startswith("~/"):
+        value = os.path.join(home, value[2:])
+    return os.path.realpath(os.path.abspath(value))
+
+try:
+    with open(expand_path(config_path), encoding="utf-8") as handle:
+        configuration = json.load(handle)
+except (OSError, ValueError) as error:
+    raise SystemExit(f"object API recovery refused: cannot read loaded host config: {error}")
+
+def configured(*parts):
+    value = configuration
+    for part in parts:
+        value = value.get(part) if isinstance(value, dict) else None
+    return value if isinstance(value, str) else ""
+
+def resolve(env_name, config_parts, fallback=""):
+    return environment.get(env_name) or configured(*config_parts) or fallback
+
+def canonical_backend(value):
+    return "stado" if value == "stado-object" else value
+
+primary_backend = canonical_backend(
+    resolve("WC_STORAGE_BACKEND", ("storage", "backend"))
+)
+primary_root = expand_path(
+    resolve(
+        "WC_LOCAL_STORAGE_PATH",
+        ("storage", "local", "path"),
+        os.path.join(home, ".stado", "local-storage"),
+    )
+)
+backup_backend = canonical_backend(
+    resolve("WC_BACKUP_STORAGE_BACKEND", ("storage", "backup", "backend"))
+)
+backup_root = expand_path(
+    resolve(
+        "WC_BACKUP_LOCAL_STORAGE_PATH",
+        ("storage", "backup", "local", "path"),
+    )
+)
+
+legacy_implicit_backup = primary_backend == "stado"
+if primary_backend in ("", "local"):
+    served_backend = "local"
+    served_root = primary_root
+elif legacy_implicit_backup:
+    served_backend = backup_backend
+    served_root = backup_root if backup_backend == "local" else ""
+else:
+    served_backend = primary_backend
+    served_root = ""
+
+if mode == "launchctl":
+    try:
+        with open(runtime_path, encoding="utf-8") as handle:
+            runtime = json.load(handle)
+    except (OSError, ValueError):
+        runtime = None
+    identity = runtime.get("storage") if isinstance(runtime, dict) else None
+    if isinstance(identity, dict):
+        if str(identity.get("pid")) != pid:
+            raise SystemExit("object API recovery refused: runtime identity changed during inspection")
+        served_backend = identity.get("backend") or ""
+        served_root = expand_path(identity.get("local_path") or "")
+        legacy_implicit_backup = False
+    elif legacy_implicit_backup and runtime is None:
+        raise SystemExit("object API recovery refused: legacy storage route is unavailable")
+
+expected_matches = all(environment.get(key) == value for key, value in expected.items())
+explicit_backend = environment.get("WC_STORAGE_BACKEND") or ""
+explicit_root = expand_path(environment.get("WC_LOCAL_STORAGE_PATH") or "")
+
+fields = (
+    primary_backend,
+    primary_root,
+    backup_backend,
+    backup_root,
+    served_backend,
+    served_root,
+    "yes" if legacy_implicit_backup else "no",
+    "yes" if expected_matches else "no",
+    pid,
+    state,
+    explicit_backend,
+    explicit_root,
+)
+for field in fields:
+    if any(character in field for character in "\t\r\n"):
+        raise SystemExit("object API recovery refused: route contains control characters")
+print("\t".join(field if field else "-" for field in fields))
+PY
+}
+
+capture_loaded_route() {
+  loaded=0
+  loaded_backend=-
+  loaded_primary_root=-
+  loaded_backup_backend=-
+  loaded_backup_root=-
+  loaded_served_backend=-
+  loaded_served_root=-
+  loaded_legacy=-
+  loaded_env_matches=-
+  loaded_pid=-
+  loaded_state=-
+  loaded_explicit_backend=-
+  loaded_explicit_root=-
+  loaded_print="$work/$label.launchctl-print"
+  if /usr/bin/sudo -n /bin/launchctl print "system/$label" \
+    > "$loaded_print.tmp" 2>/dev/null; then
+    /bin/mv "$loaded_print.tmp" "$loaded_print"
+    /bin/chmod 600 "$loaded_print"
+    runtime_state="$work/$label.runtime-state.json"
+    if /usr/bin/curl --silent --show-error --fail --max-time 5 \
+      "${object_url%/}/api/state.json" > "$runtime_state.tmp" 2>/dev/null; then
+      /bin/mv "$runtime_state.tmp" "$runtime_state"
+    else
+      /bin/rm -f "$runtime_state.tmp" "$runtime_state"
+    fi
+    route=$(inspect_route launchctl "$loaded_print")
+    IFS=$'\t' read -r loaded_backend loaded_primary_root \
+      loaded_backup_backend loaded_backup_root loaded_served_backend \
+      loaded_served_root loaded_legacy loaded_env_matches loaded_pid \
+      loaded_state loaded_explicit_backend loaded_explicit_root <<< "$route"
+    loaded=1
+  else
+    /bin/rm -f "$loaded_print.tmp"
+  fi
+}
+
+loaded_ready_for_root() {
+  expected_root=$1
+  require_expected_environment=$2
+  capture_loaded_route
+  [ "$loaded" -eq 1 ] || return 1
+  [ "$loaded_state" = running ] || return 1
+  [[ "$loaded_pid" =~ ^[0-9]+$ ]] || return 1
+  [ "$loaded_served_backend" = local ] || return 1
+  [ "$loaded_served_root" = "$expected_root" ] || return 1
+  [ "$loaded_legacy" = no ] || return 1
+  if [ "$require_expected_environment" = yes ]; then
+    [ "$loaded_env_matches" = yes ] || return 1
+  fi
+  listener_pids=$(
+    /usr/bin/sudo -n /usr/sbin/lsof -nP -a -iTCP:8765 -sTCP:LISTEN -t \
+      2>/dev/null | /usr/bin/sort -u || true
+  )
+  [ "$listener_pids" = "$loaded_pid" ] || return 1
+  authenticated_object_ready
+}
+
 same=0
 if /usr/bin/python3 - "$staged" "$plist" <<'PY'
 import plistlib, sys
@@ -575,12 +797,64 @@ raise SystemExit(0 if same else 1)
 PY
 then same=1; fi
 
-if [ "$healthy" -eq 1 ] && [ "$same" -eq 1 ]; then
+declared_backend=-
+declared_primary_root=-
+declared_backup_backend=-
+declared_backup_root=-
+declared_served_backend=-
+declared_served_root=-
+declared_legacy=-
+declared_env_matches=-
+declared_pid=-
+declared_state=-
+declared_explicit_backend=-
+declared_explicit_root=-
+if /usr/bin/sudo -n /bin/test -f "$plist"; then
+  declared_route=$(inspect_route plist "$plist")
+  IFS=$'\t' read -r declared_backend declared_primary_root \
+    declared_backup_backend declared_backup_root declared_served_backend \
+    declared_served_root declared_legacy declared_env_matches declared_pid \
+    declared_state declared_explicit_backend declared_explicit_root \
+    <<< "$declared_route"
+fi
+
+# Root movement is a different operation from listener recovery. In particular,
+# copying a whole backup over the primary can restore stale queue and registry
+# state. The resident transaction qualifies the namespace and captures writers;
+# this helper must neither duplicate it nor re-enable a listener during it.
+reconcile_skarbiec_bootstrap
+capture_loaded_route
+source_backend=local
+source_root=$store
+source_legacy=no
+if [ "$loaded" -eq 1 ]; then
+  source_backend=$loaded_served_backend
+  source_root=$loaded_served_root
+  source_legacy=$loaded_legacy
+elif [ "$declared_served_backend" != "-" ]; then
+  source_backend=$declared_served_backend
+  source_root=$declared_served_root
+  source_legacy=$declared_legacy
+fi
+if [ "$source_backend" != local ] || [ "$source_root" != "$store" ] ||
+  [ "$source_legacy" != no ]; then
+  printf 'storage_root_handoff_required backend=%s source=%s declared=%s; use stado host storage-root-reconcile for the authority transaction\n' \
+    "$source_backend" "$source_root" "$store" >&2
+  exit 70
+fi
+
+if loaded_ready_for_root "$store" yes; then
+  if [ "$same" -eq 0 ]; then
+    /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
+  fi
   reconcile_ingress
-  printf 'already_healthy %s store=%s\n' "$label" "$store"
+  printf 'already_healthy %s backend=local store=%s loaded_environment=matched\n' \
+    "$label" "$store"
   exit 0
 fi
 
+healthy=0
+if loaded_ready_for_root "$store" no; then healthy=1; fi
 stamp=$(/bin/date -u +%Y%m%dT%H%M%SZ)
 backup="$work/$label.plist.before-$stamp"
 if /usr/bin/sudo -n /bin/test -f "$plist"; then
@@ -590,27 +864,19 @@ if /usr/bin/sudo -n /bin/test -f "$plist"; then
   printf 'backup %s\n' "$backup"
 fi
 if [ "$healthy" -eq 1 ]; then
-  reconcile_ingress
-  # Persist the corrected definition without cycling a serving process. The
-  # current launchd job keeps running; the file is authoritative after reboot.
   /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
+  reconcile_ingress
   printf 'persisted_while_healthy %s store=%s backup=%s loaded_job=unchanged\n' \
     "$label" "$store" "${backup:-none}"
   exit 0
 fi
 
-# An interrupted earlier pass may have unloaded a correctly defined job.
-# The file and the loaded job are separate facts; kickstart requires both.
-loaded=0
-if /usr/bin/sudo -n /bin/launchctl print "system/$label" >/dev/null 2>&1; then
-  loaded=1
-fi
+# Preserve the corrected definition before unload so an interrupted invocation
+# can bootstrap the same root on its next run.
 if [ "$same" -eq 1 ] && [ "$loaded" -eq 1 ]; then
   /usr/bin/sudo -n /bin/launchctl kickstart -k "system/$label"
   action=kickstarted
 else
-  # Preserve the replacement before unload. A later pass can bootstrap it
-  # even if this host-channel invocation ends between bootout and bootstrap.
   /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
   if [ "$loaded" -eq 1 ]; then
     /usr/bin/sudo -n /bin/launchctl bootout "system/$label"
@@ -622,13 +888,13 @@ fi
 
 deadline=$((SECONDS + 180))
 while [ "$SECONDS" -lt "$deadline" ]; do
-  if authenticated_object_ready; then
+  if loaded_ready_for_root "$store" yes; then
     reconcile_ingress
     printf '%s %s store=%s backup=%s\n' "$action" "$label" "$store" "${backup:-none}"
     exit 0
   fi
   /bin/sleep 1
 done
-printf 'authorization_timeout %s protected object read stayed unavailable after 180 seconds; backup=%s\n' \
+printf 'authorization_timeout %s declared root did not serve authenticated reads after 180 seconds; backup=%s\n' \
   "$label" "${backup:-none}" >&2
 exit 69
