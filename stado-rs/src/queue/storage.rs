@@ -987,6 +987,22 @@ impl JobStorage {
                 transition.transition_id
             )));
         }
+        // Older writers left completed transition records after removing the
+        // source. Recovery must retire that settled generation, not replay
+        // terminal retention against run history that may already be gone.
+        let source_path = format!("{}/{}.json", transition.from_prefix, transition.job_id);
+        let source_retired = match self.read_text_versioned(&source_path).await? {
+            None => true,
+            Some(versioned) => {
+                let source = Job::from_json(&versioned.content)?;
+                source.job_id == transition.job_id
+                    && source.state == transition_cleaned_state(&transition.transition_id)
+            }
+        };
+        if source_retired {
+            self.retire_transition_record(transition).await?;
+            return Ok(true);
+        }
         if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
             crate::queue::runs::record_terminal_outcome(self, &destination, &transition.to_prefix)
                 .await?;

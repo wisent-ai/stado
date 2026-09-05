@@ -1451,21 +1451,38 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
             let status = report
                 .get("status")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+                .unwrap_or_default();
             let delivered = matches!(
-                status.as_str(),
+                status,
                 host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
             );
+            // `host release` reports host-side refusals as a structured
+            // `Ok(report)`, with the diagnostic in `error`. Reducing that
+            // report to its status discarded the only cause: the 0.16.19
+            // train printed `detail: "failed"` after the installed root had
+            // reached 0.16.19, so neither the failed reader nor its stderr
+            // survived into the convergence receipt.
+            let detail = if delivered {
+                status.to_string()
+            } else {
+                report
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .filter(|detail| !detail.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        if status.is_empty() {
+                            String::from("the delivery reported no status")
+                        } else {
+                            status.to_string()
+                        }
+                    })
+            };
             pass.releases.push(Released {
                 binary: row.binary.clone(),
                 version: row.declared.clone(),
                 status: if delivered { COMPLETED } else { FAILED },
-                detail: if status.is_empty() {
-                    String::from("the delivery reported no status")
-                } else {
-                    status
-                },
+                detail,
             });
         }
         Err(error) => pass.releases.push(Released {
