@@ -966,12 +966,12 @@ pub enum ServiceCommands {
     /// not exist, the unit is rendered for launchd's system domain and
     /// installed as a daemon in /Library/LaunchDaemons.
     ///
-    /// An existing unit is only ever restarted in place (`kickstart -k`), never
-    /// unloaded and bootstrapped back: that sequence took the always-on host
-    /// down once already. A loaded unit whose definition names a different
-    /// program is refused rather than overwritten, because launchd holds the
-    /// definition it bootstrapped and a rewritten file under a live job changes
-    /// nothing an operator can see.
+    /// An existing matching definition is restarted in place with
+    /// `kickstart -k`. When launchd's retained Program or ProgramArguments
+    /// differs from the desired definition, ensure first validates the
+    /// replacement executable and complete rendered plist, then reloads that
+    /// definition once and verifies launchd's readback and running executable.
+    /// An unreadable retained definition is refused without touching the job.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
