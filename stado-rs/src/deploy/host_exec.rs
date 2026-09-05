@@ -944,6 +944,50 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               verified or changed",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--status", "gnu-coreutils"],
+        why: "reads the installed gnu-coreutils package's recorded status, source metadata and \
+              description without verifying files, changing package state, or accepting an \
+              operator-selected package",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--status", "coreutils-from-gnu"],
+        why: "reads the installed coreutils-from-gnu package's recorded status, source metadata \
+              and description without verifying files, changing package state, or accepting an \
+              operator-selected package",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--listfiles", "gnu-coreutils"],
+        why: "lists only the paths the installed gnu-coreutils package records as its own; the \
+              package is fixed in source, and the query neither opens their contents nor changes \
+              package state",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/dpkg-query", "--listfiles", "coreutils-from-gnu"],
+        why: "lists only the paths the installed coreutils-from-gnu package records as its own; \
+              the package is fixed in source, and the query neither opens their contents nor \
+              changes package state",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/grep",
+            "usr/bin/gnuls",
+            "/var/lib/dpkg/info/gnu-coreutils.md5sums",
+        ],
+        why: "reads only the gnuls entry from gnu-coreutils' fixed package-recorded checksum \
+              file; both the literal match and file path are fixed, and no installed file is \
+              verified or changed",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/grep",
+            "usr/bin/ls",
+            "/var/lib/dpkg/info/coreutils-from-gnu.md5sums",
+        ],
+        why: "reads only the ls entry from coreutils-from-gnu's fixed package-recorded checksum \
+              file; both the literal match and file path are fixed, and no installed file is \
+              verified or changed",
+    },
+    ApprovedCommand {
         argv: &[
             "/bin/ps",
             "axww",
