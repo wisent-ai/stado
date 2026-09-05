@@ -301,6 +301,9 @@ pub enum ServiceCommands {
     RefreshImage {
         /// The host's own name for the unit: the launchd label.
         name: String,
+        /// Succeed without restarting when kernel image identity already matches.
+        #[arg(long)]
+        if_needed: bool,
         #[arg(long)]
         json: bool,
     },
@@ -345,6 +348,9 @@ pub enum ServiceCommands {
         /// Point `current` back at a version directory already on the host.
         #[arg(long, conflicts_with_all = ["from_artifact", "from_archive"])]
         rollback_to: Option<String>,
+        /// Reconcile and verify the live kernel image after installation.
+        #[arg(long)]
+        refresh_image: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1113,15 +1119,18 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
-        ServiceCommands::RefreshImage { name, json } => {
-            crate::cli::service_refresh_image::refresh_image(&name, json).await
-        }
+        ServiceCommands::RefreshImage {
+            name,
+            if_needed,
+            json,
+        } => crate::cli::service_refresh_image::refresh_image(&name, if_needed, json).await,
         ServiceCommands::Update {
             name,
             host,
             from_artifact,
             from_archive,
             rollback_to,
+            refresh_image,
             json,
         } => {
             update(
@@ -1130,6 +1139,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 from_artifact.as_deref(),
                 from_archive.as_deref(),
                 rollback_to.as_deref(),
+                refresh_image,
                 json,
             )
             .await
@@ -2535,6 +2545,7 @@ async fn update(
     reference: Option<&str>,
     archive: Option<&str>,
     rollback_to: Option<&str>,
+    refresh_image: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
@@ -2616,47 +2627,84 @@ async fn update(
             ))
         }
     };
-    let running_active = if already_active {
-        service::inspect_process(&target, declared, &runner)
-            .await
-            .ok()
-            .and_then(|running| running.matches_process())
-            == Some(true)
-    } else {
+    let followed = if already_active {
         false
+    } else {
+        // A unit pinned to a version directory never sees an install: `current`
+        // moves and the job keeps executing the path it was rendered with.
+        follow_current(&target, declared, &directory, &runner).await?
     };
-    if already_active && running_active {
-        if json {
-            print_json(&json!({
-                "host": host,
-                "service": name,
-                "unit_repointed": false,
-                "version": installed.version,
-                "sha256": installed.sha256,
-                "status": "already_active",
-                "effective": "already running from this archive tree",
-            }))?;
-        } else {
-            println!("{host}: {name} already uses {}", installed.version);
+    let image_refresh = if refresh_image {
+        let units = service::loaded_units(&target, &runner)
+            .await
+            .map_err(click)?;
+        let before = units
+            .iter()
+            .find(|unit| unit.label == declared.unit_id())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{host}: {} is absent from the domain-bound launchd inventory",
+                    declared.unit_id()
+                ))
+            })?;
+        if before.pid.is_empty() {
+            if before.loaded_domains.len() != 1 {
+                return Err(CmdError::click(format!(
+                    "{host}: {} has no live pid and {} loaded domains; refusing to guess a lifecycle action",
+                    declared.unit_id(),
+                    before.loaded_domains.len()
+                )));
+            }
+            let started = service::restart_service(&target, declared, &runner)
+                .await
+                .map_err(click)?;
+            if !started.succeeded("restarted") {
+                return Err(CmdError::click(format!(
+                    "{host}: {} was confirmed loaded without a live pid and did not start: {}",
+                    declared.unit_id(),
+                    started.failure()
+                )));
+            }
         }
-        return Ok(());
-    }
-    // A unit pinned to a version directory never sees an install: `current`
-    // moves and the job keeps executing the path it was rendered with, so the
-    // deployment reports success and the machine runs what it ran before. Point
-    // it at `current`, which is what makes a later install or a rollback a
-    // relink rather than a redeploy.
-    let followed = follow_current(&target, declared, &directory, &runner).await?;
+        let script = format!(
+            "set -euo pipefail\n\"$HOME/.stado/bin/stado\" service refresh-image {} \
+             --if-needed --json",
+            crate::deploy::shlex_quote(declared.unit_id()),
+        );
+        let output = host_channel::run_script(&target, &script, &runner)
+            .await
+            .map_err(click)?;
+        if !output.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: {}",
+                host_channel::last_error_line(&output, "the running image did not converge")
+            )));
+        }
+        serde_json::from_str::<Value>(output.stdout.trim()).map_err(|error| {
+            CmdError::click(format!(
+                "{host}: image refresh returned invalid JSON: {error}; stdout={}",
+                output.stdout.trim()
+            ))
+        })?
+    } else {
+        Value::Null
+    };
     if json {
         print_json(&json!({
             "host": host,
             "service": name,
+            "image_refresh": image_refresh,
             "unit_repointed": followed,
             "version": installed.version,
             "sha256": installed.sha256,
-            "status": "updated",
-            "effective": "on next restart",
+            "status": if already_active { "already_installed" } else { "updated" },
+            "effective": if refresh_image { "running image verified" } else { "on next restart" },
         }))?;
+    } else if refresh_image {
+        println!(
+            "{host}: {name} -> {} (running image verified)",
+            installed.version
+        );
     } else {
         println!(
             "{host}: {name} -> {} (takes effect on the next restart)",
@@ -2988,6 +3036,7 @@ async fn rollback_service_release(
         None,
         Some(previous),
         false,
+        false,
     )
     .await?;
     let report = if options.reload_unit {
@@ -3263,6 +3312,7 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         None,
         archive_path.to_str(),
         None,
+        false,
         false,
     )
     .await

@@ -160,7 +160,7 @@ fn dry_run_reports_eligible_cache_without_deleting_or_persisting() {
 
     let report = journey.invoke_ok(&["disk-cleanup", "--dry-run"]);
 
-    assert_eq!(report["mode"], "report");
+    assert_eq!(report["mode"], "report", "cleanup report: {report:#}");
     assert_eq!(report["outcome"], "report_only");
     assert_eq!(report["cleaners"]["build_caches"]["eligible_items"], 1);
     assert_eq!(report["cleaners"]["build_caches"]["deleted_items"], 0);
@@ -182,7 +182,7 @@ fn enforce_deletes_only_tagged_cache_and_persists_reclaimed_progress() {
 
     let report = journey.invoke_ok(&["disk-cleanup", "--once"]);
 
-    assert_eq!(report["mode"], "enforce");
+    assert_eq!(report["mode"], "enforce", "cleanup report: {report:#}");
     assert_eq!(report["outcome"], "reclaimed_progress");
     assert_eq!(report["cleaners"]["build_caches"]["eligible_items"], 1);
     assert_eq!(report["cleaners"]["build_caches"]["deleted_items"], 1);
@@ -231,7 +231,7 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
     .unwrap();
 
     let takeover = journey.invoke_ok(&["disk-cleanup", "--once"]);
-    assert_eq!(takeover["mode"], "report");
+    assert_eq!(takeover["mode"], "report", "cleanup report: {takeover:#}");
     assert_eq!(takeover["outcome"], "lock_recovery_report_only");
     assert!(tagged.is_dir(), "takeover pass must not delete");
     assert_eq!(journey.retired_locks().len(), 1);
@@ -249,7 +249,10 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
     FileExt::unlock(&held).unwrap();
     drop(held);
     let recovered = journey.invoke_ok(&["disk-cleanup", "--once"]);
-    assert_eq!(recovered["mode"], "enforce");
+    assert_eq!(
+        recovered["mode"], "enforce",
+        "cleanup report: {recovered:#}"
+    );
     assert_eq!(recovered["outcome"], "reclaimed_progress");
     assert!(
         !tagged.exists(),

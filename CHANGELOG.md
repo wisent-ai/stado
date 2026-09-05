@@ -1,11 +1,21 @@
 # Changelog
 
-## 0.16.13
+## 0.16.14
 
 - **Registry observations:** `registry doctor` derives its typed and raw views from one authoritative registry generation. Canonical reads no longer silently use a disaster-recovery replica or a product namespace, and live beacon/capacity reads stay on the primary.
 - **Linux service environment:** the systemd environment writer executes its Python input as a script rather than treating the service UID as a filename. A refused write retains the writer's actual error; a corrected unit definition is reloaded without restarting its service.
 - **Migration and rollback:** no stored-state migration is required. Rolling back can restore stale registry observations and the broken systemd environment-writer invocation.
 - **Platforms:** `darwin-arm64` and `linux-amd64` remain supported through the existing signed release and delivery paths.
+
+## 0.16.13
+
+- **Coordinator archive delivery:** `service update --from-archive` validates members against the fixed `darwin-arm/` directory the installer actually supplies, so canonical root `stado` satisfies a unit running `current/darwin-arm/stado`.
+- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target and retains ordinary `host release` convergence for each target's host-global Stado image. Native install identifies long-running direct or launcher-owned readers by kernel device and inode, restarts each replaced image, and fails unless its replacement process maps the installed inode. The fleet job also discovers every registry-declared service-local Stado reader, installs the target platform's canonical archive into each private version tree, and uses that same kernel identity to restart only readers not already on the delivered inode.
+- **Resumability:** `service converge --apply` runs the kernel-backed reader pass even when the installed file is already attested at the declared version, so a prior files-only delivery cannot become a false successful retry.
+- **Convergence verdict:** unread image identity, a failed restart, a replacement process that does not map the installed inode, or a failed release receipt remains a failed delivery even if a later installed-version read says the path is in sync.
+- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
+- **Migration and rollback:** no stored-state migration is required. Rolling back restores delivery that can stop after replacing only the root pathname while declared readers retain older mapped images.
+- **Platforms:** the native delivery and reader-verification path covers `darwin-arm64` and `linux-amd64`.
 
 ## 0.16.12
 
@@ -20,12 +30,8 @@
 
 - **Native qualification footprint:** the macOS and Linux release journeys omit debug symbols and incremental compiler caches from their disposable test builds. Runtime checks and the host's disk admission thresholds are unchanged.
 - **Terminal cleanup:** the Linux matrix removes its own Cargo output on both success and failure, and keeps the downloaded signing tool in its ignored work directory instead of making the source checkout dirty.
-- **Coordinator archive delivery:** `service update --from-archive` now validates members against the layout it actually installs. Because the installer supplies the fixed `darwin-arm/` directory, a unit running `current/darwin-arm/stado` correctly accepts a root `stado` member instead of requiring an archive that would install as `darwin-arm/darwin-arm/stado`.
-- **Complete reader delivery:** after both platform publications, the stable fleet job walks every manifest-required target, retains ordinary `host release` convergence for each target's host-global Stado image, and discovers every registry-declared service-local Stado reader. It installs the target platform's canonical archive into each private version tree and restarts only readers that were not already running from that digest; a failed update or restart fails the release job.
-- **Convergence verdict:** `service converge --apply` now remains failed when one of its delivery receipts failed, even if the final installed-version read is in sync because another actor converged the path concurrently.
-- **Recovery:** these changes let the active coordinator consume the canonical Stado archive and resume its already-committed release-control handoff without manually replacing files, repacking an archive, or reapplying the CAS.
-- **Migration and rollback:** no stored data changes. Rolling back restores the larger temporary build footprint, leaves Linux qualification caches until normal retention removes them, and again permits native delivery to omit service-local Stado readers.
-- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`; immutable Stado publication, service-update, restart, and resumed-handoff receipts bind the coordinator repair's exact source and bytes.
+- **Migration and rollback:** no stored data changes. Rolling back restores the larger temporary build footprint and leaves Linux qualification caches until normal retention removes them.
+- **Platforms and evidence:** the existing Probierz matrix still requires native build-artifact delivery, signed installation, and cancelled-build retry on `darwin-arm64` and `linux-amd64`.
 
 ## 0.16.10
 
