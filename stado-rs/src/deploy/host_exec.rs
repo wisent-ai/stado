@@ -899,6 +899,12 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               are opened",
     },
     ApprovedCommand {
+        argv: &["/bin/ls", "--version"],
+        why: "prints the installed /bin/ls implementation and version without reading a \
+              directory or changing filesystem state; both the executable and its sole \
+              informational flag are fixed",
+    },
+    ApprovedCommand {
         argv: &[
             "/bin/ps",
             "axww",
