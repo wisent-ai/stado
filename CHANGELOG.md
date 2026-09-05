@@ -2,6 +2,7 @@
 
 ## 0.16.18
 
+- **Measured CPU admission:** available cores use operating-system processor-time deltas instead of runnable-process load averages, so a high load average cannot falsely close a host whose CPU is idle. Unavailable measurements remain explicit, and already-owned jobs still reserve their requested cores.
 - **Linux release readers:** a system-scoped queue worker now addresses its owner's user systemd manager with the same runtime directory and bus address as service operations. Release installation can refresh the running user resolver instead of failing to enumerate it after replacing the binary.
 - **Failure reporting:** failed systemd reader operations retain the command's exit status and stderr; delivery still fails unless each replaced reader maps the installed executable.
 - **Migration and rollback:** no stored data changes. Rolling back restores dependence on inherited login-session variables during Linux release delivery.

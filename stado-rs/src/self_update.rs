@@ -577,21 +577,6 @@ pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
     subcommand == Some("agent")
 }
 
-/// Stdout of a successful command, or `None` for a missing binary, a spawn
-/// failure, a nonzero exit, or non-UTF-8 output. The caller treats all four
-/// the same way: it did not happen, and the log says so.
-async fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = tokio::process::Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout).ok()
-}
-
 /// `launchctl list` prints `PID\tStatus\tLabel` after one header row. A job
 /// that is loaded but not running prints `-` for the PID and holds no image,
 /// so it is skipped: it will pick up the new binary the next time launchd
