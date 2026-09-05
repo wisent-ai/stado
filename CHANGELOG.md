@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.8
+
+- Build-cache cleanup rechecks tagged caches encountered before its saved traversal cursor. Caches that appear or reach their retention age during a long scan no longer wait for that scan to finish; each renewed check still consumes the scan budget.
+- A changed canonical cleanup policy discards the old relative cursor, so changing the scan root or retention cannot skip newly covered caches. Existing tag, ownership, device, retention and workload-lock requirements remain unchanged.
+
 ## 0.16.7
 
 - **Exact storage-root evidence:** `stado host backup-audit TARGET --object STADO_URI` compares only the named existing object in the host's declared local primary and backup roots. The read-only report returns each side's state, byte count, and SHA-256 without returning object content or walking either store; repeat `--object` for additional coordinates.
