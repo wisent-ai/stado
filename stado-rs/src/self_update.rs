@@ -447,7 +447,9 @@ async fn install_release_with(
         log_fn(&format!("self-update: installed {name} {to}"));
     }
     std::fs::File::open(install_dir)?.sync_all()?;
-    recycle_replaced_units("self-update", install_dir, &targets, log_fn).await;
+    if let Err(error) = recycle_replaced_units("self-update", install_dir, &targets, log_fn).await {
+        log_fn(&format!("self-update: {error}"));
+    }
     Ok(UpdateOutcome::Updated {
         from: installed,
         to,
@@ -537,14 +539,14 @@ pub(crate) async fn recycle_replaced_units(
     install_dir: &Path,
     replaced: &[String],
     log_fn: &mut dyn FnMut(&str),
-) {
+) -> Result<(), String> {
     let paths: Vec<String> = replaced
         .iter()
         .map(|name| install_dir.join(name).to_string_lossy().into_owned())
         .collect();
     let ours = std::process::id();
     let restarted = if cfg!(target_os = "macos") {
-        recycle_launchd(context, &paths, ours, log_fn).await
+        recycle_launchd(context, &paths, ours, log_fn).await?
     } else {
         recycle_systemd(context, &paths, ours, log_fn).await
     };
@@ -553,6 +555,7 @@ pub(crate) async fn recycle_replaced_units(
             "{context}: no other managed unit was running a replaced binary"
         ));
     }
+    Ok(())
 }
 
 /// Whether an argv belongs to the queue agent, which recycles itself through
@@ -630,19 +633,32 @@ async fn recycle_launchd(
     paths: &[String],
     ours: u32,
     log_fn: &mut dyn FnMut(&str),
-) -> usize {
+) -> Result<usize, String> {
     let Some(uid) = unix_uid() else {
-        log_fn(&format!(
-            "{context}: this account's uid is unreadable, so no launchd unit was restarted"
+        return Err(format!(
+            "{context}: this account's uid is unreadable, so running readers of the replaced image are unknown"
         ));
-        return 0;
     };
     let Some(listing) = command_stdout("/bin/launchctl", &["list"]).await else {
-        log_fn(&format!(
-            "{context}: launchctl list failed, so no launchd unit was restarted"
+        return Err(format!(
+            "{context}: launchctl list failed, so running readers of the replaced image are unknown"
         ));
-        return 0;
     };
+    let pids: Vec<u32> = listing
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split('\t').next()?.trim().parse().ok())
+        .collect();
+    let running_images = crate::deploy::service::running_images(&pids)
+        .map_err(|error| format!("{context}: cannot read running image identities: {error}"))?;
+    let installed_images: Vec<(String, crate::deploy::service::ImageIdentity)> = paths
+        .iter()
+        .map(|path| {
+            crate::deploy::service::installed_image(Path::new(path))
+                .map(|(image, _)| (path.clone(), image))
+                .map_err(|error| format!("{context}: cannot identify installed {path}: {error}"))
+        })
+        .collect::<Result<_, _>>()?;
     let home = std::env::var("HOME").unwrap_or_default();
     let domains = [
         (
@@ -676,10 +692,24 @@ async fn recycle_launchd(
             let Some(argv) = launchd_argv(&plist).await else {
                 continue;
             };
-            let program = argv[0].clone();
-            if !paths.iter().any(|path| path == &program) {
-                continue;
+            let direct = paths
+                .iter()
+                .find(|path| argv.first().is_some_and(|program| program == *path));
+            let running = running_images.get(&pid);
+            if direct.is_some() && running.is_none() {
+                return Err(format!(
+                    "{context}: the kernel image for {label} pid {pid} is unreadable"
+                ));
             }
+            let selected = running.and_then(|running| {
+                installed_images.iter().find(|(path, installed)| {
+                    running.path.trim_end_matches(" (deleted)") == path
+                        && !running.is_same_file(installed)
+                })
+            });
+            let Some((program, installed)) = selected else {
+                continue;
+            };
             if defers_to_release_handshake(&argv) {
                 log_fn(&format!(
                     "{context}: {label} is running the replaced {program} and recycles itself \
@@ -690,22 +720,50 @@ async fn recycle_launchd(
             let service = format!("{domain}/{label}");
             if command_stdout("/bin/launchctl", &["kickstart", "-k", &service])
                 .await
-                .is_some()
+                .is_none()
             {
-                log_fn(&format!(
-                    "{context}: restarted {service} in place; pid {pid} was running the replaced {program}"
+                return Err(format!(
+                    "{context}: {service} was executing the replaced {program} and could not be restarted"
                 ));
-                restarted += 1;
-            } else {
-                log_fn(&format!(
-                    "{context}: {service} is running the replaced {program} and this account could not restart it; \
-                     it keeps the old image until launchd replaces the process"
+            }
+            let mut verified = false;
+            for _ in 0..60 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let Some(current) = command_stdout("/bin/launchctl", &["list"]).await else {
+                    continue;
+                };
+                let Some(current_pid) = current.lines().skip(1).find_map(|line| {
+                    let mut fields = line.split('\t');
+                    let pid = fields.next()?.trim().parse::<u32>().ok()?;
+                    let _status = fields.next()?;
+                    (fields.next()? == label).then_some(pid)
+                }) else {
+                    continue;
+                };
+                let Ok(images) = crate::deploy::service::running_images(&[current_pid]) else {
+                    continue;
+                };
+                if images
+                    .get(&current_pid)
+                    .is_some_and(|running| running.is_same_file(installed))
+                {
+                    log_fn(&format!(
+                        "{context}: restarted {service} in place; pid {pid} was running the replaced {program}, and pid {current_pid} now executes the installed inode"
+                    ));
+                    restarted += 1;
+                    verified = true;
+                    break;
+                }
+            }
+            if !verified {
+                return Err(format!(
+                    "{context}: {service} restarted but its running image did not converge to {program}"
                 ));
             }
             break;
         }
     }
-    restarted
+    Ok(restarted)
 }
 
 /// systemd holds a replaced image for exactly the same reason launchd does.

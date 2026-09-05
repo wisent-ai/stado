@@ -1545,7 +1545,8 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
         std::slice::from_ref(&name),
         &mut recycle_log,
     )
-    .await;
+    .await
+    .map_err(CmdError::click)?;
     println!(
         "installed {} from the delivered release archive",
         destination.display()
