@@ -2995,7 +2995,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 }
 
 /// `stado host declare-version TARGET --binary B --version V` — say what a
-/// host must run.
+/// host must run. `--unset` removes that one declaration.
 ///
 /// `managed_versions` is the declaration every version verdict is measured
 /// against, and nothing wrote it: `host inventory` compared each host's
@@ -3006,15 +3006,32 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 pub async fn declare_version(
     target: &str,
     binary: &str,
-    version: &str,
+    version: Option<&str>,
+    unset: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     let binary = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let version = version.trim();
-    if version.is_empty() {
-        return Err(CmdError::usage("--version must name an exact version"));
-    }
+    let version = match (version, unset) {
+        (Some(_), true) => {
+            return Err(CmdError::usage(
+                "--version and --unset cannot be used together",
+            ));
+        }
+        (None, false) => {
+            return Err(CmdError::usage(
+                "one of --version or --unset must be provided",
+            ));
+        }
+        (Some(version), false) => {
+            let version = version.trim();
+            if version.is_empty() {
+                return Err(CmdError::usage("--version must name an exact version"));
+            }
+            Some(version)
+        }
+        (None, true) => None,
+    };
     let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let targets = document
         .get_mut("targets")
@@ -3027,23 +3044,53 @@ pub async fn declare_version(
             (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
         })
         .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
-    let versions = entry
-        .entry("managed_versions".to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
-    versions.insert(binary.name.to_string(), json!(version));
-    let generation = super::registry::push_document_if(&document, &expected_generation).await?;
+
+    if let Some(version) = version {
+        let versions = entry
+            .entry("managed_versions".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+        versions.insert(binary.name.to_string(), json!(version));
+        let generation = super::registry::push_document_if(&document, &expected_generation).await?;
+        if json {
+            print_json(&json!({
+                "target": target,
+                "binary": binary.name,
+                "version": version,
+                "generation": generation,
+            }));
+            return Ok(());
+        }
+        println!("{target}: {} declared at {version}", binary.name);
+        return Ok(());
+    }
+
+    let removed = match entry.get_mut("managed_versions") {
+        None => false,
+        Some(versions) => versions
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?
+            .remove(binary.name)
+            .is_some(),
+    };
+    let generation = if removed {
+        super::registry::push_document_if(&document, &expected_generation).await?
+    } else {
+        expected_generation
+    };
     if json {
         print_json(&json!({
             "target": target,
             "binary": binary.name,
-            "version": version,
+            "removed": removed,
             "generation": generation,
         }));
-        return Ok(());
+    } else if removed {
+        println!("{target}: {} declaration removed", binary.name);
+    } else {
+        println!("{target}: {} declaration is already absent", binary.name);
     }
-    println!("{target}: {} declared at {version}", binary.name);
     Ok(())
 }
 
