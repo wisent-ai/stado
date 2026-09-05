@@ -395,6 +395,27 @@ stado service grant-sync <service> \
 
 The read exists because its absence hid a whole migration's work in the wrong place. `skarbiec set-json` on a workstation writes that workstation's vault; the fleet reads the target's own live vault, and nothing pointed at the difference — `retag-vault-item` reports state, revision and tags but nothing about a payload, `stado credentials get` reads the local store, and `skarbiec get` is not a host-exec command. Seven environment bundles and twenty credential fields went into a laptop vault nothing on the fleet reads, and the only symptom was Brama answering `401` to a bearer it had never been told about.
 
+### Which vault a machine resolves
+
+A machine can hold several vault files, and exactly one of them answers its credential operations. `secrets.skarbiec.vault_file` declares which: `stado config set secrets.skarbiec.vault_file <path>` for the machine you are on, `stado host config-set <target> secrets.skarbiec.vault_file <path>` for a managed host. `SKARBIEC_VAULT_FILE` still overrides it for one process, which is how a build is exercised before it is installed.
+
+With nothing declared the machine discovers one, searching the paths Skarbiec's own `vaults` command searches, in its order: `~/.local/share/skarbiec/skarbiec.vault.json`, `~/.stado/skarbiec.vault.json`, `~/skarbiec.vault.json`. That is an answer only while one candidate is present, or while the candidates carry different owners.
+
+`stado credentials vault [--json]` reports the resolution for the machine it runs on, and `stado host vaults <target>` reports it for a managed host, marking the resolved vault with `*`. Stado Desktop shows the same on the Hosts screen as "Credential vault this host resolves". The states:
+
+| State | Meaning |
+|---|---|
+| `declared` | `secrets.skarbiec.vault_file` names a vault this machine holds |
+| `discovered` | one candidate, and no declaration was needed |
+| `ambiguous` | several candidates claim one owner: every owner write and authoritative read here is refused |
+| `declared-absent` | the declaration names a file this machine does not hold |
+| `none` | no candidate at all, so this machine cannot write credential items |
+| `unreadable` | that host's installed release has no such field, so its resolution cannot be read from here |
+
+Nothing is ever merged and no vault is ever created to resolve this: which items belong where is the operator's decision, and a second vault created quietly is the defect rather than the recovery.
+
+On 2026-09-05 `lukasz-macbook` held `~/.local/share/skarbiec/skarbiec.vault.json` with 660 items and `~/.stado/skarbiec.vault.json` with 626, both claiming owner `skarbiec-owner-charless-mini-20260804`, because the `skarbiec` CLI defaults to the first and Stado used to name the second. Twenty-two of the fleet's twenty-four declared release publishers were in both, two in only one. Every owner write on that machine was refused, so `stado host reconcile-release-verifier` could not extend the release verifier's grant, and `stado doctor --deployment-preflight` failed `object-auth` with seven publisher items missing — the fleet's release publication boundary, closed by a question nothing in the product asked out loud.
+
 ## Failure ownership
 
 | Result | Meaning | Repair owner |
