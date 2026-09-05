@@ -18,7 +18,9 @@
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
-//! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
+//! POST /api/registry/import - additive canonical registry adoption
+//! POST /api/integration/enterprise/<action> - authenticated fleet projection
+//! POST /api/integration/oko/<action> - authenticated finite Oko selected-host dispatch
 //! GET /api/fleet/invite/key - invite-token-authenticated public channel key
 //! POST /api/fleet/join - invite-token-authenticated pending enrollment request
 //! GET /join.sh           - machine-side enrollment bootstrap script (public)
@@ -158,7 +160,7 @@ impl Boundary {
             Boundary::RateLimitVerifier | Boundary::RateLimitState => "/api/rate-limit/consume",
             Boundary::Integration => "the integration routes",
             Boundary::Registry => {
-                "/api/registry.json, /api/registry/policy, /api/cleanup.json, /api/cleanup/run"
+                "/api/registry.json, /api/registry/policy, /api/registry/import, /api/cleanup.json, /api/cleanup/run"
             }
         }
     }
@@ -2602,28 +2604,31 @@ impl Dashboard {
         if path == "/api/rate-limit/consume" {
             return self.post_rate_limit_consume(request).await;
         }
-        // Registry-policy writes and janitor runs. Gated on their own
-        // boundary, so a deployment that has declared no client refuses them
-        // with 401 while every other route on this listener is unaffected.
-        if matches!(path, "/api/registry/policy" | "/api/cleanup/run") {
+        // Registry imports, policy writes, and janitor runs are gated on their
+        // own actions. A deployment that grants policy editing does not thereby
+        // grant adoption of an arbitrary registry document.
+        if matches!(
+            path,
+            "/api/registry/import" | "/api/registry/policy" | "/api/cleanup/run"
+        ) {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
                     http_status("503"),
                     &json!({"error": "registry authorization unavailable"}),
                 );
             }
-            let action = if path == "/api/registry/policy" {
-                "policy-write"
-            } else {
-                "cleanup-run"
+            let action = match path {
+                "/api/registry/import" => "registry-import",
+                "/api/registry/policy" => "policy-write",
+                _ => "cleanup-run",
             };
             if let Err(response) = registry_policy::authorized(request, action).await {
                 return response;
             }
-            return if path == "/api/registry/policy" {
-                registry_policy::set_policy(request).await
-            } else {
-                registry_policy::run_cleanup().await
+            return match path {
+                "/api/registry/import" => registry_policy::import_registry(request).await,
+                "/api/registry/policy" => registry_policy::set_policy(request).await,
+                _ => registry_policy::run_cleanup().await,
             };
         }
         if control_route {
@@ -2924,6 +2929,9 @@ pub async fn serve(
 
 /// Request head cap (Python's http.server parses a similar 64 KiB budget).
 const MAX_HEAD_BYTES: usize = 65536;
+/// Desktop and API imports are bounded independently from ordinary JSON
+/// controls; the CLI reads local files directly and has no transport envelope.
+const MAX_REGISTRY_IMPORT_BYTES: usize = 2 * 1024 * 1024;
 
 static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -3061,20 +3069,27 @@ async fn read_request(
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
     let object_put = method == "PUT" && path.starts_with("/api/object?");
+    let registry_import = method == "POST"
+        && path
+            .split_once('?')
+            .map_or(path.as_str(), |(route, _)| route)
+            == "/api/registry/import";
     let content_length = match content_length_header {
         Some(value) => value.parse::<usize>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
         })?,
-        None if object_put => {
+        None if object_put || registry_import => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "object PUT requires Content-Length",
+                "mutating object and registry import requests require Content-Length",
             ));
         }
         None => usize::default(),
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
+    } else if registry_import {
+        MAX_REGISTRY_IMPORT_BYTES
     } else {
         MAX_HEAD_BYTES
     };
