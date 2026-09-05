@@ -31,6 +31,13 @@ private struct HostConnectionPathsTarget: Identifiable {
     var id: String { host }
 }
 
+/// The selected registry target whose durable storage transaction is shown.
+private struct StorageReconciliationTarget: Identifiable {
+    let host: String
+
+    var id: String { host }
+}
+
 struct HostsView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var fleetStore: FleetControlStore
@@ -43,6 +50,10 @@ struct HostsView: View {
     /// Read on demand for the selected host: what that machine dials for each
     /// service, and whether the fleet declares that address.
     @StateObject private var forwardStore = HostForwardStore()
+    @StateObject private var reconciliationStore = StorageReconciliationStore.shared
+    /// Which vault the selected host's credential operations resolve to, and
+    /// whether that host can resolve one at all.
+    @StateObject private var vaultStore = HostVaultStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -59,6 +70,7 @@ struct HostsView: View {
     @State private var reclaimTarget: HostReclaimTarget?
 
     @State private var connectionPathsTarget: HostConnectionPathsTarget?
+    @State private var reconciliationTarget: StorageReconciliationTarget?
     var body: some View {
         WisentScreen(
             title: "Hosts",
@@ -125,6 +137,10 @@ struct HostsView: View {
             guard let host = selection else { return }
             await forwardStore.load(host: host)
         }
+        .task(id: selection) {
+            guard let host = selection else { return }
+            await vaultStore.load(host: host)
+        }
         .sheet(isPresented: $showsEnrollment) {
             MachineEnrollmentView(
                 store: enrollmentStore,
@@ -155,6 +171,9 @@ struct HostsView: View {
                 store: connectionPathStore,
                 refresh: { await linkStore.refresh(hosts: [target.host]) }
             )
+        }
+        .sheet(item: $reconciliationTarget) { target in
+            StorageReconciliationSheet(host: target.host, store: reconciliationStore)
         }
     }
 
@@ -485,6 +504,17 @@ struct HostsView: View {
                     WisentField(label: "Availability", value: host.availabilityReason)
                 }
                 policySection(for: host)
+                WisentActionButton(
+                    action: WisentAction(
+                        "Reconcile storage roots…",
+                        symbol: "externaldrive",
+                        kind: .secondary,
+                        isEnabled: !reconciliationStore.isRunning
+                    ) {
+                        let target = host.targetName ?? host.displayName
+                        reconciliationTarget = StorageReconciliationTarget(host: target)
+                    }
+                )
             }
         } else {
             WisentInspector(eyebrow: "Selection", title: "No host selected") {
@@ -1118,6 +1148,16 @@ struct HostsView: View {
                 value: forwardDescription(link),
                 tone: forwardTone(link)
             )
+            // Which store every credential write and authoritative read on
+            // that host goes through. Counts alone said how much a machine
+            // held and never which vault answered, and two vaults claiming
+            // one owner is a refusal the operator only met as somebody
+            // else's failed command.
+            WisentField(
+                label: "Credential vault this host resolves",
+                value: vaultDescription(link),
+                tone: vaultTone(link)
+            )
             // Whether anybody is logged in on the screen there, which had no
             // surface anywhere in the product: `ssh_reachable` above answers
             // "can this machine be reached", and this answers "is there a
@@ -1280,6 +1320,43 @@ struct HostsView: View {
             return .warning
         }
         return .neutral
+    }
+
+    /// The resolved vault first, then every candidate the host holds, then the
+    /// resolution's own sentence when it refuses.
+    private func vaultDescription(_ link: HostLink) -> String {
+        guard vaultStore.host == link.host else { return "Not read yet" }
+        if vaultStore.isLoading { return "Reading…" }
+        if let problem = vaultStore.problem { return problem }
+        guard let authority = vaultStore.authority else { return "Not reported" }
+        var lines: [String] = []
+        if let path = authority.path, !path.isEmpty {
+            lines.append("\(authority.state): \(path)")
+        } else {
+            lines.append(authority.state)
+        }
+        if let detail = authority.detail, !detail.isEmpty {
+            lines.append(detail)
+        }
+        for vault in vaultStore.vaults {
+            let items = vault.items.map { "\($0) items" } ?? "unknown items"
+            let owner = vault.owner ?? "unknown owner"
+            let marker = vault.path == authority.path ? "* " : "  "
+            lines.append("\(marker)\(items) · \(owner) · \(vault.path)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Danger when the host resolves no vault — every owner write and
+    /// authoritative read there is refused — warning when its release cannot
+    /// report the declaration, neutral when it resolves one.
+    private func vaultTone(_ link: HostLink) -> WisentTone {
+        guard vaultStore.host == link.host, vaultStore.problem == nil else { return .neutral }
+        switch vaultStore.authority?.state {
+        case "ambiguous", "declared-absent", "none": return .danger
+        case "unreadable": return .warning
+        default: return .neutral
+        }
     }
 
     private func connectionPathsTone(_ link: HostLink) -> WisentTone {
