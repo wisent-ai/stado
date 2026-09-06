@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.33
+
+- **Cleanup during queue outages:** each agent tick observes every workload's local exit and releases its cleanup hold before reading remote policy or finalizing any slot. A slow upload or queue read for one finished job no longer keeps already-finished siblings' holds locked. Live workloads remain protected, and pending finalization records remain intact.
+
 ## 0.16.32
 
 - **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.

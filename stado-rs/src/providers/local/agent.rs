@@ -1117,6 +1117,12 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // Phase breadcrumbs for the 40GB a2-highgpu-1g first-iter hang.
         log_fn("loop: iter-start");
         heartbeat.record_tick_start();
+        // Release every exited workload's cleanup hold before any remote
+        // read. Finalizing the first slot may wait on the store; that wait
+        // must not retain the holds of other workloads that already exited.
+        for slot in &mut slots {
+            slot.reap(log_fn)?;
+        }
         // One place, not four: whatever branch of the previous iteration
         // published, `last_cap` holds it, so the heartbeat repeats the tick's
         // own most recent measurement and never a figure of its own.
