@@ -64,8 +64,8 @@ async fn run(args: &[&str]) -> Output {
     let mut receipt = json!({
         "binary": binary.to_string_lossy(),
         "args": args,
-        "status": "started",
-        "started_at": chrono::Utc::now().to_rfc3339(),
+        "status": "prepared",
+        "recorded_at": chrono::Utc::now().to_rfc3339(),
         "stdout": stdout_path,
         "stderr": stderr_path,
     });
@@ -84,6 +84,11 @@ async fn run(args: &[&str]) -> Output {
         .kill_on_drop(true)
         .spawn()
         .expect("Stado binary starts");
+    receipt["status"] = json!("started");
+    receipt["pid"] = json!(child.id());
+    receipt["started_at"] = json!(chrono::Utc::now().to_rfc3339());
+    std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap())
+        .expect("retain the started process identity");
     let (status, timed_out) = match timeout(Duration::from_secs(360), child.wait()).await {
         Ok(status) => (status.expect("reap Stado"), false),
         Err(_) => {
@@ -139,7 +144,9 @@ async fn apple_readiness_observes_the_registered_host_without_preparing_it() {
     let target = std::env::var("STADO_APPLE_PREPARATION_HOST")
         .expect("STADO_APPLE_PREPARATION_HOST must name the registered Apple host");
     assert!(!target.trim().is_empty(), "the Apple host must be explicit");
-    status(&target).await.assert_ready(&target);
+    let observed = status(&target).await;
+    observed.assert_ready(&target);
+    verify_native_api(&target, &observed, false).await;
 }
 
 #[tokio::test]
@@ -190,7 +197,10 @@ async fn apple_only_preparation_preserves_other_gui_state_and_works_through_the_
         before.unrelated_state(),
         "Apple-only preparation changed unrelated GUI state"
     );
+    verify_native_api(&target, &after_cli, true).await;
+}
 
+async fn verify_native_api(target: &str, after_cli: &Report, prepare: bool) {
     // The API is a real second instance of this exact product binary. Its
     // local store is isolated; operator children retain the configured real
     // Stado host/credential clients, not this server's local-store override.
@@ -242,7 +252,7 @@ async fn apple_only_preparation_preserves_other_gui_state_and_works_through_the_
         .post(format!("{endpoint}/api/operator/run"))
         .header("X-Stado-Action", "operator-command")
         .json(&json!({
-            "args": ["host", "gui-automation", "status", &target, "--json"],
+            "args": ["host", "gui-automation", "status", target, "--json"],
             "timeout_seconds": 300
         }))
         .send()
@@ -254,13 +264,25 @@ async fn apple_only_preparation_preserves_other_gui_state_and_works_through_the_
         .await
         .expect("retain API readiness response");
     eprintln!("API READINESS HTTP {status_code}\n{body}");
+    let artifacts = std::path::PathBuf::from(
+        std::env::var_os("PROBIERZ_ARTIFACTS").expect("Probierz artifact directory is required"),
+    );
+    std::fs::write(
+        artifacts.join("apple-api-readiness.json"),
+        serde_json::to_vec_pretty(&json!({
+            "http_status": status_code.as_u16(),
+            "body": body,
+        }))
+        .unwrap(),
+    )
+    .expect("retain the native API readiness response");
     assert_eq!(status_code, reqwest::StatusCode::OK);
     let result: Value = serde_json::from_str(&body).expect("decode API readiness result");
     assert_eq!(result["exit_code"], 0, "{result}");
     let observed: Report =
         serde_json::from_str(result["stdout"].as_str().expect("capture readiness stdout"))
             .expect("decode the actual host readiness receipt");
-    observed.assert_ready(&target);
+    observed.assert_ready(target);
     assert_eq!(
         observed.state(),
         after_cli.state(),
@@ -271,59 +293,68 @@ async fn apple_only_preparation_preserves_other_gui_state_and_works_through_the_
         "host",
         "gui-automation",
         "grant-accessibility",
-        &target,
+        target,
         "--apple-only",
         "--json",
     ];
 
+    let unknown = format!("probierz-apple-unconfirmed-{}", uuid::Uuid::new_v4());
+    let mut unconfirmed = args;
+    unconfirmed[3] = &unknown;
     let refused = http
         .post(format!("{endpoint}/api/operator/run"))
         .header("X-Stado-Action", "operator-command")
-        .json(&json!({"args": args}))
+        .json(&json!({"args": unconfirmed}))
         .send()
         .await
         .expect("send preparation without confirmation");
     assert_eq!(refused.status(), reqwest::StatusCode::FORBIDDEN);
     let refused: Value = refused.json().await.expect("read the actual API refusal");
     eprintln!("API REFUSAL {refused}");
+    std::fs::write(
+        artifacts.join("apple-api-refusal.json"),
+        serde_json::to_vec_pretty(&refused).unwrap(),
+    )
+    .expect("retain the native API mutation refusal");
     assert_eq!(
         refused["error"],
         "mutating commands require explicit RUN_MUTATION confirmation"
     );
+    if prepare {
+        let response = http
+            .post(format!("{endpoint}/api/operator/run"))
+            .header("X-Stado-Action", "operator-command")
+            .json(&json!({"args": args, "confirmation": "RUN_MUTATION", "timeout_seconds": 300}))
+            .send()
+            .await
+            .expect("prepare the same real host through the Desktop API");
+        let status_code = response.status();
+        let body = response
+            .text()
+            .await
+            .expect("retain API preparation response");
+        eprintln!("API PREPARATION HTTP {status_code}\n{body}");
+        assert_eq!(status_code, reqwest::StatusCode::OK);
+        let result: Value = serde_json::from_str(&body).expect("decode API result");
+        assert_eq!(result["exit_code"], 0, "{result}");
+        assert_eq!(result["ok"], true, "{result}");
+        let reused: Report =
+            serde_json::from_str(result["stdout"].as_str().expect("capture command stdout"))
+                .expect("decode the actual partial-or-complete preparation receipt");
+        assert_eq!(
+            reused.state().get("apple-challenge-helper"),
+            Some(&"reused")
+        );
 
-    let response = http
-        .post(format!("{endpoint}/api/operator/run"))
-        .header("X-Stado-Action", "operator-command")
-        .json(&json!({"args": args, "confirmation": "RUN_MUTATION", "timeout_seconds": 300}))
-        .send()
-        .await
-        .expect("prepare the same real host through the Desktop API");
-    let status_code = response.status();
-    let body = response
-        .text()
-        .await
-        .expect("retain API preparation response");
-    eprintln!("API PREPARATION HTTP {status_code}\n{body}");
-    assert_eq!(status_code, reqwest::StatusCode::OK);
-    let result: Value = serde_json::from_str(&body).expect("decode API result");
-    assert_eq!(result["exit_code"], 0, "{result}");
-    assert_eq!(result["ok"], true, "{result}");
-    let reused: Report =
-        serde_json::from_str(result["stdout"].as_str().expect("capture command stdout"))
-            .expect("decode the actual partial-or-complete preparation receipt");
-    assert_eq!(
-        reused.state().get("apple-challenge-helper"),
-        Some(&"reused")
-    );
-
-    let after_api = status(&target).await;
-    after_api.assert_ready(&target);
-    assert_eq!(
-        after_api.state(),
-        after_cli.state(),
-        "repeating preparation through the API changed observed host state"
-    );
-    assert_eq!(after_api.ssh_target, before.ssh_target);
+        let after_api = status(target).await;
+        after_api.assert_ready(target);
+        assert_eq!(
+            after_api.state(),
+            after_cli.state(),
+            "repeating preparation through the API changed observed host state"
+        );
+        assert_eq!(after_api.ssh_target, after_cli.ssh_target);
+    }
     server
         .kill()
         .await
