@@ -7629,20 +7629,21 @@ pub async fn vault_token_mint(
     }
     let (resolved, mut report) =
         remote_skarbiec_json_at(target, &arguments, None, token_file_name).await?;
-    let token = report
-        .get("token")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: Skarbiec token-mint returned no bearer",
-                resolved.name
-            ))
-        })?
-        .to_string();
-    if raw_token {
-        println!("{token}");
-        return Ok(());
+    if token_file_name.is_none() {
+        let token = report
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: Skarbiec token-mint returned no bearer",
+                    resolved.name
+                ))
+            })?;
+        if raw_token {
+            println!("{token}");
+            return Ok(());
+        }
     }
     if let Some(object) = report.as_object_mut() {
         object.remove("token");
