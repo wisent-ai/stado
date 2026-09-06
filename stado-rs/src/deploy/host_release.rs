@@ -2644,10 +2644,7 @@ async fn pipeline_catalog_identity(
         sha256: manifest.artifact_sha256,
         archive_name,
         member: if manifest.binary.is_empty() {
-            match &product.install {
-                Install::Program { .. } => format!("bin/{}", product.name),
-                Install::Tree { .. } => product.source.member.clone(),
-            }
+            product.source.member.clone()
         } else {
             manifest.binary
         },
