@@ -11,6 +11,7 @@
 //! POST /api/object/compose - atomically publish verified object chunks
 //! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
 //! GET /api/host/inventory?target=... - authenticated fresh inventory of one declared host
+//! GET/POST /api/host/storage-root-reconcile?target=...&transaction=...&phase=... - durable storage handoff
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
 //! GET /api/machine/status?job_id=... - read canonical machine status
@@ -166,7 +167,8 @@ impl Boundary {
             Boundary::Integration => "the integration routes",
             Boundary::Registry => {
                 "/api/registry.json, /api/registry/policy, /api/registry/import, \
-                 /api/cleanup.json, /api/cleanup/run, /api/host/inventory, /api/service/converge"
+                 /api/cleanup.json, /api/cleanup/run, /api/host/inventory, /api/service/converge, \
+                 /api/host/storage-root-reconcile"
             }
         }
     }
@@ -517,6 +519,7 @@ fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> BoundaryPlan {
         }
         "/api/service/restart" | "/api/service/status" => BoundaryPlan::gated(&[Boundary::Service]),
         "/api/host/inventory"
+        | "/api/host/storage-root-reconcile"
         | "/api/service/converge"
         | "/api/registry.json"
         | "/api/registry/policy"
@@ -1527,7 +1530,9 @@ impl Dashboard {
             }
             if matches!(
                 path_no_query,
-                "/api/host/inventory" | "/api/service/converge"
+                "/api/host/inventory"
+                    | "/api/service/converge"
+                    | "/api/host/storage-root-reconcile"
             ) {
                 if !self.boundaries_available(&[Boundary::Registry]).await {
                     return send_json(
@@ -1535,10 +1540,10 @@ impl Dashboard {
                         &json!({"error": "registry authorization unavailable"}),
                     );
                 }
-                let action = if path_no_query == "/api/service/converge" {
-                    "converge-read"
-                } else {
-                    "policy-read"
+                let action = match path_no_query {
+                    "/api/service/converge" => "converge-read",
+                    "/api/host/storage-root-reconcile" => "storage-reconcile-read",
+                    _ => "policy-read",
                 };
                 if let Err(response) = registry_policy::authorized(request, action).await {
                     return response;
@@ -1579,6 +1584,9 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
+        if path == "/api/host/storage-root-reconcile" {
+            return Ok(self.storage_root_reconcile(request, query, false).await);
+        }
         if path == "/api/service/converge" {
             return Ok(self.service_converge(request, query, false).await);
         }
@@ -1996,6 +2004,56 @@ impl Dashboard {
                 "SERVICE_CONVERGE_FAILED",
                 error.to_string(),
                 true,
+            ),
+        }
+    }
+
+    async fn storage_root_reconcile(
+        &self,
+        request: &Request,
+        query: &str,
+        write: bool,
+    ) -> Response {
+        if request.header("transfer-encoding").is_some()
+            || request.content_length != usize::default()
+            || !request.body.is_empty()
+        {
+            return send_json(
+                http_status("400"),
+                &json!({"error": "storage reconciliation does not accept a request body"}),
+            );
+        }
+        let (target, transaction, phase) = match storage_reconciliation_query(query, write) {
+            Ok(scope) => scope,
+            Err(response) => return response,
+        };
+        match crate::cli::host::storage_root_reconcile_result(&target, &transaction, &phase).await {
+            Ok(result) => {
+                let (exit_code, refusal) = match result.outcome {
+                    Ok(()) => (0, None),
+                    Err(error) => {
+                        let message = error.message.unwrap_or_default();
+                        let failure = error
+                            .failure
+                            .unwrap_or_else(|| crate::failure::classify_message(&message));
+                        let code = if error.code == crate::cli::CLICK_ERROR_CODE {
+                            failure.exit_code(error.code)
+                        } else {
+                            error.code
+                        };
+                        (code, Some(message))
+                    }
+                };
+                let mut envelope = json!({"exit_code": exit_code, "refusal": refusal});
+                envelope["report"] = result.report;
+                send_json(http_status("200"), &envelope)
+            }
+            Err(error) => send_json(
+                http_status("503"),
+                &json!({
+                    "error_code": "STORAGE_RECONCILIATION_FAILED",
+                    "error": error.to_string(),
+                }),
             ),
         }
     }
@@ -2688,6 +2746,7 @@ impl Dashboard {
                 | "/api/registry/policy"
                 | "/api/cleanup/run"
                 | "/api/service/converge"
+                | "/api/host/storage-root-reconcile"
         ) {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
@@ -2699,6 +2758,7 @@ impl Dashboard {
                 "/api/registry/import" => "registry-import",
                 "/api/registry/policy" => "policy-write",
                 "/api/service/converge" => "converge-apply",
+                "/api/host/storage-root-reconcile" => "storage-reconcile-apply",
                 _ => "cleanup-run",
             };
             if let Err(response) = registry_policy::authorized(request, action).await {
@@ -2708,6 +2768,9 @@ impl Dashboard {
                 "/api/registry/import" => registry_policy::import_registry(request).await,
                 "/api/registry/policy" => registry_policy::set_policy(request).await,
                 "/api/service/converge" => self.service_converge(request, query, true).await,
+                "/api/host/storage-root-reconcile" => {
+                    self.storage_root_reconcile(request, query, true).await
+                }
                 _ => registry_policy::run_cleanup().await,
             };
         }
@@ -3557,6 +3620,61 @@ fn service_converge_query(query: &str) -> Result<(String, Option<String>), Respo
         }
     }
     target.map(|target| (target, binary)).ok_or_else(invalid)
+}
+
+fn storage_reconciliation_query(
+    query: &str,
+    write: bool,
+) -> Result<(String, String, String), Response> {
+    let invalid = || {
+        send_json(
+            http_status("400"),
+            &json!({
+                "error": "query must contain exactly one non-empty target, transaction and phase; GET accepts status, POST accepts run, resume, rollback or finalize"
+            }),
+        )
+    };
+    if query.is_empty() || query.starts_with('&') || query.ends_with('&') {
+        return Err(invalid());
+    }
+    let mut target = None;
+    let mut transaction = None;
+    let mut phase = None;
+    for pair in query.split('&') {
+        let Some((encoded_key, encoded_value)) = pair.split_once('=') else {
+            return Err(invalid());
+        };
+        if encoded_key.is_empty() || encoded_value.is_empty() || encoded_value.contains('=') {
+            return Err(invalid());
+        }
+        let Some(key) = strict_url_decode(encoded_key) else {
+            return Err(invalid());
+        };
+        let Some(value) = strict_url_decode(encoded_value) else {
+            return Err(invalid());
+        };
+        if value.is_empty() || value.trim() != value {
+            return Err(invalid());
+        }
+        match key.as_str() {
+            "target" if target.is_none() => target = Some(value),
+            "transaction" if transaction.is_none() => transaction = Some(value),
+            "phase" if phase.is_none() => phase = Some(value),
+            _ => return Err(invalid()),
+        }
+    }
+    let (Some(target), Some(transaction), Some(phase)) = (target, transaction, phase) else {
+        return Err(invalid());
+    };
+    let valid_phase = if write {
+        matches!(phase.as_str(), "run" | "resume" | "rollback" | "finalize")
+    } else {
+        phase == "status"
+    };
+    if !valid_phase {
+        return Err(invalid());
+    }
+    Ok((target, transaction, phase))
 }
 
 fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Response> {

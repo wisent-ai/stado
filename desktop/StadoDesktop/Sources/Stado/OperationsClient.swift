@@ -244,6 +244,36 @@ actor OperationsClient {
         }
     }
 
+    func storageReconciliation(
+        target: String,
+        transaction: String,
+        phase: StorageReconciliationPhase,
+        at address: OperationsDashboardAddress
+    ) async throws -> (status: Int, document: Data) {
+        guard var components = URLComponents(
+            url: address.endpoint("api/host/storage-root-reconcile"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw OperationsClientError.invalidResponse
+        }
+        components.queryItems = [
+            URLQueryItem(name: "target", value: target),
+            URLQueryItem(name: "transaction", value: transaction),
+            URLQueryItem(name: "phase", value: phase.rawValue),
+        ]
+        guard let url = components.url else {
+            throw OperationsClientError.invalidResponse
+        }
+        return try await response(
+            from: url,
+            method: phase.isReadOnly ? "GET" : "POST",
+            authorizationToken: RegistryAPICredential.load().token(for: address),
+            timeoutInterval: phase.isReadOnly ? 120 : .greatestFiniteMagnitude,
+            using: phase.isReadOnly ? readSession : convergenceSession,
+            maximumResponseBytes: nil
+        )
+    }
+
     private static func baseConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
@@ -279,6 +309,30 @@ actor OperationsClient {
         using session: URLSession? = nil,
         maximumResponseBytes: Int? = 5 * 1_024 * 1_024
     ) async throws -> Data {
+        let response = try await self.response(
+            from: url,
+            method: method,
+            authorizationToken: authorizationToken,
+            timeoutInterval: timeoutInterval,
+            using: session,
+            maximumResponseBytes: maximumResponseBytes
+        )
+        guard response.status == 200 else {
+            let object = try? JSONSerialization.jsonObject(with: response.document) as? [String: Any]
+            let detail = object?["error"] as? String ?? ""
+            throw OperationsClientError.server(response.status, detail)
+        }
+        return response.document
+    }
+
+    private func response(
+        from url: URL,
+        method: String,
+        authorizationToken: String?,
+        timeoutInterval: TimeInterval?,
+        using session: URLSession?,
+        maximumResponseBytes: Int?
+    ) async throws -> (status: Int, document: Data) {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -296,11 +350,6 @@ actor OperationsClient {
         if let maximumResponseBytes, data.count > maximumResponseBytes {
             throw OperationsClientError.responseTooLarge
         }
-        guard http.statusCode == 200 else {
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let detail = object?["error"] as? String ?? ""
-            throw OperationsClientError.server(http.statusCode, detail)
-        }
-        return data
+        return (http.statusCode, data)
     }
 }

@@ -11107,6 +11107,27 @@ pub async fn backup_audit(
     }
     Ok(())
 }
+
+pub struct StorageRootReconciliationResult {
+    pub report: Value,
+    pub outcome: Result<(), CmdError>,
+}
+
+/// One product result for both the CLI and the authenticated host API.
+pub async fn storage_root_reconcile_result(
+    target: &str,
+    transaction: &str,
+    phase: &str,
+) -> Result<StorageRootReconciliationResult, crate::deploy::DeployError> {
+    let runner = crate::deploy::production_runner();
+    let report =
+        crate::deploy::host_storage_reconcile::reconcile_host(target, transaction, phase, &runner)
+            .await?;
+    // A write acknowledges its resident owner; only STATUS observes completion.
+    let outcome = report_outcome(&report, if phase == "status" { "ok" } else { "accepted" });
+    Ok(StorageRootReconciliationResult { report, outcome })
+}
+
 /// Create or apply one durable, source-preserving reconciliation of the two
 /// fixed physical local-store roots on a host.
 pub async fn storage_root_reconcile(
@@ -11115,9 +11136,8 @@ pub async fn storage_root_reconcile(
     phase: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_storage_reconcile::reconcile_host(target, transaction, phase, &runner)
+    let StorageRootReconciliationResult { report, outcome } =
+        storage_root_reconcile_result(target, transaction, phase)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
     if json_output {
@@ -11142,10 +11162,7 @@ pub async fn storage_root_reconcile(
             println!("verified objects: {count}");
         }
     }
-    // Mutating phases only acknowledge that the target-native owner was
-    // accepted. Their terminal result remains the durable STATUS receipt.
-    // Keep STATUS on the ordinary completed-report convention.
-    report_outcome(&report, if phase == "status" { "ok" } else { "accepted" })
+    outcome
 }
 pub async fn storage_root_reconcile_worker(
     target: &str,

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.40
+
+- **Storage reconciliation API:** authenticated GET and POST `/api/host/storage-root-reconcile` share the CLI's durable transaction implementation and return its complete report, exit code and refusal. Independent `storage-reconcile-read` and `storage-reconcile-apply` actions separate status reads from mutations; malformed requests retain precise refusals.
+- **Desktop source selection:** the Hosts reconciliation sheet sends requests to the dashboard selected when it opened, rather than launching a local CLI against another configuration. Confirmation and retained results name that source, host and transaction.
+- **Reconciliation diagnostics:** Desktop retains HTTP status, raw response bytes, product exit code and every report field through refusals and decoding errors. An accepted resident operation is not displayed as completed, and no later phase runs automatically.
+- **Resolver failure causes:** a retry description alone no longer counts as rate-limit evidence. A second authority read retains the original and subsequent errors without turning a registry refusal into upstream throttling; explicit HTTP and rate-limit evidence keep their existing precedence.
+- **Release delivery order:** stable native publication now converges every required native host from the source manifest before Linux publication uses its registry authority. A Linux failure can no longer strand a compatible Mac mini update, and final fleet delivery handles only the remaining Linux hosts. Candidate publication keeps its existing independent path.
+- **Compatibility:** stored transaction schemas and CLI phases are unchanged. Configure the two new registry actions only on a server that supports them; remove them before rolling back to an older server, which refuses unknown actions.
+
 ## 0.16.39
 
 - **Interrupted service handoff:** an incomplete handoff with a committed registry receipt re-enters the existing live-release, legacy-file, lease, and compare-and-swap checks before reapplying its same intent. The prior commit is retained in recovery history; terminal receipts and changed intent remain refusals.
