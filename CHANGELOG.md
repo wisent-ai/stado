@@ -2,7 +2,7 @@
 
 ## 0.16.34
 
-- **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured. Preparation still refuses a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple.
+- **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured. Preparation still refuses a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple. If a prior cutover has already constructed the primary route, additive reconciliation preserves primary conflicts and copies only backup-only objects; a still-constructed backup route retains the original backup-winning contract.
 
 ## 0.16.33
 

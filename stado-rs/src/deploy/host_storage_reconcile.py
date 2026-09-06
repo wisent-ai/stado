@@ -856,15 +856,32 @@ if phase == "record-lifecycle-decisions":
     raise SystemExit(0)
 
 
+def primary_is_winner():
+    try:
+        with open(fence_path, "r", encoding="utf-8") as handle:
+            fence = json.load(handle)
+    except Exception as error:
+        fail("additive-union direction cannot be read: " + str(error))
+    roots = fence.get("roots") or {}
+    prior_primary = roots.get("prior_primary")
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
+            or fence.get("transaction") != tx
+            or prior_primary not in (primary, backup)):
+        fail("additive-union direction is invalid")
+    return prior_primary == primary
+
+
 def prove_live_additive_union(label):
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_wins = primary_is_winner()
     expected_paths = set(primary_by_path) | set(backup_by_path)
     validate_complete_inventory(backup, backup_objects, "live B " + label)
     if set(object_paths(primary)) != expected_paths:
         fail("primary namespace does not equal the additive checkpoint union " + label)
     for relative in sorted(expected_paths):
-        expected = backup_by_path.get(relative) or primary_by_path[relative]
+        expected = ((primary_by_path.get(relative) if primary_wins else None)
+                    or backup_by_path.get(relative) or primary_by_path[relative])
         if regular_identity(os.path.join(primary, relative)) != expected["body"]:
             fail("primary body differs from additive checkpoint " + label + ": " + relative)
         if regular_identity(metadata_path(primary, relative)) != expected["metadata"]:
@@ -958,6 +975,7 @@ if phase == "apply":
              ", ".join(item.get("path", "?") for item in blockers))
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_wins = primary_is_winner()
     validate_complete_inventory(backup, backup_objects, "live B after checkpoint")
     current_paths = set(object_paths(primary))
     expected_paths = set(primary_by_path) | set(backup_by_path)
@@ -971,46 +989,51 @@ if phase == "apply":
         current_meta = regular_identity(metadata_path(primary, relative))
         before = primary_by_path.get(relative)
         incoming = backup_by_path.get(relative)
-        allowed_bodies = [item["body"] for item in (before, incoming) if item is not None]
-        allowed_metadata = [item["metadata"] for item in (before, incoming) if item is not None]
-        if before is None:
-            allowed_bodies.append(None)
-            allowed_metadata.append(None)
+        if primary_wins and before is not None:
+            allowed_bodies = [before["body"]]
+            allowed_metadata = [before["metadata"]]
+        else:
+            allowed_bodies = [item["body"] for item in (before, incoming) if item is not None]
+            allowed_metadata = [item["metadata"] for item in (before, incoming) if item is not None]
+            if before is None:
+                allowed_bodies.append(None)
+                allowed_metadata.append(None)
         if current_body not in allowed_bodies or current_meta not in allowed_metadata:
             fail("primary object drifted after its checkpoint: " + relative)
     receipt["status"] = "applying"
     atomic_json(receipt_path, receipt)
     for item in backup_objects:
         relative = item["path"]
-        source = os.path.join(backup_snapshot, relative)
         destination = os.path.join(primary, relative)
         current = regular_identity(destination)
         before = primary_by_path.get(relative)
-        before_body = before["body"] if before is not None else None
-        if current != item["body"]:
+        desired = before if primary_wins and before is not None else item
+        if current != desired["body"]:
+            before_body = before["body"] if before is not None else None
             if current != before_body:
                 fail("primary body changed outside the transaction: " + relative)
-            clone_file(source, destination)
-        source_meta = metadata_path(backup_snapshot, relative)
+            clone_file(os.path.join(backup_snapshot, relative), destination)
         destination_meta = metadata_path(primary, relative)
         current_meta = regular_identity(destination_meta)
-        before_meta = before["metadata"] if before is not None else None
-        if current_meta != item["metadata"]:
+        if current_meta != desired["metadata"]:
+            before_meta = before["metadata"] if before is not None else None
             if current_meta != before_meta:
                 fail("primary metadata changed outside the transaction: " + relative)
-            if item["metadata"] is None:
-                os.unlink(destination_meta)
-                fsync_dir(os.path.dirname(destination_meta))
+            if desired["metadata"] is None:
+                if os.path.exists(destination_meta):
+                    os.unlink(destination_meta)
+                    fsync_dir(os.path.dirname(destination_meta))
             else:
-                clone_file(source_meta, destination_meta)
-        if regular_identity(destination) != item["body"]:
+                clone_file(metadata_path(backup_snapshot, relative), destination_meta)
+        if regular_identity(destination) != desired["body"]:
             fail("destination body did not verify: " + relative)
-        if regular_identity(destination_meta) != item["metadata"]:
+        if regular_identity(destination_meta) != desired["metadata"]:
             fail("destination metadata did not verify: " + relative)
     prove_live_additive_union("after apply")
     receipt["status"] = "data_committed_pending_activation"
     receipt["data_committed_at"] = time.time()
-    receipt["verified_objects"] = len(backup_objects)
+    receipt["verified_objects"] = len(expected_paths)
+    receipt["conflict_winner"] = "primary" if primary_wins else "backup"
     receipt["primary_only_preserved"] = True
     receipt["backup_objects_not_written"] = True
     atomic_json(receipt_path, receipt)

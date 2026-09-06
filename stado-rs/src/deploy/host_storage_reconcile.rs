@@ -1208,34 +1208,6 @@ PY"#,
     Ok(())
 }
 
-fn qualified_copy_required(preflight: &Value) -> Result<bool, DeployError> {
-    let backup = preflight
-        .get("backup_qualified")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("preflight omitted the backup qualified inventory".to_string())
-        })?;
-    let primary = preflight
-        .get("primary_qualified")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("preflight omitted the primary qualified inventory".to_string())
-        })?;
-    let primary_by_path = primary
-        .iter()
-        .filter_map(|item| {
-            item.get("path")
-                .and_then(Value::as_str)
-                .map(|path| (path, item))
-        })
-        .collect::<BTreeMap<_, _>>();
-    Ok(backup.iter().any(|item| {
-        item.get("path")
-            .and_then(Value::as_str)
-            .and_then(|path| primary_by_path.get(path).copied())
-            != Some(item)
-    }))
-}
 fn physical_file_identity<'a>(
     preflight: &'a Value,
     inventory: &str,
@@ -1709,12 +1681,6 @@ async fn capture_fenced_preflight(
         .and_then(Value::as_str)
         .ok_or_else(|| DeployError("fenced API proof omitted its authority".to_string()))?;
     let roots = fence.roots.as_ref().unwrap();
-    if qualified_copy_required(&preflight)? && roots.prior_primary != roots.backup {
-        return Err(DeployError(
-            "object API's constructed authority is A and B differs; refusing a B-winning copy"
-                .to_string(),
-        ));
-    }
     let prior_root = if roots.prior_primary == roots.primary {
         "A"
     } else {
