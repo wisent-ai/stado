@@ -5053,7 +5053,10 @@ pub async fn refresh_weles_api_runtime(target: &str, revision: &str) -> Result<(
     // recorded above.
     crate::cli::service::restart(WELES_API_SERVICE, Some(&resolved.name), None, None, false)
         .await?;
-    println!("{}: {WELES_API_SERVICE} now serves {revision}", resolved.name);
+    println!(
+        "{}: {WELES_API_SERVICE} now serves {revision}",
+        resolved.name
+    );
     Ok(())
 }
 
@@ -5069,8 +5072,7 @@ const WELES_SOURCE_REPOSITORY: &str = "https://github.com/wisent-ai/weles.git";
 /// The interpreters this build needs, in the order the fleet's hosts install
 /// them: a login shell reached through the channel does not necessarily carry
 /// the Homebrew prefix that holds `node` and `npm`.
-const WELES_API_BUILD_PATH: &str =
-    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+const WELES_API_BUILD_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 async fn transfer_secret(
     target: &str,
