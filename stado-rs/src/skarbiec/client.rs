@@ -284,7 +284,15 @@ impl Client {
         field: &str,
     ) -> Result<Option<String>, SkarbiecError> {
         if self.route_store {
-            return Box::pin(crate::credential_store::read_string(id, field)).await;
+            return Box::pin(crate::credential_store::read_string_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                self.grant_mode,
+                id,
+                field,
+            ))
+            .await;
         }
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?
