@@ -48,25 +48,72 @@ impl Report {
     }
 }
 
+fn stado_binary() -> std::ffi::OsString {
+    std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into())
+}
+
 async fn run(args: &[&str]) -> Output {
-    eprintln!("COMMAND {:?} {:?}", env!("CARGO_BIN_EXE_stado"), args);
-    let output = timeout(
-        Duration::from_secs(360),
-        Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(args)
-            .env("NO_COLOR", "1")
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .expect("Stado operation must finish within 360 seconds")
-    .expect("Stado binary starts");
+    let binary = stado_binary();
+    let artifacts = std::path::PathBuf::from(
+        std::env::var_os("PROBIERZ_ARTIFACTS").expect("Probierz artifact directory is required"),
+    );
+    let stem = format!("apple-command-{}", uuid::Uuid::new_v4());
+    let stdout_path = artifacts.join(format!("{stem}.stdout.log"));
+    let stderr_path = artifacts.join(format!("{stem}.stderr.log"));
+    let receipt_path = artifacts.join(format!("{stem}.json"));
+    let mut receipt = json!({
+        "binary": binary.to_string_lossy(),
+        "args": args,
+        "status": "started",
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "stdout": stdout_path,
+        "stderr": stderr_path,
+    });
+    std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap())
+        .expect("retain the command before starting it");
+    eprintln!(
+        "COMMAND {binary:?} {args:?}\nRECEIPT {}",
+        receipt_path.display()
+    );
+    let mut child = Command::new(binary)
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path).expect("retain command stdout"))
+        .stderr(std::fs::File::create(&stderr_path).expect("retain command stderr"))
+        .kill_on_drop(true)
+        .spawn()
+        .expect("Stado binary starts");
+    let (status, timed_out) = match timeout(Duration::from_secs(360), child.wait()).await {
+        Ok(status) => (status.expect("reap Stado"), false),
+        Err(_) => {
+            child
+                .kill()
+                .await
+                .expect("stop the timed-out Stado command");
+            (child.wait().await.expect("reap timed-out Stado"), true)
+        }
+    };
+    receipt["status"] = json!(if timed_out { "timed-out" } else { "exited" });
+    receipt["exit_code"] = json!(status.code());
+    receipt["process_status"] = json!(status.to_string());
+    receipt["completed_at"] = json!(chrono::Utc::now().to_rfc3339());
+    std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap())
+        .expect("retain the command result");
+    let output = Output {
+        status,
+        stdout: std::fs::read(stdout_path).expect("read retained stdout"),
+        stderr: std::fs::read(stderr_path).expect("read retained stderr"),
+    };
     eprintln!(
         "EXIT {:?}\nSTDOUT\n{}\nSTDERR\n{}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !timed_out,
+        "Stado operation exceeded 360 seconds; its command and output are retained"
     );
     output
 }
@@ -82,6 +129,17 @@ fn report(output: &Output) -> Report {
 
 async fn status(target: &str) -> Report {
     report(&run(&["host", "gui-automation", "status", target, "--json"]).await)
+}
+
+#[tokio::test]
+#[ignore = "Probierz supplies the explicit registered Darwin ARM64 Apple preparation host"]
+async fn apple_readiness_observes_the_registered_host_without_preparing_it() {
+    assert_eq!(std::env::consts::OS, "macos");
+    assert_eq!(std::env::consts::ARCH, "aarch64");
+    let target = std::env::var("STADO_APPLE_PREPARATION_HOST")
+        .expect("STADO_APPLE_PREPARATION_HOST must name the registered Apple host");
+    assert!(!target.trim().is_empty(), "the Apple host must be explicit");
+    status(&target).await.assert_ready(&target);
 }
 
 #[tokio::test]
@@ -143,7 +201,7 @@ async fn apple_only_preparation_preserves_other_gui_state_and_works_through_the_
         .prefix("apple-preparation-api-")
         .tempdir_in(work)
         .expect("create isolated API store");
-    let mut server = Command::new(env!("CARGO_BIN_EXE_stado"))
+    let mut server = Command::new(stado_binary())
         .args(["dashboard", "--bind", "127.0.0.1", "--port", "0"])
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", isolated.path())
