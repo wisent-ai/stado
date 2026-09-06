@@ -394,6 +394,25 @@ impl LabelState {
         }
     }
 
+    /// Render the bounded domain failures for a CLI or higher-level refusal.
+    pub fn read_failure_detail(&self) -> Option<String> {
+        if self.read_failures.is_empty() {
+            return None;
+        }
+        Some(
+            self.read_failures
+                .iter()
+                .map(|failure| {
+                    format!(
+                        "{} exited {}: {}",
+                        failure.domain, failure.exit_code, failure.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    }
+
     /// The program the job actually runs, preferring the full argv over the
     /// bare program path: every stado unit executes the same binary and the
     /// subcommand is the whole difference between an agent and a resolver.
@@ -454,10 +473,32 @@ impl LabelState {
     }
 }
 
-/// Ask one host what it holds under one label.
+/// Ask one host what it holds under one label, refusing an inconclusive
+/// negative observation so internal lifecycle callers cannot treat a failed
+/// domain read as proof that the unit is absent.
+pub async fn print_label(
+    target: &ComputeTarget,
+    label: &str,
+    scope: BootoutScope,
+    runner: &Runner,
+) -> Result<LabelState, DeployError> {
+    let state = inspect_label(target, label, scope, runner).await?;
+    if !state.loaded() {
+        if let Some(detail) = state.read_failure_detail() {
+            return Err(DeployError(format!(
+                "{}: could not determine whether {label} is loaded: {detail}",
+                state.host
+            )));
+        }
+    }
+    Ok(state)
+}
+
+/// Ask one host what it holds under one label while retaining unavailable
+/// domain evidence for diagnostic callers.
 ///
 /// Signals nothing. This reads only the host's init-system state.
-pub async fn print_label(
+pub async fn inspect_label(
     target: &ComputeTarget,
     label: &str,
     scope: BootoutScope,

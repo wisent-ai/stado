@@ -2071,7 +2071,7 @@ async fn label_print(
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let scope = service::BootoutScope::parse(domain).map_err(click)?;
     let runner = production_runner();
-    let state = service_label_print::print_label(&target, label, scope, &runner)
+    let state = service_label_print::inspect_label(&target, label, scope, &runner)
         .await
         .map_err(click)?;
     if json {
