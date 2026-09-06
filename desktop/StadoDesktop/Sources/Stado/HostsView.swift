@@ -1646,6 +1646,7 @@ private struct HostVaultBearerSheet: View {
     @State private var showGeneratedBearer = false
     @State private var tokenItem = ""
     @State private var tokenField = "token"
+    @State private var tokenFileName = ""
     @State private var reviewing = false
 
     private var cleanConsumer: String {
@@ -1670,6 +1671,10 @@ private struct HostVaultBearerSheet: View {
 
     private var cleanTokenField: String {
         tokenField.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var cleanTokenFileName: String {
+        tokenFileName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var parsedTTL: UInt64? {
@@ -1698,7 +1703,8 @@ private struct HostVaultBearerSheet: View {
             replaceCapabilities: replaceCapabilities,
             tokenItem: mode == .stored ? cleanTokenItem : nil,
             tokenField: cleanTokenField,
-            showGeneratedBearer: mode == .mint && showGeneratedBearer
+            tokenFileName: mode == .mint && !cleanTokenFileName.isEmpty ? cleanTokenFileName : nil,
+            showGeneratedBearer: mode == .mint && cleanTokenFileName.isEmpty && showGeneratedBearer
         )
     }
 
@@ -1718,6 +1724,9 @@ private struct HostVaultBearerSheet: View {
         .onChange(of: mode) { _, value in
             if value == .stored { showGeneratedBearer = false }
         }
+        .onChange(of: tokenFileName) { _, _ in
+            if !cleanTokenFileName.isEmpty { showGeneratedBearer = false }
+        }
     }
 
     private var form: some View {
@@ -1736,7 +1745,7 @@ private struct HostVaultBearerSheet: View {
                 field(
                     title: "Operation",
                     hint: mode == .mint
-                        ? "Skarbiec generates a new bearer for this grant."
+                        ? "Mint a bearer, or reuse the exact bearer in a named file on this host."
                         : "Stado reuses one existing owner-vault field without putting its value in argv or output."
                 ) {
                     Picker("Operation", selection: $mode) {
@@ -1748,6 +1757,14 @@ private struct HostVaultBearerSheet: View {
                 }
 
                 if mode == .mint {
+                    field(
+                        title: "Keep bearer on this host",
+                        hint: "Optional basename under ~/.stado. Stado creates an owner-only file if absent and reuses its bearer if present; the value is not returned to Desktop."
+                    ) {
+                        TextField("registry-api-verifier-grant", text: $tokenFileName)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("host-vault-bearer-token-file")
+                    }
                     Toggle(isOn: $showGeneratedBearer) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Show generated bearer")
@@ -1761,6 +1778,7 @@ private struct HostVaultBearerSheet: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    .disabled(!cleanTokenFileName.isEmpty)
                 }
 
                 field(title: "Consumer", hint: "The exact consumer identity this bearer authenticates.") {
@@ -1926,6 +1944,9 @@ private struct HostVaultBearerSheet: View {
                 if let source = receipt.tokenSource {
                     WisentField(label: "Token source", value: "\(source.item)#\(source.field)")
                 }
+                if let tokenFile = receipt.skarbiec.tokenFile {
+                    WisentField(label: "Bearer file on host", value: tokenFile)
+                }
                 if let detail = receipt.detail, !detail.isEmpty {
                     WisentField(label: "Detail", value: detail, tone: receipt.succeeded ? .neutral : .danger)
                 }
@@ -1958,6 +1979,9 @@ private struct HostVaultBearerSheet: View {
                 ? "Return the newly generated plaintext bearer once for display and copy; Skarbiec stores only its hash."
                 : "Return non-secret target, status, and grant metadata without bearer bytes.",
         ]
+        if let tokenFileName = request.tokenFileName {
+            lines[0] = "Create or reuse ~/.stado/\(tokenFileName) on \(host) for \(request.consumer)."
+        }
         if request.replaceCapabilities {
             lines.append("Replace the consumer's existing capability set.")
         } else {
@@ -1970,9 +1994,11 @@ private struct HostVaultBearerSheet: View {
             listing: [StadoCLI.commandLine(HostVaultBearerStore.arguments(request))],
             footnote: stored
                 ? "The owner-vault field stays on the target and is not returned to Desktop."
-                : request.showGeneratedBearer
-                    ? "The generated bearer is shown after success because Show generated bearer is enabled."
-                    : "The generated plaintext is discarded; only its hash and grant remain in the target vault.",
+                : request.tokenFileName != nil
+                    ? "The owner-only bearer file remains on this host for subsequent requests."
+                    : request.showGeneratedBearer
+                        ? "The generated bearer is shown after success because Show generated bearer is enabled."
+                        : "The generated plaintext is discarded; only its hash and grant remain in the target vault.",
             actions: [
                 WisentAction("Back to form", kind: .secondary) { reviewing = false },
                 WisentAction(

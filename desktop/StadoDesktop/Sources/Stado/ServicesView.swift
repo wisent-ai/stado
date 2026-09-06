@@ -298,7 +298,7 @@ struct ServicesView: View {
     private func convergenceReceiptPanel(_ receipt: ServiceConvergeReceipt) -> some View {
         WisentSectionBox(
             title: "Convergence receipt",
-            detail: "The complete JSON answer Stado returned before exiting. Refreshing service state does not replace it.",
+            detail: "The complete report and product exit code returned by the API. Refreshing service state does not replace them.",
             trailing: "exit \(receipt.exitCode)"
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
@@ -307,13 +307,11 @@ struct ServicesView: View {
                     .foregroundStyle(WisentDesign.ink)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                ForEach(Array(convergenceReceiptLines(receipt.report).enumerated()), id: \.offset) { _, line in
-                    Text(verbatim: line)
-                        .font(WisentTypeScale.identifierSmall())
-                        .foregroundStyle(WisentDesign.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(verbatim: receipt.json)
+                    .font(WisentTypeScale.identifierSmall())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
                 WisentActionButton(
                     action: WisentAction("Dismiss receipt", kind: .plain) {
                         fleetStore.clearConvergenceReceipt()
@@ -323,25 +321,6 @@ struct ServicesView: View {
         }
     }
 
-    private func convergenceReceiptLines(_ report: ServiceConvergeReport) -> [String] {
-        var lines = ["target | \(report.target)", "applied | \(report.applied)"]
-        lines += report.releases.map {
-            "release | \($0.binary) | version \($0.version) | \($0.status) | \($0.detail)"
-        }
-        lines += report.undeliverable.map {
-            "undeliverable | \($0.binary) | \($0.detail)"
-        }
-        lines += report.refused.map {
-            "refused | \($0.binary) | declared \($0.declaredVersion) | installed \($0.installedVersion) | \($0.remediation)"
-        }
-        lines += report.units.map {
-            let processMatch = $0.binaryMatchesProcess.map(String.init) ?? "not reported"
-            return "binary | \($0.binary) | declared \(value($0.declaredVersion)) | installed \(value($0.installedVersion))"
-                + " | verdict \($0.verdict) | root \($0.root) | unit \($0.unit) | state \($0.state)"
-                + " | running \($0.runningBinary ?? "not reported") | process match \(processMatch) | \($0.detail)"
-        }
-        return lines
-    }
 
     private var availableConvergeBinaries: [String] {
         Array(Set(store.units.filter { $0.host == convergeHost }.map(\.unit.binary).filter { !$0.isEmpty }))
@@ -374,8 +353,8 @@ struct ServicesView: View {
                     .foregroundStyle(WisentDesign.secondary)
             }
             WisentSectionBox(
-                title: "Exact convergence request",
-                detail: "Stado owns delivery, refusal and final verification. Desktop runs this one product command and preserves its complete report."
+                title: "Authenticated convergence request",
+                detail: "Stado owns delivery, refusal and final verification. Desktop sends one apply request to the configured product API; the command below is equivalent information only."
             ) {
                 VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                     Picker("Host", selection: $convergeHost) {
@@ -387,6 +366,9 @@ struct ServicesView: View {
                         ForEach(availableConvergeBinaries, id: \.self) { Text($0).tag($0) }
                     }
                     .pickerStyle(.menu)
+                    Text("Equivalent CLI command")
+                        .font(WisentTypeScale.eyebrow())
+                        .foregroundStyle(WisentDesign.muted)
                     Text(verbatim: StadoCLI.commandLine(arguments))
                         .font(WisentTypeScale.identifier())
                         .foregroundStyle(WisentDesign.ink)

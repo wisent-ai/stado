@@ -7,13 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
-const tests = [
-  'convergence_reloads_a_cached_private_stado_definition_once',
-  'service_update_reloads_a_cached_global_stado_definition_once',
-];
+const test = 'authenticated_services_api_converges_real_same_host_state';
 const args = [
-  'test', '--locked', '--test', 'native_readers',
-  '--', '--ignored', '--nocapture', '--test-threads=1',
+  'test', '--locked', '--test', 'service_convergence', test,
+  '--', '--ignored', '--exact', '--nocapture', '--test-threads=1',
 ];
 
 function run(file, commandArgs, options) {
@@ -28,15 +25,6 @@ function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-assert.equal(
-  process.platform,
-  'darwin',
-  'native-readers requires the dedicated macOS host selected by Stado',
-);
 const artifacts = process.env.PROBIERZ_ARTIFACTS;
 const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;
 assert.ok(artifacts, 'PROBIERZ_ARTIFACTS is required');
@@ -50,16 +38,16 @@ const result = await run('cargo', args, {
     CARGO_INCREMENTAL: '0',
   },
   encoding: 'utf8',
-  timeout: 15 * 60 * 1000,
+  timeout: 20 * 60 * 1000,
   maxBuffer: 8 * 1024 * 1024,
 });
 const exitCode = result.error
   ? (Number.isInteger(result.error.code) ? result.error.code : null)
   : 0;
 const signal = result.error?.signal || null;
-const stdoutPath = join(artifacts, 'stado-native-readers.stdout.log');
-const stderrPath = join(artifacts, 'stado-native-readers.stderr.log');
-const tracePath = join(artifacts, 'stado-native-readers.trace.json');
+const stdoutPath = join(artifacts, 'stado-service-convergence.stdout.log');
+const stderrPath = join(artifacts, 'stado-service-convergence.stderr.log');
+const tracePath = join(artifacts, 'stado-service-convergence.trace.json');
 await mkdir(artifacts, { recursive: true });
 await Promise.all([
   writeFile(stdoutPath, result.stdout, { mode: 0o600 }),
@@ -75,7 +63,7 @@ assert.equal(statusResult.error, null, statusResult.stderr);
 await writeFile(tracePath, `${JSON.stringify({
   schemaVersion: 1,
   kind: 'probierz-stado-cli-trace',
-  journey: 'native-readers',
+  journey: 'service-convergence',
   runId: process.env.PROBIERZ_RUN_ID || null,
   status: exitCode === 0 ? 'completed' : 'failed',
   source: {
@@ -101,15 +89,18 @@ await writeFile(tracePath, `${JSON.stringify({
       sha256: sha256(result.stderr),
     },
   },
-  tests,
-  productionMutations: 'one collision-resistant Probierz LaunchAgent in the selected macOS login domain; isolated HOME, storage, registry, port, logs, and binaries; removed through Stado service bootout and guarded host remove-file lifecycle commands',
+  tests: [test],
+  productionMutations: 'none: real Stado, storage, registry, grants, binaries and listener are isolated below the source target directory; the real Skarbiec download cache is checksum-pinned runner state',
   contracts: [
-    'a real launchd unit can keep executing a private Stado file after its on-disk plist changes to the delivered root',
-    'release converge-local-readers reloads that changed definition through the exact launchd domain observed to own it',
-    'the public service label-print readback proves the replacement device, inode, executable path, and SHA-256 equal the delivered root file before convergence succeeds',
-    'repeating convergence leaves an already-correct process running under the same pid',
-    'service update installs the real archive into a private tree, reloads the cached global definition, proves its replacement image, and leaves it running on an identical replay',
-    'an incompatible archive is refused while the current symlink, plist bytes, live pid and mapped private image remain unchanged',
+    'built Stado provisions the target-local verifier bearer through real Skarbiec without requiring or returning a JSON token',
+    'repeated verifier provisioning preserves the exact owner-only bearer bytes and the resulting grant authorizes a real server-side item read',
+    'symlink and empty existing bearer paths retain the source-grounded refusal and change neither the vault nor protected fixture state',
+    'nonlocal GET and POST authenticate independently through action-scoped existing-registry-client grants stored in real Skarbiec',
+    'malformed, unknown and unauthorized requests are refused without opening a host mutation',
+    'host-wide and selected-binary reports use the real local hostname and Stado same-host execution rather than SSH',
+    'a selected current source-built Stado binary succeeds without redundant delivery',
+    'a missing declared Skarbiec release returns HTTP 200 with the complete nonzero convergence envelope and failed release diagnosis',
+    'failed delivery preserves the installed source-built Stado, real Skarbiec and protected operator state byte-for-byte',
   ],
   redaction: {
     status: 'verified_redacted',
@@ -117,20 +108,21 @@ await writeFile(tracePath, `${JSON.stringify({
     productionIdentifiersIncluded: false,
   },
 }, null, 2)}\n`, { mode: 0o600 });
-await mkdir(dirname(mediaManifest), { recursive: true });
 await writeFile(
   mediaManifest,
   `${JSON.stringify([{ file: tracePath, kind: 'trace', contentType: 'application/json' }], null, 2)}\n`,
   { mode: 0o600 },
 );
 
-process.stdout.write(result.stdout);
-process.stderr.write(result.stderr);
-assert.equal(
-  result.error,
-  null,
-  `native-readers journey failed with exit ${exitCode ?? 'unknown'}${signal ? ` (${signal})` : ''}`,
-);
-for (const test of tests) {
-  assert.match(result.stdout, new RegExp(`test ${escapeRegExp(test)} \\.\\.\\. ok`));
+if (result.error) {
+  process.stderr.write(`${result.stdout}\n${result.stderr}\n`);
+  throw new Error(`service-convergence journey failed with exit code ${exitCode ?? 'unknown'}`);
 }
+assert.equal(result.stderr.includes('FAILED'), false, result.stderr);
+assert.match(result.stdout, new RegExp(`${test} \\.\\.\\.`));
+assert.match(result.stdout, /verified authenticated nonlocal Services API on (darwin-arm64|linux-amd64)/);
+assert.match(result.stdout, /verified persistent verifier bearer through built Stado and real Skarbiec/);
+assert.ok(result.stdout.includes('token file must not be a symlink'));
+assert.ok(result.stdout.includes('token file must be a nonempty regular file'));
+assert.ok(result.stdout.includes('test result: ok. 1 passed; 0 failed'));
+process.stdout.write(result.stdout);

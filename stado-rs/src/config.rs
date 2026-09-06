@@ -1937,14 +1937,17 @@ static RELEASE_SIGNING_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| 
 pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 /// Actions a registry-API client may be granted.
 ///
-/// `policy-read` and `cleanup-read` answer questions; `policy-write` rewrites
-/// one target's whitelisted policy fields, `cleanup-run` asks the local
-/// janitor for a pass, and `registry-import` additively adopts a complete
-/// registry-v2 document. They are separate because reading policy, rewriting
-/// policy, running cleanup, and importing declarations are distinct authority.
+/// `policy-read`, `cleanup-read`, and `converge-read` answer questions;
+/// `policy-write` rewrites one target's whitelisted policy fields,
+/// `cleanup-run` asks the local janitor for a pass, `registry-import` additively
+/// adopts a complete registry-v2 document, and `converge-apply` may deliver every
+/// declared binary on one canonical host. Reading does not authorize mutation;
+/// each independent operation requires its own grant.
 pub const REGISTRY_API_ACTIONS: &[&str] = &[
     "cleanup-read",
     "cleanup-run",
+    "converge-apply",
+    "converge-read",
     "policy-read",
     "policy-write",
     "registry-import",

@@ -1547,7 +1547,7 @@ async fn grant_accessibility_inner(
         ));
     }
     if let Some(identity) = identity {
-        items.push(("accessibility".to_string(), "granted".to_string()));
+        items.push(("accessibility-record".to_string(), "granted".to_string()));
         items.push(("accessibility-client".to_string(), identity.bundle));
     }
     items.push((
@@ -1900,7 +1900,7 @@ async fn status_inner(
     } else {
         "app-missing".to_string()
     };
-    items.push(("accessibility".to_string(), accessibility.clone()));
+    items.push(("accessibility-record".to_string(), accessibility));
 
     let challenge_accessibility = if helper.is_some() {
         let query = format!(
@@ -1963,6 +1963,64 @@ async fn status_inner(
         if socket_ready { "ready" } else { "absent" }.to_string(),
     ));
 
+    let permission = if socket_ready {
+        match invoke_as_gui_user(
+            target,
+            &user,
+            &[
+                CUA_DRIVER_EXECUTABLE,
+                "call",
+                "check_permissions",
+                r#"{"prompt":false}"#,
+                "--socket",
+                &socket,
+            ],
+            password,
+            runner,
+        )
+        .await
+        {
+            Ok(output) if output.ok() => {
+                serde_json::from_str::<serde_json::Value>(output.stdout.trim())
+                    .map_err(|error| {
+                        format!("CuaDriver check_permissions returned invalid JSON: {error}")
+                    })
+                    .and_then(|value| {
+                        value
+                            .get("accessibility")
+                            .and_then(serde_json::Value::as_bool)
+                            .ok_or_else(|| {
+                                format!(
+                                "CuaDriver check_permissions returned no accessibility boolean: {}",
+                                output.stdout.trim()
+                            )
+                            })
+                    })
+            }
+            Ok(output) => Err(format!(
+                "CuaDriver check_permissions failed: {}",
+                output.detail().trim()
+            )),
+            Err(error) => Err(format!(
+                "CuaDriver check_permissions could not run: {error}"
+            )),
+        }
+    } else {
+        Err(format!("CuaDriver socket is absent: {socket}"))
+    };
+    let observed_accessibility = match permission {
+        Ok(true) => "granted",
+        Ok(false) => "denied",
+        Err(detail) => {
+            items.push(("accessibility-error".to_string(), detail));
+            "unobserved"
+        }
+    };
+    items.push((
+        "accessibility".to_string(),
+        observed_accessibility.to_string(),
+    ));
+
     let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
     // Whose session this is belongs in the readiness answer, not beside it. A host can
     // hold a driver, grants and a live socket in one user's session while the identity
@@ -1977,7 +2035,7 @@ async fn status_inner(
     ));
     let gui_ready = console_ready
         && declared_session
-        && accessibility == "granted"
+        && observed_accessibility == "granted"
         && runtime == "running"
         && socket_ready;
     items.push((
