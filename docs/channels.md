@@ -389,6 +389,14 @@ stado service grant-sync <service> \
 
 `stado service auth-check` then sends that bearer from the host to a read-only loopback endpoint. With `--repair`, it synchronizes the named item field into the managed environment, restarts only the declared unit, and checks the endpoint again. `--take-over-listener` is a separate, explicit recovery for an unmanaged process occupying the declared port.
 
+### The agent's own credential broker
+
+A queue agent resolves the secrets a job declares in `secret_env` through the broker `agent.skarbiec.url` names on its host. `stado host reconcile-agent-skarbiec <target> [--json]` sets that value to the `skarbiec` endpoint the service directory declares for that host, and refuses a host the directory gives no endpoint rather than pointing the agent at a guess. It writes nothing when the value already matches, and the receipt carries `declared`, `previous` and `changed`.
+
+`stado doctor` fails `agent-skarbiec` when the agent's consumer cannot read through that URL, and the check's own allowance is two probe intervals because the read decrypts through one GnuPG listener that the object-authorization sweep is using at the same moment. A broker that answers slowly or stops answering mid-request is usually a wedged GnuPG daemon: `skarbiec recover-daemons` on that host is the repair, and the check reports `unmeasured` rather than a verdict while nothing answers.
+
+On 2026-09-05 `lukasz-macbook` carried `http://127.0.0.1:19096`, a port nothing on that machine has ever bound, while the directory declared `http://127.0.0.1:8787` for it. Three brokers were listening and none was the one named. Nothing compared the two, so the only symptom was a `preferences` release job dying after it had been claimed — `cannot resolve job … secret GITHUB_TOKEN: error sending request for url (http://127.0.0.1:19096/v1/items/read)` — a build failure whose cause was a single line in another product's configuration file.
+
 ## Items in a host's vault
 
 `stado host vault-item-put <target> <item> --type <kind>` stores one canonical item, reading the payload from stdin so no credential field enters a local or remote argument vector. `stado host vault-item-show <target> <item>` is its read: kind, schema, revision, tags, `updated_at`, and per field the name, byte length and SHA-256, narrowed with `--field <name>`. The decryption and the hashing both happen on the host, so comparing a digest against a local copy's answers "does the host hold what this declaration references" without either side sending the value.

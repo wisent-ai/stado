@@ -553,6 +553,23 @@ fn object_auth_deadline() -> Duration {
     PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(mapped).unwrap_or_default()
 }
 
+/// The agent lists its own grant through the host's Skarbiec, which decrypts
+/// with GnuPG on one listener — the same one the gateway-auth sweep above is
+/// reading forty-eight mapped items through at that moment.
+///
+/// Bounding that at the flat allowance measured the queue rather than the
+/// broker: on 2026-09-05, with `agent.skarbiec.url` finally pointing at the
+/// endpoint the directory declares, five sequential reads of that grant took
+/// 1.6s, 2.1s, 2.9s, 4.7s and 14.4s, and the check reported `not measured:
+/// the probe did not answer within 8s` twice in a row about a broker that was
+/// answering every request with 200. So the allowance is one probe for the
+/// read and one for waiting behind the concurrent sweep. A broker that has
+/// genuinely stopped answering — the 60-second stalls the same host produced
+/// before `skarbiec recover-daemons` — still elapses, and still reports
+/// unmeasured rather than a verdict.
+fn agent_skarbiec_deadline() -> Duration {
+    PROBE_TIMEOUT * 2
+}
 /// Allowance for resolving alert channels. Each enabled channel reads its own
 /// destination and provider material out of the vault, through the same
 /// single-threaded listener the gateway sweep is using at the same moment —
@@ -673,8 +690,9 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
             check_agent_template().await
         },),
-        selected(
+        selected_within(
             scope,
+            agent_skarbiec_deadline(),
             AGENT_SKARBIEC_ID,
             AGENT_SKARBIEC_TITLE,
             AGENT_SKARBIEC_REMEDY,
@@ -2259,8 +2277,11 @@ async fn check_agent_template() -> Check {
 const AGENT_SKARBIEC_ID: &str = "agent-skarbiec";
 const AGENT_SKARBIEC_TITLE: &str = "The agent's own Skarbiec broker answers";
 const AGENT_SKARBIEC_REMEDY: &str =
-    "point agent.skarbiec.url at a broker that is listening on this host, or start the one it \
-     names; a queue agent whose broker is unreachable can claim no job that declares secret_env";
+    "run `stado host reconcile-agent-skarbiec <target>`, which sets agent.skarbiec.url to the \
+     credential endpoint the service directory declares for that host; a queue agent whose \
+     broker is unreachable can claim no job that declares secret_env. A broker that answers \
+     slowly or stops answering mid-request is usually a wedged GnuPG daemon: run `skarbiec \
+     recover-daemons` on that host";
 
 /// Whether this host's queue agent can reach the broker it is configured to
 /// read workload secrets through.
