@@ -6,6 +6,7 @@
 - **Desktop source selection:** the Hosts reconciliation sheet sends requests to the dashboard selected when it opened, rather than launching a local CLI against another configuration. Confirmation and retained results name that source, host and transaction.
 - **Reconciliation diagnostics:** Desktop retains HTTP status, raw response bytes, product exit code and every report field through refusals and decoding errors. An accepted resident operation is not displayed as completed, and no later phase runs automatically.
 - **Resolver failure causes:** a retry description alone no longer counts as rate-limit evidence. A second authority read retains the original and subsequent errors without turning a registry refusal into upstream throttling; explicit HTTP and rate-limit evidence keep their existing precedence.
+- **Release delivery order:** stable native publication now converges every required native host from the source manifest before Linux publication uses its registry authority. A Linux failure can no longer strand a compatible Mac mini update, and final fleet delivery handles only the remaining Linux hosts. Candidate publication keeps its existing independent path.
 - **Compatibility:** stored transaction schemas and CLI phases are unchanged. Configure the two new registry actions only on a server that supports them; remove them before rolling back to an older server, which refuses unknown actions.
 
 ## 0.16.38

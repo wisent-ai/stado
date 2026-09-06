@@ -263,10 +263,17 @@ jobs:
           print(f"runner capacity retained: {free:.2f} >= {target} GiB")
           '
 
-  # One platform, judged on its own. A failure here no longer decides whether
-  # darwin ever publishes.
+  # Stable Linux publication needs the native registry authority reader updated
+  # first. Otherwise its resolver can reject data the release itself supports,
+  # while the failed Linux job prevents that reader from ever being delivered.
+  # Candidate publication remains independent of the stable native delivery.
   publish-linux:
-    needs: [identity, release-capacity]
+    needs: [identity, release-capacity, deploy-control-plane]
+    if: >-
+      ${{ !cancelled() && needs.identity.result == 'success' &&
+          needs.release-capacity.result == 'success' &&
+          (needs.identity.outputs.channel != 'stable' ||
+           needs.deploy-control-plane.result == 'success') }}
     runs-on: [self-hosted, stado-control-plane]
     # NO shared concurrency group here, deliberately. The capacity job is a
     # completed prerequisite, not a group that can evict this pending build.
@@ -632,16 +639,11 @@ jobs:
           fi
 
 
-  # The darwin platform, and the control-plane delivery that follows it.
-  #
-  # `needs: identity`, NOT `needs: publish-linux`. The two coordinates are
-  # independent -- `stado/<version>/darwin-arm64/` shares nothing with
-  # `stado/<version>/linux-amd64/` -- and this job used to depend on the Linux
-  # job for one reason only: to read `channel`. `identity` publishes that now.
-  #
-  # Publication is asserted complete before the delivery steps below run, so a
-  # delivery or ingress failure leaves the coordinate whole rather than
-  # partial, and a Linux failure leaves it untouched rather than empty forever.
+  # Publish and verify the native coordinate, then converge every required
+  # native host from the same source manifest. Updating only a separate
+  # coordinator variable can leave the registry authority on incompatible
+  # bytes; waiting for Linux delivery to update it creates a dependency cycle.
+  # A later Linux failure cannot prevent these already-qualified native updates.
   deploy-control-plane:
     needs: [identity, release-capacity]
     if: needs.identity.outputs.channel == 'stable'
@@ -656,7 +658,6 @@ jobs:
       STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -954,15 +955,32 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Deliver verified native release
+      - name: Converge every required native delivery and reader
         run: |
           export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
           stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          "$stado_bin" host declare-version "$COORD_TARGET" \
-            --binary stado \
-            --version "$STADO_NATIVE_RELEASE_VERSION" \
-            --json
-          "$stado_bin" service converge "$COORD_TARGET" stado --apply --json
+          targets="$(
+            jq -er --arg platform "$STADO_NATIVE_RELEASE_PLATFORM" '
+              [
+                .deliveries[]
+                | select(.required == true and .platform == $platform)
+                | select(.argv[0:3] == ["stado", "release", "install-local"])
+                | .target
+              ]
+              | if length > 0 and length == (unique | length)
+                then .[]
+                else error("required native Stado delivery targets must be present and unique")
+                end
+            ' "$STADO_SOURCE_DIR/.wisent-release.json"
+          )"
+          while IFS= read -r target; do
+            test -n "$target"
+            "$stado_bin" host declare-version "$target" \
+              --binary stado \
+              --version "$STADO_NATIVE_RELEASE_VERSION" \
+              --json
+            "$stado_bin" service converge "$target" stado --apply --json
+          done <<<"$targets"
 
 
       - name: Reload TLS reverse proxy
@@ -1011,7 +1029,7 @@ jobs:
         with:
           name: stado-native-driver-${{ github.sha }}
           path: ${{ runner.temp }}/stado-native-driver
-      - name: Converge every required Stado delivery and reader
+      - name: Converge every required Linux delivery and reader
         run: |
           set -euo pipefail
           driver_dir="$RUNNER_TEMP/stado-native-driver"
@@ -1029,13 +1047,13 @@ jobs:
             jq -er '
               [
                 .deliveries[]
-                | select(.required == true)
+                | select(.required == true and .platform == "linux-amd64")
                 | select(.argv[0:3] == ["stado", "release", "install-local"])
                 | .target
               ]
               | if length > 0 and length == (unique | length)
                 then .[]
-                else error("required Stado delivery targets must be present and unique")
+                else error("required Linux Stado delivery targets must be present and unique")
                 end
             ' .wisent-release.json
           )"
