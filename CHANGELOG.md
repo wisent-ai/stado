@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.39
+
+- **Interrupted service handoff:** an incomplete handoff with a committed registry receipt re-enters the existing live-release, legacy-file, lease, and compare-and-swap checks before reapplying its same intent. The prior commit is retained in recovery history; terminal receipts and changed intent remain refusals.
+
 ## 0.16.38
 
 - **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.

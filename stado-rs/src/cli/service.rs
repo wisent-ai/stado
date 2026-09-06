@@ -863,6 +863,11 @@ pub enum ServiceCommands {
     /// must already be inactive. One conditional registry write then removes
     /// every legacy restart identity while preserving the logical route,
     /// placement dependency, probes, and release policy.
+    ///
+    /// Repeating an incomplete handoff rechecks the same release, rollout
+    /// generation and exact legacy files before committing against the current
+    /// registry. The prior commit remains in the receipt's recovery history.
+    /// A completed receipt cannot be reapplied against a mismatching registry.
     HandoffReleaseControl {
         /// Logical service in the service directory and placement profile.
         service: String,
@@ -6212,6 +6217,7 @@ async fn handoff_release_control(
             && receipt["profile"] == profile_name
             && receipt["product"] == product
             && receipt["release"]["version"] == desired.version
+            && receipt["release"]["rollout_generation"] == desired.rollout_generation
             && receipt["release"]["artifact_sha256"] == desired_artifact.artifact_sha256
             && receipt["release"]["manifest_sha256"] == desired_artifact.manifest_sha256;
         if !same_intent {
@@ -6249,13 +6255,16 @@ async fn handoff_release_control(
             )
             .await;
         }
-        if receipt["status"] != "prepared" {
+        if receipt["status"] != "prepared" && receipt["status"] != "registry_committed" {
             return Err(CmdError::click(format!(
                 "handoff receipt {} says {:?}, but the registry does not match its intended handoff",
                 receipt_path.display(),
                 receipt["status"]
             )));
         }
+        // An incomplete commit can disappear after authority recovery. Reuse
+        // every live-release, legacy-identity, lease and CAS check below rather
+        // than trusting the old generation or resetting its receipt by hand.
     }
     for (template_host, template) in &profile.hosts {
         let unit = template.units.get(service_name).ok_or_else(|| {
@@ -6448,9 +6457,28 @@ async fn handoff_release_control(
         crate::targets::validate_registry(&document)
             .map_err(|error| CmdError::click(error.to_string()))?;
 
-        let refreshing_prepared_receipt = prior_receipt.is_some();
         let mut report = if let Some(receipt) = prior_receipt.as_ref() {
             let mut receipt = receipt.clone();
+            if receipt["status"] == "registry_committed" {
+                let recovery = json!({
+                    "recorded_generation": receipt["generation"],
+                    "recorded_expected_generation": receipt["expected_generation"],
+                    "observed_registry_generation": expected_generation,
+                    "revalidated_at": now(),
+                });
+                if receipt["registry_recovery_history"].is_null() {
+                    receipt["registry_recovery_history"] = json!([]);
+                }
+                receipt["registry_recovery_history"]
+                    .as_array_mut()
+                    .ok_or_else(|| {
+                        CmdError::click(format!(
+                            "handoff receipt {} has invalid registry recovery history",
+                            receipt_path.display()
+                        ))
+                    })?
+                    .push(recovery);
+            }
             receipt["expected_generation"] = json!(expected_generation);
             receipt["generation"] = Value::Null;
             receipt["status"] = json!("prepared");
@@ -6498,7 +6526,7 @@ async fn handoff_release_control(
                 },
             })
         };
-        persist_handoff_receipt(&receipt_path, &report, refreshing_prepared_receipt)?;
+        persist_handoff_receipt(&receipt_path, &report, prior_receipt.is_some())?;
         let generation = registry::push_document_if(&document, &expected_generation).await?;
         report["status"] = json!("registry_committed");
         report["generation"] = json!(generation);
