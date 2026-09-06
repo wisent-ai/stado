@@ -24,7 +24,6 @@ Before replacing a failed platform attempt, the coordinator reads the original
 job: queued, running, completed, and uploaded jobs keep that identity and their
 existing output. A publication or storage-read failure does not start another
 build.
-
 The stored platform request fixes its builder and input archives. Resumption
 checks that request against the release's source and manifest, preserves its
 exact bytes, and uses the already-staged inputs instead of fetching them again.
@@ -33,6 +32,10 @@ new live-builder selection. If no queue plan exists yet, the saved builder
 must still pass normal admission; another machine is not silently selected.
 An altered request returns `immutable queue object differs: PATH` without
 overwriting the saved request or creating a replacement build.
+Concurrent coordinators retain the first published worker request only after
+checking that its source, manifest, and inputs match. A newly created queue plan
+still applies normal admission to the builder named by that request.
+
 
 `stado release status stado --json` shows the recorded release runs, including
 each platform's builder, job ID, state, and failure. A recorded platform failure

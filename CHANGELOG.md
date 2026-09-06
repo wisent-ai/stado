@@ -1,12 +1,22 @@
 # Changelog
 
-## 0.16.31
+## 0.16.33
 
 - **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
 - **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
 - **Credential waits:** Skarbiec HTTP connections have a 15-second deadline and requests have a 120-second total deadline. The existing owner-vault password fallback is bounded to 90 seconds and its child is terminated on cancellation; host operations report the credential failure instead of waiting indefinitely.
+- **Bounded host session:** each Apple readiness or preparation operation acquires its target key and selects a declared route once. Individual reads no longer repeat credential acquisition or probe an unavailable preferred route; the operation releases its key on completion, failure, or cancellation and never replays a failed mutation.
 - **Native Desktop:** Hosts reads Apple readiness without changing host settings and sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
 - **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
+
+## 0.16.32
+
+- **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.
+- **Capacity and cleanup evidence:** the two Probierz journeys record compilation separately from execution, retain the exact compiled CLI and test executables, and refuse execution if the source changed during compilation.
+
+## 0.16.31
+
+- **Release qualification:** format the integrated registry-import source and use equivalent option predicates required by Clippy. The decoder returns only a rejection reason; the caller constructs the unchanged refusal receipt without carrying a large error through successful decoding. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
 
 ## 0.16.30
 

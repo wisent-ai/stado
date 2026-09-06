@@ -2194,7 +2194,16 @@ pub async fn status(
     runner: &Runner,
 ) -> GuiAutomationReport {
     let mut items = Vec::new();
-    let result = status_inner(target, &mut items, password, runner).await;
+    let result = async {
+        require_target(target)?;
+        host_channel::with_session(
+            target,
+            runner,
+            status_inner(target, &mut items, password, runner),
+        )
+        .await
+    }
+    .await;
     report(target, items, result)
 }
 
@@ -2229,15 +2238,19 @@ pub async fn grant_accessibility(
 ) -> GuiAutomationReport {
     let mut items = Vec::new();
     let result = async {
-        let user = login_user(target, runner).await?;
-        require_declared_session(target, &user)?;
-        items.push(("automated-session".to_string(), user));
-        reconcile_apple_challenge_helper(target, &mut items, password, runner).await?;
-        grant_accessibility_inner(target, &mut items, apple_only, password, runner).await?;
-        if !apple_only {
-            reconcile_runtime(target, &mut items, runner).await?;
-        }
-        Ok(())
+        require_target(target)?;
+        host_channel::with_session(target, runner, async {
+            let user = login_user(target, runner).await?;
+            require_declared_session(target, &user)?;
+            items.push(("automated-session".to_string(), user));
+            reconcile_apple_challenge_helper(target, &mut items, password, runner).await?;
+            grant_accessibility_inner(target, &mut items, apple_only, password, runner).await?;
+            if !apple_only {
+                reconcile_runtime(target, &mut items, runner).await?;
+            }
+            Ok(())
+        })
+        .await
     }
     .await;
     report(target, items, result)
