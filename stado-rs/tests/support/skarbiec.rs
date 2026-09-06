@@ -106,36 +106,7 @@ pub struct SkarbiecFixture {
 }
 
 impl SkarbiecFixture {
-    pub fn start(
-        home: &Path,
-        items: &[SkarbiecItem],
-        consumer: &str,
-        capabilities: &str,
-        token_name: &str,
-    ) -> Self {
-        let token = home.join(token_name);
-        Self::start_inner(
-            home,
-            items,
-            token,
-            Some((consumer, capabilities)),
-            |_, _| {},
-        )
-    }
-
-    pub fn start_without_grant<F>(
-        home: &Path,
-        items: &[SkarbiecItem],
-        token: &Path,
-        provision: F,
-    ) -> Self
-    where
-        F: FnOnce(&Path, &Path),
-    {
-        Self::start_inner(home, items, token.to_path_buf(), None, provision)
-    }
-
-    fn start_inner<F>(
+    pub fn start<F>(
         home: &Path,
         items: &[SkarbiecItem],
         token: PathBuf,

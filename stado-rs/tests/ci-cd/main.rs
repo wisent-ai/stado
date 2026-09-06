@@ -39,9 +39,12 @@ impl SkarbiecFixture {
         Self::start(
             home,
             &[item],
-            "stado-release-coordinator",
-            "read:ci-release-signing#private_key",
-            "release-signing-grant",
+            home.join("release-signing-grant"),
+            Some((
+                "stado-release-coordinator",
+                "read:ci-release-signing#private_key",
+            )),
+            |_, _| {},
         )
     }
 }
@@ -73,6 +76,8 @@ fn release_env(command: &mut Command, home: &Path, storage: &Path, vault: &Skarb
     command
         .env_clear()
         .env("HOME", home)
+        .env("GNUPGHOME", vault.gnupg_home())
+        .env("SKARBIEC_VAULT_FILE", vault.vault_file())
         .env("PATH", std::env::var("PATH").unwrap())
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)

@@ -166,10 +166,11 @@ impl DashboardFixture {
                 .collect::<Vec<_>>()
                 .join(",");
             let mut receipt = None;
-            let vault = SkarbiecFixture::start_without_grant(
+            let vault = SkarbiecFixture::start(
                 &skarbiec_home,
                 &items,
-                &verifier_token,
+                verifier_token.clone(),
+                None,
                 |gnupg_home, vault_file| {
                     let minted = mint_verifier(
                         &home,
