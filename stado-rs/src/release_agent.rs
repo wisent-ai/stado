@@ -543,7 +543,10 @@ fn quarantine_with_logs(
         5,
         400,
     );
-    let reason = format!("{why}; stderr {}; stdout {}", stderr.rendered, stdout.rendered);
+    let reason = format!(
+        "{why}; stderr {}; stdout {}",
+        stderr.rendered, stdout.rendered
+    );
     let classified = release_cause::classify(&format!(
         "{why}\n{}\n{}",
         stderr.body.trim_end(),
