@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.34
+
+- **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured, and still refuse a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple. The object API's checkpointed current route now pins one conflict winner through the data union, effective lifecycle snapshot, direction-dependent newly-authoritative lifecycle classification, post-commit correlation, receipt, and rollback. An A-serving route preserves A conflicts and imports only B-only objects; a B-serving route preserves the original B-winning union. Pre-commit rollback exactly and resumably restores A's physical checkpoint, including transaction-created imports and directories.
+
 ## 0.16.33
 
 - **Authenticated convergence:** the typed GET and POST `/api/service/converge` routes share the CLI's implementation and return the complete report with its product exit code. Independent `converge-read` and `converge-apply` registry client actions prevent read permission from authorizing delivery.
