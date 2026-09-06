@@ -1683,7 +1683,11 @@ async fn capture_fenced_preflight(
     } else {
         "B"
     };
-    let conflict_winner = if prior_root == "A" { "primary" } else { "backup" };
+    let conflict_winner = if prior_root == "A" {
+        "primary"
+    } else {
+        "backup"
+    };
     let correlation = correlate_served_store(
         target,
         writer
@@ -3290,7 +3294,9 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         .get("conflict_winner")
         .and_then(Value::as_str)
         .filter(|winner| matches!(*winner, "primary" | "backup"))
-        .ok_or_else(|| DeployError("checkpoint evidence omitted its conflict winner".to_string()))?;
+        .ok_or_else(|| {
+            DeployError("checkpoint evidence omitted its conflict winner".to_string())
+        })?;
     if receipt.get("conflict_winner").and_then(Value::as_str) != Some(conflict_winner) {
         return Err(DeployError(
             "checkpoint receipt and evidence disagree on the conflict winner".to_string(),
