@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.38
+
+- **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
+- **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
+- **Credential waits:** Skarbiec HTTP connections have a 15-second deadline and requests have a 120-second total deadline. The existing owner-vault password fallback is bounded to 90 seconds and its child is terminated on cancellation; host operations report the credential failure instead of waiting indefinitely.
+- **Bounded host session:** each Apple readiness or preparation operation acquires its target key and selects a declared route once. Individual reads no longer repeat credential acquisition or probe an unavailable preferred route; the operation releases its key on completion, failure, or cancellation and never replays a failed mutation.
+- **Native Desktop:** Hosts reads Apple readiness without changing host settings and sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
+- **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
+
 ## 0.16.37
 
 - **Native label evidence:** exact system-label inspection now uses the existing noninteractive privileged launchd reader. A refused or failed domain read retains its exit code and error instead of being reported as proof that the label is unloaded.
