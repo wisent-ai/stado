@@ -7614,7 +7614,11 @@ pub async fn vault_token_mint(
         }
         println!("{}", serde_json::to_string_pretty(&metadata)?);
     } else {
-        let operation = if token_source.is_some() { "registered" } else { "minted" };
+        let operation = if token_source.is_some() {
+            "registered"
+        } else {
+            "minted"
+        };
         println!(
             "{}: token {operation} for {consumer} with audience {audience}",
             resolved.name
