@@ -294,29 +294,6 @@ fn registry(
     .unwrap();
 }
 
-fn wait_for_capacity(storage: &Path, home: &Path, agent: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let capacity = storage.join("capacity");
-        if fs::read_dir(&capacity)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_some()
-        {
-            return;
-        }
-        if let Some(status) = agent.try_wait().unwrap() {
-            panic!(
-                "agent exited before publishing capacity: {status}\nstdout:\n{}\nstderr:\n{}",
-                fs::read_to_string(home.join("agent.out")).unwrap_or_default(),
-                fs::read_to_string(home.join("agent.err")).unwrap_or_default()
-            );
-        }
-        assert!(Instant::now() < deadline, "agent published no capacity");
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
 fn wait_for_claimable_capacity(storage: &Path, home: &Path, agent: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(300);
     loop {
@@ -575,7 +552,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
     let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
@@ -683,7 +660,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     seed_stale_capacity(&storage, consumer);
 
     let submit_out = File::create(home.path().join("submit.out")).unwrap();

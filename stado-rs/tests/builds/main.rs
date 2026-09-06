@@ -126,12 +126,18 @@ impl Journey {
         );
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if fs::read_dir(self.storage.join("capacity"))
-                .ok()
-                .and_then(|mut entries| entries.next())
-                .is_some()
-            {
-                return;
+            if let Ok(entries) = fs::read_dir(self.storage.join("capacity")) {
+                for entry in entries.flatten() {
+                    let Ok(bytes) = fs::read(entry.path()) else {
+                        continue;
+                    };
+                    if serde_json::from_slice::<Value>(&bytes)
+                        .ok()
+                        .is_some_and(|capacity| capacity["accepting_jobs"] == true)
+                    {
+                        return;
+                    }
+                }
             }
             if self.agent.as_mut().unwrap().try_wait().unwrap().is_some() {
                 break;
@@ -139,7 +145,7 @@ impl Journey {
             thread::sleep(Duration::from_millis(100));
         }
         panic!(
-            "agent published no capacity: {}",
+            "agent did not accept work: {}",
             fs::read_to_string(self.home.path().join("agent.err")).unwrap_or_default()
         );
     }
