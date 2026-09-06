@@ -983,6 +983,47 @@ fn overdue_holder(state_dir: &Path, lock: &File) -> Option<(LockHolder, f64)> {
     (overdue_seconds > 0.0).then_some((holder, overdue_seconds))
 }
 
+/// How long the lock file itself says the current hold has lasted.
+///
+/// The holder record is the precise answer and this is the observable one: the
+/// canonical lock file is rewritten every time the lock changes hands, so its
+/// modification time bounds the age of the hold that exists right now.
+fn unattributed_overdue(lock: &File, pass_seconds: f64) -> Option<f64> {
+    let modified = lock.metadata().ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .ok()?
+        .as_secs_f64();
+    let allowance = pass_seconds + LOCK_TAKEOVER_GRACE_S;
+    (age > allowance).then_some(age - allowance)
+}
+
+/// The predecessor this pass may take the lock from, recorded or not.
+///
+/// A hold with no holder record used to be permanent: `overdue_holder` reads
+/// the record first and answers `None` without it, so the pass reported
+/// `lock_busy_unattributed` and left. On `charless-mac-mini` on 2026-09-06
+/// that state lasted two hours and counting - the agent's own janitor tick
+/// held the kernel lock with no record, every later tick declined to take it,
+/// and the host stopped reclaiming anything at 5.3 GiB free while fifty
+/// queued documentation records waited for space that only this janitor
+/// returns. A missing record is not a live budget: the lock file's own age is
+/// the evidence that exists in every case, and a hold past the declared pass
+/// deadline is overdue whether or not its owner wrote itself down.
+fn overdue_predecessor(
+    state_dir: &Path,
+    lock: &File,
+    pass_seconds: f64,
+) -> Option<(Option<LockHolder>, f64)> {
+    if let Some((holder, overdue_seconds)) = overdue_holder(state_dir, lock) {
+        return Some((Some(holder), overdue_seconds));
+    }
+    if read_lock_holder(state_dir, lock).is_some() {
+        return None;
+    }
+    unattributed_overdue(lock, pass_seconds).map(|overdue_seconds| (None, overdue_seconds))
+}
+
 /// Exclusive flock, with a bounded and mutually exclusive recovery path.
 ///
 /// A takeover keeps a hard link to the predecessor inode before atomically
@@ -1010,7 +1051,7 @@ fn acquire_lock_state(
         Err(error) => return Err(error.into()),
     }
     let initial_holder = read_lock_holder(state_dir, &file);
-    if overdue_holder(state_dir, &file).is_none() {
+    if overdue_predecessor(state_dir, &file, pass_seconds).is_none() {
         return Ok(LockState::Busy {
             holder: initial_holder,
         });
@@ -1047,7 +1088,8 @@ fn acquire_lock_state(
         Err(error) if lock_contended(&error) => {}
         Err(error) => return Err(error.into()),
     }
-    let Some((holder, overdue_seconds)) = overdue_holder(state_dir, &current) else {
+    let Some((holder, overdue_seconds)) = overdue_predecessor(state_dir, &current, pass_seconds)
+    else {
         return Ok(LockState::Busy {
             holder: read_lock_holder(state_dir, &current),
         });
@@ -1064,9 +1106,7 @@ fn acquire_lock_state(
     std::fs::hard_link(&canonical, &retired)?;
     if !path_names_file(&canonical, &current) {
         let _ = std::fs::remove_file(&retired);
-        return Ok(LockState::Busy {
-            holder: Some(holder),
-        });
+        return Ok(LockState::Busy { holder });
     }
 
     let staged = state_dir.join(format!(".{LOCK_NAME}.takeover.{replacement_token}"));
@@ -1096,7 +1136,7 @@ fn acquire_lock_state(
             holder_records: records,
             holder_token: Some(token),
         },
-        from_pid: holder.pid,
+        from_pid: holder.map_or(0, |holder| holder.pid),
         overdue_seconds,
     })
 }
@@ -2912,18 +2952,29 @@ async fn cleanup_once(
             overdue_seconds,
         }) => {
             taken_over = true;
-            let liveness = if pid_alive(from_pid) {
-                "still running and not progressing"
+            let detail = if from_pid == 0 {
+                format!(
+                    "took the janitor run lock from a predecessor that left no holder record, \
+                     {:.0}s past the declared pass deadline plus the \
+                     {LOCK_TAKEOVER_GRACE_S:.0}s grace as the lock file's own age reports it; \
+                     this pass runs in report mode, and enforcement stays disabled until the \
+                     retired predecessor inode no longer has a kernel lock",
+                    overdue_seconds
+                )
             } else {
-                "gone"
+                let liveness = if pid_alive(from_pid) {
+                    "still running and not progressing"
+                } else {
+                    "gone"
+                };
+                format!(
+                    "took the janitor run lock from pid {from_pid} ({liveness}), {:.0}s past the \
+                     deadline that holder recorded plus the {LOCK_TAKEOVER_GRACE_S:.0}s grace; \
+                     this pass runs in report mode, and enforcement stays disabled until the \
+                     retired predecessor inode no longer has a kernel lock",
+                    overdue_seconds
+                )
             };
-            let detail = format!(
-                "took the janitor run lock from pid {from_pid} ({liveness}), {:.0}s past the \
-                 deadline that holder recorded plus the {LOCK_TAKEOVER_GRACE_S:.0}s grace; this \
-                 pass runs in report mode, and enforcement stays disabled until the retired \
-                 predecessor inode no longer has a kernel lock",
-                overdue_seconds
-            );
             log_fn(&format!("disk cleanup: {detail}"));
             report.add_error("lock_taken_over", &JanitorError::os(&detail));
             lock
