@@ -175,6 +175,18 @@ pub enum RouteCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Retire one alias from the route table. Refused unless `--expected`
+    /// names the destination it currently has; the gateway stops serving the
+    /// alias in the same commit, so remove it only after every consumer has
+    /// stopped asking for it.
+    Remove {
+        alias: String,
+        /// Required compare-and-swap precondition: the alias's current destination.
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
@@ -229,6 +241,14 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => routes::set(&alias, &to, &expected, gateway.as_deref(), &fallback, json).await,
+        InferenceCommands::Route {
+            command:
+                RouteCommands::Remove {
+                    alias,
+                    expected,
+                    json,
+                },
+        } => routes::remove(&alias, &expected, json).await,
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {
             host,
