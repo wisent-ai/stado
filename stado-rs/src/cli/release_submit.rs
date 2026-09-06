@@ -1518,6 +1518,216 @@ async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError> {
     }
     Ok((key_id, private))
 }
+fn validate_receipt_identity<'a>(
+    receipt: &'a BuildReceipt,
+    run: &ReleaseRun,
+    rec: &PlatformRun,
+    platform: &str,
+) -> Result<&'a ArtifactReceipt, CmdError> {
+    if receipt.run_id != run.run_id
+        || receipt.job_id != rec.job_id
+        || receipt.product != run.product
+        || receipt.version != run.version
+        || receipt.platform != platform
+        || receipt.builder != rec.builder
+        || receipt.source_commit != run.source_commit
+        || receipt.source_sha256 != run.source_sha256
+        || receipt.manifest_sha256 != run.manifest_sha256
+        || receipt.status != StepStatus::Passed
+    {
+        return Err(CmdError::click(
+            "release job returned mixed or invalid output",
+        ));
+    }
+    receipt
+        .artifact
+        .as_ref()
+        .filter(|artifact| artifact.path == "release.tar.gz")
+        .ok_or_else(|| CmdError::click("release job omitted archive identity"))
+}
+
+fn reusable_terminal_build(job: &Job, receipt: &BuildReceipt) -> bool {
+    if receipt.status != StepStatus::Passed {
+        return false;
+    }
+    if job.state == job_state::FAILED {
+        return true;
+    }
+    // Cancellation still stops the current attempt. An earlier passing build
+    // can survive a later replay of the same immutable job being cancelled.
+    job.state == job_state::CANCELLED
+        && chrono::DateTime::parse_from_rfc3339(&receipt.completed_at)
+            .ok()
+            .zip(
+                job.started_at
+                    .as_deref()
+                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
+            )
+            .is_some_and(|(completed, started)| completed < started)
+}
+
+async fn retained_receipt(
+    run: &ReleaseRun,
+    platform: &str,
+    store: &JobStorage,
+    job: &Job,
+) -> Result<Option<Vec<u8>>, CmdError> {
+    use crate::deploy::{host_channel, production_runner, service_file_fetch, shlex_quote};
+
+    let rec = &run.platforms[platform];
+    let receipt_key = format!("status/{}/output/receipt.json", rec.job_id);
+    if let Some(bytes) = store.read_bytes(&receipt_key).await? {
+        return Ok(Some(bytes));
+    }
+    let target = host_channel::canonical_target(&rec.builder)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = production_runner();
+    let suffix = format!("/.stado/work/jobs/wc-{}/output/receipt.json", rec.job_id);
+    let fetched = service_file_fetch::fetch_file(&target, &format!("$HOME{suffix}"), &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if fetched.report.file_state == service_file_fetch::FILE_MISSING {
+        return Ok(None);
+    }
+    if let Some(failure) = fetched.failure(&rec.builder) {
+        return Err(CmdError::click(failure));
+    }
+    let receipt: BuildReceipt = serde_json::from_slice(&fetched.content)?;
+    if receipt.status != StepStatus::Passed {
+        return Ok(Some(fetched.content));
+    }
+    let artifact = validate_receipt_identity(&receipt, run, rec, platform)?;
+    if !matches!(
+        job.state.as_str(),
+        job_state::COMPLETED | job_state::UPLOADED
+    ) && !reusable_terminal_build(job, &receipt)
+    {
+        return Ok(Some(fetched.content));
+    }
+    let home = fetched
+        .report
+        .path
+        .strip_suffix(&suffix)
+        .filter(|home| home.starts_with('/'))
+        .ok_or_else(|| CmdError::click("release receipt returned an unexpected workdir"))?;
+    let (namespace, _) = run
+        .manifest_uri
+        .strip_prefix("stado://")
+        .and_then(|path| path.split_once('/'))
+        .ok_or_else(|| CmdError::click("release run has an invalid manifest URI"))?;
+    let canonical = format!("stado://{namespace}/status/{}/output", rec.job_id);
+    let attempt = run
+        .manifest_uri
+        .strip_suffix("/manifest.json")
+        .map(|prefix| format!("{prefix}/platforms/{platform}/output"))
+        .ok_or_else(|| CmdError::click("release run has an invalid manifest URI"))?;
+    // Transfer artifacts through the installed storage writer, not through the
+    // host channel's stdout. The receipt is published last at both locations.
+    let script = format!(
+        r#"set -eu
+export WC_STORAGE_BACKEND=stado
+home={home}
+canonical={canonical}
+attempt={attempt}
+cd -P -- "$home"
+for component in .stado work jobs {work} output; do
+  if [ -L "$component" ] || [ ! -d "$component" ] || [ ! -O "$component" ]; then
+    printf '%s\n' "release recovery refused unsafe directory: $PWD/$component" >&2
+    exit 1
+  fi
+  cd -P -- "$component"
+done
+for leaf in command_output.log release.tar.gz receipt.json; do
+  if [ -L "$leaf" ] || [ ! -f "$leaf" ] || [ ! -O "$leaf" ]; then
+    printf '%s\n' "release recovery refused unsafe file: $PWD/$leaf" >&2
+    exit 1
+  fi
+done
+file_sha256() {{
+  if [ -x /usr/bin/shasum ]; then
+    result=$(/usr/bin/shasum -a 256 "$1") || return 1
+  else
+    result=$(/usr/bin/sha256sum "$1") || return 1
+  fi
+  printf '%s' "${{result%% *}}"
+}}
+if [ "$(file_sha256 receipt.json)" != {receipt_sha} ] ||
+   [ "$(file_sha256 release.tar.gz)" != {archive_sha} ]; then
+  printf '%s\n' 'release recovery found changed receipt or archive bytes' >&2
+  exit 1
+fi
+printf '\nSTADO_RELEASE_OUTPUT_RECOVERY\n'
+for leaf in command_output.log release.tar.gz receipt.json; do
+  case "$leaf" in
+    command_output.log) content_type=text/plain ;;
+    release.tar.gz) content_type=application/gzip ;;
+    receipt.json) content_type=application/json ;;
+  esac
+  for destination in "$canonical" "$attempt"; do
+    "$home/.stado/bin/stado" storage put --content-type "$content_type" --json \
+      "$destination/$leaf" "$PWD/$leaf"
+  done
+done
+"#,
+        home = shlex_quote(home),
+        canonical = shlex_quote(&canonical),
+        attempt = shlex_quote(&attempt),
+        work = shlex_quote(&format!("wc-{}", rec.job_id)),
+        receipt_sha = shlex_quote(&fetched.local_digest),
+        archive_sha = shlex_quote(&artifact.sha256),
+    );
+    let output =
+        host_channel::run_script_with_timeout(&target, &script, Duration::from_secs(600), &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "release output recovery on {} failed: {}",
+            rec.builder,
+            output.detail()
+        )));
+    }
+    let payload = output
+        .stdout
+        .split_once("\nSTADO_RELEASE_OUTPUT_RECOVERY\n")
+        .map(|(_, payload)| payload)
+        .ok_or_else(|| CmdError::click("release output recovery omitted writer receipts"))?;
+    let writes = serde_json::Deserializer::from_str(payload)
+        .into_iter::<Value>()
+        .collect::<Result<Vec<_>, _>>()?;
+    if writes.len() != 6
+        || writes
+            .iter()
+            .any(|write| !matches!(write["state"].as_str(), Some("stored" | "replayed")))
+        || writes[2..4].iter().any(|write| {
+            write["sha256"].as_str() != Some(artifact.sha256.as_str())
+                || write["bytes"].as_u64() != Some(artifact.bytes)
+        })
+        || writes[4..6].iter().any(|write| {
+            write["sha256"].as_str() != Some(fetched.local_digest.as_str())
+                || write["bytes"].as_u64() != Some(fetched.content.len() as u64)
+        })
+    {
+        return Err(CmdError::click(
+            "release output recovery returned invalid writer receipts",
+        ));
+    }
+    let durable = store.read_bytes(&receipt_key).await?.ok_or_else(|| {
+        CmdError::click("release output recovery did not reach the canonical store")
+    })?;
+    if durable != fetched.content {
+        return Err(CmdError::click(
+            "release output recovery changed the build receipt",
+        ));
+    }
+    eprintln!(
+        "recovered passing build {} from {} without restarting its job; archive sha256={}",
+        rec.job_id, rec.builder, artifact.sha256
+    );
+    Ok(Some(durable))
+}
+
 async fn publish(
     run: &mut ReleaseRun,
     m: &ReleasePipelineManifest,
@@ -1529,7 +1739,7 @@ async fn publish(
     let rec = run.platforms[p].clone();
     let job = terminal(store, &rec.job_id).await?;
     let prefix = format!("status/{}/output/", rec.job_id);
-    let receipt_bytes = store.read_bytes(&format!("{prefix}receipt.json")).await?;
+    let receipt_bytes = retained_receipt(run, p, store, &job).await?;
     let receipt: Option<BuildReceipt> = receipt_bytes
         .as_deref()
         .map(serde_json::from_slice)
@@ -1538,13 +1748,9 @@ async fn publish(
         job.state.as_str(),
         job_state::COMPLETED | job_state::UPLOADED
     );
-    // The bootstrap can fail an upload after the build succeeded. The native
-    // finalizer still persists its output before recording that job failure.
-    // Keep the failed job's history; publication verifies the receipt and bytes.
-    let successful_build = job.state == job_state::FAILED
-        && receipt
-            .as_ref()
-            .is_some_and(|receipt| receipt.status == StepStatus::Passed);
+    let successful_build = receipt
+        .as_ref()
+        .is_some_and(|receipt| reusable_terminal_build(&job, receipt));
     if !successful_job && !successful_build {
         let host = if job.pinned_host.is_empty() {
             "unpinned host"
@@ -1566,26 +1772,17 @@ async fn publish(
         .await?
         .ok_or_else(|| CmdError::click("release job omitted archive"))?;
     let digest = release_control::sha256_bytes(&archive);
-    if r.run_id != run.run_id
-        || r.job_id != rec.job_id
-        || r.product != run.product
-        || r.version != run.version
-        || r.platform != p
-        || r.builder != rec.builder
-        || r.source_commit != run.source_commit
-        || r.source_sha256 != run.source_sha256
-        || r.manifest_sha256 != run.manifest_sha256
-        || r.status != StepStatus::Passed
-        || r.artifact.as_ref().map(|v| v.sha256.as_str()) != Some(&digest)
-    {
+    let artifact = validate_receipt_identity(&r, run, &rec, p)?;
+    if artifact.sha256 != digest || artifact.bytes != archive.len() as u64 {
         return Err(CmdError::click(
             "release job returned mixed or invalid output",
         ));
     }
     if successful_build {
         eprintln!(
-            "release job {} remains failed: {}; publishing its source-bound passing build receipt and verified archive without rebuilding",
+            "release job {} remains {}: {}; publishing its source-bound passing build receipt and verified archive without rebuilding",
             rec.job_id,
+            job.state,
             job.error.as_deref().unwrap_or("unspecified worker failure")
         );
     }
@@ -1877,14 +2074,13 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             // original job before deriving another build identity.
             let job_id = &run.platforms[p].job_id;
             let retry = match read_terminal_job(&store, job_id).await? {
-                Some(job) if job.state == job_state::FAILED => {
+                Some(job)
+                    if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) =>
+                {
                     // A passed build must not be repeated because its wrapper
                     // failed. `publish` checks every receipt binding and the
                     // archive digest before accepting the retained output.
-                    match store
-                        .read_bytes(&format!("status/{job_id}/output/receipt.json"))
-                        .await?
-                    {
+                    match retained_receipt(&run, p, &store, &job).await? {
                         Some(bytes) => {
                             serde_json::from_slice::<BuildReceipt>(&bytes)?.status
                                 != StepStatus::Passed
@@ -1892,7 +2088,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                         None => true,
                     }
                 }
-                Some(job) => job.state == job_state::CANCELLED,
+                Some(_) => false,
                 None => {
                     if store.read_job("running", job_id).await?.is_none()
                         && store.read_job("queue", job_id).await?.is_none()
@@ -3199,6 +3395,80 @@ fn write_receipt(receipt: &BuildReceipt) -> Result<(), CmdError> {
     Ok(())
 }
 
+fn completed_worker_output(request: &WorkerRequest, job_id: &str) -> Result<bool, CmdError> {
+    let path = Path::new("output/receipt.json");
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "cannot inspect retained worker receipt {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    if !metadata.file_type().is_file() || !std::fs::symlink_metadata("output")?.file_type().is_dir()
+    {
+        return Err(CmdError::click(
+            "retained worker output is not a regular workdir",
+        ));
+    }
+    let receipt: BuildReceipt = serde_json::from_slice(&std::fs::read(path)?)
+        .map_err(|error| CmdError::click(format!("cannot decode {}: {error}", path.display())))?;
+    if receipt.status != StepStatus::Passed {
+        return Ok(false);
+    }
+    if receipt.run_id != request.run_id
+        || receipt.job_id != job_id
+        || receipt.product != request.product
+        || receipt.version != request.version
+        || receipt.platform != request.platform
+        || receipt.builder != request.builder
+        || receipt.source_commit != request.source_commit
+        || receipt.source_sha256 != request.source_sha256
+        || receipt.manifest_sha256 != request.manifest_sha256
+        || receipt.inputs.len() != request.inputs.len()
+        || request.inputs.iter().any(|(name, expected)| {
+            !receipt.inputs.get(name).is_some_and(|actual| {
+                actual.uri == expected.uri
+                    && actual.sha256 == expected.sha256
+                    && actual.mount == expected.mount
+                    && actual.extract == expected.extract
+            })
+        })
+        || receipt.secret_env != request.secret_env
+    {
+        return Err(CmdError::click(
+            "retained worker receipt disagrees with the immutable request",
+        ));
+    }
+    let artifact = receipt
+        .artifact
+        .as_ref()
+        .filter(|artifact| artifact.path == "release.tar.gz")
+        .ok_or_else(|| CmdError::click("retained worker receipt omitted archive identity"))?;
+    let archive = Path::new("output/release.tar.gz");
+    if !std::fs::symlink_metadata(archive)
+        .map_err(|error| CmdError::click(format!("cannot inspect {}: {error}", archive.display())))?
+        .file_type()
+        .is_file()
+    {
+        return Err(CmdError::click(
+            "retained worker archive is not a regular file",
+        ));
+    }
+    let (bytes, digest) = release_control::sha256_file(archive).map_err(CmdError::click)?;
+    if bytes != artifact.bytes || digest != artifact.sha256 {
+        return Err(CmdError::click(
+            "retained worker archive differs from its passing receipt",
+        ));
+    }
+    eprintln!(
+        "[release-worker] reusing completed build {job_id}; archive sha256={digest}; no compilation repeated"
+    );
+    Ok(true)
+}
+
 pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // Name the file. Each of these was a bare `?`, so a missing one surfaced as
     // `Error: No such file or directory (os error 2)` with no path at all, on a
@@ -3225,6 +3495,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     };
     if manifest.product != request.product || !manifest.platforms.contains_key(&request.platform) {
         return Err(CmdError::click("worker request disagrees with manifest"));
+    }
+    let job_id = std::env::var("WC_JOB_ID").unwrap_or_default();
+    if completed_worker_output(&request, &job_id)? {
+        return Ok(());
     }
     let source_bytes = read_named(&request.source_archive, "the source archive")?;
     if release_control::sha256_bytes(&source_bytes) != request.source_sha256 {
@@ -3318,7 +3592,6 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // toolchain itself already arrives.
     ensure_rust_components(&manifest.platforms[&request.platform], &source)?;
     let recipe = &manifest.platforms[&request.platform];
-    let job_id = std::env::var("WC_JOB_ID").unwrap_or_default();
     let mut quality = Vec::new();
     for gate in &recipe.quality {
         let step = execute(&gate.name, &gate.argv, &source, &environment)?;
