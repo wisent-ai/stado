@@ -96,7 +96,7 @@ pub enum SecretsCommands {
     /// the product could answer "does that host hold this item" without
     /// copying an encrypted vault around.
     ///
-    /// Names, kinds, states and tags only, never a field value.
+    /// Nonsecret item metadata, including ownership and revision; never a field value.
     #[command(name = "inspect-vault")]
     InspectVault {
         /// Encrypted Skarbiec vault file. Omit with `--host`.
@@ -104,7 +104,7 @@ pub enum SecretsCommands {
         /// Registry host whose own vault to read instead of a local file.
         #[arg(long)]
         host: Option<String>,
-        /// Only report items whose name contains this text.
+        /// Filter item names and grant capability item names, case-insensitively.
         #[arg(long = "match")]
         matching: Option<String>,
         /// Emit JSON instead of a table.
@@ -171,7 +171,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             json,
         } => match (host, vault) {
             (Some(host), None) => inspect_host_vault(&host, matching.as_deref(), json).await,
-            (None, Some(vault)) => inspect_vault(&vault, json),
+            (None, Some(vault)) => inspect_vault(&vault, matching.as_deref(), json),
             (Some(_), Some(_)) => Err(CmdError::usage(
                 "inspect-vault reads either a local VAULT file or --host, not both",
             )),
@@ -617,38 +617,18 @@ async fn inspect_host_vault(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    let mut rows: Vec<(String, String, String, Vec<String>)> = inventory
+    let matching = matching.map(str::to_lowercase);
+    let mut rows: Vec<&Value> = inventory
         .iter()
-        .filter_map(|item| {
-            let name = item.get("id").and_then(Value::as_str)?.to_string();
-            if let Some(text) = matching {
-                if !name.to_lowercase().contains(&text.to_lowercase()) {
-                    return None;
-                }
-            }
-            let tags = item
-                .get("tags")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect();
-            Some((
-                name,
-                item.get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                item.get("state")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                tags,
-            ))
+        .filter(|item| {
+            item.get("id").and_then(Value::as_str).is_some_and(|name| {
+                matching
+                    .as_ref()
+                    .is_none_or(|text| name.to_lowercase().contains(text))
+            })
         })
         .collect();
-    rows.sort();
+    rows.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
 
     if json {
         println!(
@@ -660,11 +640,14 @@ async fn inspect_host_vault(
                 "matched": rows.len(),
                 "items": rows
                     .iter()
-                    .map(|(name, kind, state, tags)| json!({
-                        "name": name,
-                        "kind": kind,
-                        "state": state,
-                        "tags": tags,
+                    .map(|item| json!({
+                        "name": item["id"],
+                        "kind": item["kind"],
+                        "state": item["state"],
+                        "tags": item["tags"],
+                        "management": item["management"],
+                        "revision": item["revision"],
+                        "updated_at": item["updated_at"],
                     }))
                     .collect::<Vec<Value>>(),
             }))?
@@ -674,13 +657,20 @@ async fn inspect_host_vault(
     println!("host:      {}", resolved.name);
     println!("vault:     {}", broker.vault);
     println!("items:     {} total, {} shown", inventory.len(), rows.len());
-    for (name, kind, state, tags) in &rows {
-        println!("  {name:<52} {kind:<12} {state:<8} {}", tags.join(","));
+    for item in &rows {
+        let name = item["id"].as_str().unwrap_or_default();
+        let kind = item["kind"].as_str().unwrap_or_default();
+        let state = item["state"].as_str().unwrap_or_default();
+        let mode = item["management"]["mode"].as_str().unwrap_or("unknown");
+        let controller = item["management"]["controller"].as_str().unwrap_or("unknown");
+        let writer = item["management"]["writer"].as_str().unwrap_or("-");
+        let revision = &item["revision"];
+        println!("  {name:<52} {kind:<12} {state:<8} revision={revision} {mode}:{controller} writer={writer} tags={}", item["tags"]);
     }
     Ok(())
 }
 
-fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
+fn inspect_vault(path: &str, matching: Option<&str>, json: bool) -> Result<(), CmdError> {
     let metadata = std::fs::symlink_metadata(path)?;
     let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
     if !metadata.is_file()
@@ -692,7 +682,16 @@ fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
         ));
     }
     let launcher = skarbiec_launcher()?;
-    let items = vault_items(&launcher, std::path::Path::new(path))?;
+    let mut items = vault_items(&launcher, std::path::Path::new(path))?;
+    let items_total = items.len();
+    let matching = matching.map(str::to_lowercase);
+    if let Some(text) = matching.as_ref() {
+        items.retain(|item| {
+            item["id"]
+                .as_str()
+                .is_some_and(|name| name.to_lowercase().contains(text))
+        });
+    }
     let grants_output = std::process::Command::new(&launcher)
         .arg("tokens")
         .env("SKARBIEC_VAULT_FILE", path)
@@ -705,13 +704,28 @@ fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
             String::from_utf8_lossy(&grants_output.stderr).trim()
         )));
     }
-    let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout)
+    let mut grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout)
         .map_err(|_| CmdError::click("Skarbiec grant inventory was not a JSON array"))?;
+    if let Some(text) = matching.as_ref() {
+        grants.retain_mut(|grant| {
+            let Some(capabilities) = grant["capabilities"].as_array_mut() else {
+                return false;
+            };
+            capabilities.retain(|capability| {
+                capability["item"]
+                    .as_str()
+                    .is_some_and(|name| name.to_lowercase().contains(text))
+            });
+            !capabilities.is_empty()
+        });
+    }
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "vault": path,
+                "items_total": items_total,
+                "matched": items.len(),
                 "items": items,
                 "count": items.len(),
                 "grants": grants,
@@ -727,7 +741,7 @@ fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                item.get("type")
+                item.get("kind")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
@@ -739,10 +753,14 @@ fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
                     .and_then(Value::as_bool)
                     .unwrap_or_default()
                     .to_string(),
+                item["management"]["mode"].as_str().unwrap_or("unknown").to_string(),
+                item["management"]["controller"].as_str().unwrap_or("unknown").to_string(),
+                item["management"]["writer"].as_str().unwrap_or("-").to_string(),
+                item["revision"].to_string(),
             ]
         })
         .collect::<Vec<Vec<String>>>();
-    table::print(&["NAME", "TYPE", "UPDATED", "DELETED"], &rows);
+    table::print(&["NAME", "KIND", "UPDATED", "DELETED", "MODE", "CONTROLLER", "WRITER", "REVISION"], &rows);
     println!(
         "{} item(s), {} grant(s) in {}",
         items.len(),
