@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.35
+## 0.16.36
 
 - **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
 - **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
@@ -8,6 +8,13 @@
 - **Bounded host session:** each Apple readiness or preparation operation acquires its target key and selects a declared route once. Individual reads no longer repeat credential acquisition or probe an unavailable preferred route; the operation releases its key on completion, failure, or cancellation and never replays a failed mutation.
 - **Native Desktop:** Hosts reads Apple readiness without changing host settings and sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
 - **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
+
+## 0.16.35
+
+- **Scoped release publishers:** publishing clients accept the valid product entries they actually use instead of requiring every server-side publisher. The release server and configuration validation retain the complete active-publisher requirement; undeclared products still have no write credential.
+- **Publisher diagnostics:** malformed entries and invalid JSON are reported with their actual configuration errors instead of being reduced to “declares no publisher.” By default, authentication reads the selected publisher's token from Skarbiec.
+- **Isolated publisher credentials:** `STADO_RELEASE_PUBLISHER_TOKEN_FILE` accepts an explicitly supplied product bearer without requiring an isolated CI account to read the owner's vault. The product declaration and server-side credential check remain required; an unreadable or malformed file is refused without trying another credential.
+- **Compatibility:** existing complete publisher tables and stored schemas are unchanged. A client with a scoped table requires this release; older clients require the full table.
 
 ## 0.16.34
 

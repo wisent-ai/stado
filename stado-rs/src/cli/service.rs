@@ -3202,6 +3202,7 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
         .filter(|(logical, entry)| {
             logical.as_str() == name
                 || entry.get("managed_service").and_then(Value::as_str) == Some(name)
+                || placement_declares_unit(document, entry, logical, name)
         })
         .map(|(logical, _)| logical.clone())
         .collect::<Vec<_>>();
@@ -3219,25 +3220,55 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
     }
 }
 
+/// Whether a placement-backed route's profile installs `unit` for this service.
+///
+/// A placement-backed route MUST leave `managed_service` absent - the schema
+/// refuses it, because the unit is declared once per host inside the profile.
+/// Reading only the absent field made every such service unreachable from a
+/// unit name: on 2026-09-05 `service release com.wisent.always-on.brama` moved
+/// `current` to the new digest and then failed with "carries no route", so the
+/// host ran one release while the directory still described another.
+fn placement_declares_unit(document: &Value, entry: &Value, logical: &str, unit: &str) -> bool {
+    let Some(profile_name) = entry.get("placement_profile").and_then(Value::as_str) else {
+        return false;
+    };
+    document
+        .get("placement_profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| profile.get("name").and_then(Value::as_str) == Some(profile_name))
+        .filter_map(|profile| profile.get("hosts").and_then(Value::as_object))
+        .flat_map(|hosts| hosts.values())
+        .filter_map(|host| host.get("units").and_then(Value::as_object))
+        .filter_map(|units| units.get(logical))
+        .filter_map(|declared| declared.get("unit").and_then(Value::as_str))
+        .any(|declared| declared == unit)
+}
+
 /// Whether pinning `artifact`/`sha256` on this route would change anything.
+///
+/// A route that declares no deployable source has nothing to pin: its version
+/// is delivered by the release plane (`release_control`) and the directory
+/// carries only its address. That is not a failure of the release that just
+/// landed, and treating it as one aborted the command after `current` had
+/// already moved.
 fn source_pin_moves(
     document: &Value,
     logical: &str,
     artifact: &str,
     sha256: &str,
 ) -> Result<bool, CmdError> {
-    let source = document
+    let Some(source) = document
         .get("service_directory")
         .and_then(|directory| directory.get("services"))
         .and_then(|services| services.get(logical))
         .and_then(|entry| entry.get("declaration"))
         .and_then(|declaration| declaration.get("source"))
         .and_then(Value::as_object)
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "service directory route {logical:?} has no declaration source"
-            ))
-        })?;
+    else {
+        return Ok(false);
+    };
     Ok(
         source.get("artifact").and_then(Value::as_str) != Some(artifact)
             || source.get("sha256").and_then(Value::as_str) != Some(sha256),
