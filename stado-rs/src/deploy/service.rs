@@ -748,6 +748,16 @@ fn delivery_tree_product(program: &str) -> Option<&str> {
     }
     Some(product)
 }
+/// Whether one registry unit executes Stado from its independently installed
+/// service tree rather than from the host-global `$HOME/.stado/bin/stado`.
+///
+/// The path shape is the same declaration [`delivery_tree_product`] already
+/// uses for release inventory. Reusing it keeps release selection and reader
+/// convergence from inventing two meanings of "service-local".
+pub fn is_service_local_stado_reader(service: &ManagedService) -> bool {
+    delivery_tree_product(&service.program).is_some()
+        && service.program.rsplit('/').next() == Some("stado")
+}
 
 /// Resolve a delivery-tree unit to the exact product name the compiled
 /// `host release` catalog accepts.
@@ -930,19 +940,16 @@ pub enum EnvironmentGap {
         /// is on another host and was therefore not read.
         observed: Option<LocalUnitFile>,
     },
-    /// No product in `release_control` names this host in its `targets` map.
-    ///
-    /// `release_agent::spawn_release` is the only writer of a product's
-    /// declared `environment`, and the release agent reaches it only through
-    /// `policy.targets.get(host)` (`release_agent.rs:1878`). A host no
-    /// product target names is therefore a host the declaration cannot
-    /// reach by any path — and it is skipped by the same lookup in
-    /// [`products_without_declared_version`], which is why nothing said so.
+    /// This product has no release target for the host and its required
+    /// environment is not pinned in the managed service declaration.
     HostNamedByNoTarget {
         /// The hosts this product's `targets` map does name, so the row says
         /// where the declaration does land.
         named_hosts: Vec<String>,
     },
+    /// The service records the required values, but its native definition
+    /// either disagrees or could not be read on this host.
+    PinnedServiceEnvironment { observed: Option<LocalUnitFile> },
 }
 
 /// One product whose declared environment cannot reach the unit that serves
@@ -996,6 +1003,12 @@ impl UnreachableProductEnvironment {
         match self.gap {
             EnvironmentGap::UnrecordedDeclaration { .. } => "unrecorded-service-environment",
             EnvironmentGap::HostNamedByNoTarget { .. } => "untargeted-product-host",
+            EnvironmentGap::PinnedServiceEnvironment { observed: Some(_) } => {
+                "service-environment-drift"
+            }
+            EnvironmentGap::PinnedServiceEnvironment { observed: None } => {
+                "unread-service-environment"
+            }
         }
     }
 
@@ -1093,10 +1106,50 @@ impl UnreachableProductEnvironment {
                 ));
                 sentence
             }
+            EnvironmentGap::PinnedServiceEnvironment { observed } => match observed {
+                Some(unit) => {
+                    let differences = self
+                        .declared
+                        .iter()
+                        .filter_map(|(name, expected)| {
+                            let actual = unit.env.get(name);
+                            (actual != Some(expected)).then(|| {
+                                format!(
+                                    "{name}: expected {expected}, observed {}",
+                                    actual.map(String::as_str).unwrap_or("<absent>")
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    format!(
+                        "{} pins {} in the service record for {}, but its native unit {} \
+                         differs: {}. Reconcile that service with `stado service ensure {} \
+                         --host {}`",
+                        self.host,
+                        self.declared_pairs(),
+                        self.unit,
+                        self.path,
+                        differences,
+                        self.unit,
+                        self.host
+                    )
+                }
+                None => format!(
+                    "{} pins {} in the service record for {}, so a delivery path exists, \
+                     but the native unit {} could not be read here. Its environment is \
+                     unverified; run `stado registry doctor` on {}",
+                    self.host,
+                    self.declared_pairs(),
+                    self.unit,
+                    self.path,
+                    self.host
+                ),
+            },
             EnvironmentGap::HostNamedByNoTarget { named_hosts } => {
                 let mut sentence = format!(
-                    "{} declares managed_versions.{} and runs {}, but no release_control \
-                     product names {} in its targets map",
+                    "{} declares managed_versions.{} and runs {}, but this product's \
+                     release_control target map does not name {}",
                     self.host, self.product, self.unit, self.host,
                 );
                 if named_hosts.is_empty() {
@@ -1149,6 +1202,14 @@ impl UnreachableProductEnvironment {
             EnvironmentGap::HostNamedByNoTarget { named_hosts } => json!({
                 "kind": "host-named-by-no-target",
                 "named_hosts": named_hosts,
+            }),
+            EnvironmentGap::PinnedServiceEnvironment { observed } => json!({
+                "kind": "pinned-service-environment",
+                "observed": observed.as_ref().map(|unit| {
+                    self.declared.iter().map(|(name, _)| {
+                        (name.clone(), json!(unit.env.get(name)))
+                    }).collect::<Map<String, Value>>()
+                }),
             }),
         };
         json!({
@@ -1226,14 +1287,6 @@ pub fn unreachable_product_environments(
     let Some(control) = control else {
         return Vec::new();
     };
-    // Whether ANY product names this host. This is the fleet-wide half and it
-    // is answerable from the document alone: it needs no host to be awake,
-    // which is the point, because the host being absent from every target map
-    // is precisely what stops it from ever being asked.
-    let named_anywhere = control
-        .products
-        .values()
-        .any(|policy| policy.targets.contains_key(&target.name));
     let readable_here = local_units == Some(target.name.as_str());
     let services = declared_services(target);
     let mut rows: Vec<UnreachableProductEnvironment> = Vec::new();
@@ -1253,15 +1306,12 @@ pub fn unreachable_product_environments(
         else {
             continue;
         };
-        // `{home}` as the release agent would expand it, and left as the
-        // template when there is nothing to expand it from: a host absent
-        // from every `targets` map declares no home, and substituting a
-        // guess here would print a path no declaration names.
+        // Use the same home expansion as the delivery path that owns the values.
         let home = policy
             .targets
             .get(&target.name)
             .map(|policy_target| policy_target.home.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| crate::deploy::service_catalog::home_for(target));
         let declared: Vec<(String, String)> = policy
             .environment
             .iter()
@@ -1282,19 +1332,27 @@ pub fn unreachable_product_environments(
             path: service.path.clone(),
             gap,
         };
-        let pinned_locally = readable_here
-            && local_unit_file(&service.path, &service.kind).is_some_and(|unit| {
-                let home = crate::deploy::service_catalog::home_for(target);
-                policy.environment.iter().all(|(name, value)| {
-                    let expected = value.replace("{home}", &home);
-                    service.env.get(name) == Some(&expected)
-                        && unit.env.get(name) == Some(&expected)
-                })
-            });
-        if !named_anywhere && !pinned_locally {
-            let mut named_hosts: Vec<String> = policy.targets.keys().cloned().collect();
-            named_hosts.sort();
-            rows.push(row(EnvironmentGap::HostNamedByNoTarget { named_hosts }));
+        if !policy.targets.contains_key(&target.name) {
+            let pinned_in_service = declared
+                .iter()
+                .all(|(name, value)| service.env.get(name) == Some(value));
+            if pinned_in_service {
+                let observed = readable_here
+                    .then(|| local_unit_file(&service.path, &service.kind))
+                    .flatten();
+                let agrees = observed.as_ref().is_some_and(|unit| {
+                    declared
+                        .iter()
+                        .all(|(name, value)| unit.env.get(name) == Some(value))
+                });
+                if !agrees {
+                    rows.push(row(EnvironmentGap::PinnedServiceEnvironment { observed }));
+                }
+            } else {
+                let mut named_hosts: Vec<String> = policy.targets.keys().cloned().collect();
+                named_hosts.sort();
+                rows.push(row(EnvironmentGap::HostNamedByNoTarget { named_hosts }));
+            }
         }
         // An adopted stub: the record names a path and declares nothing about
         // what runs there. Reported independently of the target question,
@@ -3037,10 +3095,11 @@ fi
 ///   `/Library/LaunchDaemons` on an ssh login with no Aqua session, which is
 ///   the case `deploy` fails on with `Could not switch to audit session ...
 ///   Operation not permitted`, having installed nothing.
-/// - It leaves a matching loaded job alone. A changed environment requires
-///   reloading launchd's cached definition, so that path preserves the prior
-///   unit and restores it if activation fails. A changed program remains a
-///   conflict rather than silently replacing the running service.
+/// - It compares the plist, launchd's retained Program and argument vector,
+///   and the running executable. A differing retained definition is reloaded
+///   only after executable and rendered-unit preflight, with a genuinely
+///   distinct prior unit restored if activation fails and launchd's readback
+///   verified on success.
 ///
 /// There is deliberately no fallback to `launchctl submit` or to a bare
 /// background process. Those two are how a host comes to run a program no
@@ -3055,6 +3114,68 @@ argv=@ARGV@
 # with a live pid, and still failed with `postcondition unobserved`, because the
 # probe that would have confirmed the success had been unhooked by the cleanup.
 staged=''
+stado_loaded_identity() {
+  loaded_program=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*program[[:space:]]*$/ { print $2; exit }')
+  loaded_arguments_rc=0
+  loaded_argv=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '
+    /^[[:space:]]*arguments[[:space:]]*=[[:space:]]*\\{/ { seen=1; collecting=1; argv=\"\"; next }
+    collecting && /^[[:space:]]*\\}/ { complete=1; sub(/^ /, \"\", argv); print argv; exit }
+    collecting { line=$0; sub(/^[[:space:]]+/, \"\", line); sub(/[[:space:]]+$/, \"\", line); if (line != \"\") argv = argv \" \" line }
+    END { if (!seen) exit 3; if (!complete) exit 4 }') || loaded_arguments_rc=$?
+  loaded_program=$(printf '%s' \"$loaded_program\" | /usr/bin/sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  loaded_arguments_valid=yes
+  case \"$loaded_arguments_rc\" in
+    0) loaded_argv=$(printf '%s' \"$loaded_argv\" | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//') ;;
+    3) loaded_argv=\"$loaded_program\" ;;
+    *) loaded_arguments_valid=no; loaded_argv='' ;;
+  esac
+}
+# Whether the process launchd or systemd reports under this unit executes the
+# declared program. Sets `running` and `serves`.
+#
+# `comm` is the image the kernel runs, and for a program that is a launcher it
+# is the launcher's exec target: `bin/start-web` execs node, so every web unit
+# reports `node` and equality with the program fails for all of them. On
+# 2026-09-05 that refused the reload of two running sites with `pid 6678
+# executes [node]; expected [.../current/darwin-arm/bin/start-web]` and
+# restarted every healthy web unit on each ensure pass, because the idle check
+# read the same `no`. A launcher's process still runs the product: its image,
+# an argument, or its working directory lies under the product root that the
+# `current` link belongs to. That is the evidence accepted here, and it is one
+# rule for the idle check and the post-reload verification, so one process
+# cannot be `already_correct` before a reload and a verification failure after
+# it. A program outside a `current` tree keeps the exact comparison: the
+# control-plane job that went on executing the shared global binary its plist
+# no longer named is the case that comparison exists for.
+stado_process_serves() {
+  running=''
+  serves=no
+  [ -n \"$1\" ] || return 0
+  running=$(/bin/ps -p \"$1\" -o comm= 2>/dev/null)
+  case \"$running\" in
+    \"$program\") serves=yes; return 0 ;;
+  esac
+  case \"$program\" in
+    */current/*) ;;
+    *) return 0 ;;
+  esac
+  product_root=\"${program%%/current/*}/\"
+  case \"$running\" in
+    \"$product_root\"*) serves=yes; return 0 ;;
+  esac
+  command=$(/bin/ps -p \"$1\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+  case \" $command\" in
+    *\" $product_root\"*|*\"=$product_root\"*) serves=yes; return 0 ;;
+  esac
+  if [ \"$os\" = Darwin ]; then
+    cwd=$(/usr/sbin/lsof -a -p \"$1\" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)
+  else
+    cwd=$(/usr/bin/readlink \"/proc/$1/cwd\" 2>/dev/null)
+  fi
+  case \"$cwd/\" in
+    \"$product_root\"*) serves=yes ;;
+  esac
+}
 bail() {
   if [ -n \"$staged\" ]; then /bin/rm -f \"$staged\" \"$staged.rendered\"; fi
   say 'ensure_failed' \"$1\"
@@ -3089,6 +3210,7 @@ if [ \"$os\" = \"Darwin\" ]; then
   stado_launchd_state
   had_unit=\"$pc_loaded\"
   pid=\"$pc_pid\"
+  stado_loaded_identity
 else
   if [ -f \"$unit_path\" ]; then
     had_unit=yes
@@ -3101,25 +3223,12 @@ declared_argv=$(printf '%s' \"$declared_argv\" | /usr/bin/tr -s ' ' | /usr/bin/s
 # The program the live process is executing, not the one the unit names: a
 # unit pointing at a `current` link and a process that outlived the relink
 # have the same declaration and different code.
-running=''
-if [ -n \"$pid\" ]; then running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null); fi
-serves=no
-case \"$running\" in
-  \"$program\") serves=yes ;;
-esac
-if [ \"$serves\" = no ]; then
-  case \"$program\" in
-    */current/*)
-      case \"$running\" in
-        \"${program%%/current/*}/\"*) serves=yes ;;
-      esac
-      ;;
-  esac
-fi
-# Compare the whole unit, including its environment, on both init systems.
-# A kickstart reuses launchd's cached definition; only bootstrap reads new env.
+stado_process_serves \"$pid\"
+# Compare the whole desired unit, including its environment, on both init
+# systems. A loaded launchd definition can outlive a removed plist, but the
+# desired declaration is still complete enough to render and safely reload it.
 rendered=''
-if [ -f \"$unit_path\" ]; then
+if [ -f \"$unit_path\" ] || { [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ]; }; then
   staged=\"$HOME/.stado/$unit.ensure.$$\"
   if [ \"$os\" = Linux ]; then
     /bin/cat > \"$staged\" <<'@HEREDOC@'
@@ -3138,6 +3247,11 @@ if [ -f \"$unit_path\" ]; then
   account=$(/usr/bin/id -un)
   /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
   rendered=\"$staged.rendered\"
+  if [ \"$os\" = Darwin ]; then
+    rc=0
+    detail=$(/usr/bin/plutil -lint \"$rendered\" 2>&1) || rc=$?
+    if [ \"$rc\" -ne 0 ]; then bail \"plutil preflight exited $rc: ${detail:-no detail}\"; fi
+  fi
 fi
 stado_install_unit() {
   if [ \"$os\" = Darwin ] && [ \"$domain\" = system ]; then
@@ -3153,20 +3267,53 @@ stado_install_unit() {
   fi
 }
 stado_activate_definition() {
+  activation_failure=''
   if [ \"$os\" = Darwin ]; then
     stado_launchd_state
     if [ \"$pc_loaded\" = yes ]; then
-      $launch bootout \"$domain/$unit\" || return 1
+      activation_detail=$($launch bootout \"$domain/$unit\" 2>&1)
+      activation_rc=$?
+      if [ \"$activation_rc\" -ne 0 ]; then
+        activation_failure=\"launchctl bootout exited $activation_rc: ${activation_detail:-no detail}\"
+        return 1
+      fi
       attempts=0
       while $launch print \"$domain/$unit\" >/dev/null 2>&1; do
         attempts=$((attempts + 1))
-        [ \"$attempts\" -lt 150 ] || return 1
+        if [ \"$attempts\" -ge 150 ]; then
+          activation_failure=\"launchctl bootout exited 0 but $domain/$unit remained loaded\"
+          return 1
+        fi
         /bin/sleep 0.1
       done
     fi
-    $launch bootstrap \"$domain\" \"$unit_path\" || return 1
+    # A disabled service is what `stado service stop` and the release agent's
+    # `stop_legacy` leave behind, and `bootstrap` refuses it with `Bootstrap
+    # failed: 5: Input/output error` - the create path below already enables
+    # before it bootstraps, and this path did not. On 2026-09-06 that refused
+    # the one command that could give charless-mac-mini its Skarbiec unit back
+    # after the release path abandoned the stable bind, and then failed the
+    # rollback with the same error, thirteen hours into an outage.
+    $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+    activation_detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
+    activation_rc=$?
+    if [ \"$activation_rc\" -ne 0 ]; then
+      activation_failure=\"launchctl bootstrap exited $activation_rc: ${activation_detail:-no detail}\"
+      return 1
+    fi
   else
-    stado_systemctl daemon-reload && stado_systemctl restart \"$unit\" || return 1
+    activation_detail=$(stado_systemctl daemon-reload 2>&1)
+    activation_rc=$?
+    if [ \"$activation_rc\" -ne 0 ]; then
+      activation_failure=\"systemctl daemon-reload exited $activation_rc: ${activation_detail:-no detail}\"
+      return 1
+    fi
+    activation_detail=$(stado_systemctl restart \"$unit\" 2>&1)
+    activation_rc=$?
+    if [ \"$activation_rc\" -ne 0 ]; then
+      activation_failure=\"systemctl restart exited $activation_rc: ${activation_detail:-no detail}\"
+      return 1
+    fi
   fi
   attempts=0
   while [ \"$attempts\" -lt 150 ]; do
@@ -3182,28 +3329,93 @@ stado_activate_definition() {
     attempts=$((attempts + 1))
     /bin/sleep 0.1
   done
+  activation_failure=\"activation exited 0 but $unit did not acquire a live pid\"
   return 1
 }
-if [ \"$declared_argv\" = \"$argv\" ] && [ -n \"$rendered\" ] \
-  && ! /bin/cmp -s \"$rendered\" \"$unit_path\"; then
-  previous=\"$staged.previous\"
-  /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
-  /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
-  if ! stado_install_unit \"$rendered\"; then
-    stado_install_unit \"$previous\" || bail \"unit write failed; rollback failed; prior unit is $previous\"
-    /bin/rm -f \"$previous\"
-    bail 'unit write failed; prior unit restored'
+loaded_drift=no
+if [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ]; then
+  if [ -z \"$loaded_program\" ] || [ \"$loaded_arguments_valid\" != yes ]; then
+    /bin/rm -f \"$staged\" \"$rendered\"
+    say 'loaded_definition_unknown' \"$domain/$unit launchctl readback did not expose a valid Program and complete arguments definition\"
+    exit 0
+  fi
+  if [ \"$loaded_program\" != \"$program\" ] || [ \"$loaded_argv\" != \"$argv\" ]; then
+    loaded_drift=yes
+  fi
+fi
+unit_drift=no
+if [ -n \"$rendered\" ] && { [ ! -f \"$unit_path\" ] || ! /bin/cmp -s \"$rendered\" \"$unit_path\"; }; then
+  unit_drift=yes
+fi
+reload_needed=no
+reload_action=converged
+if [ \"$os\" = Darwin ] && [ \"$had_unit\" = yes ] \
+  && { [ \"$loaded_drift\" = yes ] || [ \"$unit_drift\" = yes ]; }; then
+  reload_needed=yes
+  if [ \"$loaded_drift\" = yes ]; then reload_action=reloaded; fi
+elif [ \"$declared_argv\" = \"$argv\" ] && [ \"$unit_drift\" = yes ]; then
+  reload_needed=yes
+fi
+if [ \"$reload_needed\" = yes ]; then
+  [ -n \"$rendered\" ] || bail 'cannot reload a definition without rendered configuration'
+  previous=''
+  rollback_unavailable='no prior unit file existed'
+  if [ -f \"$unit_path\" ]; then
+    if [ \"$unit_drift\" = no ]; then
+      rollback_unavailable='existing unit already matched the desired definition; no distinct prior definition exists'
+    else
+      previous=\"$staged.previous\"
+      /bin/cp \"$unit_path\" \"$previous\" || bail 'cannot preserve the prior unit'
+      /bin/chmod u=rw,go= \"$previous\" || bail 'cannot protect the prior unit'
+      rollback_unavailable=''
+    fi
+  fi
+  if [ \"$unit_drift\" = yes ] && ! stado_install_unit \"$rendered\"; then
+    if [ -n \"$previous\" ]; then
+      stado_install_unit \"$previous\" || bail \"unit write failed; rollback failed; prior unit is $previous\"
+      /bin/rm -f \"$previous\"
+      bail 'unit write failed; prior unit restored'
+    fi
+    bail \"unit write failed; rollback not attempted: $rollback_unavailable\"
   fi
   if ! stado_activate_definition; then
-    if stado_install_unit \"$previous\" && stado_activate_definition; then
-      /bin/rm -f \"$previous\"
-      bail 'new unit did not start; prior unit restored and running'
+    replacement_failure=\"$activation_failure\"
+    if [ -n \"$previous\" ]; then
+      if stado_install_unit \"$previous\" && stado_activate_definition; then
+        /bin/rm -f \"$previous\"
+        bail \"replacement activation failed ($replacement_failure); prior unit restored and running\"
+      fi
+      bail \"replacement activation failed ($replacement_failure); rollback failed; prior unit is $previous\"
     fi
-    bail \"new unit did not start; rollback failed; prior unit is $previous\"
+    bail \"replacement activation failed ($replacement_failure); rollback not attempted: $rollback_unavailable\"
+  fi
+  verification_failure=''
+  if [ \"$os\" = Darwin ]; then
+    stado_loaded_identity
+    if [ -z \"$loaded_program\" ] || [ \"$loaded_arguments_valid\" != yes ]; then
+      verification_failure='launchctl readback after reload did not expose a valid Program and complete arguments definition'
+    elif [ \"$loaded_program\" != \"$program\" ] || [ \"$loaded_argv\" != \"$argv\" ]; then
+      verification_failure=\"launchctl retained program [$loaded_program] argv [$loaded_argv]; expected program [$program] argv [$argv]\"
+    else
+      stado_process_serves \"$pid\"
+      if [ \"$serves\" != yes ]; then
+        verification_failure=\"$domain/$unit pid $pid executes [$running]; expected [$program]\"
+      fi
+    fi
+  fi
+  if [ -n \"$verification_failure\" ]; then
+    if [ -n \"$previous\" ]; then
+      if stado_install_unit \"$previous\" && stado_activate_definition; then
+        /bin/rm -f \"$previous\"
+        bail \"replacement verification failed ($verification_failure); prior unit restored and running\"
+      fi
+      bail \"replacement verification failed ($verification_failure); rollback failed; prior unit is $previous\"
+    fi
+    bail \"replacement verification failed ($verification_failure); rollback not attempted: $rollback_unavailable\"
   fi
   /bin/rm -f \"$previous\" \"$staged\" \"$rendered\"
   printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
-  say 'converged' \"$unit_path reloaded and running\"
+  say \"$reload_action\" \"$unit_path reloaded and verified\"
   exit 0
 fi
 if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
@@ -3217,11 +3429,7 @@ if [ \"$declared_argv\" = \"$argv\" ]; then
   rendered=''
 fi
 if [ \"$declared_argv\" != \"$argv\" ]; then
-  if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
-    /bin/rm -f \"$staged\" \"$rendered\"
-    say 'conflict' \"$domain/$unit is loaded running [$declared_argv] and the declaration says [$argv]; launchd holds its own copy of the argv and an in-place kick re-execs that copy, so neither restart nor ensure can carry this change: run 'stado service stop' then 'stado service ensure' to unload the job and bootstrap it from the file\"
-    exit 0
-  fi
+
   if [ \"$os\" = \"Darwin\" ]; then
     /bin/rm -f \"$staged\" \"$rendered\"
     /bin/mkdir -p \"$HOME/.stado/logs\" >/dev/null 2>&1 || bail 'cannot create the log directory'
@@ -5168,13 +5376,16 @@ pub const ACTION_CREATED: &str = "created";
 pub const ACTION_RESTARTED: &str = "restarted";
 /// The unit was there, running the declared program, and nothing was touched.
 pub const ACTION_ALREADY_CORRECT: &str = "already_correct";
-/// The unit was there, running the declared program with matching argv, but the
-/// rendered unit file had drifted; the unit was rewritten and kicked in place to
-/// converge. See the incident in ensure_service: changing base_unit_environment
-/// to render HOME or STADO_CONFIG leaves installed units with stale environments
-/// until they are deleted by hand. This action reports convergence without the
-/// window that bootout then bootstrap leaves.
+/// The unit was there with the declared Program and argv, but its rendered file
+/// had drifted; this pass installed and activated the desired definition through
+/// the guarded init-system lifecycle. See the incident in [`ensure_service`]:
+/// changing `base_unit_environment` to render `HOME` or `STADO_CONFIG` leaves
+/// installed units with stale environments until this definition is reloaded.
+/// On launchd that requires `bootout` then `bootstrap`, not an in-place kick.
 pub const ACTION_CONVERGED: &str = "converged";
+/// launchd held a stale program or argument vector and this pass reloaded the
+/// already-preflighted definition, then verified launchd's own readback.
+pub const ACTION_RELOADED: &str = "reloaded";
 
 /// launchd's system domain: `/Library/LaunchDaemons`, reached with sudo, and
 /// the only domain that exists on an ssh login with no Aqua session.
@@ -5185,9 +5396,9 @@ pub const DOMAIN_USER: &str = "user";
 /// What one `ensure` pass found and did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnsureOutcome {
-    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`], [`ACTION_ALREADY_CORRECT`] or
-    /// [`ACTION_CONVERGED`]; any other word is a failure the remote program
-    /// named.
+    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`], [`ACTION_ALREADY_CORRECT`],
+    /// [`ACTION_CONVERGED`] or [`ACTION_RELOADED`]; any other word is a failure
+    /// the remote program named.
     pub action: String,
     /// The domain the unit ended up in, as launchd spells it.
     pub domain: String,
@@ -5201,13 +5412,13 @@ pub struct EnsureOutcome {
 }
 
 impl EnsureOutcome {
-    /// True when the pass reached one of the four intended actions AND the
-    /// host was observed with the unit loaded and running afterwards.
+    /// True when the pass reached one of the intended actions AND the host was
+    /// observed with the unit loaded and running afterwards.
     ///
     /// [`ACTION_CONVERGED`] belongs here. It was added as a success action —
-    /// a drifted unit file rewritten and kicked in place, deliberately
-    /// avoiding the window `bootout` then `bootstrap` leaves — but this set
-    /// was never widened to admit it, so every converged pass was reported as
+    /// a drifted unit file rewritten and activated through the guarded
+    /// init-system lifecycle — but this set was never widened to admit it, so
+    /// every converged pass was reported as
     /// a failure naming the unit path it had just settled on. That is what
     /// stopped the stado 0.13.11 release submission: its "Ensure the declared
     /// object service" step converged
@@ -5217,7 +5428,11 @@ impl EnsureOutcome {
     pub fn succeeded(&self) -> bool {
         matches!(
             self.action.as_str(),
-            ACTION_CREATED | ACTION_RESTARTED | ACTION_ALREADY_CORRECT | ACTION_CONVERGED
+            ACTION_CREATED
+                | ACTION_RESTARTED
+                | ACTION_ALREADY_CORRECT
+                | ACTION_CONVERGED
+                | ACTION_RELOADED
         ) && self.report.postcondition_held()
     }
 
@@ -5260,8 +5475,10 @@ pub fn ensure_unit_path(plan: &DeployPlan) -> String {
     }
 }
 
-/// `service ensure` on one host: install the unit only where the host is not
-/// already running it, and never unload anything.
+/// `service ensure` on one host: leave a matching loaded definition untouched,
+/// kick a matching definition when needed, and perform one preflighted
+/// definition reload when the on-disk unit or launchd's retained Program or
+/// argv differs.
 pub async fn ensure_service(
     target: &ComputeTarget,
     plan: &DeployPlan,
@@ -5716,6 +5933,45 @@ impl StaleUnitImage {
     }
 }
 
+/// Resolve Apple's `/bin/sh` dispatcher without duplicating its shell-selection
+/// policy. Privileged mode ignores user startup files; the readiness byte keeps
+/// the selected shell alive while the ordinary kernel image reader observes it.
+#[cfg(target_os = "macos")]
+fn selected_macos_shell() -> Result<PathBuf, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("/bin/sh")
+        .args(["-p", "-c", "printf R; read -r stado_image_continue"])
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not resolve macOS /bin/sh: {error}"))?;
+    let result = (|| {
+        let mut ready = [0_u8; 1];
+        child
+            .stdout
+            .as_mut()
+            .ok_or_else(|| "macOS /bin/sh has no readiness pipe".to_string())?
+            .read_exact(&mut ready)
+            .map_err(|error| format!("macOS /bin/sh did not become observable: {error}"))?;
+        if ready != *b"R" {
+            return Err("macOS /bin/sh returned an unexpected readiness byte".to_string());
+        }
+        running_images(&[child.id()])?
+            .remove(&child.id())
+            .map(|image| PathBuf::from(image.path))
+            .ok_or_else(|| "the shell selected by macOS /bin/sh has no readable image".to_string())
+    })();
+    // EOF releases the shell's read, including every failed observation.
+    drop(child.stdin.take());
+    child
+        .wait()
+        .map_err(|error| format!("could not reap the macOS shell image reader: {error}"))?;
+    result
+}
+
 /// The identity of the file at `path` right now, and when it was last written.
 ///
 /// Symlinks are followed, which is the point and not a convenience: a declared
@@ -5726,6 +5982,16 @@ impl StaleUnitImage {
 pub fn installed_image(path: &Path) -> Result<(ImageIdentity, i64), String> {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    let (path, metadata) = if std::fs::metadata("/bin/sh")
+        .is_ok_and(|shell| shell.dev() == metadata.dev() && shell.ino() == metadata.ino())
+    {
+        let selected = selected_macos_shell()?;
+        let selected_metadata = std::fs::metadata(&selected).map_err(|error| error.to_string())?;
+        (std::borrow::Cow::Owned(selected), selected_metadata)
+    } else {
+        (std::borrow::Cow::Borrowed(path), metadata)
+    };
     Ok((
         ImageIdentity {
             path: path.to_string_lossy().into_owned(),
@@ -6031,15 +6297,14 @@ impl UnitImageObservation {
     }
 }
 
-/// One row from the unit-image scan plus the exact argv used to join it to a
-/// live process.
+/// One row from the unit-image scan plus the native owner's observed argv.
 ///
 /// The public observation predates the release revisit pass and remains the
 /// stable value consumed by doctor and the manual refresh command. The
 /// release pass additionally needs the subcommand to exclude units that
 /// recycle themselves. Keeping it beside the observation internally preserves
-/// that evidence from the same plist/process pass without widening the public
-/// struct or reading either source again.
+/// that evidence from the same native process observation without widening the
+/// public struct or reading either source again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnitImageScan {
     pub observation: UnitImageObservation,
@@ -6060,13 +6325,11 @@ pub(crate) struct UnitImageScan {
 /// a remote host silently omitted would be that same defect wearing this
 /// check's name.
 ///
-/// A unit with no matching process yields nothing. That is not a silence but
-/// the honest answer — a job that is loaded and not running holds no image,
-/// the reasoning `recycle_launchd` already states — and the process table is
-/// joined on the WHOLE argument vector rather than on `argv[0]`, because every
-/// stado unit on a host runs the same binary and the subcommand is the entire
-/// difference between them.
-pub(crate) fn observe_unit_image_scan(
+/// The native manager supplies each label's live PID. The unit file supplies
+/// the installed program to compare with that PID's kernel image; its argv may
+/// already differ from launchd's cached definition. An unloaded or stopped
+/// unit holds no image, while ambiguous ownership remains explicitly unread.
+pub(crate) async fn observe_unit_image_scan(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
@@ -6084,8 +6347,7 @@ pub(crate) fn observe_unit_image_scan(
             installed: None,
             state,
         },
-        // No argv: these rows report a host, or a unit file that could not be
-        // read or declares no program, so there is nothing that was matched.
+        // No argv: the native owner or declared program could not be read.
         arguments: Vec::new(),
     };
     let whole_host = |reason: String| {
@@ -6118,18 +6380,19 @@ pub(crate) fn observe_unit_image_scan(
                 .to_string(),
         )];
     };
-    let processes = match process_table() {
-        Ok(processes) => processes,
-        Err(reason) => return vec![whole_host(reason)],
+    let native_units = match loaded_units(target, &super::production_runner()).await {
+        Ok(units) => units,
+        Err(error) => return vec![whole_host(error.to_string())],
     };
+    let native_by_label = native_units
+        .iter()
+        .map(|unit| (unit.label.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
 
     // One pass over the unit files, then one image read for every pid they
     // name.
     let mut rows: Vec<UnitImageScan> = Vec::new();
-    // One unit file joined to one live pid, with the argv the join was made
-    // on. A named struct rather than a tuple because the argv makes six
-    // fields, and a six-tuple threaded through two loops is how the wrong
-    // element gets read.
+    // Keep the native owner's PID and argv beside the declared executable.
     struct Matched {
         label: String,
         unit_path: String,
@@ -6164,24 +6427,41 @@ pub(crate) fn observe_unit_image_scan(
             ));
             continue;
         }
-        // Matched on the WHOLE argument vector, and the vector that matched
-        // travels with the row: every stado unit on a host runs the same
-        // binary, so the subcommand is the entire difference between them,
-        // and a caller that re-read the plist to recover it would be reading
-        // a different moment.
-        let declared = unit.arguments.join(" ");
-        for (pid, age, argv) in &processes {
-            if argv == &declared {
-                pending.push(Matched {
-                    label: label.clone(),
-                    unit_path: unit_path.clone(),
-                    program: unit.program.clone(),
-                    arguments: unit.arguments.clone(),
-                    pid: *pid,
-                    age: *age,
-                });
-            }
+        let Some(native) = native_by_label.get(label.as_str()) else {
+            continue;
+        };
+        if native.loaded_domains.len() > 1 {
+            rows.push(unread(
+                format!("{label}'s native owner"),
+                format!(
+                    "launchd reports {} loaded domains; refusing to choose a process",
+                    native.loaded_domains.len()
+                ),
+            ));
+            continue;
         }
+        let Ok(pid) = native.pid.parse::<u32>() else {
+            continue;
+        };
+        if native.loaded_domains.is_empty() || native.running_program.is_empty() {
+            rows.push(unread(
+                format!("{label}'s native owner"),
+                "a live PID has no readable owner domain or argument vector".to_string(),
+            ));
+            continue;
+        }
+        pending.push(Matched {
+            label,
+            unit_path,
+            program: unit.program,
+            arguments: native
+                .running_program
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
+            pid,
+            age: native.started_epoch.map(|started| now_epoch - started),
+        });
     }
 
     let pids: Vec<u32> = pending.iter().map(|matched| matched.pid).collect();
@@ -6260,15 +6540,16 @@ pub(crate) fn observe_unit_image_scan(
 
 /// The stable public projection of [`observe_unit_image_scan`].
 ///
-/// Both callers receive rows produced by the same plist/process/image pass;
-/// only the internal release revisit keeps the matched argv it additionally
+/// Both callers receive rows produced by the same native-owner/image pass;
+/// only the internal release revisit keeps the observed argv it additionally
 /// needs.
-pub fn observe_unit_images(
+pub async fn observe_unit_images(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
 ) -> Vec<UnitImageObservation> {
     observe_unit_image_scan(target, local_units, now_epoch)
+        .await
         .into_iter()
         .map(|scan| scan.observation)
         .collect()
@@ -6279,12 +6560,13 @@ pub fn observe_unit_images(
 ///
 /// The `registry doctor` view of [`observe_unit_images`]: the same pass, with
 /// the units that are fine dropped.
-pub fn units_running_replaced_images(
+pub async fn units_running_replaced_images(
     target: &ComputeTarget,
     local_units: Option<&str>,
     now_epoch: i64,
 ) -> Vec<StaleUnitImage> {
     observe_unit_images(target, local_units, now_epoch)
+        .await
         .iter()
         .filter_map(UnitImageObservation::finding)
         .collect()
@@ -7671,8 +7953,8 @@ if [ "$os" = Darwin ]; then
       exit 0
     }
     case "$disabled" in
-      true) state=disabled ;;
-      false) state=enabled ;;
+      true|disabled) state=disabled ;;
+      false|enabled) state=enabled ;;
       *) report refused "$candidate returned invalid disabled state $disabled"; exit 0 ;;
     esac
     if { [ "$action" = enable ] && [ "$state" != enabled ]; } ||

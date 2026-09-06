@@ -15,12 +15,14 @@ struct ConsoleView: View {
     /// card over the shell.
     let firstRunNotice: String?
 
-    /// Stores that read or change hosts through the product CLI rather than the
-    /// published snapshot, by running the product CLI. Window-scoped: unlike
-    /// enrollment, nothing here spans a walk to another machine, and a
-    /// claiming gate read two hours ago is not worth keeping.
+    /// Window-scoped stores for host and service operations that are not part
+    /// of the published snapshot. Most retain their established CLI paths;
+    /// service convergence uses the same configured endpoint and authorization
+    /// source as host inventory.
     @StateObject private var gatesStore = HostGatesStore()
+    @StateObject private var inventoryStore = HostInventoryStore()
     @StateObject private var retireFileStore = HostRetireFileStore()
+    @StateObject private var vaultBearerStore = HostVaultBearerStore()
     @StateObject private var linkStore = HostLinkStore()
     @StateObject private var connectionPathStore = HostConnectionPathStore()
     @StateObject private var serviceStore = ServiceTruthStore()
@@ -359,7 +361,9 @@ struct ConsoleView: View {
                     store: store,
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
+                    inventoryStore: inventoryStore,
                     retireFileStore: retireFileStore,
+                    vaultBearerStore: vaultBearerStore,
                     linkStore: linkStore,
                     connectionPathStore: connectionPathStore,
                     enrollmentStore: enrollmentStore,
@@ -467,7 +471,6 @@ struct ConsoleView: View {
 
     private func configureAuthorization() {
         store.configureAuthorization(token: auth.session?.accessToken)
-        cleanupStore.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
         groupStore.configureAuthorization(token: auth.session?.accessToken)
@@ -482,6 +485,9 @@ struct ConsoleView: View {
             guard let selectedEndpoint = deployment.endpoint else {
                 store.clearDashboardURL()
                 cleanupStore.clearDashboardURL()
+                inventoryStore.configureEndpoint(nil)
+                serviceStore.configureEndpoint(nil)
+                fleetServiceStore.configureEndpoint(nil)
                 fleetStore.configureEndpoint(nil)
                 enrollmentStore.configureEndpoint(nil)
                 groupStore.configureEndpoint(nil)
@@ -495,6 +501,9 @@ struct ConsoleView: View {
         do {
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
+            inventoryStore.configureEndpoint(endpoint)
+            serviceStore.configureEndpoint(endpoint)
+            fleetServiceStore.configureEndpoint(endpoint)
             fleetStore.configureEndpoint(endpoint)
             enrollmentStore.configureEndpoint(endpoint)
             groupStore.configureEndpoint(endpoint)
@@ -502,6 +511,9 @@ struct ConsoleView: View {
         } catch {
             store.clearDashboardURL()
             cleanupStore.clearDashboardURL()
+            inventoryStore.configureEndpoint(nil)
+            serviceStore.configureEndpoint(nil)
+            fleetServiceStore.configureEndpoint(nil)
             fleetStore.configureEndpoint(nil)
             enrollmentStore.configureEndpoint(nil)
             groupStore.configureEndpoint(nil)

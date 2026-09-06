@@ -30,6 +30,19 @@
       }
     },
     {
+      "name": "stado-control-plane",
+      "summary": "The local control plane: queue coordination and placement for this host's fleet.",
+      "program": "$HOME/.stado/bin/stado",
+      "args": [
+        "coordinator"
+      ],
+      "unit": "com.wisent.compute.service.stado-local-control-plane",
+      "env": {
+        "HOME": "$HOME",
+        "STADO_CONFIG": "$HOME/.config/stado/config.json"
+      }
+    },
+    {
       "name": "stado",
       "summary": "The core object API for registry, queue and release state.",
       "program": "$HOME/.stado/bin/stado",

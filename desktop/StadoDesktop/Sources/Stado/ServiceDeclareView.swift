@@ -201,8 +201,10 @@ struct ServiceDeclareView: View {
     }
 
     /// `ensure --json` prints one record document; the fields this sheet
-    /// needs are none — success is the exit status plus a decodable payload,
-    /// and the screen behind re-reads the fleet either way.
+    /// needs are none. Success is the CLI exit status plus a decodable payload,
+    /// so every successful action (`already_correct`, `restarted`, `converged`,
+    /// `reloaded`, or `created`) is accepted without a second action allowlist.
+    /// The screen behind re-reads the fleet either way.
     private struct EnsureOutcome: Decodable, Sendable {}
 
     private func loadCatalog() async {

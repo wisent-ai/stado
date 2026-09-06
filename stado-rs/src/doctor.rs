@@ -553,6 +553,23 @@ fn object_auth_deadline() -> Duration {
     PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(mapped).unwrap_or_default()
 }
 
+/// The agent lists its own grant through the host's Skarbiec, which decrypts
+/// with GnuPG on one listener — the same one the gateway-auth sweep above is
+/// reading forty-eight mapped items through at that moment.
+///
+/// Bounding that at the flat allowance measured the queue rather than the
+/// broker: on 2026-09-05, with `agent.skarbiec.url` finally pointing at the
+/// endpoint the directory declares, five sequential reads of that grant took
+/// 1.6s, 2.1s, 2.9s, 4.7s and 14.4s, and the check reported `not measured:
+/// the probe did not answer within 8s` twice in a row about a broker that was
+/// answering every request with 200. So the allowance is one probe for the
+/// read and one for waiting behind the concurrent sweep. A broker that has
+/// genuinely stopped answering — the 60-second stalls the same host produced
+/// before `skarbiec recover-daemons` — still elapses, and still reports
+/// unmeasured rather than a verdict.
+fn agent_skarbiec_deadline() -> Duration {
+    PROBE_TIMEOUT * 2
+}
 /// Allowance for resolving alert channels. Each enabled channel reads its own
 /// destination and provider material out of the vault, through the same
 /// single-threaded listener the gateway sweep is using at the same moment —
@@ -606,6 +623,8 @@ pub async fn run(scope: RunScope) -> Report {
         release_check,
         integrity_check,
         template_check,
+        agent_skarbiec_check,
+        owner_vault_check,
         identity_check,
         registry_check,
         control_check,
@@ -672,6 +691,21 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
             check_agent_template().await
         },),
+        selected_within(
+            scope,
+            agent_skarbiec_deadline(),
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            AGENT_SKARBIEC_REMEDY,
+            async { check_agent_skarbiec().await },
+        ),
+        selected(
+            scope,
+            OWNER_VAULT_ID,
+            OWNER_VAULT_TITLE,
+            OWNER_VAULT_REMEDY,
+            async { check_owner_vault() },
+        ),
         selected(scope, IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
             check_vm_identity()
         },),
@@ -732,6 +766,8 @@ pub async fn run(scope: RunScope) -> Report {
         release_check,
         integrity_check,
         template_check,
+        agent_skarbiec_check,
+        owner_vault_check,
         identity_check,
         registry_check,
         control_check,
@@ -2245,6 +2281,192 @@ async fn check_agent_template() -> Check {
         }
     }
     findings.into_check(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY)
+}
+
+const AGENT_SKARBIEC_ID: &str = "agent-skarbiec";
+const AGENT_SKARBIEC_TITLE: &str = "The agent's own Skarbiec broker answers";
+const AGENT_SKARBIEC_REMEDY: &str =
+    "run `stado host reconcile-agent-skarbiec <target>`, which sets agent.skarbiec.url to the \
+     credential endpoint the service directory declares for that host; a queue agent whose \
+     broker is unreachable can claim no job that declares secret_env. A broker that answers \
+     slowly or stops answering mid-request is usually a wedged GnuPG daemon: run `skarbiec \
+     recover-daemons` on that host";
+
+/// Whether this host's queue agent can reach the broker it is configured to
+/// read workload secrets through.
+///
+/// Nothing reported this. On 2026-09-05 this laptop's `agent.skarbiec.url`
+/// was `http://127.0.0.1:19096` with nothing listening — three brokers were
+/// running, on 9877, 8799 and 8787, none of them that one — and the only
+/// symptom was a `preferences` release job dying after it had been claimed:
+/// `cannot resolve job … secret GITHUB_TOKEN: error sending request for url
+/// (http://127.0.0.1:19096/v1/items/read)`. A misconfiguration that only
+/// surfaces as another product's failed build is one an operator cannot find.
+///
+/// Metadata only: `list_items` returns ids, never values.
+async fn check_agent_skarbiec() -> Check {
+    let url = config::agent_skarbiec_url();
+    if url.trim().is_empty() {
+        return Check::pass(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            "agent.skarbiec.url is unset, so the agent reads workload secrets through the \
+             configured store client and has no separate broker to reach"
+                .to_string(),
+            AGENT_SKARBIEC_REMEDY,
+        );
+    }
+    let token_file = config::agent_skarbiec_token_file();
+    let consumer = config::agent_skarbiec_consumer();
+    let client = match crate::skarbiec::Client::direct(
+        url,
+        consumer,
+        token_file,
+        crate::skarbiec::GrantMode::for_grant_file(token_file),
+    ) {
+        Ok(client) => client,
+        Err(error) => {
+            return Check::fail(
+                AGENT_SKARBIEC_ID,
+                AGENT_SKARBIEC_TITLE,
+                format!("agent consumer {consumer} cannot be configured against {url}: {error}"),
+                AGENT_SKARBIEC_REMEDY,
+            )
+        }
+    };
+    match client.list_items().await {
+        Ok(items) => Check::pass(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            format!(
+                "agent consumer {consumer} reaches {url} and its grant exposes {} item(s)",
+                items.len()
+            ),
+            AGENT_SKARBIEC_REMEDY,
+        ),
+        Err(error) => Check::fail(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            format!(
+                "agent consumer {consumer} cannot read through {url}: {error}. This host can \
+                 claim no job that declares secret_env"
+            ),
+            AGENT_SKARBIEC_REMEDY,
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6b. The owner vault this machine writes through
+// ---------------------------------------------------------------------------
+
+const OWNER_VAULT_ID: &str = "credential-vault";
+const OWNER_VAULT_TITLE: &str = "One owner vault answers for this machine";
+const OWNER_VAULT_REMEDY: &str =
+    "run `stado credentials vault` to see every candidate with its owner and item count, then \
+     `stado config set secrets.skarbiec.vault_file <path>` to name the one this machine means; \
+     put the same path in `SKARBIEC_VAULT_FILE` where a bare `skarbiec` is run, so a write and \
+     an authoritative read cannot land in different files. Nothing is merged for you";
+
+/// Two vaults claiming one owner is not a curiosity, it is a write going
+/// somewhere no reader looks.
+///
+/// On 2026-09-05 six `skarbiec set-json` writes landed in
+/// `~/.local/share/skarbiec/skarbiec.vault.json` — real, `active` on the host,
+/// and invisible to `stado host reconcile-release-verifier`, which reads
+/// `~/.stado/skarbiec.vault.json`. The fleet's release publication boundary
+/// closed for every product and the cause took a day to name, because nothing
+/// reported the split: `stado host vaults` answered "8 vault(s)" and said
+/// nothing about which one answers.
+///
+/// So this check asks the resolution question and then one more: whether the
+/// answer is also what a bare `skarbiec` on this machine would open. A
+/// declaration fixes every Stado path, and Stado passes it to every `skarbiec`
+/// it invokes itself — but an operator's own `skarbiec set-json` still follows
+/// Skarbiec's discovery order, and where the two disagree the next write is
+/// invisible again.
+///
+/// Metadata only: owner identity, item counts, paths. No item name and no
+/// value is read.
+fn check_owner_vault() -> Check {
+    let candidates = match crate::credential_store::owner::candidates_present() {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            return Check::fail(
+                OWNER_VAULT_ID,
+                OWNER_VAULT_TITLE,
+                format!("this machine's vault candidates cannot be read: {error}"),
+                OWNER_VAULT_REMEDY,
+            )
+        }
+    };
+    let resolved = match crate::credential_store::owner::vault() {
+        Ok(path) => path,
+        Err(error) => {
+            return Check::fail(
+                OWNER_VAULT_ID,
+                OWNER_VAULT_TITLE,
+                error.to_string(),
+                OWNER_VAULT_REMEDY,
+            )
+        }
+    };
+    let resolved = resolved.display().to_string();
+    let rivals: Vec<String> = candidates
+        .iter()
+        .filter_map(|vault| {
+            let path = vault.get("path").and_then(Value::as_str)?;
+            (path != resolved).then(|| {
+                format!(
+                    "{path} ({} items)",
+                    vault
+                        .get("items")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default()
+                )
+            })
+        })
+        .collect();
+    if rivals.is_empty() {
+        return Check::pass(
+            OWNER_VAULT_ID,
+            OWNER_VAULT_TITLE,
+            format!("{resolved} is the only owner vault this machine holds"),
+            OWNER_VAULT_REMEDY,
+        );
+    }
+    // `candidates_present` lists this machine's vaults in Skarbiec's own
+    // discovery order, so its first entry is what `skarbiec set-json` opens
+    // with no `SKARBIEC_VAULT_FILE`. Read as a fact about the files, not asked
+    // of the binary: a check that shells out to learn where a write would go
+    // has already made the write's mistake when the binary is missing.
+    let cli_default = candidates
+        .first()
+        .and_then(|vault| vault.get("path").and_then(Value::as_str))
+        .map(str::to_string);
+    match cli_default {
+        Some(cli_default) if cli_default != resolved => Check::fail(
+            OWNER_VAULT_ID,
+            OWNER_VAULT_TITLE,
+            format!(
+                "Stado resolves {resolved}, and a bare `skarbiec` on this machine opens \
+                 {cli_default} instead, so any `skarbiec set-json` run without \
+                 SKARBIEC_VAULT_FILE writes an item Stado never reads. Other candidates: {}",
+                rivals.join(", ")
+            ),
+            OWNER_VAULT_REMEDY,
+        ),
+        _ => Check::pass(
+            OWNER_VAULT_ID,
+            OWNER_VAULT_TITLE,
+            format!(
+                "{resolved} answers for this machine and is what a bare `skarbiec` opens; \
+                 beside it: {}",
+                rivals.join(", ")
+            ),
+            OWNER_VAULT_REMEDY,
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -10,14 +10,19 @@
 //! GET /api/object/stat?uri=stado://... - product object metadata
 //! POST /api/object/compose - atomically publish verified object chunks
 //! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
+//! GET /api/host/inventory?target=... - authenticated fresh inventory of one declared host
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
 //! GET /api/machine/status?job_id=... - read canonical machine status
 //! POST /api/machine/cancel?job_id=... - durably cancel a machine job
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
+//! GET/POST /api/service/converge?target=...[&binary=...] - report or apply host convergence
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
-//! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
+//! POST /api/registry/import - additive canonical registry adoption
+//! POST /api/integration/enterprise/<action> - authenticated fleet projection
+//! POST /api/integration/oko/<action> - authenticated finite Oko selected-host dispatch
+//! POST /api/operator/run - bounded native Desktop operator actions
 //! GET /api/fleet/invite/key - invite-token-authenticated public channel key
 //! POST /api/fleet/join - invite-token-authenticated pending enrollment request
 //! GET /join.sh           - machine-side enrollment bootstrap script (public)
@@ -46,6 +51,8 @@
 
 mod fleet_join;
 mod integration;
+mod operator_auth;
+mod operator_console;
 mod registry_policy;
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -100,14 +107,13 @@ enum Boundary {
     RateLimitVerifier,
     RateLimitState,
     Integration,
-    /// The registry-policy and cleanup routes the desktop app calls.
+    /// The operator-owned registry and host-control routes the desktop app
+    /// calls.
     ///
-    /// Added on 2026-09-02, when all four of those routes answered 404 and
-    /// the Swift client that calls them had been written against them for
-    /// some time. Its verifier is ready even when nothing is declared: an
-    /// undeclared boundary refuses every request with `401`, which is what
-    /// "nobody has been granted this" means, and reporting it as unavailable
-    /// would send an operator looking for a broken vault.
+    /// Its verifier is ready even when nothing is declared: an undeclared
+    /// boundary refuses every request with `401`, which is what "nobody has
+    /// been granted this" means, and reporting it as unavailable would send an
+    /// operator looking for a broken vault.
     Registry,
 }
 
@@ -144,6 +150,8 @@ impl Boundary {
     /// - `Service` — `/api/service/status`, `/api/service/restart`.
     /// - `RateLimitVerifier` and `RateLimitState` — `/api/rate-limit/consume`.
     /// - `Integration` — the integration route group.
+    /// - `Registry` — the registry-policy, cleanup, host inventory, and
+    ///   full-host service convergence routes.
     ///
     /// A boundary that answers this question with "nothing" must not be
     /// reported: an operator reading `/healthz` has to be able to conclude
@@ -157,7 +165,8 @@ impl Boundary {
             Boundary::RateLimitVerifier | Boundary::RateLimitState => "/api/rate-limit/consume",
             Boundary::Integration => "the integration routes",
             Boundary::Registry => {
-                "/api/registry.json, /api/registry/policy, /api/cleanup.json, /api/cleanup/run"
+                "/api/registry.json, /api/registry/policy, /api/registry/import, \
+                 /api/cleanup.json, /api/cleanup/run, /api/host/inventory, /api/service/converge"
             }
         }
     }
@@ -507,6 +516,12 @@ fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> BoundaryPlan {
             BoundaryPlan::gated(&[Boundary::Machine])
         }
         "/api/service/restart" | "/api/service/status" => BoundaryPlan::gated(&[Boundary::Service]),
+        "/api/host/inventory"
+        | "/api/service/converge"
+        | "/api/registry.json"
+        | "/api/registry/policy"
+        | "/api/cleanup.json"
+        | "/api/cleanup/run" => BoundaryPlan::gated(&[Boundary::Registry]),
         path if path.starts_with("/api/integration/") => {
             BoundaryPlan::gated(&[Boundary::Integration])
         }
@@ -573,6 +588,7 @@ const REOPENING_PROBES: &[(&str, Option<(&str, &str)>)] = &[
     ("/api/machine/status", None),
     ("/api/service/status", None),
     ("/api/integration/anything", None),
+    ("/api/service/converge", None),
 ];
 
 /// Which boundaries no request can reopen.
@@ -1287,7 +1303,15 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -1307,6 +1331,15 @@ impl Dashboard {
         None
     }
 
+    fn storage_write_guard(&self) -> Result<Option<std::fs::File>, StorageError> {
+        match self.store.local_storage_path() {
+            Some(root) => {
+                crate::queue::LocalBackend::write_guard_for_root(std::path::Path::new(root))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
         // The immutable release channel is the recovery root for every other
@@ -1316,11 +1349,7 @@ impl Dashboard {
         if path_no_query == "/api/release/object" {
             return match self.get_routes(request).await {
                 Ok(response) => response,
-                Err(_) => Response::text(
-                    http_status("500"),
-                    "Internal Server Error",
-                    "dashboard error",
-                ),
+                Err(error) => dashboard_error_response(error),
             };
         }
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
@@ -1373,11 +1402,32 @@ impl Dashboard {
                     .expect("dashboard boundary state lock");
                 (!boundaries.all_ready(), boundaries.state_json())
             };
+            let write_fence = self
+                .store
+                .local_storage_path()
+                .filter(|_| self.store.backend_name() == "local")
+                .map(|root| {
+                    crate::queue::LocalBackend::write_fence_state(std::path::Path::new(root))
+                        .unwrap_or_else(|error| json!({"error": error.to_string()}))
+                });
             return send_json(
                 http_status("200"),
                 &json!({
                     "degraded": degraded,
                     "boundaries": boundaries,
+                    "storage": {
+                        "pid": std::process::id(),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "backend": self.store.backend_name(),
+                        "local_path": self.store.local_storage_path(),
+                        "write_fence": write_fence,
+                        "backup": self.store.backup_endpoint().map(|endpoint| json!({
+                            "backend": endpoint.kind,
+                            "local_path": (endpoint.adapter()
+                                == Some(crate::capabilities::StorageAdapter::Local))
+                                .then_some(endpoint.path.as_str()),
+                        })),
+                    },
                 }),
             );
         }
@@ -1457,8 +1507,8 @@ impl Dashboard {
                 }
             }
         } else {
-            // At most one of these two paths matches, so at most one boundary
-            // is ever revalidated here.
+            // At most one of these paths matches, so at most one boundary is
+            // ever consulted here.
             if path_no_query == "/api/service/status"
                 && !self.boundaries_available(&[Boundary::Service]).await
             {
@@ -1474,6 +1524,25 @@ impl Dashboard {
                     "AUTH_UNAVAILABLE",
                     "machine authorization unavailable",
                 )));
+            }
+            if matches!(
+                path_no_query,
+                "/api/host/inventory" | "/api/service/converge"
+            ) {
+                if !self.boundaries_available(&[Boundary::Registry]).await {
+                    return send_json(
+                        http_status("503"),
+                        &json!({"error": "registry authorization unavailable"}),
+                    );
+                }
+                let action = if path_no_query == "/api/service/converge" {
+                    "converge-read"
+                } else {
+                    "policy-read"
+                };
+                if let Err(response) = registry_policy::authorized(request, action).await {
+                    return response;
+                }
             }
             if path_no_query == "/api/service/status" {
                 let query = request
@@ -1501,11 +1570,7 @@ impl Dashboard {
         }
         match self.get_routes(request).await {
             Ok(response) => response,
-            Err(_) => Response::text(
-                http_status("500"),
-                "Internal Server Error",
-                "dashboard error",
-            ),
+            Err(error) => dashboard_error_response(error),
         }
     }
 
@@ -1514,6 +1579,29 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
+        if path == "/api/service/converge" {
+            return Ok(self.service_converge(request, query, false).await);
+        }
+        if path == "/api/host/inventory" {
+            let target = match host_inventory_target(query) {
+                Ok(target) => target,
+                Err(response) => return Ok(response),
+            };
+            let runner = crate::deploy::production_runner();
+            return Ok(
+                match crate::deploy::host_inventory::inventory_host(&target, &runner).await {
+                    Ok(report) => send_json(http_status("200"), &report),
+                    Err(error) => send_json(
+                        http_status("503"),
+                        &json!({
+                            "target": target,
+                            "status": crate::deploy::host_channel::FAILED_STATUS,
+                            "error": error.to_string(),
+                        }),
+                    ),
+                },
+            );
+        }
         if path == "/api/release/object" {
             // Public read-only release channel. This dashboard route is the
             // store's delivery endpoint; an operator-owned TLS reverse proxy
@@ -1884,6 +1972,32 @@ impl Dashboard {
             return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }
         machine_result_response(self.machine_facade().cancel_job(job_id).await)
+    }
+
+    async fn service_converge(&self, request: &Request, query: &str, apply: bool) -> Response {
+        if request.header("transfer-encoding").is_some()
+            || request.content_length != usize::default()
+            || !request.body.is_empty()
+        {
+            return invalid_service_request("service converge does not accept a request body");
+        }
+        let (target, binary) = match service_converge_query(query) {
+            Ok(scope) => scope,
+            Err(response) => return response,
+        };
+        match crate::cli::service_converge::converge_result(&target, binary.as_deref(), apply).await
+        {
+            Ok(result) => send_json(
+                http_status("200"),
+                &json!({"exit_code": result.exit_code, "report": result.report_json()}),
+            ),
+            Err(error) => service_failure(
+                http_status("503"),
+                "SERVICE_CONVERGE_FAILED",
+                error.to_string(),
+                true,
+            ),
+        }
     }
 
     async fn get_service_status(&self, request: &Request, query: &str) -> Response {
@@ -2286,7 +2400,15 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -2296,6 +2418,12 @@ impl Dashboard {
             }
         }
 
+        // Hold across publication, metadata, mirror writes and chunk cleanup:
+        // a handoff must not capture half of an accepted composition.
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         let mut staged = match tempfile::NamedTempFile::new() {
             Ok(staged) => staged,
             Err(error) => return object_compose_error(http_status("500"), error.to_string()),
@@ -2526,6 +2654,9 @@ impl Dashboard {
         if path == "/api/object/compose" {
             return self.post_object_compose(request).await;
         }
+        if path == "/api/operator/run" {
+            return operator_console::handle(request).await;
+        }
         let required: &[Boundary] = match path {
             "/api/rate-limit/consume" => &[Boundary::RateLimitVerifier, Boundary::RateLimitState],
             "/api/machine/submit" | "/api/machine/cancel" => &[Boundary::Machine],
@@ -2548,28 +2679,36 @@ impl Dashboard {
         if path == "/api/rate-limit/consume" {
             return self.post_rate_limit_consume(request).await;
         }
-        // Registry-policy writes and janitor runs. Gated on their own
-        // boundary, so a deployment that has declared no client refuses them
-        // with 401 while every other route on this listener is unaffected.
-        if matches!(path, "/api/registry/policy" | "/api/cleanup/run") {
+        // Registry adoption, policy writes, cleanup and convergence each require
+        // their own operator action. Convergence can replace every declared
+        // binary on a host; a read or one service's deployer grant is insufficient.
+        if matches!(
+            path,
+            "/api/registry/import"
+                | "/api/registry/policy"
+                | "/api/cleanup/run"
+                | "/api/service/converge"
+        ) {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
                     http_status("503"),
                     &json!({"error": "registry authorization unavailable"}),
                 );
             }
-            let action = if path == "/api/registry/policy" {
-                "policy-write"
-            } else {
-                "cleanup-run"
+            let action = match path {
+                "/api/registry/import" => "registry-import",
+                "/api/registry/policy" => "policy-write",
+                "/api/service/converge" => "converge-apply",
+                _ => "cleanup-run",
             };
             if let Err(response) = registry_policy::authorized(request, action).await {
                 return response;
             }
-            return if path == "/api/registry/policy" {
-                registry_policy::set_policy(request).await
-            } else {
-                registry_policy::run_cleanup().await
+            return match path {
+                "/api/registry/import" => registry_policy::import_registry(request).await,
+                "/api/registry/policy" => registry_policy::set_policy(request).await,
+                "/api/service/converge" => self.service_converge(request, query, true).await,
+                _ => registry_policy::run_cleanup().await,
             };
         }
         if control_route {
@@ -2639,7 +2778,15 @@ impl Dashboard {
                 authorize_release(self, request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -2656,9 +2803,13 @@ impl Dashboard {
                 )
             }
         }
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         match self.put_object(request, &object, query).await {
             Ok(response) => response,
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => dashboard_error_response(error),
         }
     }
 
@@ -2698,7 +2849,15 @@ impl Dashboard {
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
-            authorize_object(self, request, object.namespace(), object.key(), false, "delete").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "delete",
+            )
+            .await
         };
         match authorized {
             Ok(None) => {}
@@ -2715,13 +2874,17 @@ impl Dashboard {
                 )
             }
         }
+        let _write_guard = match self.storage_write_guard() {
+            Ok(guard) => guard,
+            Err(error) => return storage_error_response(error),
+        };
         let result = self.store.delete_blob(&object.storage_path()).await;
         match result {
             Ok(()) => send_json(
                 http_status("200"),
                 &json!({"state": "absent", "uri": object.to_string()}),
             ),
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => storage_error_response(error),
         }
     }
 
@@ -2809,7 +2972,7 @@ impl Dashboard {
                 http_status("200"),
                 &json!({"state": "stored", "host": host, "path": path}),
             ),
-            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+            Err(error) => storage_error_response(error),
         }
     }
 
@@ -2854,6 +3017,9 @@ pub async fn serve(
 
 /// Request head cap (Python's http.server parses a similar 64 KiB budget).
 const MAX_HEAD_BYTES: usize = 65536;
+/// Desktop and API imports are bounded independently from ordinary JSON
+/// controls; the CLI reads local files directly and has no transport envelope.
+const MAX_REGISTRY_IMPORT_BYTES: usize = 2 * 1024 * 1024;
 
 static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -2991,20 +3157,29 @@ async fn read_request(
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
     let object_put = method == "PUT" && path.starts_with("/api/object?");
+    let registry_import = method == "POST"
+        && path
+            .split_once('?')
+            .map_or(path.as_str(), |(route, _)| route)
+            == "/api/registry/import";
     let content_length = match content_length_header {
         Some(value) => value.parse::<usize>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
         })?,
-        None if object_put => {
+        None if object_put || registry_import => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "object PUT requires Content-Length",
+                "mutating object and registry import requests require Content-Length",
             ));
         }
         None => usize::default(),
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
+    } else if method == "POST" && path == "/api/operator/run" {
+        operator_console::MAX_REQUEST_BYTES
+    } else if registry_import {
+        MAX_REGISTRY_IMPORT_BYTES
     } else {
         MAX_HEAD_BYTES
     };
@@ -3093,13 +3268,11 @@ impl Response {
             200 => "OK",
             401 => "Unauthorized",
             409 => "Conflict",
+            500 => "Internal Server Error",
+            503 => "Service Unavailable",
             _ => "OK",
         };
         Self::new(status, reason, "application/json", body.as_bytes())
-    }
-
-    fn text(status: u16, reason: &str, body: &str) -> Self {
-        Self::new(status, reason, "text/plain; charset=utf-8", body.as_bytes())
     }
 }
 
@@ -3127,6 +3300,28 @@ fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usize)> {
 
 fn http_status(value: &str) -> u16 {
     value.parse().expect("static HTTP status is valid")
+}
+
+fn storage_error_status(error: &StorageError) -> u16 {
+    if matches!(error, StorageError::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock) {
+        http_status("503")
+    } else {
+        http_status("500")
+    }
+}
+
+fn storage_error_response(error: StorageError) -> Response {
+    send_json(
+        storage_error_status(&error),
+        &json!({"error": error.to_string()}),
+    )
+}
+
+fn dashboard_error_response(error: DashboardError) -> Response {
+    match error {
+        DashboardError::Storage(error) => storage_error_response(error),
+        other => send_json(http_status("500"), &json!({"error": other.to_string()})),
+    }
 }
 
 fn empty_response(status: u16, reason: &str) -> Response {
@@ -3310,6 +3505,60 @@ fn query_value(values: &[(String, String)], name: &str) -> Option<String> {
         .map(|(_, value)| value.clone())
 }
 
+/// One canonical registry target and no other query authority.
+///
+/// The handler resolves this name through [`crate::deploy::host_inventory::inventory_host`];
+/// it never becomes an SSH address supplied directly by the client.
+fn host_inventory_target(query: &str) -> Result<String, Response> {
+    let values = parse_qs(query);
+    if values.len() != 1 || values[0].0 != "target" || values[0].1.is_empty() {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "exactly one non-empty target is required"}),
+        ));
+    }
+    Ok(values[0].1.clone())
+}
+
+/// Exactly one canonical target and, optionally, one managed binary. Unknown,
+/// duplicate, empty, malformed, and lossy query components are refused before
+/// target resolution can open a host channel.
+fn service_converge_query(query: &str) -> Result<(String, Option<String>), Response> {
+    let invalid = || {
+        invalid_service_request(
+            "query must contain exactly one non-empty target and at most one non-empty binary",
+        )
+    };
+    if query.is_empty() || query.starts_with('&') || query.ends_with('&') {
+        return Err(invalid());
+    }
+    let mut target = None;
+    let mut binary = None;
+    for pair in query.split('&') {
+        let Some((encoded_key, encoded_value)) = pair.split_once('=') else {
+            return Err(invalid());
+        };
+        if encoded_key.is_empty() || encoded_value.is_empty() || encoded_value.contains('=') {
+            return Err(invalid());
+        }
+        let Some(key) = strict_url_decode(encoded_key) else {
+            return Err(invalid());
+        };
+        let Some(value) = strict_url_decode(encoded_value) else {
+            return Err(invalid());
+        };
+        if value.is_empty() || value.trim() != value {
+            return Err(invalid());
+        }
+        match key.as_str() {
+            "target" if target.is_none() => target = Some(value),
+            "binary" if binary.is_none() => binary = Some(value),
+            _ => return Err(invalid()),
+        }
+    }
+    target.map(|target| (target, binary)).ok_or_else(invalid)
+}
+
 fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Response> {
     let values = parse_qs(query);
     let uri = query_value(&values, "uri").unwrap_or_default();
@@ -3413,6 +3662,32 @@ fn object_compose_response(status: u16, payload: Value) -> Response {
 
 fn object_compose_error(status: u16, message: impl Into<String>) -> Response {
     object_compose_response(status, json!({"error": message.into()}))
+}
+
+fn strict_url_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                let hex = |byte: u8| (byte as char).to_digit(16);
+                let high = bytes.get(index + 1).and_then(|byte| hex(*byte))?;
+                let low = bytes.get(index + 2).and_then(|byte| hex(*byte))?;
+                out.push((high * 16 + low) as u8);
+                index += 3;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 fn url_decode(input: &str) -> String {

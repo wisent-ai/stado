@@ -114,6 +114,20 @@ fn safe_reference(value: &str, extra: &str) -> bool {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || "._-".contains(ch) || extra.contains(ch))
 }
+
+/// A route alias: one or more lowercase identifiers joined by `/`.
+///
+/// An alias used to be required to carry a `/`, on the theory that its first
+/// segment names a purpose or a consumer. That forced every consumer to invent
+/// a suffix — `weles/agent/primary` — whose words then changed meaning under a
+/// name that stayed, and the name stopped describing anything. A consumer's own
+/// name is a complete alias: `weles` is the alias Weles asks for, and which
+/// model answers it is this table's business. The purpose rule below still
+/// reads the first segment, so a bare `weles` keeps the namespace `weles` and
+/// is still refused a model declared for another purpose.
+fn route_alias(value: &str) -> bool {
+    !value.is_empty() && value.split('/').all(identifier)
+}
 /// The one managed alias a route may name instead of a concrete destination.
 ///
 /// **Do not set a route to `"best"` until every host in the fleet runs 0.13.10
@@ -400,24 +414,9 @@ pub fn validate(document: &Value) -> Result<(), String> {
         }
     }
     for (alias, destination) in &registry.routes {
-        // An alias is a name a consumer asks for, not a path: requiring a
-        // slash in it made one legal product alias unpublishable. Brama's
-        // compiled contract names its own client's chat alias `wisent-backend`,
-        // with no second segment, and on 2026-09-06 publishing it froze every
-        // resolver on the fleet — each refuses a document it cannot validate,
-        // keeps serving the generation it last accepted and hands consumers an
-        // address the registry has since moved away from, which took product
-        // chat down for hours. What must hold is that the name is safe to route
-        // on: non-empty segments of the same character set every other
-        // reference here uses.
-        let segments_safe = !alias.is_empty()
-            && alias
-                .split('/')
-                .all(|segment| !segment.is_empty() && safe_reference(segment, ""));
-        if !segments_safe || destination.trim().is_empty() {
+        if !route_alias(alias) || destination.trim().is_empty() {
             return Err(format!(
-                "registry.inference.routes.{alias}: an alias is one or more safe \
-                 slash-separated names and a destination must not be empty"
+                "registry.inference.routes: alias '{alias}' must be lowercase identifiers joined by '/', and its destination must be non-empty"
             ));
         }
         if !destination.contains('/')
@@ -463,7 +462,7 @@ pub fn validate(document: &Value) -> Result<(), String> {
         }
     }
     for (alias, purpose) in &registry.alias_purposes {
-        if alias.split_once('/').is_none() || !identifier(purpose) {
+        if !route_alias(alias) || !identifier(purpose) {
             return Err(format!(
                 "registry.inference.alias_purposes.{alias}: purpose must be a lowercase identifier for a route alias"
             ));

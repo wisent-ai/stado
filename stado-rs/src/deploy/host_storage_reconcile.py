@@ -1,4 +1,4 @@
-import ctypes, datetime, fcntl, hashlib, json, os, stat, sys, time
+import ctypes, datetime, errno, fcntl, hashlib, json, os, stat, subprocess, sys, time
 
 phase = os.environ["STADO_RECONCILE_PHASE"]
 tx = os.environ["STADO_RECONCILE_TX"]
@@ -36,12 +36,100 @@ def fsync_dir(path):
         os.close(descriptor)
 
 
+def path_within(path, roots):
+    candidate = os.path.abspath(path)
+    return any(
+        candidate != os.path.abspath(root)
+        and os.path.commonpath((candidate, os.path.abspath(root))) == os.path.abspath(root)
+        for root in roots
+    )
+
+
+def confined_path(path, roots, label):
+    candidate = os.path.abspath(path)
+    if path_within(candidate, roots):
+        return candidate
+    fail(label + " escaped its captured transaction roots")
+
+
+def noninteractive_privileged(arguments, label):
+    inherited_lock = globals().get("lock_fd", -1)
+    if inherited_lock < 0:
+        fail(label + ": resident transaction lock descriptor is unavailable")
+    result = subprocess.run(
+        ["/usr/bin/sudo", "-n"] + arguments,
+        stdin=inherited_lock,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        close_fds=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        fail(label + ": " + (detail[-1] if detail else "privileged command failed"))
+    return result
+
+
+def privileged_digest(path):
+    if path_within(path, (primary, backup)):
+        source = confined_path(
+            path, (primary, backup), "privileged physical-root digest")
+        label = "cannot hash unreadable physical-root file"
+    elif path_within(path, (staging,)):
+        source = confined_path(
+            path, (staging,), "privileged transaction-staging digest")
+        label = "cannot hash interrupted privileged clone"
+    else:
+        fail("privileged digest escaped the live roots and transaction staging")
+    result = noninteractive_privileged(
+        ["/usr/bin/openssl", "dgst", "-sha256", "-r", source],
+        label,
+    )
+    encoded = result.stdout.strip().split(None, 1)
+    if (not encoded
+            or len(encoded[0]) != 64
+            or any(character not in "0123456789abcdef" for character in encoded[0])):
+        fail("privileged confined digest has invalid output")
+    return encoded[0]
+
+
+def recover_privileged_clone(destination):
+    destination = confined_path(
+        destination, (staging,), "privileged clone recovery destination")
+    info = os.lstat(destination)
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        fail("privileged clone recovery found a non-regular staging entry")
+    noninteractive_privileged(
+        ["/usr/bin/chflags", "nouchg,noschg", destination],
+        "cannot clear immutable flags on privileged clone",
+    )
+    noninteractive_privileged(
+        ["/usr/sbin/chown", str(os.getuid()) + ":" + str(os.getgid()), destination],
+        "cannot transfer privileged clone ownership",
+    )
+
+
+def privileged_clone(source, destination):
+    source = confined_path(
+        source, (primary, backup), "privileged copy-on-write clone source")
+    destination = confined_path(
+        destination, (staging,), "privileged copy-on-write clone destination")
+    noninteractive_privileged(
+        ["/bin/cp", "-c", "-p", source, destination],
+        "privileged copy-on-write clone failed",
+    )
+    recover_privileged_clone(destination)
+
+
 def digest(path):
     value = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                value.update(chunk)
+        return value.hexdigest()
+    except PermissionError:
+        return privileged_digest(path)
 
 
 def metadata_path(root, relative):
@@ -124,7 +212,17 @@ def clone_file(source, destination):
         hashlib.sha256(destination.encode("utf-8")).hexdigest(),
     )
     if os.path.lexists(temporary):
-        if regular_identity(temporary) != regular_identity(source):
+        temporary_identity = regular_identity(temporary)
+        temporary_info = os.lstat(temporary)
+        temporary_flags = getattr(temporary_info, "st_flags", 0)
+        immutable = (
+            getattr(stat, "UF_IMMUTABLE", 0)
+            | getattr(stat, "SF_IMMUTABLE", 0)
+        )
+        if (temporary_info.st_uid != os.getuid()
+                or temporary_flags & immutable):
+            recover_privileged_clone(temporary)
+        if temporary_identity != regular_identity(source):
             os.unlink(temporary)
     if not os.path.exists(temporary):
         libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
@@ -133,7 +231,11 @@ def clone_file(source, destination):
         clone.restype = ctypes.c_int
         if clone(os.fsencode(source), os.fsencode(temporary), 0) != 0:
             error = ctypes.get_errno()
-            fail("clonefile refused copy-on-write clone: " + os.strerror(error))
+            if error not in (errno.EACCES, errno.EPERM):
+                fail("clonefile refused copy-on-write clone: " + os.strerror(error))
+            if os.path.lexists(temporary):
+                fail("clonefile left a partial privileged clone destination")
+            privileged_clone(source, temporary)
     if digest(source) != digest(temporary):
         fail("copy-on-write clone verification failed")
     if hasattr(os, "chflags"):
@@ -153,6 +255,7 @@ def regular_identity(path):
     if not stat.S_ISREG(info.st_mode):
         fail("non-regular object: " + path)
     return {"bytes": info.st_size, "sha256": digest(path)}
+
 
 
 def object_paths(root):
@@ -323,7 +426,7 @@ if phase == "read-fence":
         with open(fence_path, "r", encoding="utf-8") as handle:
             fence = json.load(handle)
     except FileNotFoundError:
-        fence = {"schema": "stado.storage-root-fence.v4", "transaction": tx,
+        fence = {"schema": "stado.storage-root-fence.v5", "transaction": tx,
                  "status": "absent", "writers": []}
     print("STADO_STORAGE_RECONCILE\t" +
           json.dumps(fence, sort_keys=True, separators=(",", ":")))
@@ -386,11 +489,18 @@ if phase == "status":
 
 
 def inventory(root, paths):
-    return [{
-        "path": relative,
-        "body": regular_identity(os.path.join(root, relative)),
-        "metadata": regular_identity(metadata_path(root, relative)),
-    } for relative in paths]
+    result = []
+    for relative in paths:
+        body_path = os.path.join(root, relative)
+        body = regular_identity(body_path)
+        if body is None:
+            raise FileNotFoundError(body_path)
+        result.append({
+            "path": relative,
+            "body": body,
+            "metadata": regular_identity(metadata_path(root, relative)),
+        })
+    return result
 
 
 def validate_inventory(root, objects, label):
@@ -414,6 +524,13 @@ def validate_complete_inventory(root, objects, label):
     actual_metadata = metadata_paths(root)
     if actual_metadata != expected_metadata:
         fail(label + " metadata namespace changed")
+
+
+def complete_physical_inventory(root):
+    paths = object_paths(root)
+    return paths, inventory(root, paths), physical_inventory(root)
+
+
 
 
 def checkpoint_tree(source, destination, snapshot):
@@ -452,23 +569,68 @@ def checkpoint_tree(source, destination, snapshot):
     validate_physical_checkpoint(destination, snapshot, "sealed checkpoint")
 
 
+def require_storage_write_fence():
+    lock = os.path.join(home, ".stado", "recovery", "storage-root-writes.lock")
+    intent_path = os.path.join(home, ".stado", "recovery", "storage-root-write-fence.json")
+    try:
+        with open(fence_path, encoding="utf-8") as handle:
+            lifecycle = json.load(handle)
+        with open(intent_path, encoding="utf-8") as handle:
+            intent = json.load(handle)
+        effect = lifecycle.get("write_fence") or {}
+        if (lifecycle.get("schema") != "stado.storage-root-fence.v5"
+                or lifecycle.get("transaction") != tx
+                or effect.get("status") != "acquired"
+                or effect.get("intent") != intent
+                or intent.get("schema") != "stado.storage-root-write-fence.v1"
+                or intent.get("transaction") != tx
+                or not lifecycle.get("queue", {}).get("drained")):
+            fail("physical inventory requires the recorded drained storage write fence")
+        descriptor = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fail("storage write-fence intent has no active exclusive hold")
+        finally:
+            os.close(descriptor)
+    except Exception as error:
+        fail("storage write fence cannot be observed: " + str(error))
+
+
+if phase in ("preflight", "checkpoint", "apply", "arm-activation", "arm-rollback"):
+    require_storage_write_fence()
+
+
 if phase == "preflight":
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
-    backup_physical = physical_inventory(backup)
-    primary_physical = physical_inventory(primary)
+    backup_paths, backup_objects, backup_physical = complete_physical_inventory(backup)
+    primary_paths, primary_objects, primary_physical = complete_physical_inventory(primary)
     print("STADO_STORAGE_RECONCILE\t" + json.dumps({
         "schema": schema,
         "transaction": tx,
         "status": "observed",
         "observed_at": time.time(),
-        "backup_qualified": inventory(backup, backup_paths),
-        "primary_qualified": inventory(primary, primary_paths),
+        "backup_qualified": backup_objects,
+        "primary_qualified": primary_objects,
         "backup_physical": backup_physical,
         "primary_physical": primary_physical,
         "physical_snapshot_exclusions": [],
     }, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
+
+def conflict_winner_from_fence(fence):
+    roots = fence.get("roots") or {}
+    prior_primary = roots.get("prior_primary")
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
+            or fence.get("transaction") != tx
+            or roots.get("primary") != primary
+            or roots.get("backup") != backup
+            or prior_primary not in (primary, backup)):
+        fail("storage conflict winner is invalid")
+    return "primary" if prior_primary == primary else "backup"
+
 
 def validate_effective_lifecycle(root, expected):
     actual = []
@@ -483,10 +645,14 @@ def validate_effective_lifecycle(root, expected):
         fail("effective lifecycle snapshot namespace differs from its qualified A/B union")
 
 
-def checkpoint_effective_lifecycle(primary_objects, backup_objects):
+def checkpoint_effective_lifecycle(primary_objects, backup_objects, conflict_winner):
     selected = {}
-    for source_root, objects in (
-            (primary_snapshot, primary_objects), (backup_snapshot, backup_objects)):
+    sources = (
+        ((backup_snapshot, backup_objects), (primary_snapshot, primary_objects))
+        if conflict_winner == "primary"
+        else ((primary_snapshot, primary_objects), (backup_snapshot, backup_objects))
+    )
+    for source_root, objects in sources:
         for item in objects:
             relative = item["path"]
             if relative.startswith(lifecycle_root):
@@ -551,7 +717,9 @@ def load_checkpoint_evidence(receipt):
             or evidence.get("schema") != "stado.storage-root-checkpoint-evidence.v1"
             or evidence.get("transaction") != tx
             or evidence.get("source") != backup
-            or evidence.get("destination") != primary):
+            or evidence.get("destination") != primary
+            or evidence.get("conflict_winner") not in ("primary", "backup")
+            or receipt.get("conflict_winner") != evidence.get("conflict_winner")):
         fail("checkpoint evidence belongs to another reconciliation")
     primary_objects = evidence.get("primary_objects")
     backup_objects = evidence.get("backup_objects")
@@ -567,7 +735,8 @@ def load_checkpoint_evidence(receipt):
             or receipt.get("backup_physical_files") != len(backup_physical.get("files", []))
             or receipt.get("primary_physical_files") != len(primary_physical.get("files", []))):
         fail("checkpoint receipt counts differ from immutable checkpoint evidence")
-    return backup_objects, primary_objects, backup_physical, primary_physical
+    return (backup_objects, primary_objects, backup_physical, primary_physical,
+            evidence["conflict_winner"])
 
 
 if phase == "checkpoint":
@@ -576,36 +745,39 @@ if phase == "checkpoint":
             fence = json.load(handle)
     except Exception as error:
         fail("durable lifecycle fence is absent or unreadable: " + str(error))
-    if (fence.get("schema") != "stado.storage-root-fence.v4"
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
             or fence.get("transaction") != tx or fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or not (fence.get("staged_runtime") or {}).get("staged_sha256")
+            or (fence.get("write_fence") or {}).get("status") != "acquired"
+            or not fence.get("preflight_evidence")
             or not fence.get("rechecked_at")):
         fail("durable lifecycle fence is incomplete")
     if any(item.get("status") != "stopped" for item in fence.get("writers", [])):
         fail("durable lifecycle fence does not stop every recorded writer")
+    fence_conflict_winner = conflict_winner_from_fence(fence)
+    conflict_winner = fence_conflict_winner
     receipt = load_receipt() if os.path.exists(receipt_path) else None
     if receipt is not None and receipt.get("status") in (
         "checkpoint_ready", "applying", "data_committed_pending_activation",
         "activation_effects_armed", "rollback_effects_armed",
         "activated_pending_lifecycle", "complete"
     ):
+        if receipt.get("conflict_winner") != fence_conflict_winner:
+            fail("checkpoint conflict winner differs from the durable lifecycle fence")
         emit(receipt)
         raise SystemExit(0)
     if receipt is not None and receipt.get("status") != "checkpointing":
         fail("checkpoint receipt is not resumable: " + str(receipt.get("status")))
-    backup_paths = object_paths(backup)
-    primary_paths = object_paths(primary)
     if receipt is None:
-        backup_objects = inventory(backup, backup_paths)
-        primary_objects = inventory(primary, primary_paths)
-        backup_physical = physical_inventory(backup)
-        primary_physical = physical_inventory(primary)
+        backup_paths, backup_objects, backup_physical = complete_physical_inventory(backup)
+        primary_paths, primary_objects, primary_physical = complete_physical_inventory(primary)
         checkpoint_evidence = {
             "schema": "stado.storage-root-checkpoint-evidence.v1",
             "transaction": tx,
             "source": backup,
             "destination": primary,
+            "conflict_winner": conflict_winner,
             "backup_objects": backup_objects,
             "primary_objects": primary_objects,
             "backup_physical": backup_physical,
@@ -628,6 +800,7 @@ if phase == "checkpoint":
             "checkpoint_started_at": time.time(),
             "writer_fence": fence,
             "checkpoint_evidence": checkpoint_evidence_reference,
+            "conflict_winner": conflict_winner,
             "backup_objects": len(backup_objects),
             "primary_objects": len(primary_objects),
             "backup_physical_files": len(backup_physical.get("files", [])),
@@ -638,8 +811,12 @@ if phase == "checkpoint":
         }
         atomic_json(receipt_path, receipt)
     else:
-        backup_objects, primary_objects, backup_physical, primary_physical = (
+        backup_objects, primary_objects, backup_physical, primary_physical, conflict_winner = (
             load_checkpoint_evidence(receipt))
+        if conflict_winner != fence_conflict_winner:
+            fail("checkpoint conflict winner differs from the durable lifecycle fence")
+        backup_paths = object_paths(backup)
+        primary_paths = object_paths(primary)
         if [item.get("path") for item in backup_objects] != backup_paths:
             fail("backup qualified namespace no longer matches the interrupted checkpoint")
         if [item.get("path") for item in primary_objects] != primary_paths:
@@ -654,7 +831,7 @@ if phase == "checkpoint":
     validate_physical_checkpoint(primary, primary_physical, "primary after checkpoint")
     validate_complete_inventory(backup, backup_objects, "backup qualified namespace after checkpoint")
     validate_complete_inventory(primary, primary_objects, "primary qualified namespace after checkpoint")
-    checkpoint_effective_lifecycle(primary_objects, backup_objects)
+    checkpoint_effective_lifecycle(primary_objects, backup_objects, conflict_winner)
     receipt["status"] = "checkpoint_ready"
     receipt["checkpointed_at"] = time.time()
     atomic_json(receipt_path, receipt)
@@ -665,7 +842,7 @@ receipt = load_receipt()
 if receipt.get("status") == "complete" and phase != "finalize":
     emit(receipt)
     raise SystemExit(0)
-backup_objects, primary_objects, backup_physical, primary_physical = (
+backup_objects, primary_objects, backup_physical, primary_physical, conflict_winner = (
     load_checkpoint_evidence(receipt))
 validate_complete_inventory(backup_snapshot, backup_objects, "backup checkpoint")
 validate_complete_inventory(primary_snapshot, primary_objects, "primary checkpoint")
@@ -706,21 +883,98 @@ if phase == "record-lifecycle-decisions":
     raise SystemExit(0)
 
 
+
+
+def require_pinned_conflict_winner(fence):
+    if conflict_winner_from_fence(fence) != conflict_winner:
+        fail("pinned conflict winner differs from the durable lifecycle fence")
+
+
 def prove_live_additive_union(label):
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_wins = conflict_winner == "primary"
     expected_paths = set(primary_by_path) | set(backup_by_path)
     validate_complete_inventory(backup, backup_objects, "live B " + label)
     if set(object_paths(primary)) != expected_paths:
         fail("primary namespace does not equal the additive checkpoint union " + label)
     for relative in sorted(expected_paths):
-        expected = backup_by_path.get(relative) or primary_by_path[relative]
+        expected = ((primary_by_path.get(relative) if primary_wins else None)
+                    or backup_by_path.get(relative) or primary_by_path[relative])
         if regular_identity(os.path.join(primary, relative)) != expected["body"]:
             fail("primary body differs from additive checkpoint " + label + ": " + relative)
         if regular_identity(metadata_path(primary, relative)) != expected["metadata"]:
             fail("primary metadata differs from additive checkpoint " + label + ": " + relative)
     return backup_by_path, primary_by_path, expected_paths
 
+
+
+def restore_primary_checkpoint():
+    backup_by_path = {item["path"]: item for item in backup_objects}
+    primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_files = {
+        item["path"]: item for item in primary_physical.get("files", [])
+    }
+    for relative in sorted(set(primary_by_path) | set(backup_by_path)):
+        before = primary_by_path.get(relative)
+        incoming = backup_by_path.get(relative)
+        applied = (before if conflict_winner == "primary" and before is not None
+                   else incoming or before)
+        destination = os.path.join(primary, relative)
+        current = regular_identity(destination)
+        before_body = before["body"] if before is not None else None
+        applied_body = applied["body"] if applied is not None else None
+        if current not in (before_body, applied_body):
+            fail("primary body changed outside rollback: " + relative)
+        if current != before_body:
+            if before is None:
+                os.unlink(destination)
+                fsync_dir(os.path.dirname(destination))
+            else:
+                clone_file(os.path.join(primary_snapshot, relative), destination)
+                original = primary_files.get(relative)
+                if original is None:
+                    fail("primary physical checkpoint omitted body: " + relative)
+                os.chmod(destination, original["mode"])
+                fsync_dir(os.path.dirname(destination))
+        destination_metadata = metadata_path(primary, relative)
+        current_metadata = regular_identity(destination_metadata)
+        before_metadata = before["metadata"] if before is not None else None
+        applied_metadata = applied["metadata"] if applied is not None else None
+        if current_metadata not in (before_metadata, applied_metadata):
+            fail("primary metadata changed outside rollback: " + relative)
+        if current_metadata != before_metadata:
+            if before_metadata is None:
+                os.unlink(destination_metadata)
+                fsync_dir(os.path.dirname(destination_metadata))
+            else:
+                clone_file(
+                    metadata_path(primary_snapshot, relative),
+                    destination_metadata,
+                )
+                metadata_relative = os.path.relpath(destination_metadata, primary)
+                original = primary_files.get(metadata_relative)
+                if original is None:
+                    fail("primary physical checkpoint omitted metadata: " + relative)
+                os.chmod(destination_metadata, original["mode"])
+                fsync_dir(os.path.dirname(destination_metadata))
+    original_directories = set(primary_physical.get("directories", []))
+    current_directories = set(physical_inventory(primary).get("directories", []))
+    extra_directories = current_directories - original_directories
+    for relative in sorted(
+            extra_directories,
+            key=lambda path: (path.count(os.sep), len(path)),
+            reverse=True):
+        path = os.path.join(primary, relative)
+        try:
+            os.rmdir(path)
+        except OSError as error:
+            fail("transaction-created directory cannot be rolled back: "
+                 + path + ": " + str(error))
+        fsync_dir(os.path.dirname(path))
+    validate_complete_inventory(primary, primary_objects, "live A after rollback")
+    if physical_inventory(primary) != primary_physical:
+        fail("live physical A differs from its exact rollback checkpoint")
 
 
 if phase == "arm-activation":
@@ -734,6 +988,7 @@ if phase == "arm-activation":
             fence = json.load(handle)
     except Exception as error:
         fail("activation fence cannot be rechecked: " + str(error))
+    require_pinned_conflict_winner(fence)
     if (fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))):
@@ -757,12 +1012,15 @@ if phase == "arm-rollback":
             fence = json.load(handle)
     except Exception as error:
         fail("rollback fence cannot be rechecked: " + str(error))
+    require_pinned_conflict_winner(fence)
     if (fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))):
         fail("rollback effects require every writer to remain stopped")
+    restore_primary_checkpoint()
     validate_complete_inventory(backup, backup_objects, "live B before rollback")
     validate_physical_checkpoint(backup, backup_physical, "live physical B before rollback")
+    receipt["primary_checkpoint_restored_at"] = time.time()
     receipt["status"] = "rollback_effects_armed"
     receipt["rollback_effect_boundary_at"] = time.time()
     atomic_json(receipt_path, receipt)
@@ -783,6 +1041,7 @@ if phase == "apply":
             fence = json.load(handle)
     except Exception as error:
         fail("durable lifecycle fence cannot be rechecked: " + str(error))
+    require_pinned_conflict_winner(fence)
     if (fence.get("status") != "fenced" or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))
             or fence.get("rechecked_at", 0) < receipt.get("checkpointed_at", 0)):
@@ -801,10 +1060,11 @@ if phase == "apply":
     blockers = [item for item in decisions
                 if item.get("kind") == "block_unclassified_live"]
     if blockers:
-        fail("A-only lifecycle state blocks activation: " +
+        fail("newly authoritative lifecycle state blocks activation: " +
              ", ".join(item.get("path", "?") for item in blockers))
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_wins = conflict_winner == "primary"
     validate_complete_inventory(backup, backup_objects, "live B after checkpoint")
     current_paths = set(object_paths(primary))
     expected_paths = set(primary_by_path) | set(backup_by_path)
@@ -818,46 +1078,51 @@ if phase == "apply":
         current_meta = regular_identity(metadata_path(primary, relative))
         before = primary_by_path.get(relative)
         incoming = backup_by_path.get(relative)
-        allowed_bodies = [item["body"] for item in (before, incoming) if item is not None]
-        allowed_metadata = [item["metadata"] for item in (before, incoming) if item is not None]
-        if before is None:
-            allowed_bodies.append(None)
-            allowed_metadata.append(None)
+        if primary_wins and before is not None:
+            allowed_bodies = [before["body"]]
+            allowed_metadata = [before["metadata"]]
+        else:
+            allowed_bodies = [item["body"] for item in (before, incoming) if item is not None]
+            allowed_metadata = [item["metadata"] for item in (before, incoming) if item is not None]
+            if before is None:
+                allowed_bodies.append(None)
+                allowed_metadata.append(None)
         if current_body not in allowed_bodies or current_meta not in allowed_metadata:
             fail("primary object drifted after its checkpoint: " + relative)
     receipt["status"] = "applying"
     atomic_json(receipt_path, receipt)
     for item in backup_objects:
         relative = item["path"]
-        source = os.path.join(backup_snapshot, relative)
         destination = os.path.join(primary, relative)
         current = regular_identity(destination)
         before = primary_by_path.get(relative)
-        before_body = before["body"] if before is not None else None
-        if current != item["body"]:
+        desired = before if primary_wins and before is not None else item
+        if current != desired["body"]:
+            before_body = before["body"] if before is not None else None
             if current != before_body:
                 fail("primary body changed outside the transaction: " + relative)
-            clone_file(source, destination)
-        source_meta = metadata_path(backup_snapshot, relative)
+            clone_file(os.path.join(backup_snapshot, relative), destination)
         destination_meta = metadata_path(primary, relative)
         current_meta = regular_identity(destination_meta)
-        before_meta = before["metadata"] if before is not None else None
-        if current_meta != item["metadata"]:
+        if current_meta != desired["metadata"]:
+            before_meta = before["metadata"] if before is not None else None
             if current_meta != before_meta:
                 fail("primary metadata changed outside the transaction: " + relative)
-            if item["metadata"] is None:
-                os.unlink(destination_meta)
-                fsync_dir(os.path.dirname(destination_meta))
+            if desired["metadata"] is None:
+                if os.path.exists(destination_meta):
+                    os.unlink(destination_meta)
+                    fsync_dir(os.path.dirname(destination_meta))
             else:
-                clone_file(source_meta, destination_meta)
-        if regular_identity(destination) != item["body"]:
+                clone_file(metadata_path(backup_snapshot, relative), destination_meta)
+        if regular_identity(destination) != desired["body"]:
             fail("destination body did not verify: " + relative)
-        if regular_identity(destination_meta) != item["metadata"]:
+        if regular_identity(destination_meta) != desired["metadata"]:
             fail("destination metadata did not verify: " + relative)
     prove_live_additive_union("after apply")
     receipt["status"] = "data_committed_pending_activation"
     receipt["data_committed_at"] = time.time()
-    receipt["verified_objects"] = len(backup_objects)
+    receipt["verified_objects"] = len(expected_paths)
+    receipt["conflict_winner"] = conflict_winner
     receipt["primary_only_preserved"] = True
     receipt["backup_objects_not_written"] = True
     atomic_json(receipt_path, receipt)
@@ -877,10 +1142,11 @@ if phase == "activate":
         fail("activated lifecycle fence cannot be read: " + str(error))
     active_path = os.path.expanduser("~/.stado/bin/stado")
     expected_digest = fence.get("activation_sha256")
-    if (fence.get("schema") != "stado.storage-root-fence.v4"
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
             or fence.get("status") != "activated"
             or not fence.get("queue", {}).get("resumed")
             or not fence.get("restored_at")
+            or (fence.get("write_fence") or {}).get("status") != "released"
             or not isinstance(expected_digest, str)
             or len(expected_digest) != 64
             or os.path.islink(active_path)

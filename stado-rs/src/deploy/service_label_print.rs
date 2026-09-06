@@ -38,7 +38,22 @@ if [ \"$os\" = Darwin ]; then
     *)      domains=\"system user/$uid gui/$uid\" ;;
   esac
   for domain in $domains; do
-    block=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null) || continue
+    case \"$domain\" in
+      system) launch='/usr/bin/sudo -n /bin/launchctl' ;;
+      *)      launch='/bin/launchctl' ;;
+    esac
+    block=$($launch print \"$domain/$label\" 2>&1)
+    read_code=$?
+    if [ \"$read_code\" -ne 0 ]; then
+      read_detail=$(printf '%s\\n' \"$block\" |
+        /usr/bin/awk 'NR == 1 { gsub(/[\\t\\r]/, \" \"); print substr($0, 1, 300); exit }')
+      case \"$block\" in
+        *'Could not find service'*) continue ;;
+      esac
+      if [ -z \"$read_detail\" ]; then read_detail='launchctl print failed without detail'; fi
+      printf 'STADO_LABEL_READ_FAILURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$read_code\" \"$read_detail\"
+      continue
+    fi
     if [ -z \"$block\" ]; then continue; fi
     found=yes
     printf 'STADO_LABEL_DOMAIN\\t%s\\n' \"$domain\"
@@ -99,7 +114,7 @@ if [ \"$os\" = Darwin ]; then
         if [ -n \"$opened_device\" ] && [ -n \"$opened_inode\" ] &&
            [ \"$opened_device\" -eq \"$mapped_device_decimal\" ] &&
            [ \"$opened_inode\" -eq \"$mapped_inode\" ]; then
-          image_digest=$(/usr/bin/openssl dgst -sha256 -r /dev/fd/9 2>/dev/null)
+          image_digest=$(/usr/bin/openssl dgst -sha256 -r <&9 2>/dev/null)
           image_digest=${image_digest%% *}
           after_identity=$(/usr/bin/stat -f '%d %i' <&9 2>/dev/null || true)
           after_device=${after_identity%% *}
@@ -114,7 +129,7 @@ if [ \"$os\" = Darwin ]; then
         fi
         exec 9<&-
       fi
-      current=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null || true)
+      current=$($launch print \"$domain/$label\" 2>/dev/null || true)
       current_pid=$(printf '%s\\n' \"$current\" |
         /usr/bin/awk -F' = ' '$1 ~ /^[ \\t]*pid$/ { print $2; exit }')
       current_start=$(/bin/ps -p \"$current_pid\" -o lstart= 2>/dev/null |
@@ -300,11 +315,23 @@ fi
 printf 'STADO_LABEL_DONE\\t%s\\n' \"$found\"
 ";
 
+/// A domain whose init-system state could not be read. This is distinct from
+/// an authoritative answer that the named job is absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelReadFailure {
+    pub domain: String,
+    pub exit_code: i32,
+    pub detail: String,
+}
+
 /// What an init system holds under one exact service identity.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LabelState {
     pub host: String,
     pub label: String,
+    /// Domain reads that were refused or otherwise failed. An empty loaded
+    /// result is authoritative only when this is also empty.
+    pub read_failures: Vec<LabelReadFailure>,
     /// The domain the label was found in, when it was found at all.
     pub domain: Option<String>,
     pub pid: Option<String>,
@@ -354,6 +381,38 @@ impl LabelState {
         self.domain.is_some()
     }
 
+    /// Whether the requested init-system domains were read conclusively.
+    pub fn read_status(&self) -> &'static str {
+        if self.unsupported.is_some() {
+            "unsupported"
+        } else if self.loaded() {
+            "loaded"
+        } else if self.read_failures.is_empty() {
+            "not_loaded"
+        } else {
+            "unavailable"
+        }
+    }
+
+    /// Render the bounded domain failures for a CLI or higher-level refusal.
+    pub fn read_failure_detail(&self) -> Option<String> {
+        if self.read_failures.is_empty() {
+            return None;
+        }
+        Some(
+            self.read_failures
+                .iter()
+                .map(|failure| {
+                    format!(
+                        "{} exited {}: {}",
+                        failure.domain, failure.exit_code, failure.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    }
+
     /// The program the job actually runs, preferring the full argv over the
     /// bare program path: every stado unit executes the same binary and the
     /// subcommand is the whole difference between an agent and a resolver.
@@ -369,6 +428,8 @@ impl LabelState {
             "host": self.host,
             "label": self.label,
             "loaded": self.loaded(),
+            "read_status": self.read_status(),
+            "read_failures": self.read_failures,
             "domain": self.domain,
             "pid": self.pid,
             "state": self.state,
@@ -412,10 +473,32 @@ impl LabelState {
     }
 }
 
-/// Ask one host what it holds under one label.
+/// Ask one host what it holds under one label, refusing an inconclusive
+/// negative observation so internal lifecycle callers cannot treat a failed
+/// domain read as proof that the unit is absent.
+pub async fn print_label(
+    target: &ComputeTarget,
+    label: &str,
+    scope: BootoutScope,
+    runner: &Runner,
+) -> Result<LabelState, DeployError> {
+    let state = inspect_label(target, label, scope, runner).await?;
+    if !state.loaded() {
+        if let Some(detail) = state.read_failure_detail() {
+            return Err(DeployError(format!(
+                "{}: could not determine whether {label} is loaded: {detail}",
+                state.host
+            )));
+        }
+    }
+    Ok(state)
+}
+
+/// Ask one host what it holds under one label while retaining unavailable
+/// domain evidence for diagnostic callers.
 ///
 /// Signals nothing. This reads only the host's init-system state.
-pub async fn print_label(
+pub async fn inspect_label(
     target: &ComputeTarget,
     label: &str,
     scope: BootoutScope,
@@ -449,6 +532,17 @@ pub fn parse_label_print(host: &str, label: &str, stdout: &str) -> LabelState {
     };
     for line in stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
+            ["STADO_LABEL_READ_FAILURE", domain, exit_code, detail] => {
+                let domain = (*domain).trim();
+                let detail = (*detail).trim();
+                if !domain.is_empty() && !detail.is_empty() {
+                    state.read_failures.push(LabelReadFailure {
+                        domain: domain.to_string(),
+                        exit_code: exit_code.trim().parse().unwrap_or(-1),
+                        detail: detail.to_string(),
+                    });
+                }
+            }
             ["STADO_LABEL_UNSUPPORTED", system] => {
                 state.unsupported = Some((*system).trim().to_string());
             }

@@ -18,7 +18,6 @@ final class CleanupStore: ObservableObject {
     private let defaults: UserDefaults
     private var pollingTask: Task<Void, Never>?
     private var requestGeneration = 0
-    private var authorizationToken: String?
 
     init(
         defaults: UserDefaults = .standard,
@@ -53,10 +52,6 @@ final class CleanupStore: ObservableObject {
         try? DashboardAddress(dashboardURLString)
     }
 
-    func configureAuthorization(token: String?) {
-        authorizationToken = token
-    }
-
     func refresh() async {
         guard !isRefreshing, !isRunningCleanup else { return }
         guard let address = dashboardAddress else {
@@ -72,10 +67,7 @@ final class CleanupStore: ObservableObject {
             }
         }
         do {
-            let response = try await client.currentReport(
-                at: address,
-                authorizationToken: authorizationToken
-            )
+            let response = try await client.currentReport(at: address)
             guard requestGeneration == generation else { return }
             apply(response)
         } catch {
@@ -102,10 +94,7 @@ final class CleanupStore: ObservableObject {
             }
         }
         do {
-            let response = try await client.runCleanup(
-                at: address,
-                authorizationToken: authorizationToken
-            )
+            let response = try await client.runCleanup(at: address)
             guard requestGeneration == generation else { return }
             apply(response)
             mutation = Self.outcome(of: response)

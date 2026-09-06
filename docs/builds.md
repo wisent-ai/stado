@@ -19,12 +19,36 @@ A non-Stado archive contains that product rather than another Stado binary, so
 its delivery runs the installed Stado worker against the digest-pinned archive.
 
 Repeating `stado release submit` resumes the same release run. An initial
-platform submission keeps its original stable job identity and output URI. If
-that platform is already recorded as failed, the coordinator derives one retry
-identity from the release run, platform, and prior terminal job ID, and gives
-that attempt its own output URI. A crash before or after the replacement
-platform record is saved therefore reuses the same attempt; only a newly
-persisted terminal failure can chain to another retry.
+platform submission keeps its original stable job identity and output URI.
+Before replacing a failed platform attempt, the coordinator reads the original
+job: queued, running, completed, and uploaded jobs keep that identity and their
+existing output. A publication or storage-read failure does not start another
+build.
+The stored platform request fixes its builder and input archives. Resumption
+checks that request against the release's source and manifest, preserves its
+exact bytes, and uses the already-staged inputs instead of fetching them again.
+An existing queue plan retains its recorded consumer and does not require a
+new live-builder selection. If no queue plan exists yet, the saved builder
+must still pass normal admission; another machine is not silently selected.
+An altered request returns `immutable queue object differs: PATH` without
+overwriting the saved request or creating a replacement build.
+Concurrent coordinators retain the first published worker request only after
+checking that its source, manifest, and inputs match. A newly created queue plan
+still applies normal admission to the builder named by that request.
+
+
+`stado release status stado --json` shows the recorded release runs, including
+each platform's builder, job ID, state, and failure. A recorded platform failure
+can describe a publisher read error rather than a failed worker; resumption
+checks the job itself before deciding whether another attempt is needed.
+
+Only a job recorded as failed or cancelled receives a retry identity derived
+from the release run, platform, and prior terminal job ID, with its own output
+URI. A crash before or after the replacement platform record is saved therefore
+reuses the same attempt; only another recorded terminal job failure can chain
+to another retry. An unreadable job returns the storage error. A missing job
+returns `release job JOB_ID was not found in recorded states; refusing a replacement without terminal failure`;
+neither condition creates a replacement build.
 
 Local queue jobs execute from the agent owner's
 `~/.stado/work/jobs/wc-<job-id>` tree, not a temporary directory. Admission
@@ -121,6 +145,32 @@ before sending `TERM` because it has no known service to restore.
 Only the pair on the release target authorizes that restore; a similarly named
 entry under `targets[].services` is never inferred as a fallback.
 
+## Wait for the stable release endpoint
+
+A blue-green candidate is not active merely because its own port answers.
+Stado also checks the stable proxy's process, immutable release identity,
+generation, upstream port, and declared readiness endpoint before routing is
+reported as complete. Activation, reconciliation, and rollback allow that
+endpoint to become ready within the product's
+`strategy.readiness_timeout_seconds`; they do not assume a newly spawned proxy
+has bound its socket after a fixed delay.
+
+An exited proxy fails immediately. When the deadline expires, the refusal names
+the stable URL, allowed seconds, and last connection error or HTTP status.
+Identity and generation mismatches still fail without waiting.
+
+Read the proxy's own output separately from the candidate's output:
+
+```console
+stado release logs brama --target charless-mac-mini --version proxy --stream both --json
+stado release logs brama --target charless-mac-mini --version 0.2.69 --stream both --json
+stado release quarantine list brama --target charless-mac-mini --json
+```
+
+After repairing the recorded cause, `release quarantine clear` retires only the
+exact digest named by `--digest` and records the required `--reason`. It does not
+rebuild or replace the signed release.
+
 ## Resolve the executable that is actually active
 
 ```console
@@ -207,6 +257,54 @@ A recipe accepts only an `https://` clone URL. Credentials do not belong in the 
 | succeeded | every declared artifact was uploaded and is readable from Stado results |
 
 A successful process exit without every declared artifact is a failed build. A host merely declaring a platform is insufficient: a live worker must publish capacity for that platform.
+
+## The quality gate names whose revision refused
+
+`.wisent-release.json` declares `platforms.<platform>.quality`: the argv the
+release worker executes before it builds. `scripts/quality_gate.sh` reads that
+same key and runs the same argv, so a pull request is judged by the gate the
+release stands behind, with one declaration used twice.
+
+A pull request is judged on its **merge result**, so a step that already
+refuses the base branch refuses every pull request opened against it — for
+files the author never touched. On a refusal the script therefore re-runs that
+one step against the base revision in its own `git worktree` and reports:
+
+| Verdict | Meaning | Who repairs it |
+|---|---|---|
+| `verdict=introduced` | the step passes on the base and refuses this revision | this change |
+| `verdict=inherited` | the step already refuses the base, at the printed sha | the base, in its own change |
+| `verdict=unattributed` | the base could not be checked out, or a clean tree is being compared against its own commit, so ownership is unknown | read the printed step and decide |
+
+The base is the pull request's base sha, and on a push to `main` the commit
+before that push. Comparing `main` against `origin/main` compares the revision
+under judgement against itself, which would answer `inherited` for every
+failure and never name the push that caused it; the script refuses that as
+evidence and says so.
+
+Running it by hand on a checkout with an uncommitted break still attributes:
+the base sha equals `HEAD`, but the base's own worktree does not carry the
+break, so the comparison is real and the answer is `introduced`.
+
+Every verdict still fails the gate: an inherited failure is a failure, and the
+release would hit it with a version already spent. What changes is that the
+message no longer sends the wrong author to reformat somebody else's code.
+
+Run it by hand exactly as CI does:
+
+```console
+$ bash scripts/quality_gate.sh --base origin/main
+```
+
+`--manifest` reads a different manifest and `--help` prints this contract. An
+absent platform, an absent `quality` key or an empty one is a refusal, not a
+pass with zero steps.
+
+This exists because on 2026-09-04 and 2026-09-05 `main` carried unformatted
+`cli/onboarding.rs`, then `cli/identity.rs`, then `dashboard/mod.rs`. Each one
+turned every open pull request red, the gate said "fix the tree" to authors who
+had touched none of those files, and three of them reformatted another
+revision's code to get their own work through.
 
 ## Verify every supported platform
 

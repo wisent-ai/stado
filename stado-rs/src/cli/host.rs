@@ -694,9 +694,14 @@ pub async fn build_caches(
 }
 fn print_report(
     report: &crate::deploy::host_gui_automation::GuiAutomationReport,
+    json: bool,
 ) -> Result<(), CmdError> {
-    for (item, state) in &report.items {
-        println!("{}\t{item}\t{state}", report.target);
+    if json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+    } else {
+        for (item, state) in &report.items {
+            println!("{}\t{item}\t{state}", report.target);
+        }
     }
     match &report.error {
         Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())),
@@ -707,11 +712,13 @@ fn print_report(
 
 /// `stado host gui-automation status TARGET` — report autologin, remote
 /// management, VNC, automation artifacts and the console owner.
-pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
+pub async fn gui_automation_status(target: &str, json: bool) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
-    print_report(&report)
+    let report =
+        crate::deploy::host_gui_automation::status(&resolved, password.as_deref(), &runner).await;
+    print_report(&report, json)
 }
 
 /// `stado host gui-automation enable TARGET` — configure persistent GUI login,
@@ -728,16 +735,27 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
         })?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
-/// `stado host gui-automation grant-accessibility TARGET` — grant the
-/// installed, signed CuaDriver app Accessibility for the host's GUI user.
-pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
+/// `stado host gui-automation grant-accessibility TARGET [--apple-only]` —
+/// prepare the Apple helper, optionally leaving CuaDriver and its runtime untouched.
+pub async fn gui_automation_grant_accessibility(
+    target: &str,
+    apple_only: bool,
+    json: bool,
+) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
-    print_report(&report)
+    let report = crate::deploy::host_gui_automation::grant_accessibility(
+        &resolved,
+        apple_only,
+        password.as_deref(),
+        &runner,
+    )
+    .await;
+    print_report(&report, json)
 }
 
 /// `stado host gui-automation disable TARGET [--bundle ID]` — revert the
@@ -746,7 +764,7 @@ pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), Cm
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
 /// Read one line with terminal echo disabled (Python
@@ -3061,8 +3079,9 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 }
 
 /// `stado host inventory TARGET [--json]` — the stado-managed binaries,
-/// forward markers and loopback listeners of TARGET, and the verdict on
-/// whether each marker still matches a live listener.
+/// fixed Cargo-home metadata and bin membership, forward markers and loopback
+/// listeners of TARGET, and the verdict on whether each marker still matches
+/// a live listener.
 ///
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
@@ -3097,7 +3116,33 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         let answer = crate::deploy::fleet_vaults::collect_from(&resolved, &runner).await;
-        hosts.push(crate::deploy::fleet_vaults::attribute(name, answer));
+        let mut host = crate::deploy::fleet_vaults::attribute(name, answer);
+        // What the host itself declares, read from the host: the operator's
+        // laptop config is not the answer for a machine the operator is
+        // asking about. `None` means the field was not in the answer at all,
+        // which a release older than the key produces.
+        let declared = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
+            .await
+            .ok()
+            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok())
+            .and_then(|document| {
+                document
+                    .pointer("/resolved/skarbiec_vault_file")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if let Some(object) = host.as_object_mut() {
+            let list = object
+                .get("vaults")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            object.insert(
+                "authority".to_string(),
+                crate::credential_store::owner::authority(declared.as_deref(), &list),
+            );
+        }
+        hosts.push(host);
     }
     let summary = crate::deploy::fleet_vaults::summarize(&hosts);
     if json {
@@ -3119,10 +3164,26 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let authority = host.get("authority");
+        let chosen = authority
+            .and_then(|verdict| verdict.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         println!("{name}: {} vault(s)", list.len());
         for vault in list {
+            let path = vault.get("path").and_then(Value::as_str).unwrap_or("");
+            // The marked line is the one every owner write and authoritative
+            // read on that host goes through. Reading a count without it told
+            // an operator how much is held and nothing about which store
+            // answers.
+            let marker = if !chosen.is_empty() && path == chosen {
+                "*"
+            } else {
+                " "
+            };
             println!(
-                "  {:>5} items  {} recipients  {}",
+                "{marker} {:>5} items  {} recipients  {}",
                 vault
                     .get("items")
                     .and_then(Value::as_u64)
@@ -3131,7 +3192,17 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                     .get("recipients")
                     .and_then(Value::as_u64)
                     .unwrap_or_default(),
-                vault.get("path").and_then(Value::as_str).unwrap_or("")
+                path
+            );
+        }
+        if let Some(verdict) = authority {
+            println!(
+                "  authority: {} — {}",
+                verdict
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                verdict.get("detail").and_then(Value::as_str).unwrap_or("")
             );
         }
     }
@@ -3665,6 +3736,91 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect::<Vec<Vec<String>>>(),
+    );
+
+    // The fixed Cargo paths and their children are part of the same typed
+    // report in JSON and text. Keeping the table here avoids a second
+    // filesystem reader that could drift from the JSON document.
+    let cargo = report.get("cargo").and_then(Value::as_object);
+    let cargo_roots = [("$HOME/.cargo", "home"), ("$HOME/.cargo/bin", "bin")]
+        .iter()
+        .filter_map(|(path, key)| {
+            cargo.and_then(|value| value.get(*key)).map(|metadata| {
+                vec![
+                    (*path).to_string(),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+        })
+        .collect::<Vec<Vec<String>>>();
+    super::table::print(
+        &[
+            "CARGO PATH",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_roots,
+    );
+    let cargo_entries = cargo
+        .and_then(|value| value.get("entries"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    super::table::print(
+        &[
+            "CARGO BIN ENTRY",
+            "NAME STATE",
+            "TYPE",
+            "METADATA",
+            "MODE",
+            "UID",
+            "GID",
+            "BYTES",
+            "MODIFIED",
+            "LINK TARGET",
+            "LINK STATE",
+        ],
+        &cargo_entries
+            .iter()
+            .map(|metadata| {
+                vec![
+                    cell(metadata.get("name")),
+                    cell(metadata.get("name_state")),
+                    cell(metadata.get("kind")),
+                    cell(metadata.get("metadata_state")),
+                    cell(metadata.get("mode")),
+                    cell(metadata.get("uid")),
+                    cell(metadata.get("gid")),
+                    cell(metadata.get("bytes")),
+                    cell(metadata.get("modified_epoch")),
+                    cell(metadata.get("symlink_target")),
+                    cell(metadata.get("symlink_target_state")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+    println!(
+        "Cargo bin membership: state={} listed={} seen={} entries_complete={} complete={}",
+        cell(cargo.and_then(|value| value.get("entries_state"))),
+        cargo_entries.len(),
+        cell(cargo.and_then(|value| value.get("entries_seen"))),
+        cell(cargo.and_then(|value| value.get("entries_complete"))),
+        cell(cargo.and_then(|value| value.get("complete"))),
     );
 
     let markers = section("forwards");
@@ -7073,7 +7229,7 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
-    remote_skarbiec_json_at(target, arguments, None).await
+    remote_skarbiec_json_at(target, arguments, None, None, None).await
 }
 
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
@@ -7097,6 +7253,8 @@ async fn remote_skarbiec_json_at(
     target: &str,
     arguments: &[String],
     vault_relative: Option<&str>,
+    token_source: Option<(&str, &str)>,
+    token_file_name: Option<&str>,
 ) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
         .first()
@@ -7140,30 +7298,100 @@ async fn remote_skarbiec_json_at(
     };
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let tool_path = skarbiec_tool_path(&home);
+    let token_file = if let Some(name) = token_file_name {
+        release_component("token file name", name)?;
+        let path = format!("{home}/.stado/{name}");
+        let script = format!(
+            r#"set -euo pipefail
+umask 077
+directory={directory}
+destination={destination}
+/bin/mkdir -p "$directory"
+if [ -L "$destination" ]; then
+  printf '%s\n' 'token file must not be a symlink' >&2
+  exit 1
+fi
+if [ -e "$destination" ]; then
+  if [ ! -f "$destination" ] || [ ! -s "$destination" ]; then
+    printf '%s\n' 'token file must be a nonempty regular file' >&2
+    exit 1
+  fi
+else
+  pending="$destination.pending.$$"
+  trap 'rm -f "$pending"' EXIT
+  /usr/bin/openssl rand -hex 32 > "$pending"
+  /bin/chmod 600 "$pending"
+  if ! /bin/ln "$pending" "$destination"; then
+    printf '%s\n' 'token file was created concurrently; retry using the persisted file' >&2
+    exit 1
+  fi
+fi
+"#,
+            directory = crate::deploy::shlex_quote(&format!("{home}/.stado")),
+            destination = crate::deploy::shlex_quote(&path),
+        );
+        let prepared = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !prepared.ok() {
+            return Err(CmdError::click(format!(
+                "{}: preparing token file {path} failed: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(
+                    &prepared,
+                    "remote token file creation failed"
+                )
+            )));
+        }
+        Some(path)
+    } else {
+        None
+    };
     let mut invocation = vec![
         "/usr/bin/env",
         tool_path.as_str(),
         gnupg_environment.as_str(),
         vault_environment.as_str(),
-        skarbiec.as_str(),
     ];
-    invocation.extend(arguments.iter().map(String::as_str));
-    let output = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+    let output = if let Some((item, field)) = token_source {
+        invocation.extend(["/usr/bin/python3", "-", skarbiec.as_str(), item, field]);
+        invocation.extend(arguments.iter().map(String::as_str));
+        crate::deploy::host_channel::run_program_with_stdin(
+            &resolved,
+            &invocation,
+            include_str!("../../../scripts/vault-token-from-item.py"),
+            &runner,
+        )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    } else {
+        invocation.push(skarbiec.as_str());
+        invocation.extend(arguments.iter().map(String::as_str));
+        if let Some(path) = &token_file {
+            invocation.extend(["--token-file", path.as_str()]);
+        }
+        crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
+    }
+    .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
+        let retained = token_file
+            .as_ref()
+            .map(|path| format!("; bearer remains at {path} for a retry"))
+            .unwrap_or_default();
         return Err(CmdError::click(format!(
-            "{}: Skarbiec {command} failed: {}",
+            "{}: Skarbiec {command} failed: {}{retained}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
         )));
     }
-    let report = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+    let mut report: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
             "{}: Skarbiec {command} returned unreadable JSON: {error}",
             resolved.name
         ))
     })?;
+    if let Some(path) = token_file {
+        report["token_file"] = Value::String(path);
+    }
     Ok((resolved, report))
 }
 
@@ -7226,7 +7454,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     let list = vec![String::from("list")];
     let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
     let (_, mirror_report) =
-        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE)).await?;
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None, None).await?;
     let live = mirror_items(&live_report)?;
     let mirror = mirror_items(&mirror_report)?;
 
@@ -7376,10 +7604,11 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
     Ok(())
 }
 
-/// Mint a least-privilege bearer inside TARGET's live Skarbiec vault.
+/// Mint a bounded bearer, or register an existing owner-vault field on TARGET.
 ///
-/// Metadata is the default output. `raw_token` exists only for a direct pipe
-/// into another secret store; Stado never writes that bearer to disk or argv.
+/// Existing-bearer bytes stay on the target and never enter argv or the report.
+/// `raw_token` exposes only a newly generated bearer for a secret-store pipe;
+/// `token_file_name` instead persists and reuses it on the target.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -7388,15 +7617,40 @@ pub async fn vault_token_mint(
     audience: &str,
     ttl_seconds: u64,
     replace_capabilities: bool,
+    token_item: Option<&str>,
+    token_field: &str,
     raw_token: bool,
+    token_file_name: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
     vault_word("audience", audience)?;
+    if let Some(item) = token_item {
+        vault_word("token item", item)?;
+        vault_word("token field", token_field)?;
+        if raw_token {
+            return Err(CmdError::usage(
+                "--raw-token cannot be used with an existing --token-item",
+            ));
+        }
+    }
     if raw_token && json_output {
         return Err(CmdError::usage(
             "--raw-token and --json cannot be used together",
         ));
+    }
+    if let Some(name) = token_file_name {
+        release_component("token file name", name)?;
+        if token_item.is_some() {
+            return Err(CmdError::usage(
+                "--token-item and --token-file-name cannot be used together",
+            ));
+        }
+        if raw_token {
+            return Err(CmdError::usage(
+                "--raw-token and --token-file-name cannot be used together",
+            ));
+        }
     }
     if capabilities.is_empty()
         || !capabilities
@@ -7420,39 +7674,51 @@ pub async fn vault_token_mint(
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }
-    let (resolved, mut report) = remote_skarbiec_json(target, &arguments).await?;
-    let token = report
-        .get("token")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: Skarbiec token-mint returned no bearer",
-                resolved.name
-            ))
-        })?
-        .to_string();
-    if raw_token {
-        println!("{token}");
-        return Ok(());
+    let token_source = token_item.map(|item| (item, token_field));
+    let (resolved, mut report) =
+        remote_skarbiec_json_at(target, &arguments, None, token_source, token_file_name).await?;
+    if token_source.is_none() && token_file_name.is_none() {
+        let token = report
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: Skarbiec token-mint returned no bearer",
+                    resolved.name
+                ))
+            })?;
+        if raw_token {
+            println!("{token}");
+            return Ok(());
+        }
     }
     if let Some(object) = report.as_object_mut() {
         object.remove("token");
     }
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "status": "token_minted",
-                "skarbiec": report,
-            }))?
-        );
+        let mut metadata = json!({
+            "target": resolved.name,
+            "status": if token_source.is_some() { "token_registered" } else { "token_minted" },
+            "skarbiec": report,
+        });
+        if let Some((item, field)) = token_source {
+            metadata["token_source"] = json!({ "item": item, "field": field });
+        }
+        println!("{}", serde_json::to_string_pretty(&metadata)?);
     } else {
+        let operation = if token_source.is_some() {
+            "registered"
+        } else {
+            "minted"
+        };
         println!(
-            "{}: token minted for {consumer} with audience {audience}",
+            "{}: token {operation} for {consumer} with audience {audience}",
             resolved.name
         );
+        if let Some(path) = report.get("token_file").and_then(Value::as_str) {
+            println!("Bearer file: {path}");
+        }
     }
     Ok(())
 }
@@ -8303,18 +8569,44 @@ pub async fn recover_skarbiec_acquisition_state(
 
 /// Restore the core object API without depending on the API being available.
 ///
-/// The fixed-script channel transports the checked-in helper verbatim. Its
-/// only prerequisite mutation is the helper's exact-owned orphaned Skarbiec
-/// proxy reconciliation; object recovery itself mutates only a listener whose
-/// authenticated protected read is unavailable.
+/// Storage authority changes belong to the resident storage-root transaction.
+/// This narrower repair shares its lock and never copies a backing store.
 async fn recover_object_api_on_target(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let script = format!(
+        r#"set -eu
+/usr/bin/python3 - <<'PY'
+import base64, fcntl, os, subprocess, sys
+work = os.path.join(os.path.expanduser("~"), ".stado", "recovery")
+os.makedirs(work, mode=0o700, exist_ok=True)
+descriptor = os.open(
+    os.path.join(work, "storage-root-reconcile.lock"),
+    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+    0o600,
+)
+with os.fdopen(descriptor, "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("storage authority recovery is already running on this host")
+    result = subprocess.run(
+        ["/bin/bash"],
+        input=base64.b64decode("{}"),
+        pass_fds=(lock.fileno(),),
+        check=False,
+    )
+    sys.exit(result.returncode)
+PY"#,
+        STANDARD.encode(include_str!("../../../deploy/recover_object_api.sh")),
+    );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,
-        include_str!("../../../deploy/recover_object_api.sh"),
-        std::time::Duration::from_secs(240),
+        &script,
+        std::time::Duration::from_secs(300),
         runner,
     )
     .await
@@ -10850,7 +11142,10 @@ pub async fn storage_root_reconcile(
             println!("verified objects: {count}");
         }
     }
-    report_outcome(&report, "ok")
+    // Mutating phases only acknowledge that the target-native owner was
+    // accepted. Their terminal result remains the durable STATUS receipt.
+    // Keep STATUS on the ordinary completed-report convention.
+    report_outcome(&report, if phase == "status" { "ok" } else { "accepted" })
 }
 pub async fn storage_root_reconcile_worker(
     target: &str,
@@ -11525,6 +11820,27 @@ pub async fn config_set(
     value: &str,
     reload_service: Option<&str>,
 ) -> Result<(), CmdError> {
+    let stdout = write_host_config(target, key, value).await?;
+    print!("{stdout}");
+    if let Some(service) = reload_service {
+        super::service::reconcile_after_config_change(service, target).await?;
+    }
+    Ok(())
+}
+
+/// The guarded write itself, returning the host's resolved configuration
+/// instead of printing it.
+///
+/// A caller that owns its own report cannot print this document: with
+/// `--json` a second one on the same stream makes the answer unparseable,
+/// which is exactly what `reconcile-agent-skarbiec --json` emitted before
+/// this split. The guards stay here so no writer can reach the host without
+/// them.
+pub(crate) async fn write_host_config(
+    target: &str,
+    key: &str,
+    value: &str,
+) -> Result<String, CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
         return Err(CmdError::click(
             "configuration key must be a non-empty dotted name",
@@ -11534,11 +11850,97 @@ pub async fn config_set(
     // closes the host's release publication boundary the moment the unit
     // reloads, and the cheapest place to say so is here.
     refuse_unminted_publisher(target, key, value).await?;
-    remote_config(target, RemoteConfigAction::Set { key, value }).await?;
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Set { key, value },
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     warn_unbacked_object_namespace(target, key, value);
     warn_unbacked_verifier_item(target, key, value);
-    if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(service, target).await?;
+    Ok(stdout)
+}
+
+/// `stado host reconcile-agent-skarbiec TARGET [--json]` — make TARGET's
+/// `agent.skarbiec.url` the credential endpoint the service directory
+/// declares for that host.
+///
+/// The agent's broker address was a hand-written port in one host's config
+/// and nothing compared it with the fleet's own declaration. On 2026-09-05
+/// `lukasz-macbook` carried `http://127.0.0.1:19096`, which nothing on that
+/// machine has ever bound, while the directory declared
+/// `http://127.0.0.1:8787` for it. Three brokers were listening and none was
+/// the one named, so the agent claimed a `preferences` release job and then
+/// died resolving its `GITHUB_TOKEN` — a build failure whose cause was in a
+/// different product's configuration file.
+///
+/// Derived, never invented: the value comes from
+/// `service_directory.services.skarbiec.endpoints[<target>]`, and a host the
+/// directory gives no endpoint is refused rather than pointed at a guess.
+pub async fn reconcile_agent_skarbiec(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let document = super::registry::fetch_document().await?;
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let declared = document
+        .pointer("/service_directory/services/skarbiec/endpoints")
+        .and_then(Value::as_object)
+        .and_then(|endpoints| endpoints.get(&canonical.name))
+        .and_then(|endpoint| endpoint.get("url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "the service directory declares no skarbiec endpoint for {}, so this host has \
+                 no credential broker of its own to name. Declare one with `stado service \
+                 directory endpoint skarbiec --target {} --url <url>`, or leave \
+                 agent.skarbiec.url unset so the agent reads through the configured store \
+                 client",
+                canonical.name, canonical.name
+            ))
+        })?
+        .to_string();
+
+    let runner = crate::deploy::production_runner();
+    let stdout = remote_config_output(&canonical, RemoteConfigAction::Show, &runner).await?;
+    let current = serde_json::from_str::<Value>(&stdout)
+        .ok()
+        .and_then(|config| {
+            config
+                .pointer("/resolved/agent_skarbiec_url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    let changed = current.trim() != declared;
+    if changed {
+        write_host_config(&canonical.name, "agent.skarbiec.url", &declared).await?;
+    }
+    let report = json!({
+        "target": canonical.name,
+        "declared": declared,
+        "previous": if current.trim().is_empty() { Value::Null } else { Value::from(current.trim()) },
+        "changed": changed,
+    });
+    if json_output {
+        print_json(&report);
+    } else if changed {
+        println!(
+            "{}: agent.skarbiec.url -> {declared} (was {})",
+            canonical.name,
+            if current.trim().is_empty() {
+                "unset"
+            } else {
+                current.trim()
+            }
+        );
+    } else {
+        println!("{}: agent.skarbiec.url already {declared}", canonical.name);
     }
     Ok(())
 }

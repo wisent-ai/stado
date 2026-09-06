@@ -1926,7 +1926,7 @@ async fn status_profile(target_name: &str, profile: RunnerProfile) -> Result<Val
         )
     };
     let output = host_channel::run_script(&target, &script, &production_runner()).await?;
-    let value = report(&target, &output, "status", profile);
+    let mut value = report(&target, &output, "status", profile);
     if !output.ok() {
         return Err(DeployError(format!(
             "{}: {} runner status failed: {}",
@@ -1935,7 +1935,67 @@ async fn status_profile(target_name: &str, profile: RunnerProfile) -> Result<Val
             command_failure(&output, "remote status failed")
         )));
     }
+    if profile.kind == PRECHECK.kind {
+        value["brama_route"] = brama_route_verdict(target_name, &output.stdout).await?;
+    }
     Ok(value)
+}
+
+/// Whether the Brama address the runner actually dials is the one the service
+/// directory declares for its host.
+///
+/// The installer derives that address once and writes it into
+/// `routes/brama.url`; nothing re-derived it afterwards and nothing compared
+/// the two. When Brama's endpoint on `charless-mac-mini` moved from `8080` to
+/// `18080`, the file kept the old port, and the only symptom was `kronika:
+/// fetch failed` in the CI of a DIFFERENT repository — the Skarbiec
+/// documentation gate, which is also what `build`, `deploy` and `tag` there
+/// depend on, so no Skarbiec release could be published at all. A published
+/// address that nothing compares to its declaration is the same defect this
+/// fleet has already paid for in `~/.stado/forwards/<service>.local`.
+/// A verdict rather than an error, so the rest of the status — the account,
+/// the boundary, the signing secret, the listener's own last event — still
+/// reaches the operator. The command exits non-zero on a drifted route; it
+/// does so after printing what it saw.
+async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, DeployError> {
+    let published = stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("brama route:"))
+        .map(str::trim)
+        .next_back()
+        .unwrap_or_default()
+        .to_string();
+    let (declared, _) = private_brama_route(target_name).await?;
+    if published.is_empty() {
+        return Ok(json!({
+            "published": Value::Null,
+            "declared": declared,
+            "matches": false,
+            "detail": format!(
+                "the precheck runner publishes no Brama route, so the documentation gate on \
+                 this host dials nothing. Reinstall it: stado host precheck-runner install \
+                 {target_name}"
+            ),
+        }));
+    }
+    if published != declared {
+        return Ok(json!({
+            "published": published,
+            "declared": declared,
+            "matches": false,
+            "detail": format!(
+                "the precheck runner dials {published} and the service directory declares \
+                 {declared} for this host. Every Kronika documentation gate on this runner \
+                 fails with `fetch failed` until the two agree: correct whichever is wrong, \
+                 then republish with stado host precheck-runner install {target_name}"
+            ),
+        }));
+    }
+    Ok(json!({
+        "published": published,
+        "declared": declared,
+        "matches": true,
+    }))
 }
 
 async fn remove_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
@@ -1966,6 +2026,36 @@ async fn remove_profile(target_name: &str, profile: RunnerProfile) -> Result<Val
             target.name,
             profile.kind,
             command_failure(&output, "remote removal failed")
+        )));
+    }
+    Ok(value)
+}
+
+/// Restart TARGET's pre-check runner in place and wait for it to report that
+/// it is listening for jobs again.
+pub async fn restart(target_name: &str) -> Result<Value, DeployError> {
+    let target = host_channel::canonical_target(target_name).await?;
+    let platform = Platform::for_target(&target)?;
+    let script = profile_template(
+        match platform {
+            Platform::LinuxAmd64 => LINUX_RESTART,
+            Platform::DarwinArm64 => MACOS_RESTART,
+        },
+        PRECHECK,
+    );
+    let output = host_channel::run_script_with_timeout(
+        &target,
+        &script,
+        Duration::from_secs(4 * 60),
+        &production_runner(),
+    )
+    .await?;
+    let value = report(&target, &output, "restart", PRECHECK);
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: precheck runner restart failed: {}",
+            target.name,
+            command_failure(&output, "remote restart failed")
         )));
     }
     Ok(value)
@@ -2204,6 +2294,15 @@ runner_signatures_valid() {
   root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Listener" >/dev/null 2>&1 &&
   root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Worker" >/dev/null 2>&1
 }
+resolve_runner_release() {
+  version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf '%s\n' 'runner version is malformed' >&2; exit 1; }
+  curl --fail --silent --show-error --location --max-time 60 \
+    "https://api.github.com/repos/actions/runner/releases/tags/v$version" -o "$staging/release.json"
+  expected=$(jq -er --arg name "actions-runner-osx-arm64-$version.tar.gz" \
+    '.assets | map(select(.name == $name)) | if length == 1 then .[0].digest | strings | select(startswith("sha256:")) | ltrimstr("sha256:") else error("runner artifact is ambiguous") end' "$staging/release.json")
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release has no SHA-256 digest' >&2; exit 1; }
+}
 fetch_runner_archive() {
   curl --fail --silent --show-error --location --max-time 120 \
     "https://github.com/actions/runner/releases/download/v$version/actions-runner-osx-arm64-$version.tar.gz" \
@@ -2218,7 +2317,7 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
-  for executable in Runner.Listener Runner.Worker; do
+  for executable in Runner.Worker Runner.Listener; do
     owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")
     replacement=$(root mktemp "$runner_root/bin/.$executable.stado.XXXXXX")
     root cp "$signed_runtime/bin/$executable" "$replacement"
@@ -2238,17 +2337,11 @@ if runner_signatures_valid; then
   printf '%s\n' 'runner apphost signatures are intact; no files changed'
   exit 0
 fi
-version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf '%s\n' 'runner version is malformed' >&2; exit 1; }
 mkdir -p "$HOME/.stado/work"
 staging=$(mktemp -d "$HOME/.stado/work/runner-runtime.XXXXXX")
 trap 'root rm -rf "$staging"' EXIT HUP INT TERM
 archive="$staging/runner.tar.gz"
-curl --fail --silent --show-error --location --max-time 60 \
-  "https://api.github.com/repos/actions/runner/releases/tags/v$version" -o "$staging/release.json"
-expected=$(jq -er --arg name "actions-runner-osx-arm64-$version.tar.gz" \
-  '.assets | map(select(.name == $name)) | if length == 1 then .[0].digest | strings | select(startswith("sha256:")) | ltrimstr("sha256:") else error("runner artifact is ambiguous") end' "$staging/release.json")
-[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release has no SHA-256 digest' >&2; exit 1; }
+resolve_runner_release
 fetch_runner_archive
 restore_runner_apphosts
 runner_signatures_valid
@@ -2303,13 +2396,12 @@ fi
 
 runner_registered=0
 if [ -f "$runner_root/.runner" ]; then runner_registered=1; fi
-# The verified GitHub artifact carries valid ad-hoc signatures. An older
-# installer stripped them, and current macOS kills the CoreCLR apphosts with
-# HRESULT 0x8007000C. Reconciliation repairs that installed state from the same
-# checksum-pinned artifact instead of manufacturing a replacement signature.
+# Preserve GitHub's signatures. A registered runner may have advanced beyond
+# the installer's pinned version, so restore apphosts from its own release.
 runtime_repaired=0
 if [ "$runner_registered" -eq 1 ] && ! runner_signatures_valid; then
   runtime_repaired=1
+  resolve_runner_release
 fi
 if [ "$runner_registered" -eq 0 ] || [ "$runtime_repaired" -eq 1 ]; then
   fetch_runner_archive
@@ -2469,28 +2561,244 @@ id stado-precheck
 root nft list table inet stado_precheck
 agent_id=$(root cat /opt/wisent/stado-precheck-runner/routes/kronika-agent-id)
 [ -n "$agent_id" ]
+brama_route=$(root cat /opt/wisent/stado-precheck-runner/routes/brama.url)
+[ -n "$brama_route" ]
 secret_meta=$(root stat -c '%U %G %a' /opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret)
 [ "$secret_meta" = "stado-precheck stado-precheck 600" ]
-printf 'kronika agent: %s\nkronika signing secret: owner=%s\n' "$agent_id" "$secret_meta"
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\n' "$agent_id" "$brama_route" "$secret_meta"
 "#;
 
-const MACOS_STATUS: &str = r#"set -euo pipefail
+/// Each check states its own refusal, because the caller reports the last
+/// error line and this script tails the runner's launchd logs: for as long as
+/// `set -e` alone decided the outcome, a failing check surfaced as `precheck
+/// runner status failed: No ALTQ support in kernel` — a pfctl warning from a
+/// log written hours earlier, about a step that had nothing to do with the
+/// one that failed.
+const MACOS_STATUS: &str = r#"set -uo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
-if ! root launchctl print system/com.wisent.stado-precheck-runner; then
+runner_root=/Users/Shared/stado-precheck-runner
+fail() { printf 'precheck runner: %s\n' "$1" >&2; exit 1; }
+if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
   root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
-  root tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 || true
-  exit 1
+  root tail -n 80 "$runner_root/_diag/launchd.stderr.log" >&2 || true
+  fail 'launchd daemon com.wisent.stado-precheck-runner is not loaded'
 fi
-dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
-root pfctl -a com.wisent.stado-precheck -sr
-root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>/dev/null || true
-root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
-root sudo -u stado-precheck -H -- /usr/bin/env HOME=/Users/Shared/stado-precheck-runner TMPDIR=/Users/Shared/stado-precheck-runner/_work /Users/Shared/stado-precheck-runner/bin/Runner.Listener --version
-agent_id=$(root cat /Users/Shared/stado-precheck-runner/routes/kronika-agent-id)
-[ -n "$agent_id" ]
-secret_meta=$(root stat -f '%Su %Sg %Lp' /Users/Shared/stado-precheck-runner/.stado/kronika-agent-auth-secret)
-[ "$secret_meta" = "stado-precheck stado-precheck 600" ]
-printf 'kronika agent: %s\nkronika signing secret: owner=%s\n' "$agent_id" "$secret_meta"
+root launchctl print system/com.wisent.stado-precheck-runner |
+  grep -F 'state = running' >/dev/null ||
+  fail 'launchd daemon com.wisent.stado-precheck-runner is loaded but not running'
+dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell >/dev/null 2>&1 ||
+  fail 'service account stado-precheck does not exist'
+dscl . -read /Users/stado-precheck Password >/dev/null 2>&1 ||
+  fail 'service account stado-precheck has no Password attribute, so it is not the locked account the installer creates'
+root pfctl -a com.wisent.stado-precheck -sr >/dev/null 2>&1 ||
+  fail 'pf anchor com.wisent.stado-precheck carries no ruleset, so private-network egress is not blocked'
+# The listener that IS running, not one this check starts.
+#
+# This used to re-execute `Runner.Listener --version` under `sudo -u`, and on
+# a host whose runner was executing jobs at that moment the probe answered
+# `Failed to create CoreCLR, HRESULT: 0x8007000C`: a single-file .NET bundle
+# started from an ad-hoc sudo context has no launchd domain of its own, so the
+# check measured its own invocation rather than the product. The runner is a
+# system daemon, so what can be observed about it is the process launchd keeps
+# and the account that owns it.
+# No `root` here: the process table is world-readable, and the host's
+# passwordless sudo is granted for named commands only — asking for `ps`
+# through it is refused, which is a fact about sudoers rather than about the
+# runner.
+# The whole table is consumed rather than cut short: `awk ... { exit }` closes
+# the pipe while `ps` is still writing, `ps` dies of SIGPIPE, and `pipefail`
+# then reports "the process table could not be read" on a host where reading
+# it worked perfectly.
+# Scoped to THIS runner's root. Matching any `Runner.Listener` passed on the
+# wrong process: `charless-mac-mini` runs four of them, one of which
+# (`/Users/Shared/jeden-desktop-release-runner`) happens to run as the same
+# account, so the check reported a healthy listener while the pre-check
+# runner's own listener had been dead since 18:51:45 and every job for these
+# labels queued.
+listener_owner=$(/bin/ps -Ao user=,comm= |
+  /usr/bin/awk -v root="$runner_root/" \
+    '$2 ~ /Runner\.Listener$/ && index($2, root) == 1 && !seen++ { owner = $1 } END { print owner }') ||
+  fail 'the process table could not be read'
+if [ -z "$listener_owner" ]; then
+  # Three logs, one sentence: the wrapper's stdout, the wrapper's stderr and
+  # the runner's own diagnostic. A listener that will not start says so in
+  # exactly one of them, and reading them one round trip at a time is how an
+  # operator spends an evening on a queued job.
+  daemon_out=$(root tail -n 3 "$runner_root/_diag/launchd.stdout.log" 2>/dev/null | /usr/bin/tr '\n' ' ')
+  daemon_err=$(root tail -n 3 "$runner_root/_diag/launchd.stderr.log" 2>/dev/null | /usr/bin/tr '\n' ' ')
+  runner_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+  runner_tail=$(root tail -n 3 "$runner_log" 2>/dev/null | /usr/bin/tr '\n' ' ')
+  # How many processes the runner account holds. A listener that exits and is
+  # relaunched every five seconds can leave the account at its process limit,
+  # and then every allocation fails: `Failed to create CoreCLR, HRESULT:
+  # 0x8007000C` with exit 137 is what that looks like from the wrapper.
+  owned=$(/bin/ps -Ao user= | /usr/bin/grep -c -x 'stado-precheck')
+  fail "no listener is running from $runner_root, so this host takes no jobs for its labels. stado-precheck holds $owned processes. wrapper stdout: $daemon_out | wrapper stderr: $daemon_err | runner log ($runner_log): $runner_tail"
+fi
+[ "$listener_owner" = "stado-precheck" ] ||
+  fail "the runner listener runs as $listener_owner, not stado-precheck"
+agent_id=$(root cat "$runner_root/routes/kronika-agent-id" 2>/dev/null) ||
+  fail 'routes/kronika-agent-id is unreadable'
+[ -n "$agent_id" ] || fail 'routes/kronika-agent-id is empty'
+brama_route=$(root cat "$runner_root/routes/brama.url" 2>/dev/null) ||
+  fail 'routes/brama.url is unreadable'
+[ -n "$brama_route" ] || fail 'routes/brama.url is empty'
+secret_meta=$(root stat -f '%Su %Sg %Lp' "$runner_root/.stado/kronika-agent-auth-secret" 2>/dev/null) ||
+  fail 'the kronika agent signing secret is missing'
+[ "$secret_meta" = "stado-precheck stado-precheck 600" ] ||
+  fail "the kronika agent signing secret is $secret_meta, not stado-precheck stado-precheck 600"
+# Whether the listener is CONNECTED, which is a different fact from whether a
+# process exists. A registration the runner can no longer use leaves the
+# process up and every job for this label queued forever; the only place that
+# shows is the runner's own diagnostic log, and nothing in this product read
+# it. On 2026-09-06 a Skarbiec documentation gate sat queued for half an hour
+# against a host whose daemon was `state = running`.
+newest_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+if [ -n "$newest_log" ]; then
+  listener_state=$(root tail -n 400 "$newest_log" |
+    /usr/bin/grep -a -E 'Listening for Jobs|Running job|Job .* completed|Terminate|Error|Exception' |
+    /usr/bin/tail -n 1)
+  [ -n "$listener_state" ] || listener_state='no listener event in the last 400 log lines'
+else
+  listener_state='no runner diagnostic log, so the listener has never started'
+fi
+# Every runner listener this host runs, with its owner and its path. A host
+# carries several runners, and "a Runner.Listener is running" says nothing
+# about which one: the reclaim phase of `restart` needs the process that
+# belongs to THIS runner root, and an operator reading a queued job needs the
+# same distinction.
+listeners=$(/bin/ps -Ao user=,comm= |
+  /usr/bin/awk '$2 ~ /Runner\.Listener$/ { printf "%s %s; ", $1, $2 }')
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}"
+"#;
+
+/// Restart the runner in place and wait until it says it is listening again.
+///
+/// A listener whose long poll to GitHub's broker is cut keeps its process and
+/// its `state = running`, and takes no jobs: `install` sees a running service
+/// and leaves it alone, so nothing in this product could recover it. On
+/// 2026-09-06 a reinstall cut that session at 18:51:45 —
+/// `[ERR BrokerServer] System.Net.Sockets.SocketException (89): Operation
+/// canceled` — and a Skarbiec documentation gate then sat queued for half an
+/// hour against a host that looked healthy in every other reading.
+///
+/// `kickstart -k` replaces the job without a window in which it does not
+/// exist, and the wait is on the runner's own log rather than on the daemon
+/// state that was never the question.
+const MACOS_RESTART: &str = r#"set -uo pipefail
+root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+runner_root=/Users/Shared/stado-precheck-runner
+fail() { printf 'precheck runner: %s\n' "$1" >&2; exit 1; }
+newest_log_path() {
+  root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1"
+}
+# The evidence has to be NEWER than the restart. A whole-file `grep
+# 'Listening for Jobs'` matches the line the runner wrote when it first
+# started, so the first version of this wait reported success on a listener
+# that had not reconnected at all — the same "the check I happened to run"
+# failure this repository keeps paying for.
+await_listening() {
+  before_path=$1
+  before_bytes=$2
+  deadline=$(( $(date +%s) + $3 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    sleep 5
+    current=$(newest_log_path)
+    [ -n "$current" ] || continue
+    if [ "$current" != "$before_path" ]; then
+      # The runner rotated to a log of its own, so anything in it is new.
+      fresh=$(root cat "$current" 2>/dev/null)
+    else
+      fresh=$(root tail -c "+$(( before_bytes + 1 ))" "$current" 2>/dev/null)
+    fi
+    if printf '%s' "$fresh" | /usr/bin/grep -a -q 'Listening for Jobs'; then
+      return 0
+    fi
+  done
+  return 1
+}
+snapshot() {
+  snapshot_path=$(newest_log_path)
+  snapshot_bytes=0
+  if [ -n "$snapshot_path" ]; then
+    snapshot_bytes=$(root stat -f %z "$snapshot_path" 2>/dev/null || printf '0')
+  fi
+}
+
+snapshot
+root launchctl kickstart -k system/com.wisent.stado-precheck-runner ||
+  fail 'launchctl refused to restart com.wisent.stado-precheck-runner'
+if await_listening "$snapshot_path" "$snapshot_bytes" 90; then
+  printf 'runner listener: listening for jobs\n'
+  exit 0
+fi
+
+# A listener launchd no longer owns keeps the registration's session and
+# writes nothing, so the managed job cannot take over and every job for these
+# labels queues forever. That is the state this host was in on 2026-09-06: a
+# `Runner.Listener` under the runner root, owned by stado-precheck, whose last
+# log line was `Shutting down JobDispatcher` from a kickstart three quarters
+# of an hour earlier.
+#
+# Only processes whose executable is UNDER THIS RUNNER'S ROOT are signalled,
+# and only after the ordinary restart has already failed to produce a fresh
+# listening line.
+stale=$(/bin/ps -Ao pid=,comm= |
+  /usr/bin/awk -v root="$runner_root/" '$2 ~ /Runner\.Listener$|runsvc\.sh$/ && index($2, root) == 1 { print $1 }')
+if [ -z "$stale" ]; then
+  last=$(root tail -n 5 "$(newest_log_path)" 2>/dev/null | /usr/bin/tr '\n' ' ')
+  fail "the runner did not report listening within 90s of the restart and holds no stale listener to reclaim: $last"
+fi
+printf 'reclaiming stale listener pids: %s\n' "$(printf '%s' "$stale" | /usr/bin/tr '\n' ' ')"
+for pid in $stale; do
+  root kill -TERM "$pid" 2>/dev/null || true
+done
+sleep 10
+for pid in $stale; do
+  if /bin/ps -p "$pid" >/dev/null 2>&1; then
+    root kill -KILL "$pid" 2>/dev/null || true
+  fi
+done
+snapshot
+root launchctl kickstart -k system/com.wisent.stado-precheck-runner ||
+  fail 'launchctl refused to restart com.wisent.stado-precheck-runner after reclaiming its listener'
+if await_listening "$snapshot_path" "$snapshot_bytes" 150; then
+  printf 'runner listener: listening for jobs after reclaiming a stale listener\n'
+  exit 0
+fi
+last=$(root tail -n 5 "$(newest_log_path)" 2>/dev/null | /usr/bin/tr '\n' ' ')
+fail "the runner did not report listening after its stale listener was reclaimed: $last"
+"#;
+
+const LINUX_RESTART: &str = r#"set -uo pipefail
+root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+runner_root=/opt/wisent/stado-precheck-runner
+fail() { printf 'precheck runner: %s\n' "$1" >&2; exit 1; }
+newest_before=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+bytes_before=0
+if [ -n "$newest_before" ]; then
+  bytes_before=$(root stat -c %s "$newest_before" 2>/dev/null || printf '0')
+fi
+root systemctl restart wisent-stado-precheck-runner.service ||
+  fail 'systemctl refused to restart wisent-stado-precheck-runner.service'
+deadline=$(( $(date +%s) + 180 ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  sleep 5
+  newest_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+  [ -n "$newest_log" ] || continue
+  if [ "$newest_log" != "$newest_before" ]; then
+    fresh=$(root cat "$newest_log" 2>/dev/null)
+  else
+    fresh=$(root tail -c "+$(( bytes_before + 1 ))" "$newest_log" 2>/dev/null)
+  fi
+  if printf '%s' "$fresh" | grep -a -q 'Listening for Jobs'; then
+    printf 'runner listener: listening for jobs\n'
+    exit 0
+  fi
+done
+newest_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+last=$(root tail -n 5 "$newest_log" 2>/dev/null | tr '\n' ' ')
+fail "the runner did not report listening within 180s of the restart: $last"
 "#;
 
 const LINUX_REMOVE: &str = r#"set -euo pipefail

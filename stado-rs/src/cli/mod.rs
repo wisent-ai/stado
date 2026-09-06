@@ -270,46 +270,6 @@ impl From<crate::providers::ProviderError> for CmdError {
     }
 }
 
-const ONBOARDING: &str = "\
-Stado — one queue for every machine.
-
-Stado needs three things:
-- state storage for the queue and results,
-- at least one compute provider,
-- a running worker that can claim jobs.
-
-Fastest path: local mode. `stado config init` creates:
-- provider: local
-- queue storage: ~/.stado/local-storage
-- backup storage: ~/.stado/local-backup
-
-No cloud account or credentials are required for local mode.
-The worker host must already have the shell, runtime, and GPU driver required by the workload.
-
-1. Create the local configuration:
-   stado config init
-
-2. Check the installation:
-   stado config validate
-   stado doctor --fix-hints
-
-3. Start the local control plane:
-   stado local-control-plane
-
-Submit your first job (retain --run-id to recover the same job after a retry):
-   stado submit --run-id onboarding-hello \"printf 'hello from Stado\\n'\"
-
-Already configured? Run:
-   stado overview
-
-More commands:
-   stado --help
-";
-
-fn print_onboarding() {
-    print!("{ONBOARDING}");
-}
-
 #[derive(Parser)]
 #[command(
     // Not bare `version`: that prints CARGO_PKG_VERSION alone, and one
@@ -330,11 +290,17 @@ enum Commands {
     #[command(name = "package-root", hide = true)]
     PackageRoot,
 
-    /// Show the CLI first-use walkthrough.
+    /// Show the CLI first-use walkthrough or import an existing registry-v2 file.
     Onboarding {
         /// Discard recorded progress and evidence, then show the walkthrough again.
         #[arg(long)]
         reset: bool,
+        /// Additively adopt this registry-v2 JSON file into the canonical registry.
+        #[arg(long = "import-registry")]
+        import_registry: Option<String>,
+        /// Emit the typed import receipt. Requires --import-registry.
+        #[arg(long, requires = "import_registry")]
+        json: bool,
     },
 
     /// List Stado capability families, variants, providers and active selections.
@@ -482,8 +448,8 @@ enum Commands {
 
     /// Run the Stado API listener for the wisent-compute queue.
     ///
-    /// Serves the authenticated object, release, machine, service and
-    /// host-health routes plus the three enrollment routes over loopback
+    /// Serves native operator actions and the authenticated object, release,
+    /// machine, service, host-health and enrollment routes over loopback
     /// HTTP. It serves no HTML page; the operator workspace is Stado
     /// Desktop.
     ///
@@ -1112,6 +1078,14 @@ pub(crate) enum CostCommands {
 enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
     Validate { path: Option<String> },
+    /// Additively adopt an existing registry-v2 JSON document.
+    Import {
+        /// Existing Stado registry-v2 JSON file.
+        path: String,
+        /// Emit a `stado.registry-import-receipt.v1` object.
+        #[arg(long)]
+        json: bool,
+    },
     /// Upload local registry.json to the canonical registry object.
     ///
     /// With --if-generation the write is conditional on the generation the
@@ -1273,6 +1247,18 @@ enum HostPrecheckRunnerCommands {
     },
     /// Read the installed runner service, identity and network boundary.
     Status {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restart the runner in place and wait until it reports listening for
+    /// jobs.
+    ///
+    /// For a listener whose session to GitHub's broker was cut: the process
+    /// and the launchd state stay healthy, every job for its labels queues
+    /// forever, and `install` leaves a running service alone.
+    Restart {
         target: String,
         /// Emit the lifecycle report as JSON.
         #[arg(long)]
@@ -1819,7 +1805,7 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Mint one bounded Skarbiec bearer on TARGET's live vault.
+    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
     #[command(name = "vault-token-mint")]
     VaultTokenMint {
         target: String,
@@ -1836,9 +1822,18 @@ enum HostCommands {
         /// Replace an existing consumer's capability set.
         #[arg(long)]
         replace_capabilities: bool,
-        /// Print only the bearer, for piping directly into a secret store.
+        /// Reuse this owner-vault item's bearer instead of generating one.
         #[arg(long)]
+        token_item: Option<String>,
+        /// Field in --token-item; defaults to token.
+        #[arg(long, requires = "token_item")]
+        token_field: Option<String>,
+        /// Print only a newly generated bearer, for piping into a secret store.
+        #[arg(long, conflicts_with = "token_item")]
         raw_token: bool,
+        /// Keep the bearer in TARGET's ~/.stado/NAME; create if absent, reuse if present.
+        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
+        token_file_name: Option<String>,
         /// Emit nonsecret bearer metadata as JSON.
         #[arg(long)]
         json: bool,
@@ -1877,6 +1872,16 @@ enum HostCommands {
     ReconcileServiceVerifier {
         target: String,
         /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's `agent.skarbiec.url` the credential endpoint the service
+    /// directory declares for that host, so the queue agent reads workload
+    /// secrets through a broker that exists.
+    #[command(name = "reconcile-agent-skarbiec")]
+    ReconcileAgentSkarbiec {
+        target: String,
+        /// Emit the receipt as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -2239,8 +2244,9 @@ enum HostCommands {
         /// Local renderer to deliver and run.
         source: String,
     },
-    /// Report TARGET's stado-managed binaries, forward markers and loopback
-    /// listeners, and whether each marker still matches a live listener.
+    /// Report TARGET's stado-managed binaries, fixed Cargo-home metadata and
+    /// bin membership, forward markers and loopback listeners, and whether
+    /// each marker still matches a live listener.
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.
@@ -2682,14 +2688,28 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC, CuaDriver, and the signed
     /// Apple challenge helper for the registry-bound GUI user.
-    Status { target: String },
+    Status {
+        target: String,
+        /// Return the complete observed host state as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Configure the persistent GUI login, CuaDriver, the Apple challenge
     /// helper, runtime, and Accessibility grants.
     Enable { target: String },
     /// Reconcile the signed Apple challenge helper and grant it and the
     /// installed CuaDriver Accessibility for the registry-bound GUI user.
     #[command(name = "grant-accessibility")]
-    GrantAccessibility { target: String },
+    GrantAccessibility {
+        target: String,
+        /// Prepare only the Apple challenge helper; leave CuaDriver, its
+        /// Accessibility grants, and its runtime unchanged.
+        #[arg(long)]
+        apple_only: bool,
+        /// Return the complete preparation report, including partial work on failure.
+        #[arg(long)]
+        json: bool,
+    },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
     Disable {
@@ -2929,8 +2949,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         )));
     }
     let Some(command) = cli.command else {
-        print_onboarding();
-        return Ok(());
+        return onboarding::run(false, None, false).await;
     };
     match command {
         Commands::PackageRoot => {
@@ -2940,7 +2959,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             println!("{}", crate::data_dir().display());
             Ok(())
         }
-        Commands::Onboarding { reset } => onboarding::run(reset),
+        Commands::Onboarding {
+            reset,
+            import_registry,
+            json,
+        } => onboarding::run(reset, import_registry, json).await,
         Commands::Capabilities { capability, json } => {
             capabilities::run(capability.as_deref(), json)
         }
@@ -3038,6 +3061,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
+            RegistryCommands::Import { path, json } => registry::import(path, json).await,
             RegistryCommands::Push {
                 path,
                 if_generation,
@@ -3213,15 +3237,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
-                host::gui_automation_status(&target).await
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
+                host::gui_automation_status(&target, json).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
                 host::gui_automation_enable(&target).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
                 target,
-            }) => host::gui_automation_grant_accessibility(&target).await,
+                apple_only,
+                json,
+            }) => host::gui_automation_grant_accessibility(&target, apple_only, json).await,
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }
@@ -3286,6 +3312,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 }
                 HostPrecheckRunnerCommands::Status { target, json } => {
                     precheck_runner::status(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Restart { target, json } => {
+                    precheck_runner::restart(&target, json).await
                 }
                 HostPrecheckRunnerCommands::Remove { target, json } => {
                     precheck_runner::remove(&target, json).await
@@ -3444,7 +3473,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 audience,
                 ttl_seconds,
                 replace_capabilities,
+                token_item,
+                token_field,
                 raw_token,
+                token_file_name,
                 json,
             } => {
                 host::vault_token_mint(
@@ -3454,7 +3486,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     &audience,
                     ttl_seconds,
                     replace_capabilities,
+                    token_item.as_deref(),
+                    token_field.as_deref().unwrap_or("token"),
                     raw_token,
+                    token_file_name.as_deref(),
                     json,
                 )
                 .await
@@ -3467,6 +3502,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await
+            }
+            HostCommands::ReconcileAgentSkarbiec { target, json } => {
+                host::reconcile_agent_skarbiec(&target, json).await
             }
             HostCommands::RecoverSkarbiecAudit { target, json } => {
                 host::recover_skarbiec_audit(&target, json).await

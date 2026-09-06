@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -110,7 +110,7 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 
 const REMOTE_PYTHON: &str = include_str!("host_storage_reconcile.py");
 
-const FENCE_SCHEMA: &str = "stado.storage-root-fence.v4";
+const FENCE_SCHEMA: &str = "stado.storage-root-fence.v5";
 const READ_FENCE: &str = "read-fence";
 const READ_OWNER: &str = "read-owner";
 const PREFLIGHT_EVIDENCE_FILE: &str = "preflight.json";
@@ -138,6 +138,8 @@ struct WriterFence {
     target: String,
     label: String,
     role: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    storage_evidence: Vec<String>,
     path: String,
     listener_port: Option<u16>,
     was_loaded: bool,
@@ -223,6 +225,23 @@ struct ImmutableEvidenceReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct StorageRoots {
+    primary: String,
+    backup: String,
+    prior_primary: String,
+    prior_backup: Option<String>,
+    runtime: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WriteFenceEffect {
+    status: String,
+    intent: Value,
+    acquired_at: Option<i64>,
+    released_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LifecycleFence {
     schema: String,
     transaction: String,
@@ -231,8 +250,17 @@ struct LifecycleFence {
     queue: QueueFence,
     writers: Vec<WriterFence>,
     transport_retained: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    non_storage_retained: Vec<Value>,
     staged_runtime: Option<super::host_release::StagedRelease>,
-    preflight_evidence: ImmutableEvidenceReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    roots: Option<StorageRoots>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    write_fence: Option<WriteFenceEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preflight_evidence: Option<ImmutableEvidenceReference>,
+    #[serde(default)]
+    rollback_preparation: bool,
     #[serde(default)]
     lease_acquisitions: Vec<LeaseAcquisition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -556,6 +584,7 @@ struct ServiceCandidate {
     declared: service::ManagedService,
     loaded_domains: Vec<String>,
     observed_command: String,
+    storage_evidence: BTreeSet<String>,
 }
 
 fn command_tokens(command: &str) -> Vec<&str> {
@@ -568,6 +597,20 @@ fn command_tokens(command: &str) -> Vec<&str> {
 
 fn executable_name(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
+}
+
+fn storage_route_key(key: &str) -> bool {
+    matches!(
+        key,
+        "STADO_CONFIG"
+            | "WC_STORAGE_BACKEND"
+            | "WC_LOCAL_STORAGE_PATH"
+            | "WC_BACKUP_STORAGE_BACKEND"
+            | "WC_BACKUP_LOCAL_STORAGE_PATH"
+            | "WC_STADO_STORAGE_URL"
+            | "WC_STADO_STORAGE_NAMESPACE"
+            | "WC_STADO_STORAGE_TOKEN_FILE"
+    )
 }
 
 fn service_role(label: &str, command: &str) -> &'static str {
@@ -585,10 +628,15 @@ fn service_role(label: &str, command: &str) -> &'static str {
     let executable = tokens
         .iter()
         .position(|token| executable_name(token) == "stado");
+    if executable.is_some_and(|index| {
+        tokens.get(index + 1).copied() == Some("release")
+            && tokens.get(index + 2).copied() == Some("agent")
+    }) {
+        return "release-agent";
+    }
     if let Some(index) = executable {
         return match tokens.get(index + 1).copied() {
             Some("resolver") => "transport",
-            Some("release-agent") => "release-agent",
             Some("coordinator" | "local-control-plane" | "cloud-control-plane") => "coordinator",
             Some("agent") => "agent",
             Some("disk-cleanup") => "disk-cleanup",
@@ -600,9 +648,11 @@ fn service_role(label: &str, command: &str) -> &'static str {
         .map(|token| executable_name(token))
         .unwrap_or_default()
     {
-        "caddy" | "tailscaled" | "skarbiec" | "skarbiec-control-plane" | "ssh" => "transport",
+        "caddy" | "cloudflared" | "tailscaled" | "skarbiec" | "skarbiec-control-plane" | "ssh" => {
+            "transport"
+        }
         "stado-fix" => "agent",
-        _ => "writer",
+        _ => "other",
     }
 }
 
@@ -691,6 +741,12 @@ async fn registry_services(
         if declared.unit_id() == resident_owner_unit {
             continue;
         }
+        let storage_evidence = declared
+            .env
+            .keys()
+            .filter(|key| storage_route_key(key))
+            .cloned()
+            .collect();
         candidates.insert(
             declared.unit_id().to_string(),
             ServiceCandidate {
@@ -701,6 +757,7 @@ async fn registry_services(
                     .join(" "),
                 declared,
                 loaded_domains: Vec::new(),
+                storage_evidence,
             },
         );
     }
@@ -724,6 +781,7 @@ async fn registry_services(
                     declared: managed_from_unit(storage_target, &label, &path, kind),
                     loaded_domains: Vec::new(),
                     observed_command: String::new(),
+                    storage_evidence: BTreeSet::new(),
                 });
         }
     }
@@ -752,8 +810,18 @@ async fn registry_services(
                 declared: managed_from_unit(storage_target, &label, &native.path, kind),
                 loaded_domains: Vec::new(),
                 observed_command: String::new(),
+                storage_evidence: BTreeSet::new(),
             }
         });
+        for key in native
+            .env_keys
+            .iter()
+            .chain(&native.script_reads)
+            .chain(&native.script_assigns)
+            .filter(|key| storage_route_key(key))
+        {
+            candidate.storage_evidence.insert(key.clone());
+        }
         if candidate.declared.path.is_empty() && !native.path.is_empty() {
             candidate.declared.path.clone_from(&native.path);
         }
@@ -796,6 +864,13 @@ async fn renew_fence_leases(
     store: &crate::queue::JobStorage,
     fence: &mut LifecycleFence,
 ) -> Result<(), DeployError> {
+    if fence
+        .write_fence
+        .as_ref()
+        .is_some_and(|effect| matches!(effect.status.as_str(), "acquired" | "release_intent"))
+    {
+        return Ok(());
+    }
     const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
     for acquisition in &mut fence.lease_acquisitions {
         if matches!(
@@ -816,7 +891,7 @@ async fn renew_fence_leases(
                 acquisition.subject_id
             ))
         })?;
-        *lease = crate::autonomy::storage::renew_placement_lease(
+        let renewed = crate::autonomy::storage::renew_placement_lease(
             store,
             &lease.subject_id,
             &lease.token,
@@ -824,13 +899,31 @@ async fn renew_fence_leases(
             Utc::now(),
         )
         .await
-        .map_err(|error| DeployError(format!("cannot renew {}: {error}", lease.subject_id)))?
-        .ok_or_else(|| {
-            DeployError(format!(
-                "placement lease ownership changed for {}",
-                lease.subject_id
-            ))
-        })?;
+        .map_err(|error| DeployError(format!("cannot renew {}: {error}", lease.subject_id)))?;
+        *lease = match renewed {
+            Some(renewed) => renewed,
+            None => crate::autonomy::storage::acquire_placement_lease(
+                store,
+                &lease.subject_id,
+                &fence.transaction,
+                &lease.holder,
+                LEASE_TTL_SECONDS,
+                Utc::now(),
+            )
+            .await
+            .map_err(|error| {
+                DeployError(format!(
+                    "cannot recover lease {}: {error}",
+                    lease.subject_id
+                ))
+            })?
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "placement lease ownership changed for {}",
+                    lease.subject_id
+                ))
+            })?,
+        };
     }
     Ok(())
 }
@@ -1085,63 +1178,36 @@ async fn prove_listener_closed(
     runner: &Runner,
 ) -> Result<(), DeployError> {
     let script = format!(
-        "PORT={} /usr/bin/python3 - <<'PY'\n\
-import os, socket, time\n\
-port = int(os.environ['PORT'])\n\
-deadline = time.monotonic() + 30\n\
-while True:\n\
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n\
-    probe.settimeout(0.2)\n\
-    result = probe.connect_ex(('127.0.0.1', port))\n\
-    probe.close()\n\
-    if result != 0:\n\
-        print('STADO_LISTENER_CLOSED\\t' + str(port))\n\
-        break\n\
-    if time.monotonic() >= deadline:\n\
-        raise SystemExit('object API listener remained open')\n\
-    time.sleep(0.2)\n\
-PY",
+        r#"PORT={} /usr/bin/python3 - <<'PY'
+import os, socket, time
+port = int(os.environ['PORT'])
+deadline = time.monotonic() + 30
+while True:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.2)
+    result = probe.connect_ex(('127.0.0.1', port))
+    probe.close()
+    if result != 0:
+        print('STADO_LISTENER_CLOSED\t' + str(port))
+        break
+    if time.monotonic() >= deadline:
+        raise SystemExit('object API listener remained open')
+    time.sleep(0.2)
+PY"#,
         port
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "object API listener did not close",
+        return Err(DeployError(format!(
+            "object API listener on {}:{port} did not close: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     Ok(())
 }
 
-fn qualified_copy_required(preflight: &Value) -> Result<bool, DeployError> {
-    let backup = preflight
-        .get("backup_qualified")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("preflight omitted the backup qualified inventory".to_string())
-        })?;
-    let primary = preflight
-        .get("primary_qualified")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("preflight omitted the primary qualified inventory".to_string())
-        })?;
-    let primary_by_path = primary
-        .iter()
-        .filter_map(|item| {
-            item.get("path")
-                .and_then(Value::as_str)
-                .map(|path| (path, item))
-        })
-        .collect::<BTreeMap<_, _>>();
-    Ok(backup.iter().any(|item| {
-        item.get("path")
-            .and_then(Value::as_str)
-            .and_then(|path| primary_by_path.get(path).copied())
-            != Some(item)
-    }))
-}
 fn physical_file_identity<'a>(
     preflight: &'a Value,
     inventory: &str,
@@ -1162,33 +1228,34 @@ async fn snapshot_unit_file(
     runner: &Runner,
 ) -> Result<Option<FileSnapshot>, DeployError> {
     let script = format!(
-        "STADO_UNIT_PATH={} /usr/bin/python3 - <<'PY'\n\
-import base64, hashlib, json, os, stat\n\
-path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))\n\
-try:\n\
-    info = os.lstat(path)\n\
-except FileNotFoundError:\n\
-    print('STADO_UNIT_SNAPSHOT\\tabsent')\n\
-    raise SystemExit(0)\n\
-if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):\n\
-    raise SystemExit('unit path is not a regular non-symlink file')\n\
-with open(path, 'rb') as handle:\n\
-    body = handle.read()\n\
-print('STADO_UNIT_SNAPSHOT\\t' + json.dumps({{\n\
-    'body_base64': base64.b64encode(body).decode('ascii'),\n\
-    'sha256': hashlib.sha256(body).hexdigest(),\n\
-    'mode': stat.S_IMODE(info.st_mode),\n\
-    'uid': info.st_uid,\n\
-    'gid': info.st_gid,\n\
-}}, sort_keys=True, separators=(',', ':')))\n\
-PY",
+        r#"STADO_UNIT_PATH={} /usr/bin/python3 - <<'PY'
+import base64, hashlib, json, os, stat
+path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
+try:
+    info = os.lstat(path)
+except FileNotFoundError:
+    print('STADO_UNIT_SNAPSHOT\tabsent')
+    raise SystemExit(0)
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    raise SystemExit('unit path is not a regular non-symlink file')
+with open(path, 'rb') as handle:
+    body = handle.read()
+print('STADO_UNIT_SNAPSHOT\t' + json.dumps({{
+    'body_base64': base64.b64encode(body).decode('ascii'),
+    'sha256': hashlib.sha256(body).hexdigest(),
+    'mode': stat.S_IMODE(info.st_mode),
+    'uid': info.st_uid,
+    'gid': info.st_gid,
+}}, sort_keys=True, separators=(',', ':')))
+PY"#,
         shlex_quote(path)
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "unit file could not be snapshotted",
+        return Err(DeployError(format!(
+            "unit snapshot failed for {path} on {}: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     let value = output
@@ -1242,105 +1309,115 @@ async fn correlate_served_store(
     port: u16,
     preflight: &Value,
     primary_after_commit: bool,
+    conflict_winner: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
+    if !matches!(conflict_winner, "primary" | "backup") {
+        return Err(DeployError(
+            "served-store correlation conflict winner is invalid".to_string(),
+        ));
+    }
     let payload = serde_json::to_vec(&json!({
         "primary": preflight.get("primary_qualified"),
         "backup": preflight.get("backup_qualified"),
         "primary_physical": preflight.get("primary_physical"),
         "backup_physical": preflight.get("backup_physical"),
         "primary_after_commit": primary_after_commit,
+        "conflict_winner": conflict_winner,
     }))
     .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
     let script = format!(
-        "STADO_CORRELATION={} STADO_OBJECT_PORT={} /usr/bin/python3 - <<'PY'\n\
-import base64, hashlib, json, os, urllib.parse, urllib.request\n\
-payload = json.loads(base64.b64decode(os.environ['STADO_CORRELATION']))\n\
-port = int(os.environ['STADO_OBJECT_PORT'])\n\
-token_path = os.path.expanduser('~/.stado/queue-object-api-token')\n\
-with open(token_path, encoding='utf-8') as handle:\n\
-    token = handle.read().strip()\n\
-if not token:\n\
-    raise SystemExit('object API correlation token is empty')\n\
-headers = {{'Authorization': 'Bearer ' + token}}\n\
-base = 'http://127.0.0.1:' + str(port)\n\
-request = urllib.request.Request(base + '/api/object/list?namespace=probierz&prefix=', headers=headers)\n\
-with urllib.request.urlopen(request, timeout=30) as response:\n\
-    listed = json.load(response)\n\
-keys = sorted(item.get('key') for item in listed.get('objects', []) if isinstance(item.get('key'), str))\n\
-def identities(name):\n\
-    result = {{}}\n\
-    prefix = 'ecosystem/probierz/'\n\
-    for item in payload[name]:\n\
-        path = item.get('path', '')\n\
-        if not path.startswith(prefix):\n\
-            continue\n\
-        result[path[len(prefix):]] = item.get('body')\n\
-    return result\n\
-primary_before = identities('primary')\n\
-backup = identities('backup')\n\
-primary = dict(primary_before)\n\
-if payload.get('primary_after_commit'):\n\
-    primary.update(backup)\n\
-served = {{}}\n\
-for key in keys:\n\
-    uri = 'stado://probierz/' + key\n\
-    url = base + '/api/object?uri=' + urllib.parse.quote(uri, safe='')\n\
-    request = urllib.request.Request(url, headers=headers)\n\
-    digest = hashlib.sha256()\n\
-    size = 0\n\
-    with urllib.request.urlopen(request, timeout=60) as response:\n\
-        while True:\n\
-            chunk = response.read(1024 * 1024)\n\
-            if not chunk:\n\
-                break\n\
-            digest.update(chunk)\n\
-            size += len(chunk)\n\
-    served[key] = {{'sha256': digest.hexdigest(), 'size': size}}\n\
-matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)\n\
-matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)\n\
-if not matches_primary and not matches_backup:\n\
-    raise SystemExit('object API does not serve either complete physical qualified root')\n\
-authority = 'identical' if matches_primary and matches_backup else 'A' if matches_primary else 'B'\n\
-def physical_identity(name, path):\n\
-    for item in payload[name].get('files', []):\n\
-        if item.get('path') == path:\n\
-            return item.get('body')\n\
-    return None\n\
-object_mappings = [{{\n\
-    'backend': 'stado-object-api', 'namespace': 'probierz', 'key': key,\n\
-    'physical_path': 'ecosystem/probierz/' + key, 'identity': served[key],\n\
-}} for key in keys]\n\
-registry_mappings = [\n\
-    {{'root': 'A', 'backend': 'local', 'namespace': None, 'key': 'registry.json',\n\
-      'physical_path': 'registry.json',\n\
-      'identity': physical_identity('primary_physical', 'registry.json')}},\n\
-    {{'root': 'B', 'backend': 'local', 'namespace': None, 'key': 'registry.json',\n\
-      'physical_path': 'registry.json',\n\
-      'identity': physical_identity('backup_physical', 'registry.json')}},\n\
-    {{'root': 'served', 'backend': 'stado-object', 'namespace': None,\n\
-      'key': 'registry.json', 'physical_path': None,\n\
-      'observation': 'client namespace was not observable from the object API'}},\n\
-]\n\
-print('STADO_SERVED_STORE\\t' + json.dumps({{\n\
-    'object_authority': authority,\n\
-    'endpoint': base,\n\
-    'object_store': {{'backend': 'stado-object-api', 'namespace': 'probierz',\n\
-                     'objects': object_mappings}},\n\
-    'registry_store': {{'mappings': registry_mappings}},\n\
-    'primary_root': os.path.expanduser('~/.stado/local-storage'),\n\
-    'backup_root': os.path.expanduser('~/.stado/local-backup'),\n\
-}}, sort_keys=True, separators=(',', ':')))\n\
-PY",
-        shlex_quote(&encoded),
-        port
+        r#"STADO_OBJECT_PORT={port} /usr/bin/python3 - <<'PY'
+import base64, hashlib, json, os, urllib.parse, urllib.request
+payload = json.loads(base64.b64decode('{encoded}'))
+port = int(os.environ['STADO_OBJECT_PORT'])
+token_path = os.path.expanduser('~/.stado/queue-object-api-token')
+with open(token_path, encoding='utf-8') as handle:
+    token = handle.read().strip()
+if not token:
+    raise SystemExit('object API correlation token is empty')
+headers = {{'Authorization': 'Bearer ' + token}}
+base = 'http://127.0.0.1:' + str(port)
+request = urllib.request.Request(base + '/api/object/list?namespace=probierz&prefix=', headers=headers)
+with urllib.request.urlopen(request, timeout=30) as response:
+    listed = json.load(response)
+keys = sorted(item.get('key') for item in listed.get('objects', []) if isinstance(item.get('key'), str))
+def identities(name):
+    result = {{}}
+    prefix = 'ecosystem/probierz/'
+    for item in payload[name]:
+        path = item.get('path', '')
+        if not path.startswith(prefix):
+            continue
+        result[path[len(prefix):]] = item.get('body')
+    return result
+primary_before = identities('primary')
+backup = identities('backup')
+primary = dict(primary_before)
+if payload.get('primary_after_commit'):
+    if payload.get('conflict_winner') == 'primary':
+        primary = dict(backup)
+        primary.update(primary_before)
+    else:
+        primary.update(backup)
+served = {{}}
+for key in keys:
+    uri = 'stado://probierz/' + key
+    url = base + '/api/object?uri=' + urllib.parse.quote(uri, safe='')
+    request = urllib.request.Request(url, headers=headers)
+    digest = hashlib.sha256()
+    size = 0
+    with urllib.request.urlopen(request, timeout=60) as response:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    served[key] = {{'sha256': digest.hexdigest(), 'bytes': size}}
+matches_primary = keys == sorted(primary) and all(served[key] == primary[key] for key in keys)
+matches_backup = keys == sorted(backup) and all(served[key] == backup[key] for key in keys)
+if not matches_primary and not matches_backup:
+    raise SystemExit('object API does not serve either complete physical qualified root')
+authority = 'identical' if matches_primary and matches_backup else 'A' if matches_primary else 'B'
+def physical_identity(name, path):
+    for item in payload[name].get('files', []):
+        if item.get('path') == path:
+            return item.get('body')
+    return None
+object_mappings = [{{
+    'backend': 'stado-object-api', 'namespace': 'probierz', 'key': key,
+    'physical_path': 'ecosystem/probierz/' + key, 'identity': served[key],
+}} for key in keys]
+registry_mappings = [
+    {{'root': 'A', 'backend': 'local', 'namespace': None, 'key': 'registry.json',
+      'physical_path': 'registry.json',
+      'identity': physical_identity('primary_physical', 'registry.json')}},
+    {{'root': 'B', 'backend': 'local', 'namespace': None, 'key': 'registry.json',
+      'physical_path': 'registry.json',
+      'identity': physical_identity('backup_physical', 'registry.json')}},
+    {{'root': 'served', 'backend': 'stado-object', 'namespace': None,
+      'key': 'registry.json', 'physical_path': None,
+      'observation': 'client namespace was not observable from the object API'}},
+]
+print('STADO_SERVED_STORE\t' + json.dumps({{
+    'object_authority': authority,
+    'endpoint': base,
+    'object_store': {{'backend': 'stado-object-api', 'namespace': 'probierz',
+                     'objects': object_mappings}},
+    'registry_store': {{'mappings': registry_mappings}},
+    'primary_root': os.path.expanduser('~/.stado/local-storage'),
+    'backup_root': os.path.expanduser('~/.stado/local-backup'),
+}}, sort_keys=True, separators=(',', ':')))
+PY"#
     );
     let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "object API physical-store correlation failed",
+        return Err(DeployError(format!(
+            "object API physical-store correlation failed on {}:{port}: {}",
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     output
@@ -1353,10 +1430,352 @@ PY",
                 .map_err(|error| DeployError(format!("object API correlation is invalid: {error}")))
         })
 }
+async fn observe_object_runtime(
+    target: &crate::targets::ComputeTarget,
+    port: u16,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    let script = format!(
+        r#"python3 - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen('http://127.0.0.1:{port}/api/state.json', timeout=30) as response:
+    state = json.load(response)
+print('STADO_STORAGE_RECONCILE\t' + json.dumps(state, sort_keys=True))
+PY
+"#
+    );
+    let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
+    parse_remote_payload(&output)
+}
+
+fn capture_storage_roots(
+    transaction: &str,
+    runtime: Value,
+    writer: &WriterFence,
+    staged: &super::host_release::StagedRelease,
+) -> Result<StorageRoots, DeployError> {
+    let directory = transaction_directory(transaction)?;
+    let home = directory.ancestors().nth(3).ok_or_else(|| {
+        DeployError("transaction directory has no Stado data directory".to_string())
+    })?;
+    let primary = home.join("local-storage").to_string_lossy().into_owned();
+    let backup = home.join("local-backup").to_string_lossy().into_owned();
+    let storage = runtime.get("storage").ok_or_else(|| {
+        DeployError("object API state omitted its constructed storage handle".to_string())
+    })?;
+    let pid = storage.get("pid").and_then(Value::as_u64);
+    if pid != writer.prior_pid.as_deref().and_then(|pid| pid.parse().ok())
+        || writer.prior_sha256.as_deref() != Some(staged.staged_sha256.as_str())
+    {
+        return Err(DeployError(format!(
+            "object API identity differs from the captured process or staged declared runtime: \
+             API PID {pid:?}, captured PID {:?}, mapped SHA-256 {:?}, staged SHA-256 {}",
+            writer.prior_pid, writer.prior_sha256, staged.staged_sha256,
+        )));
+    }
+    if storage.get("backend").and_then(Value::as_str) != Some("local")
+        || storage
+            .pointer("/write_fence/protocol")
+            .and_then(Value::as_str)
+            != Some(crate::queue::LocalBackend::WRITE_FENCE_PROTOCOL)
+    {
+        return Err(DeployError(
+            "object API does not report the local storage write-fence protocol; \
+             the declared release must converge before a storage handoff"
+                .to_string(),
+        ));
+    }
+    let prior_primary = storage
+        .get("local_path")
+        .and_then(Value::as_str)
+        .filter(|path| *path == primary || *path == backup)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "object API constructed root {:?} is outside fixed roots {primary:?} and {backup:?}",
+                storage.get("local_path")
+            ))
+        })?
+        .to_string();
+    let prior_backup = match storage.get("backup").filter(|value| !value.is_null()) {
+        None => None,
+        Some(mirror) => {
+            let path = mirror
+                .get("local_path")
+                .and_then(Value::as_str)
+                .filter(|path| *path == primary || *path == backup);
+            if mirror.get("backend").and_then(Value::as_str) != Some("local")
+                || path.is_none()
+                || path == Some(prior_primary.as_str())
+            {
+                return Err(DeployError(format!(
+                    "object API constructed mirror is outside the distinct fixed A/B roots: {mirror}"
+                )));
+            }
+            path.map(str::to_string)
+        }
+    };
+    Ok(StorageRoots {
+        primary,
+        backup,
+        prior_primary,
+        prior_backup,
+        runtime,
+    })
+}
+
+async fn acquire_storage_write_fence(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
+    guard: &mut Option<std::fs::File>,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    use crate::queue::LocalBackend;
+    let roots = fence.roots.as_ref().ok_or_else(|| {
+        DeployError("lifecycle fence omitted its observed storage roots".to_string())
+    })?;
+    let root = PathBuf::from(&roots.primary);
+    let paths = LocalBackend::write_fence_paths(&root)
+        .ok_or_else(|| DeployError("primary root has no storage write-fence path".to_string()))?;
+    if LocalBackend::write_fence_paths(Path::new(&roots.backup)) != Some(paths.clone()) {
+        return Err(DeployError(
+            "A and B do not share the same storage write fence".to_string(),
+        ));
+    }
+    if fence.write_fence.is_none() {
+        fence.write_fence = Some(WriteFenceEffect {
+            status: "acquire_intent".to_string(),
+            intent: json!({
+                "schema": LocalBackend::WRITE_FENCE_PROTOCOL,
+                "transaction": transaction,
+                "primary_root": roots.primary,
+                "backup_root": roots.backup,
+                "prepared_at": Utc::now().timestamp(),
+            }),
+            acquired_at: None,
+            released_at: None,
+        });
+        write_fence(target, transaction, fence, runner).await?;
+    }
+    let effect = fence
+        .write_fence
+        .as_ref()
+        .expect("write intent was recorded");
+    if effect.status == "released" {
+        return Ok(());
+    }
+    if guard.is_none() {
+        let file = LocalBackend::open_write_fence_lock(&root)
+            .map_err(|error| DeployError(error.to_string()))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match fs2::FileExt::try_lock_exclusive(&file) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(DeployError(
+                            "in-flight local storage writes did not finish within 30 seconds; \
+                             the recorded handoff remains resumable"
+                                .to_string(),
+                        ));
+                    }
+                    sleep(Duration::from_millis(25)).await;
+                }
+                Err(error) => {
+                    return Err(DeployError(format!(
+                        "cannot acquire storage write fence {}: {error}",
+                        paths.0.display()
+                    )))
+                }
+            }
+        }
+        *guard = Some(file);
+    }
+    let state =
+        LocalBackend::write_fence_state(&root).map_err(|error| DeployError(error.to_string()))?;
+    match state.get("intent").filter(|value| !value.is_null()) {
+        Some(intent) if intent == &effect.intent => {}
+        Some(intent) => {
+            return Err(DeployError(format!(
+                "storage write fence belongs to a different recorded intent: {intent}"
+            )))
+        }
+        None if effect.status == "acquire_intent" => {
+            atomic_json_file(&paths.1, &effect.intent, "storage write-fence intent")?;
+        }
+        None if effect.status == "release_intent" => return Ok(()),
+        None => {
+            return Err(DeployError(
+                "acquired storage write-fence intent disappeared; refusing to reconstruct it"
+                    .to_string(),
+            ))
+        }
+    }
+    if fence.write_fence.as_ref().unwrap().status == "acquire_intent" {
+        let effect = fence.write_fence.as_mut().unwrap();
+        effect.status = "acquired".to_string();
+        effect.acquired_at = Some(Utc::now().timestamp());
+        write_fence(target, transaction, fence, runner).await?;
+    }
+    Ok(())
+}
+
+async fn release_storage_write_fence(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
+    guard: &mut Option<std::fs::File>,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    use crate::queue::LocalBackend;
+    if fence.write_fence.is_none() {
+        return Ok(());
+    }
+    acquire_storage_write_fence(target, transaction, fence, guard, runner).await?;
+    if fence.write_fence.as_ref().unwrap().status == "released" {
+        return Ok(());
+    }
+    fence.write_fence.as_mut().unwrap().status = "release_intent".to_string();
+    write_fence(target, transaction, fence, runner).await?;
+    let root = Path::new(&fence.roots.as_ref().unwrap().primary);
+    let (_, intent_path) = LocalBackend::write_fence_paths(root).unwrap();
+    let state =
+        LocalBackend::write_fence_state(root).map_err(|error| DeployError(error.to_string()))?;
+    if let Some(intent) = state.get("intent").filter(|value| !value.is_null()) {
+        if intent != &fence.write_fence.as_ref().unwrap().intent {
+            return Err(DeployError(
+                "storage write-fence intent changed before release".to_string(),
+            ));
+        }
+        std::fs::remove_file(&intent_path).map_err(|error| {
+            DeployError(format!("cannot release {}: {error}", intent_path.display()))
+        })?;
+        std::fs::File::open(intent_path.parent().unwrap())
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| DeployError(format!("cannot sync write-fence release: {error}")))?;
+    }
+    let effect = fence.write_fence.as_mut().unwrap();
+    effect.status = "released".to_string();
+    effect.released_at = Some(Utc::now().timestamp());
+    write_fence(target, transaction, fence, runner).await?;
+    *guard = None;
+    Ok(())
+}
+
+async fn capture_fenced_preflight(
+    target: &crate::targets::ComputeTarget,
+    transaction: &str,
+    fence: &mut LifecycleFence,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    if fence.preflight_evidence.is_some() {
+        return Ok(());
+    }
+    let mut preflight = remote_phase(target, transaction, PREFLIGHT, runner).await?;
+    let writer = fence
+        .writers
+        .iter()
+        .find(|writer| writer.role == "object-api")
+        .ok_or_else(|| DeployError("fence omitted its object API".to_string()))?;
+    let roots = fence.roots.as_ref().unwrap();
+    let prior_root = if roots.prior_primary == roots.primary {
+        "A"
+    } else {
+        "B"
+    };
+    let conflict_winner = if prior_root == "A" {
+        "primary"
+    } else {
+        "backup"
+    };
+    let correlation = correlate_served_store(
+        target,
+        writer
+            .listener_port
+            .ok_or_else(|| DeployError("object API port is absent".to_string()))?,
+        &preflight,
+        false,
+        conflict_winner,
+        runner,
+    )
+    .await?;
+    let authority = correlation
+        .get("object_authority")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DeployError("fenced API proof omitted its authority".to_string()))?;
+    if !matches!(authority, "identical") && authority != prior_root {
+        return Err(DeployError(
+            "fenced API bytes disagree with its constructed storage root".to_string(),
+        ));
+    }
+    let inventory = if prior_root == "A" {
+        "primary_physical"
+    } else {
+        "backup_physical"
+    };
+    let configuration = json!({
+        "object_api": {
+            "runtime": roots.runtime,
+            "observed_loaded_environment": writer.prior_loaded_environment,
+            "unit_declaration": writer.unit_declared_environment,
+            "registry_declaration": writer.registry_declared_environment,
+        },
+        "dashboard_registry_store": {
+            "backend": "local", "namespace": Value::Null, "key": "registry.json",
+            "physical_root": prior_root,
+            "identity": physical_file_identity(&preflight, inventory, "registry.json"),
+        },
+    });
+    let report = preflight
+        .as_object_mut()
+        .ok_or_else(|| DeployError("fenced preflight report is not an object".to_string()))?;
+    report.insert("served_store".to_string(), correlation);
+    report.insert("effective_configuration".to_string(), configuration);
+    fence.preflight_evidence = Some(write_json_evidence(
+        transaction,
+        PREFLIGHT_EVIDENCE_FILE,
+        &preflight,
+        "fenced preflight evidence",
+        true,
+    )?);
+    write_fence(target, transaction, fence, runner).await
+}
+
+async fn print_settled_label(
+    target: &crate::targets::ComputeTarget,
+    label: &str,
+    runner: &Runner,
+) -> Result<super::service_label_print::LabelState, DeployError> {
+    let mut state =
+        super::service_label_print::print_label(target, label, service::BootoutScope::Any, runner)
+            .await?;
+    for _ in 0..2 {
+        let complete = state.pid.is_none()
+            || (state.process_started_at.is_some()
+                && state.process_executable.is_some()
+                && state.process_device.is_some()
+                && state.process_inode.is_some()
+                && state.process_sha256.is_some());
+        if complete {
+            return Ok(state);
+        }
+        sleep(Duration::from_secs(1)).await;
+        state = super::service_label_print::print_label(
+            target,
+            label,
+            service::BootoutScope::Any,
+            runner,
+        )
+        .await?;
+    }
+    Ok(state)
+}
+
 async fn prepare_lifecycle_fence(
     storage_target: &crate::targets::ComputeTarget,
     transaction: &str,
     runner: &Runner,
+    write_guard: &mut Option<std::fs::File>,
 ) -> Result<LifecycleFence, DeployError> {
     let mut fence = match read_fence(storage_target, transaction, runner).await? {
         Some(existing) => existing,
@@ -1371,8 +1790,6 @@ async fn prepare_lifecycle_fence(
                 })?
                 .to_string();
             let services = registry_services(storage_target, &resident_owner_unit, runner).await?;
-            let mut preflight =
-                remote_phase(storage_target, transaction, PREFLIGHT, runner).await?;
             let repository_runner_gate = repository_runner_gate().await?;
             let staged_runtime = super::host_release::stage_declared_release(
                 &storage_target.name,
@@ -1405,19 +1822,30 @@ async fn prepare_lifecycle_fence(
             )?;
             let mut writers = Vec::new();
             let mut transport_retained = Vec::new();
-            let mut api_already_forward = false;
             let mut owning_runner_found = false;
+            let mut non_storage_retained = Vec::new();
             let mut object_port = None;
             for candidate in &services {
-                let state = super::service_label_print::print_label(
-                    &candidate.target,
-                    candidate.declared.unit_id(),
-                    service::BootoutScope::Any,
-                    runner,
-                )
-                .await?;
+                let observed_role =
+                    service_role(candidate.declared.unit_id(), &candidate.observed_command);
+                if observed_role == "other" && candidate.storage_evidence.is_empty() {
+                    non_storage_retained.push(json!({
+                        "target": candidate.target.name.clone(),
+                        "label": candidate.declared.unit_id(),
+                        "loaded_domains": candidate.loaded_domains.clone(),
+                        "observed_command": candidate.observed_command.clone(),
+                        "reason": "no Stado/runner/object-API role or local-storage route evidence",
+                    }));
+                    continue;
+                }
+                let state =
+                    print_settled_label(&candidate.target, candidate.declared.unit_id(), runner)
+                        .await?;
                 let command = state.runs().unwrap_or(&candidate.observed_command);
                 let mut role = service_role(candidate.declared.unit_id(), command).to_string();
+                if role == "other" {
+                    role = "writer".to_string();
+                }
                 if role == "runner"
                     && current_runner.as_deref().is_some_and(|current| {
                         current_runner_candidate(candidate, command, current)
@@ -1469,15 +1897,6 @@ async fn prepare_lifecycle_fence(
                             candidate.declared.unit_id()
                         )));
                     }
-                    api_already_forward = loaded_routing_observed
-                        && state
-                            .loaded_environment
-                            .get("WC_LOCAL_STORAGE_PATH")
-                            .is_some_and(|path| path.ends_with("/.stado/local-storage"))
-                        && backup_backend.map(String::as_str) == Some("local")
-                        && backup_path
-                            .map(String::as_str)
-                            .is_some_and(|path| path.ends_with("/.stado/local-backup"));
                     object_port = command_u16_option(command, "--port");
                 }
                 if matches!(role.as_str(), "transport" | "current-runner") {
@@ -1558,6 +1977,7 @@ async fn prepare_lifecycle_fence(
                     target: candidate.target.name.clone(),
                     label: candidate.declared.unit_id().to_string(),
                     role,
+                    storage_evidence: candidate.storage_evidence.iter().cloned().collect(),
                     path: candidate.declared.path.clone(),
                     listener_port,
                     was_loaded,
@@ -1602,121 +2022,32 @@ async fn prepare_lifecycle_fence(
                     "runner gate did not map its owning native runner service".to_string(),
                 ));
             }
-            let correlation = correlate_served_store(
+            let runtime = observe_object_runtime(
                 storage_target,
-                object_port.ok_or_else(|| {
-                    DeployError(
-                        "object API listener port is absent from its loaded argv".to_string(),
-                    )
-                })?,
-                &preflight,
-                false,
+                object_port.ok_or_else(|| DeployError("object API port is absent".to_string()))?,
                 runner,
             )
             .await?;
-            let copy_required = qualified_copy_required(&preflight)?;
-            let served_authority = correlation
-                .get("object_authority")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    DeployError("fresh served-store proof omitted its authority".to_string())
-                })?;
-            if copy_required && !matches!(served_authority, "B" | "identical") {
-                return Err(DeployError(format!(
-                    "fresh object API proof serves authority {served_authority:?}; refusing a \
-                     B-winning copy derived from older evidence"
-                )));
-            }
-            preflight
-                .as_object_mut()
-                .ok_or_else(|| DeployError("preflight report is not an object".to_string()))?
-                .insert("served_store".to_string(), correlation.clone());
-            let primary_root = correlation
-                .get("primary_root")
-                .and_then(Value::as_str)
-                .ok_or_else(|| DeployError("served-store evidence omitted A root".to_string()))?;
-            let backup_root = correlation
-                .get("backup_root")
-                .and_then(Value::as_str)
-                .ok_or_else(|| DeployError("served-store evidence omitted B root".to_string()))?;
             let object_writer = writers
                 .iter_mut()
                 .find(|writer| writer.role == "object-api")
                 .expect("canonical object API writer was required above");
+            let roots =
+                capture_storage_roots(transaction, runtime, object_writer, &staged_runtime)?;
             object_writer.forward_object_recovery = Some(object_recovery_script(
                 object_writer,
-                primary_root,
-                Some(backup_root),
+                &roots.primary,
+                Some(&roots.backup),
             )?);
-            object_writer.rollback_object_recovery =
-                Some(object_recovery_script(object_writer, backup_root, None)?);
-            let raw_registry_identity =
-                physical_file_identity(&preflight, "primary_physical", "registry.json").cloned();
-            let configuration_evidence = json!({
-                "object_api": {
-                    "loaded_environment_status": if object_writer
-                        .prior_loaded_environment
-                        .contains_key("WC_STORAGE_BACKEND")
-                    {
-                        "observed"
-                    } else {
-                        "unavailable"
-                    },
-                    "observed_loaded_environment": object_writer.prior_loaded_environment.clone(),
-                    "unit_declaration": object_writer.unit_declared_environment.clone(),
-                    "registry_declaration":
-                        object_writer.registry_declared_environment.clone(),
-                },
-                "dashboard_registry_store": {
-                    "backend": if api_already_forward { Value::from("local") } else { Value::Null },
-                    "namespace": Value::Null,
-                    "key": "registry.json",
-                    "physical_root": if api_already_forward { Value::from("A") } else { Value::Null },
-                    "identity": raw_registry_identity,
-                },
-                "remote_registry_store_mapping": {
-                    "backend": "stado-object",
-                    "namespace": Value::Null,
-                    "key": "registry.json",
-                    "physical_path": Value::Null,
-                    "observation": "client namespace was not observed",
-                },
-            });
-            preflight
-                .as_object_mut()
-                .expect("preflight report was validated as an object")
-                .insert(
-                    "effective_configuration".to_string(),
-                    configuration_evidence,
-                );
-            let object_runtime_matches = writers
-                .iter()
-                .find(|writer| writer.role == "object-api")
-                .and_then(|writer| writer.prior_sha256.as_deref())
-                == Some(staged_runtime.staged_sha256.as_str());
-            let already_reconciled = !copy_required
-                && api_already_forward
-                && physical_file_identity(&preflight, "primary_physical", "registry.json")
-                    .is_some()
-                && correlation.get("object_authority").and_then(Value::as_str) == Some("A")
-                && object_runtime_matches;
-            let staged_runtime = Some(staged_runtime);
-            let preflight_evidence = write_json_evidence(
-                transaction,
-                PREFLIGHT_EVIDENCE_FILE,
-                &preflight,
-                "preflight evidence",
-                true,
-            )?;
+            object_writer.rollback_object_recovery = Some(object_recovery_script(
+                object_writer,
+                &roots.prior_primary,
+                roots.prior_backup.as_deref(),
+            )?);
             let initial = LifecycleFence {
                 schema: FENCE_SCHEMA.to_string(),
                 transaction: transaction.to_string(),
-                status: if already_reconciled {
-                    "already_reconciled"
-                } else {
-                    "preparing"
-                }
-                .to_string(),
+                status: "preparing".to_string(),
                 queue: QueueFence {
                     was_paused: prior.paused,
                     drained: false,
@@ -1742,8 +2073,12 @@ async fn prepare_lifecycle_fence(
                 resident_owner,
                 writers,
                 transport_retained,
-                staged_runtime,
-                preflight_evidence,
+                non_storage_retained,
+                staged_runtime: Some(staged_runtime),
+                roots: Some(roots),
+                write_fence: None,
+                preflight_evidence: None,
+                rollback_preparation: false,
                 lease_acquisitions: Vec::new(),
                 repository_runner_gate,
                 prepared_at: Utc::now().timestamp(),
@@ -1762,10 +2097,9 @@ async fn prepare_lifecycle_fence(
         ));
     }
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
-    if fence.status == "already_reconciled" {
-        return Ok(fence);
-    }
     if fence.status == "fenced" {
+        acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
+            .await?;
         return recheck_lifecycle_fence(storage_target, transaction, runner).await;
     }
     if fence.status != "preparing" {
@@ -1775,111 +2109,131 @@ async fn prepare_lifecycle_fence(
         )));
     }
 
-    let store = crate::queue::JobStorage::new()
-        .await
-        .map_err(|error| DeployError(format!("cannot open queue for fencing: {error}")))?;
-    const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
-    let subjects = fence
-        .writers
-        .iter()
-        .map(|writer| format!("service:{}:{}", writer.target, writer.label))
-        .collect::<Vec<_>>();
-    for subject in subjects {
-        let index = match fence
-            .lease_acquisitions
-            .iter()
-            .position(|entry| entry.subject_id == subject)
+    let store = if fence.write_fence.is_some() {
+        if !fence.queue.drained
+            || fence
+                .lease_acquisitions
+                .iter()
+                .any(|entry| entry.lease.is_none())
         {
-            Some(index) => index,
-            None => {
-                fence.lease_acquisitions.push(LeaseAcquisition {
-                    subject_id: subject.clone(),
-                    status: "acquire_intent".to_string(),
-                    lease: None,
-                    released_lease: None,
-                });
-                write_fence(storage_target, transaction, &fence, runner).await?;
-                fence.lease_acquisitions.len() - 1
-            }
-        };
-        if fence.lease_acquisitions[index].lease.is_none() {
-            let lease = crate::autonomy::storage::acquire_placement_lease(
-                &store,
-                &subject,
-                transaction,
-                "stado storage-root-reconcile",
-                LEASE_TTL_SECONDS,
-                Utc::now(),
-            )
-            .await
-            .map_err(|error| DeployError(format!("cannot acquire {subject}: {error}")))?
-            .ok_or_else(|| DeployError(format!("active placement lease blocks {subject}")))?;
-            fence.lease_acquisitions[index].lease = Some(lease);
-            fence.lease_acquisitions[index].status = "acquired".to_string();
-            write_fence(storage_target, transaction, &fence, runner).await?;
-        }
-    }
-    renew_fence_leases(&store, &mut fence).await?;
-    write_fence(storage_target, transaction, &fence, runner).await?;
-
-    if !fence.queue.drained {
-        if let Some(pause) = fence.queue.pause.as_ref() {
-            if pause.status != "applied" {
-                if pause.status != "pause_intent" {
-                    return Err(DeployError(format!(
-                        "queue pause has invalid state {:?}",
-                        pause.status
-                    )));
-                }
-                match execute_queue_effect(&store, pause).await? {
-                    QueueEffectOutcome::Applied => {
-                        fence
-                            .queue
-                            .pause
-                            .as_mut()
-                            .expect("queue pause was initialized")
-                            .status = "applied".to_string();
-                        write_fence(storage_target, transaction, &fence, runner).await?;
-                    }
-                    QueueEffectOutcome::Superseded(current) => {
-                        fence
-                            .queue
-                            .pause
-                            .as_mut()
-                            .expect("queue pause was initialized")
-                            .superseding = Some(current);
-                        return Err(DeployError(
-                            "queue control changed after the exact pause intent was recorded"
-                                .to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-        let current = crate::queue::control::read(&store)
-            .await
-            .map_err(|error| DeployError(format!("cannot recheck queue fence: {error}")))?;
-        if !current.paused {
             return Err(DeployError(
-                "queue is not paused after its durable fencing transition".to_string(),
+                "storage write fence preceded queue draining or lease acquisition".to_string(),
             ));
         }
-        let deadline =
-            Instant::now() + Duration::from_secs(crate::queue::control::default_drain_timeout_s());
-        while !crate::queue::control::is_drained(&store)
-            .await
-            .map_err(|error| DeployError(format!("cannot prove queue drained: {error}")))?
-        {
-            if Instant::now() >= deadline {
+        acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
+            .await?;
+        None
+    } else {
+        Some(
+            crate::queue::JobStorage::new()
+                .await
+                .map_err(|error| DeployError(format!("cannot open queue for fencing: {error}")))?,
+        )
+    };
+    if let Some(store) = &store {
+        const LEASE_TTL_SECONDS: u64 = 12 * 60 * 60;
+        let subjects = fence
+            .writers
+            .iter()
+            .map(|writer| format!("service:{}:{}", writer.target, writer.label))
+            .collect::<Vec<_>>();
+        for subject in subjects {
+            let index = match fence
+                .lease_acquisitions
+                .iter()
+                .position(|entry| entry.subject_id == subject)
+            {
+                Some(index) => index,
+                None => {
+                    fence.lease_acquisitions.push(LeaseAcquisition {
+                        subject_id: subject.clone(),
+                        status: "acquire_intent".to_string(),
+                        lease: None,
+                        released_lease: None,
+                    });
+                    write_fence(storage_target, transaction, &fence, runner).await?;
+                    fence.lease_acquisitions.len() - 1
+                }
+            };
+            if fence.lease_acquisitions[index].lease.is_none() {
+                let lease = crate::autonomy::storage::acquire_placement_lease(
+                    store,
+                    &subject,
+                    transaction,
+                    "stado storage-root-reconcile",
+                    LEASE_TTL_SECONDS,
+                    Utc::now(),
+                )
+                .await
+                .map_err(|error| DeployError(format!("cannot acquire {subject}: {error}")))?
+                .ok_or_else(|| DeployError(format!("active placement lease blocks {subject}")))?;
+                fence.lease_acquisitions[index].lease = Some(lease);
+                fence.lease_acquisitions[index].status = "acquired".to_string();
+                write_fence(storage_target, transaction, &fence, runner).await?;
+            }
+        }
+        renew_fence_leases(store, &mut fence).await?;
+        write_fence(storage_target, transaction, &fence, runner).await?;
+
+        if !fence.queue.drained {
+            if let Some(pause) = fence.queue.pause.as_ref() {
+                if pause.status != "applied" {
+                    if pause.status != "pause_intent" {
+                        return Err(DeployError(format!(
+                            "queue pause has invalid state {:?}",
+                            pause.status
+                        )));
+                    }
+                    match execute_queue_effect(store, pause).await? {
+                        QueueEffectOutcome::Applied => {
+                            fence
+                                .queue
+                                .pause
+                                .as_mut()
+                                .expect("queue pause was initialized")
+                                .status = "applied".to_string();
+                            write_fence(storage_target, transaction, &fence, runner).await?;
+                        }
+                        QueueEffectOutcome::Superseded(current) => {
+                            fence
+                                .queue
+                                .pause
+                                .as_mut()
+                                .expect("queue pause was initialized")
+                                .superseding = Some(current);
+                            return Err(DeployError(
+                                "queue control changed after the exact pause intent was recorded"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+            let current = crate::queue::control::read(store)
+                .await
+                .map_err(|error| DeployError(format!("cannot recheck queue fence: {error}")))?;
+            if !current.paused {
                 return Err(DeployError(
-                    "queue remained active until the canonical drain deadline; fence retained"
-                        .to_string(),
+                    "queue is not paused after its durable fencing transition".to_string(),
                 ));
             }
-            sleep(Duration::from_secs(5)).await;
+            let deadline = Instant::now()
+                + Duration::from_secs(crate::queue::control::default_drain_timeout_s());
+            while !crate::queue::control::is_drained(store)
+                .await
+                .map_err(|error| DeployError(format!("cannot prove queue drained: {error}")))?
+            {
+                if Instant::now() >= deadline {
+                    return Err(DeployError(
+                        "queue remained active until the canonical drain deadline; fence retained"
+                            .to_string(),
+                    ));
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+            fence.queue.drained = true;
+            write_fence(storage_target, transaction, &fence, runner).await?;
         }
-        fence.queue.drained = true;
-        write_fence(storage_target, transaction, &fence, runner).await?;
     }
     for index in 0..fence.writers.len() {
         let writer = &fence.writers[index];
@@ -1941,11 +2295,24 @@ async fn prepare_lifecycle_fence(
         if fence.writers[index].status == "stopped" {
             continue;
         }
+        if fence.writers[index].role == "object-api" {
+            acquire_storage_write_fence(
+                storage_target,
+                transaction,
+                &mut fence,
+                write_guard,
+                runner,
+            )
+            .await?;
+            capture_fenced_preflight(storage_target, transaction, &mut fence, runner).await?;
+        }
         if fence.writers[index].status == "pending" {
             fence.writers[index].status = "stop_intent".to_string();
             write_fence(storage_target, transaction, &fence, runner).await?;
         }
-        renew_fence_leases(&store, &mut fence).await?;
+        if let Some(store) = &store {
+            renew_fence_leases(store, &mut fence).await?;
+        }
         write_fence(storage_target, transaction, &fence, runner).await?;
         let label = fence.writers[index].label.clone();
         for (scope, enabled) in fence.writers[index].autostart.clone() {
@@ -2160,6 +2527,19 @@ fn object_recovery_script(
 }
 
 fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
+    if fence.roots.is_none() {
+        return Err(DeployError(
+            "lifecycle fence omitted its constructed storage roots".to_string(),
+        ));
+    }
+    if fence.status != "preparing"
+        && !fence.rollback_preparation
+        && fence.preflight_evidence.is_none()
+    {
+        return Err(DeployError(
+            "lifecycle fence omitted its frozen preflight evidence".to_string(),
+        ));
+    }
     let staged_runtime_digest = fence
         .staged_runtime
         .as_ref()
@@ -2220,7 +2600,7 @@ fn validate_prepared_fence(fence: &LifecycleFence) -> Result<(), DeployError> {
                 || writer.rollback_object_recovery.is_none())
         {
             return Err(DeployError(
-                "object API has no immutable forward and B-only rollback configurations"
+                "object API has no immutable forward and captured-prior rollback configurations"
                     .to_string(),
             ));
         }
@@ -2256,18 +2636,6 @@ fn recovered_object_store(fence: &LifecycleFence) -> Result<crate::queue::JobSto
     ))
 }
 
-fn committed_local_store(root: &str) -> Result<crate::queue::JobStorage, DeployError> {
-    let backend = crate::queue::LocalBackend::open_existing(Path::new(root)).map_err(|error| {
-        DeployError(format!(
-            "cannot bind lease protection to committed local authority {root}: {error}"
-        ))
-    })?;
-    Ok(crate::queue::JobStorage::with_backend(
-        std::sync::Arc::new(backend),
-        "committed-local-authority",
-    ))
-}
-
 async fn restore_unit_snapshot(
     target: &crate::targets::ComputeTarget,
     writer: &WriterFence,
@@ -2278,43 +2646,50 @@ async fn restore_unit_snapshot(
         .as_ref()
         .ok_or_else(|| DeployError(format!("{} has no captured exact unit bytes", writer.label)))?;
     let script = format!(
-        "STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'\n\
-import base64, hashlib, os, stat, subprocess, tempfile\n\
-path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))\n\
-body = base64.b64decode(os.environ['STADO_UNIT_BODY'])\n\
-expected = os.environ['STADO_UNIT_SHA']\n\
-if hashlib.sha256(body).hexdigest() != expected:\n\
-    raise SystemExit('captured unit bytes fail their digest')\n\
-work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')\n\
-os.makedirs(work, mode=0o700, exist_ok=True)\n\
-fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)\n\
-try:\n\
-    with os.fdopen(fd, 'wb') as handle:\n\
-        handle.write(body)\n\
-        handle.flush()\n\
-        os.fsync(handle.fileno())\n\
-    command = ['/usr/bin/sudo', '-n', '/usr/bin/install',\n\
-               '-m', os.environ['STADO_UNIT_MODE'],\n\
-               '-o', os.environ['STADO_UNIT_UID'],\n\
-               '-g', os.environ['STADO_UNIT_GID'], temporary, path]\n\
-    result = subprocess.run(command, stdin=subprocess.DEVNULL,\n\
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n\
-                            text=True, close_fds=False)\n\
-    if result.returncode != 0:\n\
-        raise SystemExit((result.stderr or result.stdout).strip())\n\
-finally:\n\
-    try:\n\
-        os.unlink(temporary)\n\
-    except FileNotFoundError:\n\
-        pass\n\
-info = os.lstat(path)\n\
-if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):\n\
-    raise SystemExit('restored unit is not a regular file')\n\
-with open(path, 'rb') as handle:\n\
-    if hashlib.sha256(handle.read()).hexdigest() != expected:\n\
-        raise SystemExit('restored unit digest mismatch')\n\
-print('STADO_UNIT_RESTORED\\t' + expected)\n\
-PY",
+        r#"STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'
+import base64, hashlib, os, stat, subprocess, tempfile
+path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
+body = base64.b64decode(os.environ['STADO_UNIT_BODY'])
+expected = os.environ['STADO_UNIT_SHA']
+if hashlib.sha256(body).hexdigest() != expected:
+    raise SystemExit('captured unit bytes fail their digest')
+expected_metadata = (int(os.environ['STADO_UNIT_MODE']),
+                     int(os.environ['STADO_UNIT_UID']),
+                     int(os.environ['STADO_UNIT_GID']))
+work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')
+os.makedirs(work, mode=0o700, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)
+try:
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    command = ['/usr/bin/sudo', '-n', '/usr/bin/install',
+               '-m', format(expected_metadata[0], 'o'),
+               '-o', os.environ['STADO_UNIT_UID'],
+               '-g', os.environ['STADO_UNIT_GID'], temporary, path]
+    result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, close_fds=False)
+    if result.returncode != 0:
+        raise SystemExit((result.stderr or result.stdout).strip())
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+info = os.lstat(path)
+if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    raise SystemExit('restored unit is not a regular file')
+observed_metadata = (stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
+if observed_metadata != expected_metadata:
+    raise SystemExit('restored unit mode/uid/gid mismatch: expected ' +
+                     str(expected_metadata) + ', observed ' + str(observed_metadata))
+with open(path, 'rb') as handle:
+    if hashlib.sha256(handle.read()).hexdigest() != expected:
+        raise SystemExit('restored unit digest mismatch')
+print('STADO_UNIT_RESTORED\t' + expected)
+PY"#,
         shlex_quote(&writer.path),
         shlex_quote(&snapshot.body_base64),
         shlex_quote(&snapshot.sha256),
@@ -2325,9 +2700,11 @@ PY",
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "exact unit bytes were not restored",
+        return Err(DeployError(format!(
+            "exact unit restoration failed for {} on {}: {}",
+            writer.label,
+            target.name,
+            remote_failure_detail(&output, "remote command failed")
         )));
     }
     Ok(())
@@ -2338,8 +2715,7 @@ fn restored_state_matches(
     state: &super::service_label_print::LabelState,
     autostart: &BTreeMap<String, bool>,
     active_sha256: &str,
-    forward_primary: &str,
-    forward_backup: &str,
+    roots: &StorageRoots,
     rollback: bool,
 ) -> bool {
     if autostart != &writer.autostart {
@@ -2400,22 +2776,22 @@ fn restored_state_matches(
     {
         return false;
     }
-    if rollback {
-        loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(forward_backup)
-            && loaded
-                .get("WC_BACKUP_STORAGE_BACKEND")
-                .is_none_or(String::is_empty)
-            && loaded
-                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-                .is_none_or(String::is_empty)
+    let (primary, backup) = if rollback {
+        (roots.prior_primary.as_str(), roots.prior_backup.as_deref())
     } else {
-        loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(forward_primary)
-            && loaded.get("WC_BACKUP_STORAGE_BACKEND").map(String::as_str) == Some("local")
-            && loaded
-                .get("WC_BACKUP_LOCAL_STORAGE_PATH")
-                .map(String::as_str)
-                == Some(forward_backup)
-    }
+        (roots.primary.as_str(), Some(roots.backup.as_str()))
+    };
+    loaded.get("WC_LOCAL_STORAGE_PATH").map(String::as_str) == Some(primary)
+        && loaded
+            .get("WC_BACKUP_STORAGE_BACKEND")
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            == backup.map(|_| "local")
+        && loaded
+            .get("WC_BACKUP_LOCAL_STORAGE_PATH")
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            == backup
 }
 
 fn durable_restored_state_matches(
@@ -2436,32 +2812,50 @@ async fn activate_lifecycle_fence(
     transaction: &str,
     runner: &Runner,
     rollback: bool,
+    write_guard: &mut Option<std::fs::File>,
 ) -> Result<LifecycleFence, DeployError> {
     let mut fence = read_fence(storage_target, transaction, runner)
         .await?
         .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
     validate_prepared_fence(&fence)?;
     refresh_resident_owner(storage_target, transaction, &mut fence, runner).await?;
-    let preflight = read_json_evidence(
-        transaction,
-        PREFLIGHT_EVIDENCE_FILE,
-        &fence.preflight_evidence,
-        "preflight evidence",
-    )?;
-    let served = preflight
-        .get("served_store")
-        .and_then(Value::as_object)
-        .ok_or_else(|| DeployError("fence has no physical/API correlation evidence".to_string()))?;
-    let forward_primary = served
-        .get("primary_root")
-        .and_then(Value::as_str)
-        .ok_or_else(|| DeployError("served-store evidence omitted A root".to_string()))?
-        .to_string();
-    let forward_backup = served
-        .get("backup_root")
-        .and_then(Value::as_str)
-        .ok_or_else(|| DeployError("served-store evidence omitted B root".to_string()))?
-        .to_string();
+    let preflight = if fence.rollback_preparation {
+        None
+    } else {
+        Some(read_json_evidence(
+            transaction,
+            PREFLIGHT_EVIDENCE_FILE,
+            fence.preflight_evidence.as_ref().ok_or_else(|| {
+                DeployError("lifecycle fence omitted frozen preflight evidence".to_string())
+            })?,
+            "preflight evidence",
+        )?)
+    };
+    let roots = fence.roots.clone().ok_or_else(|| {
+        DeployError("lifecycle fence omitted its observed storage roots".to_string())
+    })?;
+    let route_conflict_winner = if roots.prior_primary == roots.primary {
+        "primary"
+    } else {
+        "backup"
+    };
+    let conflict_winner = if rollback {
+        route_conflict_winner.to_string()
+    } else {
+        let receipt = read_transaction_receipt(transaction)?;
+        let pinned = receipt
+            .get("conflict_winner")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                DeployError("checkpoint receipt omitted its conflict winner".to_string())
+            })?;
+        if pinned != route_conflict_winner {
+            return Err(DeployError(
+                "checkpoint conflict winner differs from the captured storage route".to_string(),
+            ));
+        }
+        pinned.to_string()
+    };
     let final_status = if rollback { "rolled_back" } else { "activated" };
     let admissible = if rollback {
         matches!(
@@ -2494,6 +2888,10 @@ async fn activate_lifecycle_fence(
         write_fence(storage_target, transaction, &fence, runner).await?;
     }
 
+    if fence.write_fence.is_some() {
+        acquire_storage_write_fence(storage_target, transaction, &mut fence, write_guard, runner)
+            .await?;
+    }
     let staged_runtime = fence
         .staged_runtime
         .clone()
@@ -2515,14 +2913,6 @@ async fn activate_lifecycle_fence(
         .activated_at
         .get_or_insert_with(|| Utc::now().timestamp());
     fence.status = "restoring".to_string();
-    write_fence(storage_target, transaction, &fence, runner).await?;
-    let committed_root = if rollback {
-        &forward_backup
-    } else {
-        &forward_primary
-    };
-    let committed_store = committed_local_store(committed_root)?;
-    renew_fence_leases(&committed_store, &mut fence).await?;
     write_fence(storage_target, transaction, &fence, runner).await?;
 
     let mut order = (0..fence.writers.len()).collect::<Vec<_>>();
@@ -2551,8 +2941,7 @@ async fn activate_lifecycle_fence(
                 &state,
                 &autostart,
                 &active_sha256,
-                &forward_primary,
-                &forward_backup,
+                &roots,
                 rollback,
             )
             && (!was_durably_restored
@@ -2641,8 +3030,7 @@ async fn activate_lifecycle_fence(
                 &state,
                 &autostart,
                 &active_sha256,
-                &forward_primary,
-                &forward_backup,
+                &roots,
                 rollback,
             ) {
                 return Err(DeployError(format!(
@@ -2666,21 +3054,80 @@ async fn activate_lifecycle_fence(
             let port = fence.writers[index].listener_port.ok_or_else(|| {
                 DeployError("object API listener port is absent from its fence".to_string())
             })?;
-            let correlation =
-                correlate_served_store(storage_target, port, &preflight, !rollback, runner).await?;
+            let runtime = observe_object_runtime(storage_target, port, runner).await?;
+            let storage = runtime.get("storage").ok_or_else(|| {
+                DeployError("restored object API omitted its constructed storage".to_string())
+            })?;
+            let (expected_root, expected_backup) = if rollback {
+                (roots.prior_primary.as_str(), roots.prior_backup.as_deref())
+            } else {
+                (roots.primary.as_str(), Some(roots.backup.as_str()))
+            };
+            let mirror_matches = match expected_backup {
+                Some(path) => {
+                    storage.pointer("/backup/backend").and_then(Value::as_str) == Some("local")
+                        && storage
+                            .pointer("/backup/local_path")
+                            .and_then(Value::as_str)
+                            == Some(path)
+                }
+                None => storage.get("backup").is_none_or(Value::is_null),
+            };
+            if storage.get("backend").and_then(Value::as_str) != Some("local")
+                || storage.get("local_path").and_then(Value::as_str) != Some(expected_root)
+                || storage.get("pid").and_then(Value::as_u64)
+                    != state.pid.as_deref().and_then(|pid| pid.parse().ok())
+                || storage
+                    .pointer("/write_fence/protocol")
+                    .and_then(Value::as_str)
+                    != Some(crate::queue::LocalBackend::WRITE_FENCE_PROTOCOL)
+                || !mirror_matches
+            {
+                return Err(DeployError(format!(
+                    "{label} constructed storage does not match its recorded recovery route: {storage}"
+                )));
+            }
+            let mut correlation = if let Some(preflight) = preflight.as_ref() {
+                correlate_served_store(
+                    storage_target,
+                    port,
+                    preflight,
+                    !rollback,
+                    &conflict_winner,
+                    runner,
+                )
+                .await?
+            } else {
+                json!({
+                    "endpoint": format!("http://127.0.0.1:{port}"),
+                    "object_authority": if expected_root == roots.primary { "A" } else { "B" },
+                    "evidence": "constructed-runtime-without-data-mutation",
+                })
+            };
+            correlation["runtime"] = runtime;
             let authority = correlation
                 .get("object_authority")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let accepted = if rollback {
-                matches!(authority, "B" | "identical")
+                matches!(authority, "identical")
+                    || authority
+                        == if roots.prior_primary == roots.primary {
+                            "A"
+                        } else {
+                            "B"
+                        }
             } else {
                 matches!(authority, "A" | "identical")
             };
             if !accepted {
                 return Err(DeployError(format!(
                     "{label} serves {authority:?} after {} recovery",
-                    if rollback { "B-only" } else { "forward A+B" }
+                    if rollback {
+                        "captured-prior"
+                    } else {
+                        "forward A+B"
+                    }
                 )));
             }
             let prepared_sha256 = if rollback {
@@ -2717,6 +3164,14 @@ async fn activate_lifecycle_fence(
         fence.writers[index].status = "restored".to_string();
         write_fence(storage_target, transaction, &fence, runner).await?;
         if fence.writers[index].role == "object-api" {
+            release_storage_write_fence(
+                storage_target,
+                transaction,
+                &mut fence,
+                write_guard,
+                runner,
+            )
+            .await?;
             let store = recovered_object_store(&fence)?;
             renew_fence_leases(&store, &mut fence).await?;
             write_fence(storage_target, transaction, &fence, runner).await?;
@@ -2835,6 +3290,18 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
             "checkpoint evidence belongs to another reconciliation".to_string(),
         ));
     }
+    let conflict_winner = checkpoint
+        .get("conflict_winner")
+        .and_then(Value::as_str)
+        .filter(|winner| matches!(*winner, "primary" | "backup"))
+        .ok_or_else(|| {
+            DeployError("checkpoint evidence omitted its conflict winner".to_string())
+        })?;
+    if receipt.get("conflict_winner").and_then(Value::as_str) != Some(conflict_winner) {
+        return Err(DeployError(
+            "checkpoint receipt and evidence disagree on the conflict winner".to_string(),
+        ));
+    }
     let backup_paths = checkpoint
         .get("backup_objects")
         .and_then(Value::as_array)
@@ -2842,16 +3309,21 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let primary_only = checkpoint
+    let primary_paths = checkpoint
         .get("primary_objects")
         .and_then(Value::as_array)
         .ok_or_else(|| DeployError("checkpoint evidence omitted primary objects".to_string()))?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
-        .filter(|path| !backup_paths.contains(path))
-        .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
+    let newly_authoritative = if conflict_winner == "primary" {
+        backup_paths.difference(&primary_paths)
+    } else {
+        primary_paths.difference(&backup_paths)
+    }
+    .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
+    .map(str::to_string)
+    .collect::<Vec<_>>();
     let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
     if receipt
         .get("effective_lifecycle_checkpoint")
@@ -2870,7 +3342,7 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         std::sync::Arc::new(backend),
         "immutable-local-snapshot",
     );
-    crate::monitor::reap::classify_reconciliation_snapshot(&store, &primary_only)
+    crate::monitor::reap::classify_reconciliation_snapshot(&store, &newly_authoritative)
         .await
         .map_err(|error| DeployError(format!("typed lifecycle snapshot refused: {error}")))
 }
@@ -3008,10 +3480,59 @@ async fn reconcile_host_inner(
         let fence = read_fence(target, transaction, runner).await?;
         return report(target, transaction, phase, receipt, fence.as_ref());
     }
+    let mut write_guard = None;
+    let existing = read_fence(target, transaction, runner).await?;
+    // The captured target keeps the host reachable across the outage. Its
+    // managed version is not a release declaration: a remote caller may have
+    // captured an older registry. Before fencing, resolve the resident host's
+    // authoritative declaration; afterwards, keep the staged coordinate pinned.
+    let runtime_version = match existing.as_ref() {
+        Some(fence) => {
+            if fence.schema != FENCE_SCHEMA || fence.transaction != transaction {
+                return Err(DeployError(
+                    "durable lifecycle fence belongs to another transaction".to_string(),
+                ));
+            }
+            Some(
+                fence
+                    .staged_runtime
+                    .as_ref()
+                    .ok_or_else(|| {
+                        DeployError(
+                            "durable lifecycle fence omitted its staged runtime".to_string(),
+                        )
+                    })?
+                    .request
+                    .version
+                    .clone(),
+            )
+        }
+        None if matches!(phase, RUN | RESUME) => {
+            let registry = crate::targets::fetch_registry_remote()
+                .await
+                .map_err(|error| DeployError(error.to_string()))?;
+            let declared = host_channel::resolve_target(&registry, &target.name)?;
+            Some(
+                declared
+                    .declared_version("stado")
+                    .ok_or_else(|| {
+                        DeployError("storage host has no declared Stado runtime".to_string())
+                    })?
+                    .to_string(),
+            )
+        }
+        None => None,
+    };
+    let mut runtime_target = target.clone();
+    if let Some(version) = runtime_version {
+        runtime_target
+            .managed_versions
+            .insert("stado".to_string(), version);
+    }
+    let target = &runtime_target;
     if phase == FINALIZE {
-        let mut fence = read_fence(target, transaction, runner)
-            .await?
-            .ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
+        let mut fence =
+            existing.ok_or_else(|| DeployError("durable lifecycle fence is absent".to_string()))?;
         refresh_resident_owner(target, transaction, &mut fence, runner).await?;
         if fence.status != "activated" {
             return Err(DeployError(format!(
@@ -3025,12 +3546,52 @@ async fn reconcile_host_inner(
                 .await?;
         return report(target, transaction, phase, receipt, Some(&fence));
     }
-    if phase == ROLLBACK {
+    if phase == ROLLBACK
+        || existing
+            .as_ref()
+            .is_some_and(|fence| fence.rollback_preparation)
+    {
         let receipt = remote_phase(target, transaction, STATUS, runner).await?;
         let receipt_status = receipt
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let mut rollback_fence = existing
+            .ok_or_else(|| DeployError("rollback has no recorded lifecycle fence".to_string()))?;
+        if receipt_status == "absent" {
+            if !rollback_fence.rollback_preparation
+                && (rollback_fence.status != "preparing"
+                    || !rollback_fence.queue.drained
+                    || rollback_fence.lease_acquisitions.len() != rollback_fence.writers.len()
+                    || rollback_fence
+                        .lease_acquisitions
+                        .iter()
+                        .any(|entry| entry.status != "acquired" || entry.lease.is_none()))
+            {
+                return Err(DeployError(
+                    "preparation rollback requires the recorded drained queue and complete \
+                     placement leases"
+                        .to_string(),
+                ));
+            }
+            rollback_fence.rollback_preparation = true;
+            write_fence(target, transaction, &rollback_fence, runner).await?;
+            let fence =
+                activate_lifecycle_fence(target, transaction, runner, true, &mut write_guard)
+                    .await?;
+            return report(
+                target,
+                transaction,
+                phase,
+                json!({
+                    "schema": "stado.storage-root-reconcile.v2",
+                    "transaction": transaction,
+                    "status": "preparation_rolled_back",
+                    "data_mutated": false,
+                }),
+                Some(&fence),
+            );
+        }
         if !matches!(
             receipt_status,
             "checkpoint_ready" | "applying" | "rollback_effects_armed"
@@ -3040,12 +3601,20 @@ async fn reconcile_host_inner(
             )));
         }
         verify_resident_lock(transaction)?;
+        acquire_storage_write_fence(
+            target,
+            transaction,
+            &mut rollback_fence,
+            &mut write_guard,
+            runner,
+        )
+        .await?;
         let receipt = remote_phase(target, transaction, ARM_ROLLBACK, runner).await?;
-        let fence = activate_lifecycle_fence(target, transaction, runner, true).await?;
+        let fence =
+            activate_lifecycle_fence(target, transaction, runner, true, &mut write_guard).await?;
         return report(target, transaction, phase, receipt, Some(&fence));
     }
 
-    let existing = read_fence(target, transaction, runner).await?;
     if existing
         .as_ref()
         .is_some_and(|fence| fence.status == "rolled_back")
@@ -3064,17 +3633,8 @@ async fn reconcile_host_inner(
         {
             fence
         }
-        _ => prepare_lifecycle_fence(target, transaction, runner).await?,
+        _ => prepare_lifecycle_fence(target, transaction, runner, &mut write_guard).await?,
     };
-    if fence.status == "already_reconciled" {
-        let receipt = json!({
-            "schema": "stado.storage-root-reconcile.v2",
-            "transaction": transaction,
-            "status": "already_reconciled",
-            "preflight_evidence": fence.preflight_evidence.clone(),
-        });
-        return report(target, transaction, phase, receipt, Some(&fence));
-    }
     if fence.status == "fenced" {
         remote_phase(target, transaction, CHECKPOINT, runner).await?;
         let checkpoint_decisions = typed_lifecycle_decisions(transaction).await?;
@@ -3119,7 +3679,8 @@ async fn reconcile_host_inner(
         }
         verify_resident_lock(transaction)?;
         validate_prepared_fence(&fence)?;
-        fence = activate_lifecycle_fence(target, transaction, runner, false).await?;
+        fence =
+            activate_lifecycle_fence(target, transaction, runner, false, &mut write_guard).await?;
     } else if fence.status != "activated" {
         let receipt = read_transaction_receipt(transaction)?;
         if receipt.get("status").and_then(Value::as_str) != Some("activation_effects_armed") {
@@ -3131,7 +3692,8 @@ async fn reconcile_host_inner(
         record_typed_lifecycle_decisions(target, transaction, &decisions, runner).await?;
         verify_resident_lock(transaction)?;
         validate_prepared_fence(&fence)?;
-        fence = activate_lifecycle_fence(target, transaction, runner, false).await?;
+        fence =
+            activate_lifecycle_fence(target, transaction, runner, false, &mut write_guard).await?;
     }
     let receipt = remote_phase(target, transaction, ACTIVATE, runner).await?;
     report(target, transaction, phase, receipt, Some(&fence))
@@ -3147,18 +3709,19 @@ fn verify_resident_lock(transaction: &str) -> Result<(), DeployError> {
         .join("storage-root-reconcile.lock");
     let path_metadata = std::fs::metadata(&lock)
         .map_err(|error| DeployError(format!("cannot stat {}: {error}", lock.display())))?;
-    let descriptor_path = if cfg!(target_os = "linux") {
-        PathBuf::from(format!("/proc/self/fd/{fd}"))
-    } else {
-        PathBuf::from(format!("/dev/fd/{fd}"))
-    };
-    let descriptor_metadata = std::fs::metadata(&descriptor_path).map_err(|error| {
-        DeployError(format!(
-            "resident reconciliation lock descriptor {fd} is invalid: {error}"
-        ))
-    })?;
-    if path_metadata.dev() != descriptor_metadata.dev()
-        || path_metadata.ino() != descriptor_metadata.ino()
+    // Ask the descriptor itself. Darwin's fdesc filesystem does not promise
+    // that statting `/dev/fd/N` exposes the opened object's device and inode;
+    // the descriptor-authoritative `fstat(2)` does on every supported host.
+    // SAFETY: the worker-owned `operation_lock` remains alive until after the
+    // reconciliation outcome is recorded.
+    let descriptor_metadata = nix::sys::stat::fstat(unsafe { BorrowedFd::borrow_raw(fd) })
+        .map_err(|error| {
+            DeployError(format!(
+                "resident reconciliation lock descriptor {fd} is invalid: {error}"
+            ))
+        })?;
+    if path_metadata.dev() as nix::libc::dev_t != descriptor_metadata.st_dev
+        || path_metadata.ino() != descriptor_metadata.st_ino
     {
         return Err(DeployError(
             "resident reconciliation lock no longer maps the canonical transaction lock"
@@ -3703,6 +4266,85 @@ captured_target = json.loads(base64.b64decode(argument("--target-config")))
 requested_action = argument("--phase")
 requested_revision = argument("--source-revision")
 
+def exact_option(values, name):
+    found = [
+        values[index + 1]
+        for index, value in enumerate(values[:-1])
+        if value == name
+    ]
+    if len(found) != 1 or not isinstance(found[0], str):
+        raise SystemExit("captured object API command must declare exactly one " + name)
+    return found[0]
+
+
+def native_object_arguments(service):
+    if system == "Darwin":
+        path = service.get("path")
+        if not isinstance(path, str) or not path:
+            raise SystemExit("captured object API has no native unit path")
+        path = os.path.expanduser(path.replace("$HOME", home))
+        with open(path, "rb") as handle:
+            unit = plistlib.load(handle)
+        values = unit.get("ProgramArguments")
+        if not isinstance(values, list) or not values:
+            raise SystemExit("captured object API unit has no ProgramArguments")
+        return values[1:]
+    unit = service.get("unit") or service.get("label")
+    result = checked(["/bin/systemctl", "show", unit, "--property=ExecStart", "--value"])
+    commands = re.findall(r"argv\[\] = (.*?); (?:ignore_errors|flags)=", result.stdout)
+    if len(commands) != 1:
+        raise SystemExit("captured object API has no single observed ExecStart")
+    return shlex.split(commands[0])[1:]
+
+
+def captured_release_api(target):
+    fence = read_json(os.path.join(work, "lifecycle-fence.json"))
+    if fence is not None:
+        if (not isinstance(fence, dict)
+                or fence.get("schema") != "@FENCE_SCHEMA@"
+                or fence.get("transaction") != tx):
+            raise SystemExit("captured lifecycle fence has the wrong transaction identity")
+        staged_runtime = fence.get("staged_runtime")
+        if staged_runtime is not None:
+            request = staged_runtime.get("request", {})
+            origin = request.get("release_api")
+            if not isinstance(origin, str) or not origin:
+                raise SystemExit("captured staged runtime has no release origin")
+            return origin
+    services = target.get("services")
+    if not isinstance(services, list):
+        raise SystemExit("captured target declares no service inventory")
+    object_apis = [
+        service for service in services
+        if isinstance(service, dict)
+        and service.get("label") == "com.wisent.always-on.stado-object-api"
+    ]
+    if len(object_apis) != 1:
+        raise SystemExit("captured target must declare exactly one canonical object API")
+    values = object_apis[0].get("args")
+    if values is None or values == []:
+        values = native_object_arguments(object_apis[0])
+    if (not isinstance(values, list)
+            or not all(isinstance(value, str) for value in values)
+            or not values
+            or values[0] != "dashboard"):
+        raise SystemExit("captured object API command is not the dashboard")
+    bind = exact_option(values, "--bind")
+    port_text = exact_option(values, "--port")
+    try:
+        port = int(port_text)
+    except ValueError:
+        raise SystemExit("captured object API port is not numeric")
+    if port < 1 or port > 65535:
+        raise SystemExit("captured object API port is outside 1..65535")
+    if bind == "::1":
+        host = "[::1]"
+    elif bind in ("127.0.0.1", "localhost"):
+        host = bind
+    else:
+        raise SystemExit("captured object API release origin is not loopback")
+    return "http://" + host + ":" + str(port)
+
 
 def checked(argv, accepted=(0,)):
     result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -3751,8 +4393,11 @@ def manager_state():
         pid_match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", result.stdout)
         state_match = re.search(r"(?m)^\s*state = (.+?)\s*$", result.stdout)
         pid = int(pid_match.group(1)) if pid_match else None
+        completed = re.search(r"(?m)^\s*last exit code = -?[0-9]+\s*$", result.stdout)
+        runs = re.search(r"(?m)^\s*runs = ([1-9][0-9]*)\s*$", result.stdout)
         state = state_match.group(1).strip() if state_match else None
-        terminal = (state or "").lower() in ("exited", "not running")
+        terminal = ((state or "").lower() in ("exited", "not running")
+                    or (pid is None and completed is not None and runs is not None))
         return {"manager": "launchd", "service": label, "domain": "system",
                 "loaded": True, "active": pid is not None,
                 "starting": pid is None and not terminal, "pid": pid, "state": state}
@@ -3801,17 +4446,20 @@ def manager_bound_owner(state):
 def launch_observation(state):
     intent = read_json(intent_path)
     if not isinstance(intent, dict) or intent.get("transaction") != tx:
-        intent = {
-            "schema": "stado.storage-root-launch.v1",
-            "transaction": tx,
-            "target": captured_target.get("name"),
-            "target_config": captured_target,
-            "action": requested_action,
-            "status": "manager_starting",
-        }
+        raise SystemExit("active native worker has no recorded launch intent")
     intent["native_manager"] = state
     intent.pop("worker_arguments", None)
     return intent
+
+
+def acknowledge_owner(observation):
+    action = observation.get("action")
+    forward = ("run", "resume")
+    if action != requested_action and not (action in forward and requested_action in forward):
+        raise SystemExit("native reconciliation is already executing "
+                         + str(action) + "; cannot accept " + requested_action)
+    print("STADO_RECONCILE_OWNER\t" + json.dumps(
+        observation, sort_keys=True, separators=(",", ":")))
 
 
 launch_lock_path = os.path.join(
@@ -3825,8 +4473,7 @@ state = manager_state()
 if state["active"] or state["starting"]:
     owner = manager_bound_owner(state)
     observation = owner if owner is not None else launch_observation(state)
-    print("STADO_RECONCILE_OWNER\t" + json.dumps(
-        observation, sort_keys=True, separators=(",", ":")))
+    acknowledge_owner(observation)
     raise SystemExit(0)
 
 operation_lock_path = os.path.normpath(os.path.join(
@@ -3839,8 +4486,7 @@ except BlockingIOError:
     if state["active"] or state["starting"]:
         owner = manager_bound_owner(state)
         observation = owner if owner is not None else launch_observation(state)
-        print("STADO_RECONCILE_OWNER\t" + json.dumps(
-            observation, sort_keys=True, separators=(",", ":")))
+        acknowledge_owner(observation)
         raise SystemExit(0)
     raise SystemExit("native reconciliation lock is held without a manager-bound owner")
 
@@ -3853,11 +4499,11 @@ if state["active"] or state["starting"]:
     os.close(operation_lock)
     owner = manager_bound_owner(state)
     observation = owner if owner is not None else launch_observation(state)
-    print("STADO_RECONCILE_OWNER\t" + json.dumps(
-        observation, sort_keys=True, separators=(",", ":")))
+    acknowledge_owner(observation)
     raise SystemExit(0)
 
 lock_info = os.fstat(operation_lock)
+release_api = captured_release_api(captured_target)
 intent = {
     "schema": "stado.storage-root-launch.v1",
     "transaction": tx,
@@ -3867,6 +4513,7 @@ intent = {
     "status": "launch_intent",
     "source_revision": requested_revision,
     "tool_sha256": expected,
+    "release_api": release_api,
     "native_manager": state,
     "lock_device": lock_info.st_dev,
     "lock_inode": lock_info.st_ino,
@@ -3892,6 +4539,7 @@ if system == "Darwin":
         "EnvironmentVariables": {
             "HOME": home,
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "STADO_API_URL": release_api,
         },
         "WorkingDirectory": home,
         "RunAtLoad": True,
@@ -3935,6 +4583,7 @@ else:
         "Type=simple",
         "User=" + checked(["/usr/bin/id", "-un"]).stdout.strip(),
         "Environment=HOME=" + home,
+        "Environment=STADO_API_URL=" + release_api,
         "WorkingDirectory=" + home,
         "ExecStart=" + wrapper,
         "Restart=no",
@@ -3975,6 +4624,7 @@ PY"##
         .replace("@STAGED@", &shlex_quote(staged_tool))
         .replace("@TOOL@", &shlex_quote(canonical_tool))
         .replace("@SHA@", &shlex_quote(tool_sha256))
+        .replace("@FENCE_SCHEMA@", FENCE_SCHEMA)
         .replace("@TX@", &shlex_quote(transaction)))
 }
 
@@ -4002,9 +4652,73 @@ async fn read_operation_owner(
         if encoded == "absent" {
             return Ok(None);
         }
-        return serde_json::from_str(encoded)
-            .map(Some)
-            .map_err(|error| DeployError(format!("operation owner is invalid: {error}")));
+        let mut owner: Value = serde_json::from_str(encoded)
+            .map_err(|error| DeployError(format!("operation owner is invalid: {error}")))?;
+        let label = owner
+            .pointer("/native_manager/service")
+            .and_then(Value::as_str)
+            .ok_or_else(|| DeployError("operation owner omitted its native service".to_string()))?;
+        let scope = match owner
+            .pointer("/native_manager/domain")
+            .and_then(Value::as_str)
+        {
+            Some("system") => service::BootoutScope::System,
+            Some(domain) if domain.starts_with("gui/") || domain.starts_with("user/") => {
+                service::BootoutScope::User
+            }
+            _ => service::BootoutScope::Any,
+        };
+        let observed = super::service_label_print::print_label(target, label, scope, runner).await;
+        let recorded_status = owner.get("status").cloned().unwrap_or(Value::Null);
+        let executing = recorded_status.as_str() == Some("executing");
+        let (observation, effective_status) = match observed {
+            Ok(state) => {
+                let owner_running = state
+                    .pid
+                    .as_deref()
+                    .and_then(|pid| pid.parse::<u64>().ok())
+                    .is_some_and(|pid| owner.get("pid").and_then(Value::as_u64) == Some(pid));
+                let effective_status = if !executing {
+                    recorded_status.clone()
+                } else if state.unsupported.is_some() {
+                    json!("unobserved")
+                } else if owner_running {
+                    recorded_status.clone()
+                } else {
+                    json!("interrupted")
+                };
+                (
+                    json!({
+                        "observed_at": Utc::now().to_rfc3339(),
+                        "loaded": state.loaded(),
+                        "domain": state.domain,
+                        "pid": state.pid,
+                        "state": state.state,
+                        "last_exit_code": state.last_exit_code,
+                        "unsupported": state.unsupported,
+                    }),
+                    effective_status,
+                )
+            }
+            Err(error) => (
+                json!({
+                    "observed_at": Utc::now().to_rfc3339(),
+                    "error": error.to_string(),
+                }),
+                if executing {
+                    json!("unobserved")
+                } else {
+                    recorded_status.clone()
+                },
+            ),
+        };
+        let fields = owner
+            .as_object_mut()
+            .ok_or_else(|| DeployError("operation owner is not an object".to_string()))?;
+        fields.insert("recorded_status".to_string(), recorded_status);
+        fields.insert("status".to_string(), effective_status);
+        fields.insert("native_manager_observation".to_string(), observation);
+        return Ok(Some(owner));
     }
     Err(DeployError(
         "operation owner reader returned no marker".to_string(),

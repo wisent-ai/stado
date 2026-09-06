@@ -20,8 +20,8 @@ use crate::config;
 use crate::models::Job;
 
 use super::{
-    construct_backend, listing, tombstone, BackendLocator, BlobBackend, BlobInfo, StorageError,
-    VersionedText,
+    construct_backend, listing, tombstone, BackendLocator, BlobBackend, BlobInfo, LocalBackend,
+    StorageError, VersionedText,
 };
 
 const LAYOUT_PATH: &str = "system/storage-layout.json";
@@ -32,6 +32,8 @@ pub struct JobStorage {
     backend: Arc<dyn BlobBackend>,
     backend_name: String,
     bucket_name: String,
+    local_path: Option<Arc<str>>,
+    backup_endpoint: Option<Arc<super::copy::Endpoint>>,
     /// Where the last bounded claimable-scan stopped in the priority index.
     ///
     /// Reachability, and nothing else. A budgeted scan that always restarted
@@ -348,6 +350,10 @@ impl JobStorage {
         } else {
             bucket
         };
+        let local_path = (adapter == StorageAdapter::Local)
+            .then(|| LocalBackend::resolved_root(config::wc_local_storage_path()))
+            .transpose()?
+            .map(|path| path.to_string_lossy().into_owned());
         let backend = construct_backend(
             adapter,
             BackendLocator {
@@ -355,12 +361,15 @@ impl JobStorage {
                 account: config::wc_azure_storage_account(),
                 container: config::wc_azure_container(),
                 region: config::wc_s3_region(),
-                path: config::wc_local_storage_path(),
+                path: local_path
+                    .as_deref()
+                    .unwrap_or_else(|| config::wc_local_storage_path()),
             },
         )
         .await?;
 
-        let storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
+        let mut storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
+        storage.local_path = local_path.map(Arc::from);
         storage.ensure_layout().await?;
         storage.with_configured_read_failover(read_mode).await
     }
@@ -390,7 +399,7 @@ impl JobStorage {
         mut self,
         read_mode: super::failover::ReadMode,
     ) -> Result<Self, StorageError> {
-        let Some(endpoint) = super::copy::Endpoint::configured_backup() else {
+        let Some(mut endpoint) = super::copy::Endpoint::configured_backup() else {
             return Ok(self);
         };
         let primary = super::copy::Endpoint::configured_primary();
@@ -401,12 +410,18 @@ impl JobStorage {
             );
             return Ok(self);
         }
+        if endpoint.adapter() == Some(StorageAdapter::Local) {
+            endpoint.path = LocalBackend::resolved_root(&endpoint.path)?
+                .to_string_lossy()
+                .into_owned();
+        }
         let backup = endpoint.build().await?;
         self.backend = Arc::new(super::failover::ReadFailoverBackend::new(
             self.backend.clone(),
             backup,
             read_mode,
         ));
+        self.backup_endpoint = Some(Arc::new(endpoint));
         Ok(self)
     }
 
@@ -456,6 +471,8 @@ impl JobStorage {
             backend,
             backend_name: backend_name.into(),
             bucket_name: bucket_name.into(),
+            local_path: None,
+            backup_endpoint: None,
             scan_cursor: Arc::new(std::sync::Mutex::new(String::new())),
         }
     }
@@ -476,6 +493,17 @@ impl JobStorage {
         if let Ok(mut slot) = self.scan_cursor.lock() {
             *slot = cursor;
         }
+    }
+
+    /// The local root supplied when this facade constructed its backend.
+    /// Custom backends do not claim a location they did not disclose.
+    pub(crate) fn local_storage_path(&self) -> Option<&str> {
+        self.local_path.as_deref()
+    }
+
+    /// The mirror actually constructed for this handle, not a later config read.
+    pub(crate) fn backup_endpoint(&self) -> Option<&super::copy::Endpoint> {
+        self.backup_endpoint.as_deref()
     }
 
     /// Configured storage backend name ("gcs" / "local").

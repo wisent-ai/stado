@@ -1,8 +1,116 @@
 # Changelog
 
-## Unreleased
+## 0.16.39
 
+- **Interrupted service handoff:** an incomplete handoff with a committed registry receipt re-enters the existing live-release, legacy-file, lease, and compare-and-swap checks before reapplying its same intent. The prior commit is retained in recovery history; terminal receipts and changed intent remain refusals.
+
+## 0.16.38
+
+- **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
+- **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
+- **Credential waits:** Skarbiec HTTP connections have a 15-second deadline and requests have a 120-second total deadline. The existing owner-vault password fallback is bounded to 90 seconds and its child is terminated on cancellation; host operations report the credential failure instead of waiting indefinitely.
+- **Bounded host session:** each Apple readiness or preparation operation acquires its target key and selects a declared route once. Individual reads no longer repeat credential acquisition or probe an unavailable preferred route; the operation releases its key on completion, failure, or cancellation and never replays a failed mutation.
+- **Native Desktop:** Hosts reads Apple readiness without changing host settings and sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
+- **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
+
+## 0.16.37
+
+- **Native label evidence:** exact system-label inspection now uses the existing noninteractive privileged launchd reader. A refused or failed domain read retains its exit code and error instead of being reported as proof that the label is unloaded.
+
+## 0.16.36
+
+- **Primary authority:** a successful missing-object answer remains authoritative for releases as well as mutable objects. GET and stat no longer copy bytes from the backup or return a backup body after the primary refused a repair; ordinary failover remains limited to failed primary reads.
+- **Publication retention:** release-store cleanup requires a completed or reconciled pipeline run for the exact reserved source revision. Missing completion evidence, an unreadable source claim, and an untracked installer publication retain the version with separate diagnostic reasons. A failed run alone does not authorize deleting its output.
+- **Desktop cleanup diagnostics:** the Disk screen decodes every reported cleaner instead of dropping all but two names, and displays each cleaner's exact skipped reasons and counts.
+- **Immutable reservations:** reclaiming eligible release payloads retains both version and platform source-revision records, so cleanup cannot free a used version for a different commit.
+- **Migration:** no stored schemas change. Tag-only releases remain retained because their publisher does not supply the pipeline completion evidence required for deletion; the janitor reports that limitation instead of deleting an active upload.
+
+## 0.16.35
+
+- **Scoped release publishers:** publishing clients accept the valid product entries they actually use instead of requiring every server-side publisher. The release server and configuration validation retain the complete active-publisher requirement; undeclared products still have no write credential.
+- **Publisher diagnostics:** malformed entries and invalid JSON are reported with their actual configuration errors instead of being reduced to “declares no publisher.” By default, authentication reads the selected publisher's token from Skarbiec.
+- **Isolated publisher credentials:** `STADO_RELEASE_PUBLISHER_TOKEN_FILE` accepts an explicitly supplied product bearer without requiring an isolated CI account to read the owner's vault. The product declaration and server-side credential check remain required; an unreadable or malformed file is refused without trying another credential.
+- **Compatibility:** existing complete publisher tables and stored schemas are unchanged. A client with a scoped table requires this release; older clients require the full table.
+
+## 0.16.34
+
+- **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured, and still refuse a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple. The object API's checkpointed current route now pins one conflict winner through the data union, effective lifecycle snapshot, direction-dependent newly-authoritative lifecycle classification, post-commit correlation, receipt, and rollback. An A-serving route preserves A conflicts and imports only B-only objects; a B-serving route preserves the original B-winning union. Pre-commit rollback exactly and resumably restores A's physical checkpoint, including transaction-created imports and directories.
+
+## 0.16.33
+
+- **Authenticated convergence:** the typed GET and POST `/api/service/converge` routes share the CLI's implementation and return the complete report with its product exit code. Independent `converge-read` and `converge-apply` registry client actions prevent read permission from authorizing delivery.
+- **Desktop receipts and credentials:** Services uses the typed API instead of launching the CLI, retains every JSON field after failed delivery and refresh, and does not cancel host work when its selected source changes. Settings binds the registry client token file to one endpoint; registry policy, inventory, cleanup and convergence no longer send a Wisent account token to that API.
+- **Verifier provisioning:** `host vault-token-mint --token-file-name NAME` creates a target-local owner-only bearer file and reuses it on subsequent calls. The grant is minted by the host's own Skarbiec, the bearer never enters command arguments, and a failed mint retains the file for a retry.
+- **Observed GUI readiness:** `host gui-automation status` distinguishes stored Accessibility entries from the serving driver's prompt-free permission response. A denied, missing or unreadable response cannot report `gui-ready: yes`; transport and parsing failures retain their operation and cause.
+- **Run retention:** a completed transition with a linked but missing run manifest retains its terminal result, source and transition record and reports the missing manifest. A stale reaper still respects an intentionally removed manifest without recreating it.
+- **Recovery ownership:** the resident worker verifies its acquired lock descriptor on macOS and preserves that lock during confined noninteractive privileged snapshot reads. Resume reuses a staged release's recorded origin, supports path-only object API declarations, distinguishes a completed PID-less launchd unit from a starting worker, and refuses conflicting actions against an active owner.
+- **Native unit state:** autostart read-back accepts both boolean overrides and native `enabled`/`disabled` names. Cached launchd definitions are joined by native PID ownership rather than matching old arguments against a newly written plist.
+- **Migration and rollback:** no stored schemas change. Registry clients and their dedicated verifier grant must be configured explicitly. When rolling back to a server without convergence actions, remove those actions from its client mapping; otherwise that older server correctly refuses the unknown configuration. This release includes the 0.16.32 changes below; that coordinate remains bound to its original request-recovery source.
+- **Platforms:** the API and native delivery apply to `darwin-arm64` and `linux-amd64`; Stado Desktop is the macOS surface.
+
+## 0.16.32
+
+- **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.
+- **Capacity and cleanup evidence:** the two Probierz journeys record compilation separately from execution, retain the exact compiled CLI and test executables, and refuse execution if the source changed during compilation.
+
+## 0.16.31
+
+- **Release qualification:** format the integrated registry-import source and use equivalent option predicates required by Clippy. The decoder returns only a rejection reason; the caller constructs the unchanged refusal receipt without carrying a large error through successful decoding. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
+
+## 0.16.30
+
+- **Interrupted release requests:** resumption retains the saved platform builder, exact request bytes, staged input archives, and recorded queue consumer. An existing queue plan can be recovered without selecting a live builder or creating a replacement attempt. A request whose source, manifest, or inputs differ is refused rather than overwritten.
+
+## 0.16.29
+
+- **Frozen storage inventory:** storage-root reconciliation pauses and drains the queue, stops the other writers, and holds the local A/B write fence before enumerating files or comparing served bytes. In-flight object publication finishes before the hold; new writes return HTTP 503 with the owning transaction. A durable intent preserves the refusal across an interrupted owner.
+- **Observed handoff routes:** the object API reports the root and mirror actually constructed, and preparation requires its PID and mapped binary to match the declared staged release. HTTP byte identities use the physical inventory's `bytes` field. A differing B cannot replace an A authority, and rollback restores the captured primary/mirror rather than assuming B-only.
+- **Interrupted preparation:** after queue draining and lease acquisition, rollback can restore preparation before a checkpoint exists; its receipt explicitly records that no data-copy step ran. Same-transaction resumption retains that rollback direction. Expired placement leases are recovered through the canonical lease API only when no different active owner holds them.
+- **Desktop reconciliation:** the Hosts screen exposes all five phases with a retained transaction ID and exact command. Receipts preserve raw stdout, stderr, exit status and refusals; a resident launch acknowledgement is not displayed as completion. Separate sheets retain their own reviewed host and transaction.
+- **Checkpoint consistency:** the exclusive write fence replaces speculative snapshot retries. A disappearing file under that hold is reported rather than treated as stable data; complete physical checkpoints still retain every captured file and directory.
+
+## 0.16.28
+
+- **Authority inventory:** a missing enumerated body is refused instead of recorded as an absent object. The live preflight retries transient missing-file reads, and served HTTP identities use the same `bytes` field as the physical inventory.
+
+## 0.16.27
+
+- **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.
+- **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.
+- **Desktop services:** the service inspector exposes the same runner repair and shows its result or refusal without replacing the CLI's diagnosis.
+- **Signing diagnostics:** approved host reads expose the Brama runner's apphost entitlements, CoreCLR signing identity, and macOS protection status without modifying signatures, boot settings, or permissions.
+- **Migration and rollback:** no stored schema changes. Repair retains the registered runner's own version, including an upstream auto-update; rollback restores the earlier installer's signature stripping.
+- **Platforms:** apphost repair applies to `darwin-arm64`; Linux runner installation is unchanged.
+- **Native image diagnostics:** macOS shell dispatch is resolved from an observed process rather than comparing its selected shell with the `/bin/sh` dispatcher inode; aliases use the same identity check.
+- **Environment diagnostics:** service-owned pins retain the required native-unit comparison. Unread remote definitions and observed mismatches have separate findings, and another product's target entry no longer hides a missing delivery declaration.
+
+- **Reconciliation script transport:** native unit capture, listener closure, served-store comparison, and exact unit restoration preserve Python indentation. Their failures retain the operation, host, and complete remote output. Full inventory input travels in the streamed program instead of the process environment. Live preflight retries only an entry that disappears during its single complete qualified and physical capture; it emits those captured identities without rereading live files. The later fenced checkpoint additionally requires two consecutive identical captures. Served-object correlation uses the same `bytes`/SHA-256 identity shape as physical inventory, while every permitted key remains retained.
+- **Native unit restoration:** saved permission bits are rendered as octal for `install`; the restored file must match the captured mode, owner, group, and byte digest before restoration succeeds.
+- **Cargo inventory:** `stado host inventory` reports fixed Cargo-root metadata and complete direct bin membership, including cache symlinks and hidden entries, with explicit partial-read states. Stado Desktop reads the same typed report through the authenticated host inventory API.
+- **Service convergence:** catalog lookup resolves both product names and native unit identities, so label-addressed repairs retain the full required environment. Object API recovery preserves unrelated installed unit fields rather than competing with the shared renderer.
+- **Completion recording:** after a unit changes, `service ensure` waits up to 30 seconds for an authoritative registry read before recording completion. Only retryable reads are repeated; host actions and conditional writes are not. A later failure names the completed action, running PID, and original recording error.
+- **Complete Stado reader delivery:** `release install-local` and `service converge --apply` share the catalog-verified archive retained in the version/platform release tree. Root activation excludes independently installed service-tree readers; convergence includes every registry-declared private Stado reader through the existing idempotent service-update and image-proof lifecycle. A partial-state resume can restore a missing retained archive without reinstalling or kicking an already-attested root, leaves already-current reader images running, preserves the queue-agent handshake, and reports any private install or process-image failure as a failed convergence. Resume requires a receiver built from a release that contains the hidden retained-archive contract; a version banner alone is not evidence of that source identity, and an older receiver rejects the arguments and remains failed rather than claiming full reader convergence.
+- **Reader resume and receipts:** a required `install-local` delivery whose global payload is byte-identical repairs attestation and the queue handshake without rewriting the root, then reruns the image-idempotent global reader pass before private updates through the explicit newly installed Stado path. Global processes already mapped to the installed inode are not kicked; stale ones are reconciled, while the queue agent keeps its installed-release handshake. Failed private child JSON, stdout, and stderr survive in `stado-readers.detail`. Stado Desktop can apply host-wide or selected-binary convergence and retains the complete decoded receipt together with the CLI exit status.
+
+## 0.16.25
+
+- **Reconciliation retries:** before fencing writers, `host storage-root-reconcile` reads the current canonical Stado version instead of reusing the version in an older captured target. An existing fence keeps its staged version pinned; an unavailable registry is an error, not permission to use cached declarations.
+- **Live transaction status:** owner reports retain `recorded_status` and include the native manager's current observation. A previously executing owner is reported as interrupted when its process is gone, or unobserved when the manager cannot be read.
+
+- **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
+
+## 0.16.24
+
+- **Stable proxy startup:** activation and rollback wait for the stable readiness endpoint using the product's declared readiness timeout. A live process or a fixed 200 ms delay no longer substitutes for a listening, forwarding proxy; an exited process still fails immediately, and an expired wait reports the last observed error.
 - **Storage authority handoff:** `host storage-root-reconcile` now runs as a target-resident, globally locked transaction with durable run/resume/status/rollback/finalize receipts. It snapshots complete physical A and B roots, copies only the qualified `ecosystem/` namespace and matching metadata additively from B to A, captures and restores the exact native service, queue, autostart, routing, and mapped-executable state, activates the target's dynamically declared published Stado runtime, and leaves lifecycle cleanup to the ordinary coordinator before observation-only finalization.
+
+- **Object API recovery:** loaded process identity, storage root, and authenticated reads determine readiness, rather than the plist alone. Recovery shares the storage-handoff lock and refuses to change authority; `host storage-root-reconcile` remains the single snapshot, copy, and rollback implementation.
+- **Runtime storage identity:** `/api/state.json` reports the serving PID, version, backend, and local root. Direct-primary requirements and primary-only registry reads are preserved.
+- **Service archives:** extraction is staged beside an installed version, the declared executable must exist before activation, existing immutable contents remain intact, and `current` changes atomically. Replaying the active archive preserves the existing no-relink behavior.
+
+## 0.16.23
+
+- **Release coordinate:** this coordinate remains bound to source `d38c960e82747fd94e954eeaba0fd202e5509a16`. The integrated authority, recovery, and archive changes use a new coordinate rather than overwriting that source identity.
 
 ## 0.16.22
 
@@ -158,6 +266,7 @@
 ## 0.16.4
 
 - **Object API recovery:** an absent launchd job is bootstrapped even when its plist already matches the intended definition. A changed definition is persisted before unloading, so an interrupted recovery does not lose the file needed by its next invocation.
+- **Launchd definition convergence:** `service ensure` now compares the desired Program and argument vector with launchd's retained definition, not only the plist. A stale retained definition is reloaded only after executable and plist preflight, and success requires launchd readback plus the running executable to match. Rollback is attempted only when the prior on-disk definition genuinely differs; an already-desired plist is not reactivated after the replacement lifecycle fails.
 - **Recovery deadline:** the protected-read wait now uses 180 elapsed seconds rather than 180 potentially slow network attempts.
 - **Executable ownership:** the object API now runs the host's canonical delivered `$HOME/.stado/bin/stado`, whose version is governed by `targets[].managed_versions.stado`, instead of an independently content-addressed service image whose source checksum was not retained in the service declaration. The catalog, physical-store recovery definition, registry reconciliation, and Stado product unit ownership agree on that one path; release activation restarts the object unit only on a host whose registry service set declares its exact label.
 - **Migration:** run the existing `stado host recover-object-api TARGET` to repoint and recover the physical unit, then reconcile the managed service declaration with `stado service ensure --from $HOME/.stado/bin/stado`, the existing dashboard argv, and the unit's explicit recovered environment. Recovery alone does not rewrite the registry.

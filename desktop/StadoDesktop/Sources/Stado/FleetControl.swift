@@ -192,6 +192,84 @@ enum FleetPolicyPatch: Sendable {
     }
 }
 
+struct RegistryImportConflict: Decodable, Identifiable, Sendable {
+    let path: String
+    let reason: String
+
+    var id: String { "\(path)\u{0}\(reason)" }
+}
+
+/// Exact receipt returned by the product-owned registry import operation.
+struct RegistryImportReceipt: Decodable, Sendable {
+    let schema: String
+    let state: String
+    let sourceSHA256: String
+    let generation: String?
+    let previousGeneration: String?
+    let importedTargets: [String]
+    let unchangedTargets: [String]
+    let importedFleets: [String]
+    let unchangedFleets: [String]
+    let importedSections: [String]
+    let unchangedSections: [String]
+    let conflicts: [RegistryImportConflict]
+    let rejected: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case schema, state, generation, conflicts, rejected
+        case sourceSHA256 = "source_sha256"
+        case previousGeneration = "previous_generation"
+        case importedTargets = "imported_targets"
+        case unchangedTargets = "unchanged_targets"
+        case importedFleets = "imported_fleets"
+        case unchangedFleets = "unchanged_fleets"
+        case importedSections = "imported_sections"
+        case unchangedSections = "unchanged_sections"
+    }
+
+    var accepted: Bool { state == "imported" || state == "unchanged" }
+
+    var outcomeSentence: String {
+        switch state {
+        case "imported":
+            return "The registry was accepted and persisted."
+        case "unchanged":
+            return "Every source declaration was already present with identical content."
+        case "conflict":
+            return "Nothing was imported because existing registry state differs."
+        case "rejected":
+            return "Nothing was imported because the source is not a valid registry-v2 document."
+        default:
+            return "The registry import returned an unsupported result."
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try values.decode(String.self, forKey: .schema)
+        state = try values.decode(String.self, forKey: .state)
+        sourceSHA256 = try values.decode(String.self, forKey: .sourceSHA256)
+        if let number = try? values.decode(Int.self, forKey: .generation) {
+            generation = String(number)
+        } else {
+            generation = try values.decodeIfPresent(String.self, forKey: .generation)
+        }
+        if let number = try? values.decode(Int.self, forKey: .previousGeneration) {
+            previousGeneration = String(number)
+        } else {
+            previousGeneration = try values.decodeIfPresent(String.self, forKey: .previousGeneration)
+        }
+        importedTargets = try values.decodeIfPresent([String].self, forKey: .importedTargets) ?? []
+        unchangedTargets = try values.decodeIfPresent([String].self, forKey: .unchangedTargets) ?? []
+        importedFleets = try values.decodeIfPresent([String].self, forKey: .importedFleets) ?? []
+        unchangedFleets = try values.decodeIfPresent([String].self, forKey: .unchangedFleets) ?? []
+        importedSections = try values.decodeIfPresent([String].self, forKey: .importedSections) ?? []
+        unchangedSections = try values.decodeIfPresent([String].self, forKey: .unchangedSections) ?? []
+        conflicts = try values.decodeIfPresent([RegistryImportConflict].self, forKey: .conflicts) ?? []
+        rejected = try values.decodeIfPresent([String].self, forKey: .rejected) ?? []
+    }
+}
+
 /// Bounded output of one allowlisted Stado command executed by the dashboard.
 struct OperatorCommandResult: Decodable, Sendable {
     let ok: Bool
@@ -251,6 +329,7 @@ enum FleetControlError: LocalizedError, Sendable {
     case backend(status: Int, message: String)
     case invalidResponse
     case malformedPolicy
+    case registryImportTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -260,6 +339,8 @@ enum FleetControlError: LocalizedError, Sendable {
             "The Stado dashboard returned an invalid response."
         case .malformedPolicy:
             "The Stado dashboard registry projection does not match the supported interface."
+        case .registryImportTooLarge:
+            "The registry file exceeds the 2 MiB Desktop and registry API limit."
         }
     }
 }
@@ -288,14 +369,13 @@ actor FleetControlClient {
     }
 
     func policy(
-        at address: OperationsDashboardAddress,
-        authorizationToken: String?
+        at address: OperationsDashboardAddress
     ) async throws -> FleetPolicy {
         var request = URLRequest(url: address.endpoint("api/registry.json"))
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        apply(authorizationToken, to: &request)
+        apply(try RegistryAPICredential.load().token(for: address), to: &request)
 
         let data = try await payload(for: request)
         do {
@@ -310,7 +390,6 @@ actor FleetControlClient {
     /// only proof the write landed on the document they were reading.
     func updatePolicy(
         at address: OperationsDashboardAddress,
-        authorizationToken: String?,
         target: String,
         patch: FleetPolicyPatch
     ) async throws -> String {
@@ -320,7 +399,7 @@ actor FleetControlClient {
         request.httpMethod = "POST"
         request.setValue("registry-policy", forHTTPHeaderField: "X-Stado-Action")
         try attach(body, to: &request)
-        apply(authorizationToken, to: &request)
+        apply(try RegistryAPICredential.load().token(for: address), to: &request)
 
         let data = try await payload(for: request)
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -334,6 +413,42 @@ actor FleetControlClient {
         }
         throw FleetControlError.invalidResponse
     }
+    /// Import raw registry-v2 JSON through the same operation as the CLI.
+    /// Typed conflict and rejection receipts are returned to the caller rather
+    /// than flattened into transport errors.
+    func importRegistry(
+        document: Data,
+        at address: OperationsDashboardAddress,
+        authorizationToken: String?
+    ) async throws -> RegistryImportReceipt {
+        guard document.count <= maximumResponseBytes else {
+            throw FleetControlError.registryImportTooLarge
+        }
+        var request = URLRequest(url: address.endpoint("api/registry/import"))
+        request.httpMethod = "POST"
+        request.httpBody = document
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(document.count), forHTTPHeaderField: "Content-Length")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("registry-import", forHTTPHeaderField: "X-Stado-Action")
+        apply(authorizationToken, to: &request)
+
+        let (data, response) = try await response(for: request)
+        if [200, 400, 409].contains(response.statusCode),
+           let receipt = try? JSONDecoder().decode(RegistryImportReceipt.self, from: data),
+           receipt.schema == "stado.registry-import-receipt.v1"
+        {
+            return receipt
+        }
+        guard response.statusCode == 200 else {
+            throw FleetControlError.backend(
+                status: response.statusCode,
+                message: Self.backendMessage(in: data)
+            )
+        }
+        throw FleetControlError.invalidResponse
+    }
+
 
     /// Run one command from the dashboard's allowlisted catalog. Mutating
     /// invocations carry the confirmation value the dashboard requires; there
@@ -383,7 +498,7 @@ actor FleetControlClient {
         }
     }
 
-    private func payload(for request: URLRequest) async throws -> Data {
+    private func response(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw FleetControlError.invalidResponse
@@ -394,6 +509,11 @@ actor FleetControlClient {
                 message: "The Stado dashboard response exceeded the safe display limit."
             )
         }
+        return (data, http)
+    }
+
+    private func payload(for request: URLRequest) async throws -> Data {
+        let (data, http) = try await response(for: request)
         guard http.statusCode == 200 else {
             throw FleetControlError.backend(
                 status: http.statusCode,

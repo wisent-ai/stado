@@ -9,7 +9,7 @@ import Foundation
 enum StadoCLIError: LocalizedError, Sendable {
     case executableMissing
     case failed(exitCode: Int32, message: String)
-    case malformedJSON(String)
+    case response(exitCode: Int32, stdout: Data, stderr: Data, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -17,8 +17,8 @@ enum StadoCLIError: LocalizedError, Sendable {
             "The stado command line is not installed where this app can reach it. Looked on PATH and in ~/.local/bin, ~/.stado/bin, /opt/homebrew/bin and /usr/local/bin."
         case let .failed(exitCode, message):
             message.isEmpty ? "stado exited \(exitCode)." : message
-        case let .malformedJSON(detail):
-            "stado answered with something this console could not read: \(detail)"
+        case let .response(exitCode, _, _, message):
+            message.isEmpty ? "stado exited \(exitCode)." : message
         }
     }
 }
@@ -35,6 +35,18 @@ enum StadoCLIError: LocalizedError, Sendable {
 /// The executable is resolved once and remembered: an app launched from Finder
 /// inherits a four-entry PATH, so the search has to include the places the
 /// installers actually write to.
+/// A decoded JSON answer together with the complete process evidence that
+/// produced it. Some commands intentionally print a complete document before
+/// exiting non-zero, so callers must retain stdout, stderr, the refusal and the
+/// process verdict rather than treating decoding as the whole invocation.
+struct StadoCLIJSONResult<Value: Sendable>: Sendable {
+    let value: Value
+    let exitCode: Int32
+    let stdout: Data
+    let stderr: Data
+    let refusal: String?
+}
+
 actor StadoCLI {
     private let configuredExecutable: String?
     private var resolvedExecutable: URL?
@@ -57,8 +69,23 @@ actor StadoCLI {
     nonisolated func json<T: Decodable & Sendable>(
         _ type: T.Type,
         arguments: [String],
-        timeoutSeconds: Int = 120
+        timeoutSeconds: Int? = 120
     ) async throws -> T {
+        try await jsonResult(type, arguments: arguments, timeoutSeconds: timeoutSeconds).value
+    }
+
+    /// Run one JSON command while retaining its complete process evidence.
+    ///
+    /// A valid payload is always returned, including for a non-zero exit, with
+    /// exact stdout and stderr plus the CLI refusal. An absent or malformed
+    /// payload throws the same evidence in `StadoCLIError.response`. A `nil`
+    /// deadline leaves bounded host operations to the product command itself;
+    /// readonly callers keep the default screen deadline.
+    nonisolated func jsonResult<T: Decodable & Sendable>(
+        _ type: T.Type,
+        arguments: [String],
+        timeoutSeconds: Int? = 120
+    ) async throws -> StadoCLIJSONResult<T> {
         let executable = try await executableURL()
         let completion = try await Self.capture(
             executable: executable,
@@ -66,30 +93,71 @@ actor StadoCLI {
             timeoutSeconds: timeoutSeconds
         )
         do {
-            return try JSONDecoder().decode(T.self, from: completion.output)
+            return StadoCLIJSONResult(
+                value: try JSONDecoder().decode(T.self, from: completion.output),
+                exitCode: completion.exitCode,
+                stdout: completion.output,
+                stderr: completion.errors,
+                refusal: completion.refusal?.errorDescription
+            )
         } catch {
-            // No payload to read: now the exit status is the only answer there
-            // is, and the CLI's own sentence is better than a decoding one.
-            if let refusal = completion.refusal { throw refusal }
-            throw StadoCLIError.malformedJSON(
-                "\(Self.commandLine(arguments)) — \(error.localizedDescription)"
+            // A missing or malformed payload still has real process evidence.
+            // Carry it through the thrown value so a receipt-oriented caller
+            // can render both streams instead of collapsing them into one
+            // synthesized decoding sentence.
+            let message = completion.refusal?.errorDescription
+                ?? "stado answered with something this console could not read: \(Self.commandLine(arguments)) — \(error.localizedDescription)"
+            throw StadoCLIError.response(
+                exitCode: completion.exitCode,
+                stdout: completion.output,
+                stderr: completion.errors,
+                message: message
             )
         }
     }
 
-    /// What one invocation produced: its stdout, and the sentence it refused
-    /// with when it exited non-zero.
+    /// Run a command whose successful stdout is intentionally plain text.
+    ///
+    /// This is reserved for explicit reveal/copy flows such as
+    /// `host vault-token-mint --raw-token`. Unlike `json`, a non-zero exit can
+    /// never be a decodable state, so the CLI's refusal is thrown immediately.
+    nonisolated func text(
+        arguments: [String],
+        timeoutSeconds: Int = 120
+    ) async throws -> String {
+        let executable = try await executableURL()
+        let completion = try await Self.capture(
+            executable: executable,
+            arguments: arguments,
+            timeoutSeconds: timeoutSeconds
+        )
+        if let refusal = completion.refusal { throw refusal }
+        let value = String(data: completion.output, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !value.isEmpty else {
+            throw StadoCLIError.failed(
+                exitCode: 0,
+                message: "\(Self.commandLine(arguments)) succeeded but returned no value."
+            )
+        }
+        return value
+    }
+
+    /// What one invocation produced: exact stdout and stderr, and the sentence
+    /// it refused with when it exited non-zero.
     ///
     /// A non-zero exit is not the absence of an answer here. `host gates`
     /// exits non-zero when the host is claiming nothing, `service converge`
     /// when a binary has drifted, `release status` when a host never reported
     /// its software — each after printing its complete `--json` payload. Those
     /// are the exact states these screens were built to show, so the payload
-    /// is decoded first and the refusal is kept for the case where there is no
-    /// payload at all.
+    /// is decoded first while both raw streams and the refusal remain
+    /// available to the caller.
     private struct Completion: Sendable {
         let output: Data
+        let errors: Data
         let refusal: StadoCLIError?
+        let exitCode: Int32
     }
 
     private func executableURL() throws -> URL {
@@ -154,24 +222,24 @@ actor StadoCLI {
             lock.withLock { data = value }
         }
 
-        var text: String {
-            let value = lock.withLock { data }
-            return String(data: value, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var value: Data {
+            lock.withLock { data }
         }
     }
 
     private static func capture(
         executable: URL,
         arguments: [String],
-        timeoutSeconds: Int
+        timeoutSeconds: Int?
     ) async throws -> Completion {
         let invocation = Invocation()
-        let watchdog = Task.detached(priority: .utility) {
-            try? await Task.sleep(for: .seconds(timeoutSeconds))
-            invocation.terminateForTimeout()
+        let watchdog = timeoutSeconds.map { seconds in
+            Task.detached(priority: .utility) {
+                try? await Task.sleep(for: .seconds(seconds))
+                invocation.terminateForTimeout()
+            }
         }
-        defer { watchdog.cancel() }
+        defer { watchdog?.cancel() }
 
         return try await Task.detached(priority: .userInitiated) {
             try runToCompletion(
@@ -194,7 +262,7 @@ actor StadoCLI {
         invocation: Invocation,
         executable: URL,
         arguments: [String],
-        timeoutSeconds: Int
+        timeoutSeconds: Int?
     ) throws -> Completion {
         let process = invocation.process
         let output = Pipe()
@@ -228,20 +296,30 @@ actor StadoCLI {
         process.waitUntilExit()
         drained.wait()
 
-        guard process.terminationStatus == 0 else {
+        let exitCode = process.terminationStatus
+        let errorData = collected.value
+        guard exitCode == 0 else {
             return Completion(
                 output: data,
+                errors: errorData,
                 refusal: refusal(
                     arguments: arguments,
-                    exitCode: process.terminationStatus,
+                    exitCode: exitCode,
                     stdout: data,
-                    stderr: collected.text,
+                    stderr: String(data: errorData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
                     timedOut: invocation.didTimeOut,
                     timeoutSeconds: timeoutSeconds
-                )
+                ),
+                exitCode: exitCode
             )
         }
-        return Completion(output: data, refusal: nil)
+        return Completion(
+            output: data,
+            errors: errorData,
+            refusal: nil,
+            exitCode: exitCode
+        )
     }
 
     /// The sentence a non-zero exit refused with, in the CLI's own words.
@@ -251,12 +329,12 @@ actor StadoCLI {
         stdout: Data,
         stderr: String,
         timedOut: Bool,
-        timeoutSeconds: Int
+        timeoutSeconds: Int?
     ) -> StadoCLIError {
-        if timedOut {
+        if timedOut, let timeoutSeconds {
             return .failed(
                 exitCode: exitCode,
-                message: "\(commandLine(arguments)) gave no answer within \(timeoutSeconds) s and was stopped. Nothing was written."
+                message: "\(commandLine(arguments)) gave no answer within \(timeoutSeconds) s and was stopped. This does not show whether the command changed anything."
             )
         }
         let stdoutText = String(data: stdout, encoding: .utf8)?

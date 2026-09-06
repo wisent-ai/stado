@@ -313,65 +313,21 @@ jobs:
       - name: Run every quality step the release manifest declares
         env:
           MANIFEST: .wisent-release.json
+          # On a pull request the base branch; on a push to `main` the commit
+          # BEFORE that push, because comparing `main` against `origin/main`
+          # compares the revision under judgement against itself and answers
+          # `inherited` for everything.
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+        # One implementation, checked in and runnable by hand:
+        # `scripts/quality_gate.sh` reads the same `platforms.<platform>.quality`
+        # the release worker executes and runs exactly those argv. It also says
+        # WHOSE revision a refusal belongs to, by re-running the refused step
+        # against the base in its own worktree -- because a pull request is
+        # judged on its merge result, so a step already refusing `main` refuses
+        # every pull request opened against it, for files their authors never
+        # touched. That happened three times on 2026-09-04/05 and each time the
+        # gate said "fix the tree" to the wrong person.
         run: |
           set -euo pipefail
-
-          # The runner's own platform, not a hardcoded one, so moving this job
-          # to a macOS runner runs the darwin-arm64 steps rather than silently
-          # judging the wrong ones.
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64)  platform=linux-amd64 ;;
-            Darwin-arm64)  platform=darwin-arm64 ;;
-            *)
-              echo "::error::$MANIFEST declares no release platform for" \
-                "$(uname -s)-$(uname -m), so there is no declared gate to run here."
-              exit 1 ;;
-          esac
-          echo "platform: $platform"
-
-          # A gate that can only say yes is worth nothing, and the cheapest way
-          # to reach that state is to empty the array this job reads. An absent
-          # platform, an absent `quality` key or an empty one is a refusal, not
-          # a pass with zero steps: whoever removes the release's quality steps
-          # has to come here and say so out loud.
-          steps="$(jq -er --arg p "$platform" '
-            .platforms[$p].quality // [] | length' "$MANIFEST")"
-          if [ "$steps" -lt 1 ]; then
-            echo "::error::$MANIFEST declares $steps quality step(s) for $platform." \
-              "This job exists to run the release gate on the pull request; with" \
-              "nothing declared there is no gate, and a green tick here would be a" \
-              "lie. Restore the declaration or delete this job deliberately."
-            exit 1
-          fi
-          echo "$MANIFEST declares $steps quality step(s) for $platform"
-
-          # Executed verbatim from the manifest -- NUL-delimited, so an argv
-          # element containing a space or a glob reaches the program the way the
-          # release worker passes it, not the way a shell would re-split it.
-          index=0
-          while [ "$index" -lt "$steps" ]; do
-            name="$(jq -er --arg p "$platform" --argjson i "$index" '
-              .platforms[$p].quality[$i].name' "$MANIFEST")"
-            argv=()
-            while IFS= read -r -d '' element; do
-              argv+=("$element")
-            done < <(jq -j --arg p "$platform" --argjson i "$index" '
-              .platforms[$p].quality[$i].argv[] | . + "\u0000"' "$MANIFEST")
-            if [ "${#argv[@]}" -lt 1 ]; then
-              echo "::error::quality step '$name' declares no argv"
-              exit 1
-            fi
-            echo "::group::$name: ${argv[*]}"
-            if ! "${argv[@]}"; then
-              echo "::endgroup::"
-              echo "::error::the release quality step '$name' refused this revision." \
-                "It is declared in $MANIFEST and the release worker runs the same" \
-                "argv, so this is the failure the release would have hit -- with a" \
-                "version already spent on it. Fix the tree; do not narrow the step."
-              exit 1
-            fi
-            echo "::endgroup::"
-            index=$((index + 1))
-          done
-
-          echo "Every quality step $MANIFEST declares for $platform passed."
+          git fetch --no-tags --depth 1 origin "$BASE_REF" >/dev/null 2>&1 || true
+          bash scripts/quality_gate.sh --manifest "$MANIFEST" --base "$BASE_REF"

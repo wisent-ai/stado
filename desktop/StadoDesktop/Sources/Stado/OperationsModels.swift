@@ -503,6 +503,72 @@ struct HostGatesCapacity: Decodable, Sendable {
     }
 }
 
+/// Non-secret receipt from `stado host vault-token-mint --json`.
+///
+/// The bearer is deliberately not represented. Desktop keeps only the grant
+/// metadata the command returns after removing the token, plus the optional
+/// owner-vault coordinate used to register an existing bearer.
+struct HostVaultBearerReceipt: Decodable, Sendable {
+    let target: String
+    let status: String
+    let skarbiec: HostVaultBearerGrant
+    let tokenSource: HostVaultBearerSource?
+    let detail: String?
+
+    var succeeded: Bool {
+        status == "token_minted" || status == "token_registered"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case target, status, skarbiec, detail
+        case tokenSource = "token_source"
+    }
+}
+
+struct HostVaultBearerGrant: Decodable, Sendable {
+    let ok: Bool
+    let consumer: String
+    let capabilities: [HostVaultBearerCapability]
+    let workloadBound: Bool
+    let audience: String
+    let expiresAt: UInt64?
+    let tokenFile: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, consumer, capabilities, audience
+        case workloadBound = "workload_bound"
+        case expiresAt = "expires_at"
+        case tokenFile = "token_file"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try values.decodeIfPresent(Bool.self, forKey: .ok) ?? false
+        consumer = try values.decodeIfPresent(String.self, forKey: .consumer) ?? ""
+        capabilities =
+            try values.decodeIfPresent([HostVaultBearerCapability].self, forKey: .capabilities) ?? []
+        workloadBound = try values.decodeIfPresent(Bool.self, forKey: .workloadBound) ?? false
+        audience = try values.decodeIfPresent(String.self, forKey: .audience) ?? ""
+        expiresAt = try values.decodeIfPresent(UInt64.self, forKey: .expiresAt)
+        tokenFile = try values.decodeIfPresent(String.self, forKey: .tokenFile)
+    }
+}
+
+struct HostVaultBearerCapability: Decodable, Sendable {
+    let action: String
+    let item: String
+    let field: String?
+
+    var displayValue: String {
+        "\(action):\(item)\(field.map { "#\($0)" } ?? "")"
+    }
+}
+
+struct HostVaultBearerSource: Decodable, Sendable {
+    let item: String
+    let field: String
+}
+
 /// Typed receipt from `stado host retire-file --json`.
 ///
 /// The CLI is the policy authority. Desktop keeps these fields verbatim so the
@@ -586,23 +652,89 @@ struct HostReclaimStage: Decodable, Identifiable, Sendable {
     }
 }
 
-/// `stado service converge <host> --json`, read-only: what each declared unit
-/// runs, and what the process on the host is actually executing.
+/// The complete product report from `service converge`.
+///
+/// Report mode leaves the apply arrays empty. Apply mode carries every
+/// delivery, refusal and binary that could not be delivered, including the
+/// untouched delivery `detail` strings that retain child JSON, stdout and
+/// stderr when convergence exits non-zero.
 struct ServiceConvergeReport: Decodable, Sendable {
     let target: String
     let applied: Bool
+    let releases: [ServiceConvergeRelease]
+    let undeliverable: [ServiceConvergeUndeliverable]
+    let refused: [ServiceConvergeRefusal]
     let units: [ServiceUnit]
 
     enum CodingKeys: String, CodingKey {
-        case target, applied
+        case target, applied, releases, undeliverable, refused
         case units = "binaries"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
-        applied = try values.decodeIfPresent(Bool.self, forKey: .applied) ?? false
-        units = try values.decodeIfPresent([ServiceUnit].self, forKey: .units) ?? []
+        target = try values.decode(String.self, forKey: .target)
+        applied = try values.decode(Bool.self, forKey: .applied)
+        releases = try values.decode([ServiceConvergeRelease].self, forKey: .releases)
+        undeliverable = try values.decode([ServiceConvergeUndeliverable].self, forKey: .undeliverable)
+        refused = try values.decode([ServiceConvergeRefusal].self, forKey: .refused)
+        units = try values.decode([ServiceUnit].self, forKey: .units)
+    }
+}
+
+struct ServiceConvergeRelease: Decodable, Sendable {
+    let binary: String
+    let version: String
+    let status: String
+    let detail: String
+}
+
+struct ServiceConvergeUndeliverable: Decodable, Sendable {
+    let binary: String
+    let detail: String
+}
+
+struct ServiceConvergeRefusal: Decodable, Sendable {
+    let binary: String
+    let declaredVersion: String
+    let installedVersion: String
+    let remediation: String
+
+    enum CodingKeys: String, CodingKey {
+        case binary, remediation
+        case declaredVersion = "declared_version"
+        case installedVersion = "installed_version"
+    }
+}
+
+/// The API returns the product-owned exit decision and its report atomically.
+/// A nonzero exit code is still a complete successful HTTP response.
+struct ServiceConvergeResponse: Decodable, Sendable {
+    let exitCode: Int32
+    let report: ServiceConvergeReport
+
+    enum CodingKeys: String, CodingKey {
+        case exitCode = "exit_code"
+        case report
+    }
+}
+
+/// The equivalent CLI argv and the complete API answer. Kept apart from
+/// refreshed service state so a read-only refresh cannot erase mutation
+/// evidence.
+struct ServiceConvergeReceipt: Sendable {
+    let arguments: [String]
+    let exitCode: Int32
+    let json: String
+
+    init(arguments: [String], exitCode: Int32, document: Data) throws {
+        self.arguments = arguments
+        self.exitCode = exitCode
+        let object = try JSONSerialization.jsonObject(with: document)
+        let formatted = try JSONSerialization.data(
+            withJSONObject: object, options: [.prettyPrinted, .sortedKeys]
+        )
+        json = String(decoding: formatted, as: UTF8.self)
     }
 }
 
@@ -1620,6 +1752,59 @@ struct ReleaseRow: Identifiable, Sendable {
     }
 }
 
+// MARK: - Typed host filesystem inventory
+
+/// `GET /api/host/inventory?target=…`, narrowed to the fixed Cargo filesystem
+/// section the Hosts inspector renders.
+struct HostInventoryReport: Decodable, Sendable {
+    let target: String
+    let status: String
+    let error: String?
+    let cargo: HostCargoInventory?
+}
+
+/// The managed account's `$HOME/.cargo` and fixed `bin` child.
+struct HostCargoInventory: Decodable, Sendable {
+    let home: HostFilesystemMetadata
+    let bin: HostFilesystemMetadata
+    let entries: [HostFilesystemMetadata]
+    let entriesSeen: UInt64
+    let entriesComplete: Bool
+    let entriesState: String
+    let complete: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case home, bin, entries, complete
+        case entriesSeen = "entries_seen"
+        case entriesComplete = "entries_complete"
+        case entriesState = "entries_state"
+    }
+}
+
+/// One lstat row from the fixed Cargo inventory.
+struct HostFilesystemMetadata: Decodable, Sendable {
+    let name: String
+    let nameState: String
+    let kind: String
+    let metadataState: String
+    let bytes: UInt64?
+    let mode: String
+    let uid: UInt64?
+    let gid: UInt64?
+    let modifiedEpoch: Int64?
+    let symlinkTarget: String
+    let symlinkTargetState: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, kind, bytes, mode, uid, gid
+        case nameState = "name_state"
+        case metadataState = "metadata_state"
+        case modifiedEpoch = "modified_epoch"
+        case symlinkTarget = "symlink_target"
+        case symlinkTargetState = "symlink_target_state"
+    }
+}
+
 // MARK: - Connectivity, sleep and silence
 
 /// `stado host link <host> --json`.
@@ -1753,6 +1938,65 @@ struct HostConnectionPathProbe: Decodable, Identifiable, Sendable {
     let error: String?
 
     var id: String { name }
+}
+
+/// One `~/.stado/forwards/<service>.url` marker as `stado host inventory`
+/// reports it: the address consumers on that host dial, whether anything
+/// answers there, and whether it is the address the fleet declares for them.
+///
+/// The console had no surface for these at all, and they are what a product
+/// on that host actually resolves a service through. On 2026-09-05
+/// `lukasz-macbook` carried `weles-admission` at `18794` while its own
+/// resolver adapter for that service binds `17614`; the file was the only
+/// statement of the address and nothing displayed it.
+struct HostForwardMarker: Decodable, Identifiable, Sendable {
+    let name: String
+    let url: String
+    /// `matches`, `stale`, `unreadable` or `unknown`: whether anything answers
+    /// where the marker points.
+    let reconciliation: String
+    /// The address the fleet declares for this host, when it declares one.
+    let declaredUrl: String?
+    /// `directory-endpoint` when this host serves the service,
+    /// `resolver-adapter` when it dials its own adapter, `undeclared` when the
+    /// fleet claims neither.
+    let declaredSource: String
+    /// `matches`, `disagrees` or `undeclared`.
+    let declarationVerdict: String
+
+    var id: String { name }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case url
+        case reconciliation
+        case declaredUrl = "declared_url"
+        case declaredSource = "declared_source"
+        case declarationVerdict = "declaration_verdict"
+    }
+}
+
+/// One vault a host holds: an owner, two counts and a path, which is all
+/// `stado host vaults` transports. Item names never cross the wire.
+struct HostVault: Decodable, Identifiable, Sendable {
+    let path: String
+    let owner: String?
+    let items: Int?
+    let recipients: Int?
+
+    var id: String { path }
+}
+
+/// Which of those vaults the host's own credential operations resolve to.
+///
+/// `declared` and `discovered` are answers; `ambiguous`, `declared-absent`
+/// and `none` mean every owner write and authoritative read on that host is
+/// refused, and `unreadable` means the host's installed release has no
+/// `secrets.skarbiec.vault_file` field to report.
+struct HostVaultAuthority: Decodable, Sendable {
+    let state: String
+    let path: String?
+    let detail: String?
 }
 
 /// Why a reachable host stopped publishing beacons, read from the managed
@@ -2036,4 +2280,8 @@ enum HostLinkVerdict: Hashable, Sendable {
         case let .unrecognised(raw): raw.isEmpty ? "Not reported" : raw.humanizedIdentifier
         }
     }
+}
+
+struct ServiceRunnerRuntimeReport: Decodable, Sendable {
+    let stdout: String
 }

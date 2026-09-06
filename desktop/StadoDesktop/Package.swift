@@ -53,7 +53,8 @@ let package = Package(
                 "Stado",
                 .product(name: "WisentDesignSystem", package: "wisent-components"),
             ],
-            path: "tests/service"
+            path: "tests/service",
+            exclude: ["ServicesConvergence.probierz.mjs"]
         ),
         .testTarget(
             name: "ProductTests",

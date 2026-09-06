@@ -91,9 +91,8 @@ pub struct QuarantineRecord {
 impl QuarantineRecord {
     /// Record one refusal, naming its cause from the reason itself.
     ///
-    /// For the sites that never read a candidate log — a rollback, a rejected
-    /// rollback-compatibility declaration, a fetch that failed — the reason is
-    /// the whole of the available evidence.
+    /// For refusals before a process starts — a rejected rollback-compatibility
+    /// declaration or a fetch that failed — the reason is all available evidence.
     fn new(reason: String) -> Self {
         let classified = release_cause::classify(&reason);
         Self {
@@ -526,6 +525,36 @@ fn log_evidence(path: &Path, lines: usize, max_chars: usize) -> LogEvidence {
     }
 }
 
+/// Keep the same process evidence for startup, active and drain failures.
+/// The reason carries bounded tails; classification reads the full logs once.
+fn quarantine_with_logs(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+    record: &ProcessRecord,
+    why: &str,
+) -> QuarantineRecord {
+    let stderr = log_evidence(
+        &release_log_path(target, product, &record.version, "err"),
+        20,
+        1200,
+    );
+    let stdout = log_evidence(
+        &release_log_path(target, product, &record.version, "out"),
+        5,
+        400,
+    );
+    let reason = format!(
+        "{why}; stderr {}; stdout {}",
+        stderr.rendered, stdout.rendered
+    );
+    let classified = release_cause::classify(&format!(
+        "{why}\n{}\n{}",
+        stderr.body.trim_end(),
+        stdout.body.trim_end()
+    ));
+    QuarantineRecord::classified(reason, classified)
+}
+
 fn expand_home(value: &str, home: &str) -> String {
     value.replace("{home}", home)
 }
@@ -647,10 +676,6 @@ async fn not_ready_because(record: &ProcessRecord, path: &str) -> Option<String>
         Err(error) if error.is_connect() => Some(format!("{url} refused the connection")),
         Err(error) => Some(format!("{url} failed: {error}")),
     }
-}
-
-async fn ready(record: &ProcessRecord, path: &str) -> bool {
-    not_ready_because(record, path).await.is_none()
 }
 
 /// Wait for readiness, returning the last reason it was refused.
@@ -793,6 +818,7 @@ async fn stable_bind_answer(
     product: &str,
     generation: u64,
     active: &ProcessRecord,
+    readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     if !pid_alive(proxy_pid) {
         return Err(format!("stable release proxy pid {proxy_pid} is gone"));
@@ -829,24 +855,41 @@ async fn stable_bind_answer(
     }
 
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    let response = reqwest::Client::new()
-        .get(&url)
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                format!("{url} did not answer within 3s")
-            } else if error.is_connect() {
-                format!("{url} refused the connection")
-            } else {
-                format!("{url} failed: {error}")
-            }
-        })?;
-    if !response.status().is_success() {
-        return Err(format!("{url} answered HTTP {}", response.status()));
+    let client = reqwest::Client::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
+    let mut last_error = None;
+    loop {
+        if !pid_alive(proxy_pid) {
+            return Err(format!("stable release proxy pid {proxy_pid} is gone"));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "{url} did not become ready within {readiness_timeout_seconds}s; {}",
+                last_error
+                    .as_deref()
+                    .unwrap_or("no response before the deadline")
+            ));
+        }
+        last_error = Some(
+            match client
+                .get(&url)
+                .timeout(remaining.min(Duration::from_secs(3)))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => return Ok(()),
+                Ok(response) => format!("HTTP {}", response.status()),
+                Err(error) => format!("{error:#}"),
+            },
+        );
+        tokio::time::sleep(
+            deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .min(Duration::from_millis(200)),
+        )
+        .await;
     }
-    Ok(())
 }
 
 fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
@@ -878,16 +921,36 @@ fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     }
 }
 
+/// Hand the stable bind back to the declared legacy unit.
+///
+/// `enable` first: the unit was disabled the moment the release path took the
+/// bind over, and `launchctl bootstrap` refuses a disabled service with exit 5
+/// (`Bootstrap failed: 5: Input/output error`). Until 2026-09-06 that exit was
+/// accepted as success here, so a rollback with no previous release recorded
+/// "legacy restored" while nothing was bootstrapped: on charless-mac-mini the
+/// skarbiec rollback killed its proxy, took exit 5 as the unit being back, and
+/// the stable bind stayed empty for thirteen hours while the object API answered
+/// `503 object authorization unavailable` to every host. A refusal is a refusal;
+/// the caller decides what to do about the bind it still does not have.
 fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(plist) = target.legacy_launchd_plist.as_deref() else {
         return Ok(());
     };
+    if let Some(label) = target.legacy_launchd_label.as_deref() {
+        let _ = Command::new("/usr/bin/sudo")
+            .args(["-n", "/bin/launchctl", "enable", &format!("system/{label}")])
+            .status();
+    }
     let status = Command::new("/usr/bin/sudo")
         .args(["-n", "/bin/launchctl", "bootstrap", "system", plist])
         .status()
         .map_err(|error| format!("cannot restore legacy launchd service {plist}: {error}"))?;
-    if status.success() || status.code() == Some(5) {
+    if status.success() {
         Ok(())
+    } else if status.code() == Some(5) {
+        Err(format!(
+            "legacy launchd service bootstrap of {plist} was refused (exit 5: the service is disabled or its plist is unloadable); the stable bind has no owner"
+        ))
     } else {
         Err(format!(
             "legacy launchd service bootstrap exited with {status}"
@@ -947,9 +1010,15 @@ async fn ensure_active_proxy(
     generation: u64,
     active: &ProcessRecord,
     state: &mut HostReleaseState,
+    readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
-    if !ready(active, &serving.readiness_path).await {
-        return Err("active release lost readiness".to_string());
+    // The probe's own sentence travels with the verdict. On 2026-09-06 the
+    // quarantine list on charless-mac-mini read `active release lost readiness`
+    // for two digests in a row, and nothing said whether the candidate answered
+    // 503, refused the connection, or took longer than the 3s the probe allows
+    // on a host running 242 jobs. Three different repairs, one word.
+    if let Some(why) = not_ready_because(active, &serving.readiness_path).await {
+        return Err(format!("active release lost readiness: {why}"));
     }
     // A legacy unit can be loaded again after cutover while the stable proxy
     // remains healthy. Reassert release ownership on every reconcile, not only
@@ -971,7 +1040,6 @@ async fn ensure_active_proxy(
     } else {
         stop_legacy(target)?;
         let spawned_pid = start_proxy(target, serving, product, generation, active.port)?;
-        tokio::time::sleep(Duration::from_millis(200)).await;
         let proxy_pid = exact_proxy_pid(target, serving, product)
             .map_err(|why| format!("stable release proxy failed to start: {why}"))?
             .ok_or_else(|| "spawned stable release proxy is not live".to_string())?;
@@ -984,9 +1052,17 @@ async fn ensure_active_proxy(
     };
 
     state.proxy_pid = Some(proxy_pid);
-    stable_bind_answer(proxy_pid, target, serving, product, generation, active)
-        .await
-        .map_err(|why| format!("stable release proxy is invalid: {why}"))
+    stable_bind_answer(
+        proxy_pid,
+        target,
+        serving,
+        product,
+        generation,
+        active,
+        readiness_timeout_seconds,
+    )
+    .await
+    .map_err(|why| format!("stable release proxy is invalid: {why}"))
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
@@ -1242,14 +1318,27 @@ struct ReleaseProcess {
     version: String,
     port: Option<u16>,
     release_dir: PathBuf,
+    /// Whether this process was started by `spawn_release`: that path runs the
+    /// launcher through `env STADO_RELEASE_PRODUCT=<product> ...`, so the marker
+    /// sits in the argument vector of the group leader and of every child that
+    /// re-executes the same command line. A process running the release
+    /// binary without it was started by someone else.
+    agent_spawned: bool,
 }
 
 /// Every process running out of this product's `releases/` directory, including
 /// the immutable release directory named by its exact argument vector.
 ///
-/// These processes are all children of some run of this agent -- nothing else
-/// executes from that directory -- so any of them the state file does not name is
-/// a leak from a run that died between spawning and recording.
+/// Not every one of them is this agent's. `release_processes` used to say
+/// "nothing else executes from that directory", and that was false on the
+/// always-on Mac: the Weles worker starts `skarbiec capability-serve` out of
+/// the attested Skarbiec release directory on purpose, because a broker from
+/// any other path could belong to a different Skarbiec generation. The state
+/// file never names that process, so `sweep_leaked_processes` sent it SIGTERM
+/// on every pass -- 164 times in the log on 2026-09-05 -- and every Weles
+/// trajectory that redeemed a credential read `ECONNREFUSED` at the socket,
+/// including the Developer ID run that publishes desktop signing material.
+/// `agent_spawned` records which processes carry the agent's own launch marker.
 fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     let output = match std::process::Command::new("/bin/ps")
         .args(["-eo", "pid=,pgid=,command="])
@@ -1296,12 +1385,16 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
                 port = pair[1].parse().ok();
             }
         }
+        let agent_spawned = arguments
+            .iter()
+            .any(|argument| argument.starts_with("STADO_RELEASE_PRODUCT="));
         found.push(ReleaseProcess {
             pid,
             process_group,
             version,
             port,
             release_dir,
+            agent_spawned,
         });
     }
     found
@@ -1333,15 +1426,54 @@ async fn reconcile_stable_proxy(
     state: &mut HostReleaseState,
 ) -> Result<(), String> {
     let serving = target.blue_green_serving()?;
+    let ownership_empty =
+        state.active.is_none() && state.candidate.is_none() && state.previous.is_none();
     let Some(proxy_pid) = exact_proxy_pid(target, &serving, product)? else {
+        // No proxy, no owned release, and nothing answering on the stable bind:
+        // the release path has let go of the bind and the legacy unit was never
+        // given it back. This is the state a rollback whose `restore_legacy`
+        // was refused leaves behind, and until 2026-09-06 the agent returned
+        // here every fifteen seconds while charless-mac-mini served no
+        // Skarbiec for thirteen hours. The bind belongs to someone on every
+        // tick; when the release path does not want it, the declared unit does.
+        if ownership_empty
+            && target.legacy_launchd_plist.is_some()
+            && !stable_bind_ready(&serving).await
+        {
+            restore_legacy(target)?;
+            let deadline =
+                tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
+            while !stable_bind_ready(&serving).await {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "legacy {product} did not reclaim {} after the release path released it",
+                        serving.stable_bind
+                    ));
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            eprintln!(
+                "restored legacy {product} on {}: no release proxy and no owned release held the bind",
+                serving.stable_bind
+            );
+        }
         return Ok(());
     };
     let upstream = proxy_upstream_port(target, product);
     let processes = release_processes(install_root);
+    // Owned means a release process holds the upstream port. The argument
+    // vector is asked first and the kernel second, because a launcher that was
+    // not told `--port` -- skarbiec's is not -- answers `None` to the first
+    // question and the proxy it serves would otherwise be retired as orphaned.
     let upstream_is_owned = upstream.is_some_and(|upstream_port| {
         processes
             .iter()
             .any(|process| process.port == Some(upstream_port))
+            || listener_pid(upstream).is_some_and(|pid| {
+                processes
+                    .iter()
+                    .any(|process| process.pid == pid || process.process_group == pid)
+            })
     });
     // A surviving healthy proxy means the release path owns the stable bind.
     // Reconcile the declared legacy unit before adopting that proxy so a later
@@ -1359,8 +1491,6 @@ async fn reconcile_stable_proxy(
         return Ok(());
     }
 
-    let ownership_empty =
-        state.active.is_none() && state.candidate.is_none() && state.previous.is_none();
     if !ownership_empty {
         return Ok(());
     }
@@ -1406,6 +1536,14 @@ async fn reconcile_stable_proxy(
 /// release system. The one process spared is whichever serves the proxy's current
 /// upstream: it carries traffic, and the normal cutover retires it by routing away
 /// first, after which the next pass sweeps it here.
+///
+/// A leak is a process this agent started. `spawn_release` marks every one of
+/// its launches with `STADO_RELEASE_PRODUCT=` in the argument vector and puts
+/// the launch in its own process group, so a leaked release is recognised by
+/// that marker on itself or on its group leader. A process running the
+/// release binary with neither -- another product's client, such as the Weles
+/// capability broker running the attested Skarbiec binary -- is not this
+/// agent's to stop; it is named in the log and left alone.
 fn sweep_leaked_processes(
     target: &ReleaseTargetPolicy,
     product: &str,
@@ -1423,24 +1561,104 @@ fn sweep_leaked_processes(
         known.push(pid);
     }
     let upstream = proxy_upstream_port(target, product);
-    for process in release_processes(install_root) {
+    let processes = release_processes(install_root);
+    let spawned_groups: Vec<i32> = processes
+        .iter()
+        .filter(|process| process.agent_spawned)
+        .map(|process| process.process_group)
+        .collect();
+    for process in &processes {
         if known.contains(&process.process_group) {
             continue;
         }
-        if upstream.is_some() && process.port == upstream {
+        if !process.agent_spawned && !spawned_groups.contains(&process.process_group) {
             eprintln!(
-                "leaked {product} {} pid={} still carries traffic on \
-                 {:?}; retiring by cutover, not by kill",
-                process.version, process.pid, process.port
+                "{product} {} pid={} runs the release binary without this agent's launch \
+                 marker; it belongs to another product and is not swept",
+                process.version, process.pid
             );
             continue;
         }
-        let _ = kill(Pid::from_raw(process.pid), Signal::SIGTERM);
+        if upstream.is_some()
+            && (process.port == upstream || listener_pid(upstream) == Some(process.pid))
+        {
+            eprintln!(
+                "leaked {product} {} pid={} still carries traffic on \
+                 {:?}; retiring by cutover, not by kill",
+                process.version, process.pid, upstream
+            );
+            continue;
+        }
+        // A process that ignored the previous pass's SIGTERM is still here on
+        // this one. Sending it the same signal again is not a sweep, it is a log
+        // line: skarbiec 0.2.39 pid 38640 on charless-mac-mini was "swept" every
+        // fifteen seconds for thirteen hours on 2026-09-06 and never exited.
+        let signal = if swept_before(target, product, process.pid) {
+            Signal::SIGKILL
+        } else {
+            Signal::SIGTERM
+        };
+        let _ = kill(Pid::from_raw(process.pid), signal);
         eprintln!(
-            "swept leaked {product} {} pid={} port={:?}",
+            "swept leaked {product} {} pid={} port={:?} signal={signal:?}",
             process.version, process.pid, process.port
         );
     }
+}
+
+/// The pid the kernel says is listening on a loopback port, or `None` when
+/// nothing is or the socket table could not be read.
+///
+/// `ReleaseProcess::port` is what a launcher was told; this is what a process
+/// does. They differ for any release whose argument vector does not carry
+/// `--port` -- skarbiec's does not -- and for such a release the argv answer
+/// is always `None`, which is how the sweep came to kill the one process
+/// serving the proxy's upstream while believing it carried no traffic.
+fn listener_pid(port: Option<u16>) -> Option<i32> {
+    let port = port?;
+    let output = Command::new("/usr/sbin/lsof")
+        .args([
+            "-nP",
+            "-Fp",
+            &format!("-iTCP@127.0.0.1:{port}"),
+            "-sTCP:LISTEN",
+        ])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('p')?.parse().ok())
+}
+
+/// Whether this pid was already swept on an earlier pass, recording it if not.
+///
+/// The record is one file per pid under the product's state directory, so it
+/// survives the agent process and never outlives the pid's next reuse by more
+/// than the file's own name: `pid_alive` is checked by the caller before this
+/// is consulted, and a pid that has exited takes its marker with it on the next
+/// pass that finds the file without the process.
+fn swept_before(target: &ReleaseTargetPolicy, product: &str, pid: i32) -> bool {
+    let directory = PathBuf::from(&target.state_dir).join(format!("{product}.swept"));
+    if let Ok(entries) = std::fs::read_dir(&directory) {
+        for entry in entries.flatten() {
+            let stale = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<i32>().ok())
+                .is_some_and(|recorded| recorded != pid && !pid_alive(recorded));
+            if stale {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let marker = directory.join(pid.to_string());
+    if marker.exists() {
+        return true;
+    }
+    let _ = std::fs::create_dir_all(&directory);
+    let _ = std::fs::write(&marker, Utc::now().to_rfc3339());
+    false
 }
 
 fn next_port(candidate_ports: [u16; 2], state: &HostReleaseState, occupied: Option<u16>) -> u16 {
@@ -1552,19 +1770,33 @@ async fn rollback(
     target: &ReleaseTargetPolicy,
     state: &mut HostReleaseState,
     reason: String,
+    readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
-    if let Some(record) = &failed {
-        state.quarantined.insert(
-            record.artifact_sha256.clone(),
-            QuarantineRecord::new(reason.clone()),
-        );
-    }
+    let reason = if let Some(record) = &failed {
+        let failure = quarantine_with_logs(target, &state.product, record, &reason);
+        let reason = failure.reason.clone();
+        state
+            .quarantined
+            .insert(record.artifact_sha256.clone(), failure);
+        reason
+    } else {
+        reason
+    };
     if let Some(previous) = state.previous.take() {
         let serving = target.blue_green_serving()?;
         let product = state.product.clone();
         let generation = state.rollout_generation;
-        ensure_active_proxy(target, &serving, &product, generation, &previous, state).await?;
+        ensure_active_proxy(
+            target,
+            &serving,
+            &product,
+            generation,
+            &previous,
+            state,
+            readiness_timeout_seconds,
+        )
+        .await?;
         if let Some(record) = &failed {
             terminate(record);
         }
@@ -1960,10 +2192,10 @@ async fn reconcile_product(
         && state.previous.is_none();
     state.rollout_generation = desired.rollout_generation;
     if repeats_failed_rollout {
-        state.quarantined.insert(
-            artifact.artifact_sha256.clone(),
-            QuarantineRecord::new(state.detail.clone()),
-        );
+        state
+            .quarantined
+            .entry(artifact.artifact_sha256.clone())
+            .or_insert_with(|| QuarantineRecord::new(state.detail.clone()));
         state.phase = RolloutPhase::Quarantined;
         state.detail =
             "desired release digest is quarantined after its previous rollback".to_string();
@@ -1980,11 +2212,18 @@ async fn reconcile_product(
                 desired.rollout_generation,
                 &active,
                 &mut state,
+                policy.strategy.readiness_timeout_seconds,
             )
             .await
             {
                 if policy.strategy.automatic_rollback {
-                    rollback(target, &mut state, reason).await?;
+                    rollback(
+                        target,
+                        &mut state,
+                        reason,
+                        policy.strategy.readiness_timeout_seconds,
+                    )
+                    .await?;
                 } else {
                     state.phase = RolloutPhase::Failed;
                     state.detail = reason;
@@ -2012,11 +2251,18 @@ async fn reconcile_product(
             desired.rollout_generation,
             &active,
             &mut state,
+            policy.strategy.readiness_timeout_seconds,
         )
         .await;
         if let Err(reason) = proxy_result {
             if policy.strategy.automatic_rollback {
-                rollback(target, &mut state, reason).await?;
+                rollback(
+                    target,
+                    &mut state,
+                    reason,
+                    policy.strategy.readiness_timeout_seconds,
+                )
+                .await?;
             } else {
                 state.phase = RolloutPhase::Failed;
                 state.detail = reason;
@@ -2033,18 +2279,20 @@ async fn reconcile_product(
             state.cutover_at.get_or_insert_with(Utc::now);
             save_state(target, &mut state)?;
             tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
-            if !ready(&active, &serving.readiness_path).await {
+            if let Some(why) = not_ready_because(&active, &serving.readiness_path).await {
                 if policy.strategy.automatic_rollback {
                     rollback(
                         target,
                         &mut state,
-                        "candidate failed during drain".to_string(),
+                        format!("candidate failed during drain: {why}"),
+                        policy.strategy.readiness_timeout_seconds,
                     )
                     .await?;
                 } else {
                     state.phase = RolloutPhase::Failed;
-                    state.detail =
-                        "candidate failed during drain; automatic rollback is disabled".to_string();
+                    state.detail = format!(
+                        "candidate failed during drain: {why}; automatic rollback is disabled"
+                    );
                     save_state(target, &mut state)?;
                 }
                 return Ok(state);
@@ -2158,43 +2406,19 @@ async fn reconcile_product(
     .await
     {
         terminate(&process);
-        let stderr = log_evidence(
-            &release_log_path(target, product, &manifest.version, "err"),
-            20,
-            1200,
+        let failure = quarantine_with_logs(
+            target,
+            product,
+            &process,
+            &format!(
+                "candidate did not become ready within {}s: {why}",
+                policy.strategy.readiness_timeout_seconds
+            ),
         );
-        let stdout = log_evidence(
-            &release_log_path(target, product, &manifest.version, "out"),
-            5,
-            400,
-        );
-        let reason = format!(
-            "candidate did not become ready within {}s: {why}; stderr {}; stdout {}",
-            policy.strategy.readiness_timeout_seconds, stderr.rendered, stdout.rendered
-        );
-        // Classified from every byte the candidate wrote, not from the bounded
-        // tail that went into the reason, so a name is never withheld because
-        // the quote was trimmed. On the live records the two happen to agree;
-        // that is luck about where those products put their decisive line, not
-        // a property worth depending on, and the whole log costs one read that
-        // has already happened.
-        //
-        // It does not manufacture a name where the product wrote none. The
-        // three candidates burned on 2026-09-01 (`brama` 0.2.49, 0.2.50 and
-        // 0.2.51) wrote no failure line anywhere in their logs -- they stop
-        // after `issuing runtime capabilities` and say nothing -- and they stay
-        // unclassified when the whole file is read. That is a gap in what the
-        // product reports about itself, and this classifier must not paper over
-        // it with the nearest-looking label.
-        let classified = release_cause::classify(&format!(
-            "{why}\n{}\n{}",
-            stderr.body.trim_end(),
-            stdout.body.trim_end()
-        ));
-        state.quarantined.insert(
-            process.artifact_sha256.clone(),
-            QuarantineRecord::classified(reason.clone(), classified),
-        );
+        let reason = failure.reason.clone();
+        state
+            .quarantined
+            .insert(process.artifact_sha256.clone(), failure);
         state.candidate = None;
         state.phase = RolloutPhase::Quarantined;
         state.detail = reason;
@@ -2216,11 +2440,18 @@ async fn reconcile_product(
         desired.rollout_generation,
         &process,
         &mut state,
+        policy.strategy.readiness_timeout_seconds,
     )
     .await;
     if let Err(reason) = proxy_result {
         if policy.strategy.automatic_rollback {
-            rollback(target, &mut state, reason).await?;
+            rollback(
+                target,
+                &mut state,
+                reason,
+                policy.strategy.readiness_timeout_seconds,
+            )
+            .await?;
         } else {
             state.phase = RolloutPhase::Failed;
             state.detail = reason;
@@ -2237,18 +2468,19 @@ async fn reconcile_product(
         .active
         .clone()
         .ok_or_else(|| "routed release lost its active process record".to_string())?;
-    if !ready(&active, &serving.readiness_path).await {
+    if let Some(why) = not_ready_because(&active, &serving.readiness_path).await {
         if policy.strategy.automatic_rollback {
             rollback(
                 target,
                 &mut state,
-                "candidate failed during drain".to_string(),
+                format!("candidate failed during drain: {why}"),
+                policy.strategy.readiness_timeout_seconds,
             )
             .await?;
         } else {
             state.phase = RolloutPhase::Failed;
             state.detail =
-                "candidate failed during drain; automatic rollback is disabled".to_string();
+                format!("candidate failed during drain: {why}; automatic rollback is disabled");
             save_state(target, &mut state)?;
         }
         return Ok(state);

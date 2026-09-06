@@ -58,6 +58,10 @@ decides where and when to run it, then records what happened.
 
 - a provider-neutral queue and job lifecycle;
 - local workers on registered workstations and servers;
+- prompt-free preparation and observed readiness of the signed Apple code-capture
+  helper on a registered Mac, through both the CLI and the native Hosts screen;
+  [Apple preparation](https://stado.wisent.com/docs/desktop#prepare-apple-code-capture)
+  documents the separate read-only and `--apple-only` actions;
 - local filesystem queue/storage as the stable 0.5 execution path;
 - GCS, S3, and Azure Blob queue/storage adapters released as preview until
   their release-scoped live sandbox suites pass;
@@ -71,8 +75,9 @@ decides where and when to run it, then records what happened.
   references;
 - cost, capacity, quota, inventory, health, and ownership evidence where the
   selected provider adapter declares support;
-- a human CLI, versioned machine JSON interface, dashboard, and read-only MCP
-  interface;
+- a human CLI, versioned machine JSON interface, native macOS Desktop, and
+  read-only MCP interface; Desktop uses `WisentDesignSystem` from
+  `wisent-ai/wisent-components` for its visual tokens and SwiftUI primitives;
 - a loopback mobile-egress proxy whose upstream sockets are pinned to a named
   tether interface and whose process lifecycle is managed as a Stado service.
 
@@ -89,10 +94,6 @@ decides where and when to run it, then records what happened.
 - Local hosts are attached and scheduled; Stado does not provision physical
   machines or install their operating systems, GPU drivers, or workload
   runtimes.
-- The Swift desktop application is not a required 0.5 operations interface.
-  The CLI, machine API, dashboard, and MCP contracts are canonical.
-  Its visual tokens and reusable SwiftUI primitives come from
-  `wisent-ai/wisent-components` through `WisentDesignSystem`.
 - Stado does not make an optional provider, alert channel, dashboard identity
   provider, or artifact service mandatory for local execution.
 
@@ -373,6 +374,15 @@ stado capabilities --json
 
 See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
 
+The graphical equivalent for bounded host-vault bearer work is **Fleet › Hosts
+› selected host › Bounded vault bearer**. It can mint a new least-privilege
+bearer or register an existing owner-vault item field (default field `token`).
+Generated plaintext is hidden and discarded by default; **Show generated
+bearer** explicitly requests the one-time raw value and presents the existing
+sensitive copy control. Stored-item mode remains metadata-only. The sheet shows
+target, status, grant or stored-source metadata, and Stado's refusal details.
+See [Channels](docs/channels.md#bounded-vault-bearers).
+
 For a loaded launchd label or systemd unit that the registry does not declare,
 `stado service bootout <exact-unit> --host <target> --domain system|user`
 retires only that exact init-system identity. Linux bootout disables and stops
@@ -551,6 +561,35 @@ state, the program it declares, the binary the process is really executing and
 whether the two agree (`stado service converge`), plus the product processes no
 unit owns at all (`stado service list --unowned`).*
 
+Services report and apply use the authenticated `GET` and `POST`
+`/api/service/converge?target=<host>[&binary=<name>]` API, which shares the
+implementation of `stado service converge`. A completed request preserves the
+product's `exit_code` and full `report` even on failure. Desktop keeps the
+complete receipt through refresh rather than reducing it to a status label.
+Settings → **Registry API access** binds a raw client token file to the exact
+source endpoint; a Wisent account token is not a registry credential.
+`STADO_REGISTRY_API_URL` and `STADO_REGISTRY_API_TOKEN_FILE` override those
+saved settings. See the canonical [Desktop](https://stado.wisent.com/docs/desktop)
+and [configuration](https://stado.wisent.com/docs/configuration) pages.
+
+The server's independent Skarbiec verifier grant can be created without
+transferring its bearer through the operator's terminal:
+
+```bash
+stado host vault-token-mint charless-mac-mini stado-registry-api-verifier \
+  --capabilities read:stado-desktop-registry-api#token \
+  --audience skarbiec \
+  --token-file-name stado-registry-api-verifier-skarbiec-token --json
+```
+
+`--token-file-name` creates an owner-only file under the target's `.stado`
+directory when absent and reuses its exact bearer when present. Skarbiec
+still owns the grant, capability changes and expiry. If minting fails, the
+file remains available for the same command to resume. The Desktop client
+bearer is a separate `stado-desktop-registry-api/token` item, not this verifier
+grant; its declared actions must include `converge-read` and `converge-apply`
+for both Services operations.
+
 *Cloudflare routes — list, inspect, add, update and remove hostnames on a
 declared Cloudflare Tunnel without leaving Stado Desktop. The screen compares
 tunnel ingress with exact proxied CNAMEs, reports connector connections
@@ -712,6 +751,41 @@ declaration-driven delivery path for a healthy fleet. `host recover --release`
 is the break-glass bootstrap for restoring Stado itself when the resolver or
 remote binary that normal delivery depends on is unavailable. Leaving
 `--release` out preserves the original recovery behavior.
+
+For Stado's native delivery, `release install-local` and
+`service converge --apply` share the verified archive retained under
+`$HOME/.stado/releases/stado/<version>/<platform>/`. Root delivery moves its
+already-downloaded archive there before activation; it does not restart
+registry units whose executable lives in an independently installed
+`$HOME/.stado/services/...` tree. Reader convergence then uses the existing
+idempotent `service update --from-archive --refresh-image` path for every such
+registry declaration. A resumed pass with an already-attested root fetches the
+exact archive only when the retained copy is absent or corrupt, leaves
+already-current root and reader images running, and fails unless every stale
+private image is installed and proved. The queue agent continues to defer its
+own recycle through the installed-release handshake.
+
+On a required-delivery retry, `install-local` compares the already-verified
+payload with the installed root. Byte-identical root bytes are not renamed;
+the endpoint repairs their attestation and release-version handshake, checks
+every global reader's live image, then starts private updates through the explicit installed
+`$HOME/.stado/bin/stado` path. Failed child JSON, stdout, and stderr remain in
+the `stado-readers.detail` receipt. The Desktop Services action runs the same
+host-wide or selected-binary CLI apply, preserves its decoded report plus
+actual exit status, and never re-derives the gate.
+
+Partial-state reader resume requires the target's global receiver to come from
+a release containing the retained-archive arguments. A version banner alone
+does not establish that source identity. A receiver built without the hidden
+contract rejects the apply and leaves convergence failed; first deliver a
+release that contains this fix through the normal root path. There is no
+compatibility shim and no success inferred from an older source.
+
+The repository's `.github/workflows/deploy.yml` invokes that CLI convergence
+for the existing stable deployment workflow; it does not define a second
+private-reader loop and is not the canonical source, qualification,
+publication, or promotion contract. Those remain owned by
+`stado release submit`; GitHub is an optional adapter.
 
 ### Observability and recovery
 

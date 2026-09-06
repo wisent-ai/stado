@@ -2,8 +2,8 @@ import Combine
 import Foundation
 import WisentDesignSystem
 
-/// Canonical fleet policy plus the two writes an operator client is allowed to
-/// perform: a whitelisted policy patch and one recorded job rerun.
+/// Canonical fleet policy and native operator actions through the configured
+/// Stado API, without launching a separate CLI from Desktop.
 @MainActor
 final class FleetControlStore: ObservableObject {
     @Published private(set) var policy: FleetPolicy?
@@ -11,6 +11,11 @@ final class FleetControlStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    @Published private(set) var appleChallengeHost: String?
+    @Published private(set) var appleChallengeReceipt: AppleChallengePreparationReceipt?
+    @Published private(set) var appleChallengeMutation: WisentMutationOutcome = .idle
+    @Published private(set) var registryImport: RegistryImportReceipt?
+    @Published private(set) var registryImportMutation: WisentMutationOutcome = .idle
 
     private let client: FleetControlClient
     private var addressString = ""
@@ -59,10 +64,15 @@ final class FleetControlStore: ObservableObject {
         errorMessage = nil
         isRefreshing = false
         mutation = .idle
+        appleChallengeHost = nil
+        appleChallengeReceipt = nil
+        appleChallengeMutation = .idle
+        registryImport = nil
+        registryImportMutation = .idle
     }
 
     func refresh() async {
-        guard !isRefreshing, !mutation.isWorking else { return }
+        guard !isRefreshing, !mutation.isWorking, !registryImportMutation.isWorking else { return }
         guard let address else {
             errorMessage = nil
             return
@@ -73,7 +83,7 @@ final class FleetControlStore: ObservableObject {
             if requestGeneration == generation { isRefreshing = false }
         }
         do {
-            let policy = try await client.policy(at: address, authorizationToken: authorizationToken)
+            let policy = try await client.policy(at: address)
             guard requestGeneration == generation else { return }
             self.policy = policy
             lastUpdated = Date()
@@ -89,7 +99,7 @@ final class FleetControlStore: ObservableObject {
     }
 
     func apply(_ patch: FleetPolicyPatch, to target: String, describedAs summary: String) async {
-        guard !mutation.isWorking else { return }
+        guard !mutation.isWorking, !registryImportMutation.isWorking else { return }
         guard let address else {
             mutation = .failed("No Stado endpoint is configured, so the policy write was not attempted.")
             return
@@ -98,7 +108,6 @@ final class FleetControlStore: ObservableObject {
         do {
             let generation = try await client.updatePolicy(
                 at: address,
-                authorizationToken: authorizationToken,
                 target: target,
                 patch: patch
             )
@@ -108,6 +117,53 @@ final class FleetControlStore: ObservableObject {
             mutation = .failed(Self.describe(error))
         }
     }
+    /// Send an existing registry-v2 document to the same product-owned
+    /// operation as `stado registry import`. A receipt is kept for exact
+    /// per-record rendering even when the operation refuses all mutation.
+    @discardableResult
+    func importRegistry(_ document: Data) async -> RegistryImportReceipt? {
+        guard !registryImportMutation.isWorking, !mutation.isWorking else { return nil }
+        guard let address else {
+            registryImportMutation = .failed(
+                "No Stado endpoint is configured, so the registry import was not attempted."
+            )
+            return nil
+        }
+        registryImport = nil
+        registryImportMutation = .working(
+            "Validating and additively merging the existing registry…"
+        )
+        do {
+            let receipt = try await client.importRegistry(
+                document: document,
+                at: address,
+                authorizationToken: authorizationToken
+            )
+            registryImport = receipt
+            if receipt.accepted {
+                let generation = receipt.generation.map { " Canonical generation \($0)." } ?? ""
+                registryImportMutation = .succeeded("\(receipt.outcomeSentence)\(generation)")
+                await refresh()
+            } else {
+                registryImportMutation = .failed(receipt.outcomeSentence)
+            }
+            return receipt
+        } catch {
+            registryImportMutation = .failed(Self.describe(error))
+            return nil
+        }
+    }
+
+    func reportRegistryImportFailure(_ message: String) {
+        guard !registryImportMutation.isWorking else { return }
+        registryImport = nil
+        registryImportMutation = .failed(message)
+    }
+
+    func clearRegistryImportMutation() {
+        registryImportMutation = .idle
+    }
+
 
     /// `stado job rerun <id> --retry-token <token>` through the dashboard's
     /// allowlisted command bridge. The recorded specification is resubmitted
@@ -139,6 +195,74 @@ final class FleetControlStore: ObservableObject {
         } catch {
             mutation = .failed(Self.describe(error))
         }
+    }
+
+    nonisolated static func appleChallengeArguments(host: String) -> [String] {
+        ["host", "gui-automation", "grant-accessibility", host, "--apple-only", "--json"]
+    }
+
+    nonisolated static func appleChallengeStatusArguments(host: String) -> [String] {
+        ["host", "gui-automation", "status", host, "--json"]
+    }
+
+    func readAppleChallenge(host: String) async {
+        await runAppleChallenge(host: host, prepare: false)
+    }
+
+    func prepareAppleChallenge(host: String) async {
+        await runAppleChallenge(host: host, prepare: true)
+    }
+
+    private func runAppleChallenge(host: String, prepare: Bool) async {
+        guard !appleChallengeMutation.isWorking else { return }
+        appleChallengeHost = host
+        appleChallengeReceipt = nil
+        guard let address else {
+            appleChallengeMutation = .failed("No Stado endpoint is configured, so the Apple helper operation was not attempted.")
+            return
+        }
+        let generation = requestGeneration
+        appleChallengeMutation = .working(prepare
+            ? "Preparing Apple code capture on \(host)"
+            : "Reading Apple code capture status on \(host)")
+        do {
+            let result = try await client.run(
+                arguments: prepare
+                    ? Self.appleChallengeArguments(host: host)
+                    : Self.appleChallengeStatusArguments(host: host),
+                confirmsMutation: prepare,
+                at: address,
+                authorizationToken: authorizationToken,
+                timeoutSeconds: 300
+            )
+            guard requestGeneration == generation else { return }
+            let receipt: AppleChallengePreparationReceipt
+            do {
+                receipt = try JSONDecoder().decode(
+                    AppleChallengePreparationReceipt.self,
+                    from: Data(result.standardOutput.utf8)
+                )
+            } catch {
+                appleChallengeMutation = .failed(result.ok
+                    ? "Stado returned an invalid Apple helper report: \(error.localizedDescription)"
+                    : result.message)
+                return
+            }
+            appleChallengeReceipt = receipt
+            appleChallengeMutation = result.ok && receipt.error == nil
+                ? .succeeded(prepare
+                    ? "Apple code capture is ready on \(receipt.target)"
+                    : "Apple code capture status read on \(receipt.target)")
+                : .failed(receipt.error ?? result.message)
+        } catch {
+            guard requestGeneration == generation else { return }
+            appleChallengeMutation = .failed(Self.describe(error))
+        }
+    }
+
+    func clearAppleChallengeMutation() {
+        guard !appleChallengeMutation.isWorking else { return }
+        appleChallengeMutation = .idle
     }
 
     func clearMutation() {

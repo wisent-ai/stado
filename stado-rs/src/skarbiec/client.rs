@@ -3,6 +3,7 @@
 //! client every read path ultimately talks through.
 
 use serde_json::{json, Value};
+use std::time::Duration;
 
 use super::{
     checked_url, erase_transient_grant, read_grant, GrantMode, ItemInfo, SkarbiecError,
@@ -71,6 +72,8 @@ impl Client {
         }
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(120))
             .build()?;
         let base_url = if route_store {
             base_url.trim().to_string()
@@ -192,6 +195,12 @@ impl Client {
     /// there is no reason to prefer the whole-item read where the caller
     /// already knows the field it wants.
     pub async fn read_field(&self, id: &str, field: &str) -> Result<Value, SkarbiecError> {
+        self.read_field_inner(id, field)
+            .await
+            .map_err(|error| error.naming(&self.consumer, id, field))
+    }
+
+    async fn read_field_inner(&self, id: &str, field: &str) -> Result<Value, SkarbiecError> {
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?
             .json(&json!({"id": id, "field": field}))
@@ -264,8 +273,26 @@ impl Client {
         id: &str,
         field: &str,
     ) -> Result<Option<String>, SkarbiecError> {
+        self.read_string_inner(id, field)
+            .await
+            .map_err(|error| error.naming(&self.consumer, id, field))
+    }
+
+    async fn read_string_inner(
+        &self,
+        id: &str,
+        field: &str,
+    ) -> Result<Option<String>, SkarbiecError> {
         if self.route_store {
-            return Box::pin(crate::credential_store::read_string(id, field)).await;
+            return Box::pin(crate::credential_store::read_string_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                self.grant_mode,
+                id,
+                field,
+            ))
+            .await;
         }
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?

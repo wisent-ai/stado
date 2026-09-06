@@ -24,6 +24,7 @@
 //! - every report carries `exit_code` and a `status` string, and a failure
 //!   surfaces the LAST stderr line verbatim.
 
+use std::future::Future;
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -39,6 +40,46 @@ use crate::targets::{ComputeTarget, Registry};
 pub const FAILED_STATUS: &str = "failed";
 const CONNECTION_PROBE_PROGRAM: [&str; 1] = ["true"];
 const CONNECTION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+struct HostSession {
+    target: String,
+    key: ssh_key::KeyFile,
+    connection_name: String,
+    destination: String,
+}
+
+tokio::task_local! {
+    static HOST_SESSION: HostSession;
+}
+
+pub(super) fn session_key(target: &str) -> Option<ssh_key::KeyFile> {
+    HOST_SESSION
+        .try_with(|session| (session.target == target).then(|| session.key.clone()))
+        .ok()
+        .flatten()
+}
+
+/// Authenticate and choose a declared route once for a multi-command operation.
+/// The key and route live only as long as this future; failed commands are never
+/// replayed on another route.
+pub(crate) async fn with_session<T>(
+    target: &ComputeTarget,
+    runner: &Runner,
+    operation: impl Future<Output = Result<T, DeployError>>,
+) -> Result<T, DeployError> {
+    if target_is_this_host(target) {
+        return operation.await;
+    }
+    let key = ssh_key::materialize(&target.name).await?;
+    let connection = select_connection_with_key(target, &key, runner).await?;
+    let session = HostSession {
+        target: target.name.clone(),
+        key,
+        connection_name: connection.name.to_string(),
+        destination: connection.destination.to_string(),
+    };
+    HOST_SESSION.scope(session, operation).await
+}
 
 /// One declared route for the SSH host-control transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +194,12 @@ pub async fn canonical_target(target_name: &str) -> Result<ComputeTarget, Deploy
 pub fn ssh_options(ssh_target: &str) -> Vec<String> {
     let mut argv = host_reboot::ssh_reboot_argv(ssh_target);
     argv.pop();
+    if tracing::enabled!(
+        target: "stado::deploy::host_channel",
+        tracing::Level::TRACE
+    ) {
+        argv.insert(argv.len() - 1, "-vvv".to_string());
+    }
     argv
 }
 
@@ -253,6 +300,18 @@ async fn select_connection_with_key<'a>(
     key: &ssh_key::KeyFile,
     runner: &Runner,
 ) -> Result<SshConnection<'a>, DeployError> {
+    if let Ok(Some(connection)) = HOST_SESSION.try_with(|session| {
+        (session.target == target.name)
+            .then(|| {
+                declared_connections(target).find(|connection| {
+                    connection.name == session.connection_name
+                        && connection.destination == session.destination
+                })
+            })
+            .flatten()
+    }) {
+        return Ok(connection);
+    }
     let mut connections = declared_connections(target);
     let Some(first) = connections.next() else {
         return Err(DeployError(format!(

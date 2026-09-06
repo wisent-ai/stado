@@ -135,10 +135,13 @@ async fn job_state(store: &JobStorage, job_id: &str) -> Result<Option<&'static s
     Ok(None)
 }
 
-/// Retain an exact terminal job before its lifecycle blobs can be deleted.
+/// Retain an exact terminal job before its source transition can be retired.
+///
 /// Jobs predating durable submission manifests have no submission identity
-/// and are left on their legacy lifecycle path; v3 jobs fail closed on any
-/// manifest mismatch.
+/// and are left on their legacy lifecycle path. A linked v3 job must still
+/// have its manifest: the terminal destination is already durable when this
+/// runs, so refusing an absent manifest preserves the settled result and its
+/// source fence for recovery rather than losing the only chance to retain it.
 pub async fn record_terminal_outcome(
     store: &JobStorage,
     job: &crate::models::Job,
@@ -155,7 +158,15 @@ pub async fn record_terminal_outcome(
     if job.run_id.is_empty() || job.submission_request_digest.is_empty() {
         return Ok(());
     }
-    record_terminal_outcome_for_entry(store, &job.run_id, index, job, prefix).await
+    record_terminal_outcome_inner(
+        store,
+        &job.run_id,
+        index,
+        job,
+        prefix,
+        MissingManifest::Refuse,
+    )
+    .await
 }
 
 fn terminal_job_projection(job: &crate::models::Job) -> Value {
@@ -192,6 +203,12 @@ pub(crate) fn terminal_job_matches_entry(
         && terminal_job_projection(job) == terminal_job_projection(planned)
 }
 
+#[derive(Clone, Copy)]
+enum MissingManifest {
+    Allow,
+    Refuse,
+}
+
 /// Retain one terminal job against the durable manifest entry that names it.
 ///
 /// Reaping supplies the manifest identity explicitly so runs migrated after a
@@ -199,23 +216,26 @@ pub(crate) fn terminal_job_matches_entry(
 /// job may omit all three submission-linkage fields, but a partial or
 /// conflicting linkage is still rejected.
 ///
-/// The manifest is retained evidence of a submission, never a precondition
-/// for terminality. A run whose history is gone still has to let its jobs
-/// reach `cancelled/` or `failed/`, because a job that cannot go terminal is
-/// not finished: the reaper requeues it at lease expiry and the next agent
-/// claims it again. Ten documentation records did exactly that on
-/// charless-mac-mini for a day, each claim rebuilding Spis into 2.5 GiB of a
-/// disk with 15 GiB to spare, and `stado cancel` could not stop them because
-/// it moves the job through this same retention. Absence therefore retains
-/// nothing and succeeds; every contradiction below - wrong schema, wrong
-/// entry, a different recorded outcome - is still an error, because those say
-/// the manifest disagrees rather than that it is missing.
+/// A reaper that already read the manifest supplies its identity explicitly.
+/// If another owner removes that manifest before retention, its deletion wins
+/// and this stale reaper stops without recreating it.
 pub(crate) async fn record_terminal_outcome_for_entry(
     store: &JobStorage,
     run_id: &str,
     index: usize,
     job: &crate::models::Job,
     prefix: &str,
+) -> Result<(), StorageError> {
+    record_terminal_outcome_inner(store, run_id, index, job, prefix, MissingManifest::Allow).await
+}
+
+async fn record_terminal_outcome_inner(
+    store: &JobStorage,
+    run_id: &str,
+    index: usize,
+    job: &crate::models::Job,
+    prefix: &str,
+    missing_manifest: MissingManifest,
 ) -> Result<(), StorageError> {
     if !TERMINAL_PREFIXES.contains(&prefix) {
         return Err(StorageError::Other(format!(
@@ -227,12 +247,20 @@ pub(crate) async fn record_terminal_outcome_for_entry(
     let path = format!("{RUN_PREFIX}/{run_id}.json");
     match crate::queue::submit::migrate_v2_run_manifest(store, run_id).await {
         Ok(_) => {}
-        Err(crate::queue::submit::SubmitError::Storage(StorageError::NotFound(_))) => return Ok(()),
+        Err(crate::queue::submit::SubmitError::Storage(StorageError::NotFound(missing))) => {
+            return match missing_manifest {
+                MissingManifest::Allow => Ok(()),
+                MissingManifest::Refuse => Err(StorageError::NotFound(missing)),
+            };
+        }
         Err(error) => return Err(StorageError::Other(error.to_string())),
     }
     for _ in 0..16 {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
-            return Ok(());
+            return match missing_manifest {
+                MissingManifest::Allow => Ok(()),
+                MissingManifest::Refuse => Err(StorageError::NotFound(path)),
+            };
         };
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
         crate::queue::submit::validate_stored_run_manifest(&manifest, run_id)

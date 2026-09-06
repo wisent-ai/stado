@@ -944,6 +944,16 @@ jobs:
             "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
             "$RUNNER_TEMP"
 
+      - name: Retain the published native delivery driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: stado-native-driver-${{ github.sha }}
+          path: |
+            ${{ env.STADO_NATIVE_RELEASE_DIR }}/stado
+            ${{ env.STADO_NATIVE_RELEASE_DIR }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Deliver verified native release
         run: |
           export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
@@ -996,11 +1006,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - name: Download the source-bound native delivery driver
+        uses: actions/download-artifact@v4
+        with:
+          name: stado-native-driver-${{ github.sha }}
+          path: ${{ runner.temp }}/stado-native-driver
       - name: Converge every required Stado delivery and reader
         run: |
           set -euo pipefail
-          stado_bin="$HOME/.stado/bin/stado"
-          test -x "$stado_bin"
+          driver_dir="$RUNNER_TEMP/stado-native-driver"
+          stado_bin="$driver_dir/stado"
+          expected="$(sed -n 's/^\([0-9a-f]\{64\}\)  stado$/\1/p' "$driver_dir/SHA256SUMS")"
+          actual="$(openssl dgst -sha256 "$stado_bin")"
+          test -n "$expected"
+          test "${actual##* }" = "$expected"
+          chmod 755 "$stado_bin"
           version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
           declared="${version_line#*\"}"
           declared="${declared%%\"*}"
@@ -1019,8 +1039,6 @@ jobs:
                 end
             ' .wisent-release.json
           )"
-          registry="$RUNNER_TEMP/registry-for-stado-delivery.json"
-          "$stado_bin" registry pull >"$registry"
           while IFS= read -r target; do
             test -n "$target"
             "$stado_bin" host declare-version "$target" \
@@ -1028,43 +1046,4 @@ jobs:
               --version "$STADO_VERSION" \
               --json
             "$stado_bin" service converge "$target" stado --apply --json
-
-            readers="$(
-              jq -r --arg target "$target" '
-                [
-                  .targets[]
-                  | select(.name == $target)
-                  | .services[]?
-                  | select((.program? | type) == "string")
-                  | select(
-                      (.program | contains("/.stado/services/")) and
-                      (.program | endswith("/stado"))
-                    )
-                  | .name
-                ]
-                | if length == (unique | length)
-                  then .[]?
-                  else error("declared service-local Stado reader names must be unique")
-                  end
-              ' "$registry"
-            )"
-            test -n "$readers" || continue
-            platform="$(
-              jq -er --arg target "$target" '
-                .targets[]
-                | select(.name == $target)
-                | .release_platform
-              ' "$registry"
-            )"
-            archive="$RUNNER_TEMP/stado-v$STADO_VERSION-$platform-$target.tar.gz"
-            "$stado_bin" storage get \
-              "stado://releases/stado/$STADO_VERSION/$platform/stado-v$STADO_VERSION-$platform.tar.gz" \
-              "$archive"
-            while IFS= read -r reader; do
-              "$stado_bin" service update "$reader" \
-                --host "$target" \
-                --from-archive "$archive" \
-                --refresh-image \
-                --json
-            done <<<"$readers"
           done <<<"$targets"
