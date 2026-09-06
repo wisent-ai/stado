@@ -1,12 +1,21 @@
 # Changelog
 
-## 0.16.38
+## 0.16.39
 
 - **Storage reconciliation API:** authenticated GET and POST `/api/host/storage-root-reconcile` share the CLI's durable transaction implementation and return its complete report, exit code and refusal. Independent `storage-reconcile-read` and `storage-reconcile-apply` actions separate status reads from mutations; malformed requests retain precise refusals.
 - **Desktop source selection:** the Hosts reconciliation sheet sends requests to the dashboard selected when it opened, rather than launching a local CLI against another configuration. Confirmation and retained results name that source, host and transaction.
 - **Reconciliation diagnostics:** Desktop retains HTTP status, raw response bytes, product exit code and every report field through refusals and decoding errors. An accepted resident operation is not displayed as completed, and no later phase runs automatically.
 - **Resolver failure causes:** a retry description alone no longer counts as rate-limit evidence. A second authority read retains the original and subsequent errors without turning a registry refusal into upstream throttling; explicit HTTP and rate-limit evidence keep their existing precedence.
 - **Compatibility:** stored transaction schemas and CLI phases are unchanged. Configure the two new registry actions only on a server that supports them; remove them before rolling back to an older server, which refuses unknown actions.
+
+## 0.16.38
+
+- **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
+- **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
+- **Credential waits:** Skarbiec HTTP connections have a 15-second deadline and requests have a 120-second total deadline. The existing owner-vault password fallback is bounded to 90 seconds and its child is terminated on cancellation; host operations report the credential failure instead of waiting indefinitely.
+- **Bounded host session:** each Apple readiness or preparation operation acquires its target key and selects a declared route once. Individual reads no longer repeat credential acquisition or probe an unavailable preferred route; the operation releases its key on completion, failure, or cancellation and never replays a failed mutation.
+- **Native Desktop:** Hosts reads Apple readiness without changing host settings and sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
+- **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
 
 ## 0.16.37
 

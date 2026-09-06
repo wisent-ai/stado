@@ -23,6 +23,7 @@
 //! POST /api/registry/import - additive canonical registry adoption
 //! POST /api/integration/enterprise/<action> - authenticated fleet projection
 //! POST /api/integration/oko/<action> - authenticated finite Oko selected-host dispatch
+//! POST /api/operator/run - bounded native Desktop operator actions
 //! GET /api/fleet/invite/key - invite-token-authenticated public channel key
 //! POST /api/fleet/join - invite-token-authenticated pending enrollment request
 //! GET /join.sh           - machine-side enrollment bootstrap script (public)
@@ -51,6 +52,8 @@
 
 mod fleet_join;
 mod integration;
+mod operator_auth;
+mod operator_console;
 mod registry_policy;
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -2709,6 +2712,9 @@ impl Dashboard {
         if path == "/api/object/compose" {
             return self.post_object_compose(request).await;
         }
+        if path == "/api/operator/run" {
+            return operator_console::handle(request).await;
+        }
         let required: &[Boundary] = match path {
             "/api/rate-limit/consume" => &[Boundary::RateLimitVerifier, Boundary::RateLimitState],
             "/api/machine/submit" | "/api/machine/cancel" => &[Boundary::Machine],
@@ -3233,6 +3239,8 @@ async fn read_request(
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
+    } else if method == "POST" && path == "/api/operator/run" {
+        operator_console::MAX_REQUEST_BYTES
     } else if registry_import {
         MAX_REGISTRY_IMPORT_BYTES
     } else {
