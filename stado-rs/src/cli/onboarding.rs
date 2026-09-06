@@ -214,16 +214,17 @@ pub async fn run(
 /// Record the effect only after the canonical import operation has read back
 /// the accepted generation. A rejected source or semantic conflict never
 /// reaches this boundary.
-pub fn record_registry_import_accepted(
-    receipt: &crate::registry_import::RegistryImportReceipt,
-) {
+pub fn record_registry_import_accepted(receipt: &crate::registry_import::RegistryImportReceipt) {
     if !receipt.accepted() {
         return;
     }
     if let Err(error) = try_record_registry_import_accepted(receipt) {
         eprintln!(
             "registry import was accepted, but first-run evidence was not recorded: {}",
-            error.message.as_deref().unwrap_or("onboarding state unavailable")
+            error
+                .message
+                .as_deref()
+                .unwrap_or("onboarding state unavailable")
         );
     }
 }

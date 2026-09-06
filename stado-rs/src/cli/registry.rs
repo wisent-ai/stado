@@ -261,8 +261,12 @@ fn render_import_receipt(receipt: &crate::registry_import::RegistryImportReceipt
 /// returning an accepted receipt.
 pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
     let source = PathBuf::from(&path);
-    let bytes = std::fs::read(&source)
-        .map_err(|error| CmdError::click(format!("cannot read registry import {}: {error}", source.display())))?;
+    let bytes = std::fs::read(&source).map_err(|error| {
+        CmdError::click(format!(
+            "cannot read registry import {}: {error}",
+            source.display()
+        ))
+    })?;
     let receipt = crate::registry_import::import_bytes(&bytes)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
