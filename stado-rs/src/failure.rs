@@ -101,7 +101,6 @@ const RATE_LIMIT_NEEDLES: &[&str] = &[
     "too many requests",
     "quota exceeded",
     "throttl",
-    "retry after",
 ];
 
 const TIMEOUT_NEEDLES: &[&str] = &[

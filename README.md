@@ -505,10 +505,12 @@ exists so that adding a machine never depends on them. See
 
 ### Desktop operator screens
 
-Stado Desktop is optional — the CLI stays canonical. Its screens run the same
-`stado` commands an operator would type and render the command's JSON answer;
-provider APIs and credential values do not get a second implementation in the
-app. Build and install it with
+Stado Desktop is optional — the CLI stays canonical. Its screens invoke typed
+product operations and render their retained results. Where Desktop uses an
+authenticated dashboard API, including service convergence and storage-root
+reconciliation, the API and CLI call the same product implementation; provider
+APIs and credential values do not get a second implementation in the app.
+Build and install it with
 `desktop/StadoDesktop/scripts/build-app.sh`. The screenshots below are live
 reads of the Wisent fleet.
 
@@ -638,35 +640,52 @@ Even exact equality at selected physical coordinates does not identify which
 root the running API serves; that requires the loaded service environment and
 process identity reported by `service label-print`.
 
-The command itself owns one three-phase durable transaction rather than using
-`object-relocate` (which is an in-store move):
+The command owns one durable transaction rather than using `object-relocate`
+(which is an in-store move):
 
 ```console
-stado host storage-root-reconcile TARGET --transaction ID --phase checkpoint --json
-stado host storage-root-reconcile TARGET --transaction ID --phase apply --json
+stado host storage-root-reconcile TARGET --transaction ID --phase run --json
+stado host storage-root-reconcile TARGET --transaction ID --phase resume --json
+stado host storage-root-reconcile TARGET --transaction ID --phase status --json
+stado host storage-root-reconcile TARGET --transaction ID --phase rollback --json
 stado host storage-root-reconcile TARGET --transaction ID --phase finalize --json
 ```
 
-Checkpoint first records the canonical queue state and each local writer's
-loaded routing environment, process PID/start/image, and running state. It
-pauses and drains the queue, retains the host transport services, stops
-storage writers, rechecks those fences, and then takes verified immutable
-snapshots of both complete physical roots using clone-only filesystem
-operations. Typed recovery decisions come from the effective B-wins additive
-overlay, including A-only queued cancellations and transition companions.
-Apply refuses live-source, destination, namespace, or resume drift; copies B
-into A additively with normal live file modes; preserves unresolved A-only
-objects; and never prunes or changes B. Finalize restores the object API
-through its checked-in canonical recovery contract and reinstalls other
-previously running writers from their declared service configuration, then
-proves a fresh process image with A loaded as primary and B as backup, restores
-the prior queue pause state, and refuses completion until ordinary canonical
-transition, cancellation, and retained-outcome recovery has resolved every
-proven residue. The `0.16.9` release workflow runs this transaction from the
-exact staged candidate, after a fresh repository runner gate and before
-claiming or publishing any release coordinate; later service convergence
-therefore cannot activate the candidate ahead of the handoff. The immutable
-full A snapshot is the long-lived rollback coordinate.
+Run starts the transaction; Resume continues that same ID after interruption;
+Status is read-only. Run, Resume, Rollback and Finalize launch a target-resident,
+globally locked native worker and first report `accepted` once that worker owns
+the request. Acceptance is not completion, and neither the CLI, API nor Desktop
+automatically chooses a follow-up phase. Read Status explicitly after every
+accepted action.
+
+Run and Resume own the internal checkpoint, apply and activation stages. They
+capture the queue and each writer's exact native state, resolve and stage the
+target's current declared Stado runtime before the fence, acquire placement
+leases, pause and drain the queue, stop storage writers while retaining the
+transport and current runner, and hold the storage-write fence. Only then do
+they take verified immutable snapshots of both complete physical roots.
+
+The object API's captured loaded route fixes the transaction's authority. If A
+was serving, A's body and metadata win shared-path conflicts and only B-only
+objects are imported. If B was serving, B wins shared paths while A-only
+objects remain. The qualified `ecosystem/` namespace and its matching metadata
+are copied additively from the immutable B checkpoint into A; B is never
+changed, and the handoff is not an unconditional B-wins overwrite.
+
+Rollback is resumable only before the data-commit boundary. It restores A to
+its exact physical checkpoint, removes transaction-created imports and empty
+directories, and restores the captured route, services and queue state. After
+data commit, Resume the same transaction to finish the recorded activation
+instead of rolling back or starting another transaction.
+
+Run or Resume continues automatically through typed lifecycle classification,
+verified additive application, activation of the target's declared runtime,
+exact native-service and queue restoration, and write-fence release. It then
+records `activated_pending_lifecycle`. Let the ordinary coordinator complete
+the typed cleanup of queued cancellations and retained outcomes, then
+explicitly run Finalize and use a later Status receipt to prove `complete`. The
+full physical snapshots remain the transaction's fenced evidence; finalization
+records successful lifecycle cleanup rather than deleting that proof.
 
 Provider resources are mutable only when their ownership and expected state
 match the approved plan. Report-only is the default autonomy level.

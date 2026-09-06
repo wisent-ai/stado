@@ -371,7 +371,7 @@ impl SnapshotSource {
                     .await
                     .map_err(|retry_error| {
                         format!(
-                            "{first_error}; retry after dropping stale SSH control sockets failed: \
+                            "{first_error}; second authority read with stale SSH control sockets removed failed: \
                              {retry_error}"
                         )
                     })
