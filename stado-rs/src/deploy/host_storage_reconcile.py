@@ -912,6 +912,9 @@ def prove_live_additive_union(label):
 def restore_primary_checkpoint():
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_files = {
+        item["path"]: item for item in primary_physical.get("files", [])
+    }
     for relative in sorted(set(primary_by_path) | set(backup_by_path)):
         before = primary_by_path.get(relative)
         incoming = backup_by_path.get(relative)
@@ -929,6 +932,11 @@ def restore_primary_checkpoint():
                 fsync_dir(os.path.dirname(destination))
             else:
                 clone_file(os.path.join(primary_snapshot, relative), destination)
+                original = primary_files.get(relative)
+                if original is None:
+                    fail("primary physical checkpoint omitted body: " + relative)
+                os.chmod(destination, original["mode"])
+                fsync_dir(os.path.dirname(destination))
         destination_metadata = metadata_path(primary, relative)
         current_metadata = regular_identity(destination_metadata)
         before_metadata = before["metadata"] if before is not None else None
@@ -944,6 +952,12 @@ def restore_primary_checkpoint():
                     metadata_path(primary_snapshot, relative),
                     destination_metadata,
                 )
+                metadata_relative = os.path.relpath(destination_metadata, primary)
+                original = primary_files.get(metadata_relative)
+                if original is None:
+                    fail("primary physical checkpoint omitted metadata: " + relative)
+                os.chmod(destination_metadata, original["mode"])
+                fsync_dir(os.path.dirname(destination_metadata))
     original_directories = set(primary_physical.get("directories", []))
     current_directories = set(physical_inventory(primary).get("directories", []))
     extra_directories = current_directories - original_directories
@@ -959,7 +973,8 @@ def restore_primary_checkpoint():
                  + path + ": " + str(error))
         fsync_dir(os.path.dirname(path))
     validate_complete_inventory(primary, primary_objects, "live A after rollback")
-    validate_physical_checkpoint(primary, primary_physical, "live physical A after rollback")
+    if physical_inventory(primary) != primary_physical:
+        fail("live physical A differs from its exact rollback checkpoint")
 
 
 if phase == "arm-activation":
