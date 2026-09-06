@@ -111,16 +111,100 @@ pub async fn set(
             .fallbacks
             .insert(alias.to_string(), fallbacks.to_vec());
     }
-    let next = schema::write(&document, &registry).map_err(click)?;
+    let change = RouteChange {
+        report: json!({
+            "alias": alias,
+            "from": expected,
+            "to": to,
+            "fallbacks": fallbacks,
+        }),
+        line: format!("route '{alias}': {expected} -> {to} fallbacks={fallbacks:?}"),
+    };
+    commit_routes(
+        &document,
+        &expected_generation,
+        host.as_deref(),
+        &previous_registry,
+        &registry,
+        change,
+        json_output,
+    )
+    .await
+}
+
+/// Retire one alias from the route table, with the same compare-and-swap
+/// precondition `set` demands and the same staged gateway commit behind it.
+///
+/// An alias that a consumer still asks for must stay until that consumer has
+/// moved: the gateway answers an unknown alias with a refusal, not a guess, so
+/// removal is a consumer cutover's last step and never its first.
+pub async fn remove(alias: &str, expected: &str, json_output: bool) -> Result<(), CmdError> {
+    let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
+    let mut registry = schema::parse(&document).map_err(click)?;
+    let previous_registry = registry.clone();
+    let Some(current) = registry.routes.get(alias).map(String::as_str) else {
+        return Err(CmdError::click(format!(
+            "route '{alias}' is '{ABSENT}'; nothing to remove"
+        )));
+    };
+    if current != expected {
+        return Err(CmdError::click(format!(
+            "route '{alias}' is '{current}', expected '{expected}'"
+        )));
+    }
+    let host = route_host(&registry).map(str::to_string);
+    registry.routes.remove(alias);
+    registry.fallbacks.remove(alias);
+    let change = RouteChange {
+        report: json!({
+            "alias": alias,
+            "from": expected,
+            "to": ABSENT,
+            "fallbacks": [],
+        }),
+        line: format!("route '{alias}': {expected} -> {ABSENT}"),
+    };
+    commit_routes(
+        &document,
+        &expected_generation,
+        host.as_deref(),
+        &previous_registry,
+        &registry,
+        change,
+        json_output,
+    )
+    .await
+}
+
+/// What one route mutation reports once the registry and the gateway agree.
+struct RouteChange {
+    report: Value,
+    line: String,
+}
+
+/// Validate the mutated registry, stage its route table on the gateway host,
+/// compare-and-swap the registry, then commit the staged table — rolling both
+/// back together when the gateway refuses, so the registry never declares a
+/// route the gateway does not serve.
+async fn commit_routes(
+    document: &Value,
+    expected_generation: &str,
+    host: Option<&str>,
+    previous_registry: &schema::Registry,
+    registry: &schema::Registry,
+    change: RouteChange,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let next = schema::write(document, registry).map_err(click)?;
     schema::validate(&next).map_err(click)?;
 
     let runner = production_runner();
     let mut staged = Value::Null;
     let mut transaction = String::new();
-    let target = if let Some(host) = host.as_deref() {
+    let target = if let Some(host) = host {
         let target = host_channel::canonical_target(host).await.map_err(click)?;
-        transaction = inference_routes::transaction(&registry).map_err(click)?;
-        staged = inference_routes::stage(&target, &registry, &transaction, &runner)
+        transaction = inference_routes::transaction(registry).map_err(click)?;
+        staged = inference_routes::stage(&target, registry, &transaction, &runner)
             .await
             .map_err(click)?;
         if !inference_routes::ready(&staged, "routes_staged") {
@@ -131,7 +215,7 @@ pub async fn set(
         None
     };
 
-    let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
+    let generation = match crate::cli::registry::push_document_if(&next, expected_generation).await
     {
         Ok(generation) => generation,
         Err(error) => {
@@ -147,13 +231,13 @@ pub async fn set(
             .as_ref()
             .is_ok_and(|value| inference_routes::ready(value, "routes_committed"));
         if !committed {
-            let rollback = schema::write(&next, &previous_registry).map_err(click)?;
+            let rollback = schema::write(&next, previous_registry).map_err(click)?;
             let registry_rollback =
                 crate::cli::registry::push_document_if(&rollback, &generation).await;
             let old_transaction =
-                inference_routes::transaction(&previous_registry).map_err(click)?;
+                inference_routes::transaction(previous_registry).map_err(click)?;
             let runtime_rollback =
-                if inference_routes::stage(target, &previous_registry, &old_transaction, &runner)
+                if inference_routes::stage(target, previous_registry, &old_transaction, &runner)
                     .await
                     .is_ok()
                 {
@@ -187,21 +271,12 @@ pub async fn set(
     };
 
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "generation": generation,
-                "alias": alias,
-                "from": expected,
-                "to": to,
-                "fallbacks": fallbacks,
-                "runtime": inference_routes::summary(&transaction, staged, committed),
-            }))?
-        );
+        let mut report = change.report;
+        report["generation"] = json!(generation);
+        report["runtime"] = inference_routes::summary(&transaction, staged, committed);
+        println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "route '{alias}': {expected} -> {to} fallbacks={fallbacks:?} generation={generation}"
-        );
+        println!("{} generation={generation}", change.line);
     }
     Ok(())
 }
