@@ -1910,9 +1910,23 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             save(&mut run).await?
         }
     }
+    // A platform still recorded as failed at this point was not re-enqueued:
+    // its own enqueue failed, or the loop stopped at an earlier platform.
+    // Publishing it would only re-read the terminal job of the previous
+    // attempt and report that attempt's failure again, ahead of the enqueue
+    // error that is the actual diagnosis. Measured on weles-worker 0.5.72 on
+    // 2026-09-05: four resumes each reported the same upload timeout from a
+    // job that had finished an hour earlier, while the reason nothing new was
+    // built - no eligible builder, or a store timeout while staging inputs -
+    // was never printed. Only platforms this run actually submitted are
+    // published; the enqueue error is returned below.
     let submitted_platforms: Vec<_> = platforms
         .iter()
-        .filter(|platform| run.platforms.contains_key(*platform))
+        .filter(|platform| {
+            run.platforms
+                .get(*platform)
+                .is_some_and(|record| record.state != PlatformRunState::Failed)
+        })
         .cloned()
         .collect();
     run.state = ReleaseRunState::Waiting;

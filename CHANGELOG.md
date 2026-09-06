@@ -1,9 +1,13 @@
 # Changelog
 
-## 0.16.31
+## 0.16.32
 
 - **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.
 - **Capacity and cleanup evidence:** the two Probierz journeys record compilation separately from execution, retain the exact compiled CLI and test executables, and refuse execution if the source changed during compilation.
+
+## 0.16.31
+
+- **Release qualification:** format the integrated registry-import source and use equivalent option predicates required by Clippy. The decoder returns only a rejection reason; the caller constructs the unchanged refusal receipt without carrying a large error through successful decoding. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
 
 ## 0.16.30
 
