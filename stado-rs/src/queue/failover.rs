@@ -45,94 +45,6 @@ impl ReadFailoverBackend {
             "[storage-replica] primary committed but backup {operation} failed for {path}: {error}"
         );
     }
-
-    /// A part of an unfinished multipart upload, which is not an object.
-    const UPLOAD_PART_MARKER: &'static str = "__stado_upload";
-
-    /// Whether this path names an object the primary may be healed with from
-    /// the mirror.
-    ///
-    /// Deliberately narrow. Serving a mirror copy in place of an absent
-    /// primary is what [`ReadMode::PrimaryOnly`] exists to refuse: for a
-    /// mutable key a stale replica would be returned as authority. But a
-    /// release object is immutable by contract — the object API accepts them
-    /// create-only and refuses to delete them — so a mirror copy of one cannot
-    /// be a stale version of anything. For those, and only those, a primary
-    /// that has lost the object can be repaired from the copy that survived,
-    /// after which the read is answered from the PRIMARY's own bytes and the
-    /// authority rule is intact rather than bypassed.
-    ///
-    /// Upload parts are excluded because they are not objects: the composed
-    /// object is, and a part resurrected on its own would make an abandoned
-    /// upload look resumable.
-    fn healable(path: &str) -> bool {
-        let key = path
-            .strip_prefix(crate::object_store::ROOT_PREFIX)
-            .unwrap_or(path);
-        key.starts_with("releases/") && !path.contains(Self::UPLOAD_PART_MARKER)
-    }
-
-    /// Repair the primary from the mirror, create-only, and say so once.
-    ///
-    /// On 2026-09-05 `preferences-landing` 0.1.1 published five objects, was
-    /// read back complete at 13:18, and answered 404 for four of them from
-    /// 13:23 — the minute its object API restarted. The four were still on
-    /// disk in the mirror the whole time; nothing had deleted them from the
-    /// world, and no DELETE ever reached the API. A clean primary `absent` was
-    /// returned as fact, so a recoverable inconsistency read as a destroyed
-    /// release, and the 104 MB archive that the mirror did NOT hold was lost
-    /// before anybody knew to look.
-    ///
-    /// So the store heals on read instead of hiding: the copy that exists is
-    /// written back where the reader looked for it.
-    async fn heal_primary(&self, path: &str, content: &[u8]) {
-        if !Self::healable(path) {
-            return;
-        }
-        let staged = match tempfile::NamedTempFile::new() {
-            Ok(staged) => staged,
-            Err(error) => {
-                eprintln!(
-                    "[storage-replica] warn primary_absent_mirror_present {path}: cannot stage the \
-                     mirror copy to heal the primary: {error}"
-                );
-                return;
-            }
-        };
-        if let Err(error) = std::fs::write(staged.path(), content) {
-            eprintln!(
-                "[storage-replica] warn primary_absent_mirror_present {path}: cannot write the \
-                 staged mirror copy: {error}"
-            );
-            return;
-        }
-        match self
-            .primary
-            .upload_file_if_absent(path, staged.path())
-            .await
-        {
-            Ok(created) => eprintln!(
-                "[storage-replica] warn primary_absent_mirror_present {path}: the primary answered \
-                 absent and the mirror holds this immutable release object; healed the primary \
-                 (created={created}) and served it"
-            ),
-            Err(error) => eprintln!(
-                "[storage-replica] warn primary_absent_mirror_present {path}: the mirror holds it \
-                 but the primary refused the repair: {error}"
-            ),
-        }
-    }
-
-    /// The mirror's bytes for a path the primary says it does not have, having
-    /// healed the primary with them.
-    async fn mirror_bytes_for_absent_primary(&self, path: &str) -> Option<Vec<u8>> {
-        if !Self::healable(path) {
-            return None;
-        }
-        let content = self.backup.download_bytes(path).await.ok().flatten()?;
-        self.heal_primary(path, &content).await;
-        Some(content)
-    }
 }
 
 #[async_trait]
@@ -169,10 +81,6 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
         match self.primary.download_text(path).await {
-            Ok(None) => match self.mirror_bytes_for_absent_primary(path).await {
-                Some(content) => Ok(Some(String::from_utf8_lossy(&content).into_owned())),
-                None => Ok(None),
-            },
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_text(path).await,
@@ -181,7 +89,6 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_bytes(path).await {
-            Ok(None) => Ok(self.mirror_bytes_for_absent_primary(path).await),
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_bytes(path).await,
@@ -190,16 +97,6 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_release(uri).await {
-            Ok(None) => {
-                // The release route addresses by URI; the heal writes by path,
-                // so the primary's own addressing decides where the repair
-                // lands, exactly as `blob_path` does for every other write.
-                let Ok(object) = crate::object_store::ObjectRef::parse(uri) else {
-                    return Ok(None);
-                };
-                let path = self.primary.blob_path(&object);
-                Ok(self.mirror_bytes_for_absent_primary(&path).await)
-            }
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_release(uri).await,
@@ -208,13 +105,6 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         match self.primary.download_to_filename(path, dest).await {
-            Ok(false) => match self.mirror_bytes_for_absent_primary(path).await {
-                Some(content) => {
-                    std::fs::write(dest, &content).map_err(StorageError::from)?;
-                    Ok(true)
-                }
-                None => Ok(false),
-            },
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_to_filename(path, dest).await,
@@ -291,16 +181,7 @@ impl BlobBackend for ReadFailoverBackend {
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
         let exact = |blobs: Vec<BlobInfo>| blobs.into_iter().any(|blob| blob.name == path);
         match self.primary.list_blobs_with_meta(path).await {
-            // `stat` must not answer `absent` for something a read would
-            // serve: that disagreement is what made a recoverable
-            // inconsistency look like a destroyed release. Healing here means
-            // the next reader finds it in the primary.
-            Ok(blobs) => {
-                if exact(blobs) {
-                    return Ok(true);
-                }
-                Ok(self.mirror_bytes_for_absent_primary(path).await.is_some())
-            }
+            Ok(blobs) => Ok(exact(blobs)),
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_blobs_with_meta(path).await.map(exact),
         }
