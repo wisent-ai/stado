@@ -1899,34 +1899,45 @@ impl RemoteObjectApi {
                     "release_api.publishers declares no publisher for {policy_key}"
                 ))
             })?;
-        // Read with the publisher command's configured consumer, whose grant
-        // is settled here. The server has a separate release verifier; using
-        // that identity in the client would ignore the grant just acquired.
-        // An existing authorized read must still work when this caller lacks
-        // the owner credentials required to extend its grant.
-        if let Err(error) =
-            crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"])
-        {
-            eprintln!(
-                "could not widen the grant on release publisher item {} before reading it, \
-                 continuing with the grant as it stands: {error}",
-                publisher.item()
-            );
-        }
-        let token = crate::credential_store::read_string(publisher.item(), "token")
-            .await
-            .map_err(|error| {
+        let token_file = std::env::var_os("STADO_RELEASE_PUBLISHER_TOKEN_FILE");
+        let token = if let Some(path) = token_file.as_ref() {
+            tokio::fs::read_to_string(path).await.map_err(|error| {
                 CmdError::click(format!(
-                    "cannot read release publisher item {}: {error}",
+                    "cannot read STADO_RELEASE_PUBLISHER_TOKEN_FILE {} for publisher item {}: {error}",
+                    std::path::Path::new(path).display(),
                     publisher.item()
                 ))
             })?
-            .ok_or_else(|| {
-                CmdError::click(format!(
-                    "release publisher item {} carries no token field",
+        } else {
+            // Read with the publisher command's configured consumer, whose grant
+            // is settled here. The server has a separate release verifier; using
+            // that identity in the client would ignore the grant just acquired.
+            // An existing authorized read must still work when this caller lacks
+            // the owner credentials required to extend its grant.
+            if let Err(error) =
+                crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"])
+            {
+                eprintln!(
+                    "could not widen the grant on release publisher item {} before reading it, \
+                 continuing with the grant as it stands: {error}",
                     publisher.item()
-                ))
-            })?;
+                );
+            }
+            crate::credential_store::read_string(publisher.item(), "token")
+                .await
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot read release publisher item {}: {error}",
+                        publisher.item()
+                    ))
+                })?
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "release publisher item {} carries no token field",
+                        publisher.item()
+                    ))
+                })?
+        };
         // A token that cannot become a header value is refused here, by name.
         // reqwest reports that case as the bare string `builder error`, with no
         // item, no field and no failure point that means anything: on
@@ -1938,12 +1949,27 @@ impl RemoteObjectApi {
         // from the others. A bearer is header material; whether one is usable
         // is knowable before the request, and the answer names the item.
         if token.is_empty() {
+            if let Some(path) = token_file.as_ref() {
+                return Err(CmdError::click(format!(
+                    "STADO_RELEASE_PUBLISHER_TOKEN_FILE {} for publisher item {} is empty",
+                    std::path::Path::new(path).display(),
+                    publisher.item()
+                )));
+            }
             return Err(CmdError::click(format!(
                 "release publisher item {} carries an empty token field",
                 publisher.item()
             )));
         }
         if reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
+            if let Some(path) = token_file.as_ref() {
+                return Err(CmdError::click(format!(
+                    "STADO_RELEASE_PUBLISHER_TOKEN_FILE {} for publisher item {} cannot form an \
+                     Authorization header; write the bearer alone without a trailing newline",
+                    std::path::Path::new(path).display(),
+                    publisher.item()
+                )));
+            }
             return Err(CmdError::click(format!(
                 "release publisher item {}'s token field cannot form an Authorization header: it \
                  is {} bytes and carries a character a header value may not (a newline or a \

@@ -384,9 +384,16 @@ WC_RELEASE_API_PUBLISHERS='{"wisent-backend":{"item":"wisent-backend-release-pub
   <archive> --if-absent --content-type application/gzip
 ```
 
-The client reads the selected item's `token` field with its configured Skarbiec
-consumer and grant file. `STADO_API_TOKEN` is not a substitute for that publisher
-grant. Unrelated products need not appear in this client's environment, and an
+By default the client reads the selected item's `token` field with its configured
+Skarbiec consumer and grant file. An isolated publisher that already holds that
+product's bearer may instead set `STADO_RELEASE_PUBLISHER_TOKEN_FILE` to an
+owner-only file containing the bearer alone, without a trailing newline. The
+server still verifies it against the selected product's publisher item.
+An unreadable, empty or malformed explicit file fails by name without falling
+back to another credential. `STADO_API_TOKEN` remains the generic object
+credential and is not substituted for a release publisher.
+
+Unrelated products need not appear in this client's environment, and an
 undeclared product still fails with `release_api.publishers declares no publisher
 for <key>`.
 
