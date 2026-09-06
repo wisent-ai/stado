@@ -86,9 +86,8 @@ fn validate_sources(value: &Value) -> Result<(), HandlerError> {
             .and_then(Value::as_array)
             .ok_or(HandlerError::UpstreamFailure)?;
         if roots.iter().any(|root| {
-            root.as_str().map_or(true, |root| {
-                !Path::new(root).is_absolute() || root.contains('\0')
-            })
+            root.as_str()
+                .is_none_or(|root| !Path::new(root).is_absolute() || root.contains('\0'))
         }) {
             return Err(HandlerError::UpstreamFailure);
         }
@@ -98,7 +97,7 @@ fn validate_sources(value: &Value) -> Result<(), HandlerError> {
             .ok_or(HandlerError::UpstreamFailure)?;
         if source_ids
             .iter()
-            .any(|source_id| source_id.as_str().map_or(true, str::is_empty))
+            .any(|source_id| source_id.as_str().is_none_or(str::is_empty))
         {
             return Err(HandlerError::UpstreamFailure);
         }
@@ -186,15 +185,15 @@ async fn adopt(body: &[u8]) -> HandlerResult {
         || adoption
             .get("status")
             .and_then(Value::as_str)
-            .map_or(true, str::is_empty)
+            .is_none_or(str::is_empty)
         || adoption
             .get("sourceId")
             .and_then(Value::as_str)
-            .map_or(true, str::is_empty)
+            .is_none_or(str::is_empty)
         || adoption
             .get("dataDir")
             .and_then(Value::as_str)
-            .map_or(true, |path| !Path::new(path).is_absolute())
+            .is_none_or(|path| !Path::new(path).is_absolute())
         || required_counts
             .iter()
             .any(|field| adoption.get(*field).and_then(Value::as_u64).is_none())
@@ -205,7 +204,7 @@ async fn adopt(body: &[u8]) -> HandlerResult {
         || receipt
             .get("database")
             .and_then(Value::as_str)
-            .map_or(true, str::is_empty)
+            .is_none_or(str::is_empty)
     {
         return Err(HandlerError::UpstreamFailure);
     }
