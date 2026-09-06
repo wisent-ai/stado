@@ -1,7 +1,7 @@
 # Checks that measure nothing
 
-One defect shape has now been found forty-two times in this repository, in
-forty-two different subsystems, inside about two days. The twentieth was
+One defect shape has now been found forty-three times in this repository, in
+forty-three different subsystems, inside about two days. The twentieth was
 mine, in the diagnosis of the nineteen; the twenty-first hid longest, because
 every reading of it was true; the twenty-second is the one where the fleet
 could rule out every mechanism it owns and still not name what had happened;
@@ -36,16 +36,17 @@ thirty-eighth is the release agent trusting an empty ownership record while
 an unrecorded proxy from its own interrupted handoff still held the declared
 stable bind; the thirty-ninth is a selector reading an empty table as a
 sentence the host never spoke; the fortieth is a repair whose own failure
-left the fleet unable to try a different one; and the forty-second is a
+left the fleet unable to try a different one; the forty-second is a
 verification reading the kernel's answer to a different question than the one
-the unit asks.
+the unit asks; and the forty-third is a rollback recording a hand-back that
+launchd had refused, and an agent that then asked nobody who held the bind.
 Every instance is
 the same thing: **a declaration checked against something narrower than the world.**
 
 The check passes. The declaration is self-consistent. Nothing compares it to
 what is actually there.
 
-## The forty-two
+## The forty-three
 
 | # | Where | The declaration | What nothing checked |
 |---|---|---|---|
@@ -91,6 +92,7 @@ what is actually there.
 | 40 | `recover_gpg_daemons` and `run` in `skarbiec`'s `src/core/crypto.rs` (skarbiec#29, #30) | a recoverable gpg failure gets one daemon recovery and one retry | **that the recovery could complete, and that a recovery which cannot still leaves the next request a different move.** The repair spoke only through `gpgconf`, and a keyboxd stuck mid-request makes both `--kill` and `--launch` hit the 30s seam deadline — so the recovery returned an error, `?` propagated it without retrying, and `GPG_RECOVERY_GENERATION` never advanced, which made every later read replay the identical failing sequence. One wedged daemon therefore took a 641-item vault offline for eight hours: `stado doctor` object-auth failed closed on `gpg: keydb_search failed: Broken pipe` for items whose secret keys were in the keyring, Brama could mint no capability, and the documentation gate of the repository holding the fix could not reach a model to audit it. `gpgconf` is now best-effort, the escalation signals `keyboxd`, `gpg-agent` and `scdaemon` directly, nothing is launched at the end because `gpg` starts its own daemons, the generation advances because recovery was ATTEMPTED, and `skarbiec recover-daemons` performs the same repair on demand for the case where the wedge is held by a long-lived reader that cannot retry |
 | 41 | `release-quality-gate` in `.github/workflows/version-check.yml`, now `scripts/quality_gate.sh` (#488, #490) | a refused quality step is this pull request's failure | **whose revision the refusal belongs to.** A pull request is judged on its merge result, so a step already refusing the base refuses every pull request opened against it. On 2026-09-04 and 2026-09-05 `main` carried unformatted `cli/onboarding.rs`, then `cli/identity.rs`, then `dashboard/mod.rs`; the gate said "Fix the tree" to authors who had touched none of them, and three reformatted another revision's code to get their own work through. The gate now re-runs the refused step against the base in its own worktree and reports `introduced`, `inherited` with the base sha, or `unattributed`. Its first version then compared a push to `main` against `origin/main` — itself — which answered `inherited` for everything, so the base is `github.event.before` on a push and a clean tree at its own base commit is refused as evidence. Every run prints the base it used, green ones included. |
 | 42 | `stado_process_serves` in `ENSURE_BODY`, `src/deploy/service.rs` (#507) | the process launchd reports under this unit executes the declared program | **that the declared program is what the process would still be executing.** The verification compared `ps -o comm=` with the program, and a program that is a launcher is never what its process executes: `bin/start-web` execs `node`, so every web unit answered `[node]`. On 2026-09-05 that refused the reload of two running sites — `replacement verification failed (gui/501/com.wisent.web.handtohuman-landing pid 6678 executes [node]; expected [/Users/charles/.stado/services/handtohuman-landing/current/darwin-arm/bin/start-web]); prior unit restored and running` — and, because the idle check read the same `no`, kicked every healthy web unit on every ensure pass while reporting `restarted`. One rule now answers both checks: the image equals the program, or, for a program under a `current` tree, the image, an argument, or the working directory lies under the product root. A program outside a `current` tree keeps the exact comparison, which is the control-plane case it was written for. |
+| 43 | `restore_legacy`, `reconcile_stable_proxy` and `sweep_leaked_processes` in `src/release_agent.rs` (#515) | after a rollback with no previous release, the declared legacy unit holds the stable bind again | **that launchd did what it was told, and that anyone held the bind afterwards.** `restore_legacy` accepted `launchctl bootstrap`'s exit 5 (`Bootstrap failed: 5: Input/output error`: the service is disabled, which is what taking the bind over had done to it) as success, so the skarbiec rollback on charless-mac-mini on 2026-09-06 recorded `RolledBack` with nothing bootstrapped. Every tick after that `exact_proxy_pid` found no proxy and `reconcile_stable_proxy` returned; the sweep read skarbiec 0.2.39's port from an argument vector that carries no `--port`, judged it as carrying no traffic, and sent it SIGTERM, which it ignored — `swept leaked skarbiec 0.2.39 pid=38640 port=None` every fifteen seconds for thirteen hours while `127.0.0.1:8895` had no listener and the object API answered `503 object authorization unavailable` to the whole fleet. `stado service ensure` could not restore the unit either: its reload path bootstrapped without `enable` and refused with the same exit 5, then failed its own rollback the same way. Now `restore_legacy` enables before it bootstraps and names exit 5 as the refusal it is; a tick with no proxy, no owned release and a dead stable bind restores the legacy unit and waits for the bind; the upstream is judged owned by the kernel's listener as well as by argv; a leaked process that survived one SIGTERM gets SIGKILL; and `ensure`'s reload path enables first. |
 
 The observed `c50f5388…` record had already been labelled `aborted`, even
 though its source was `transition-cleaned:c50f5388…` and its queued
