@@ -3,6 +3,7 @@
 ## 0.16.34
 
 - **Release and build qualification:** real release and native build journeys wait for the worker's observed `accepting_jobs` state instead of treating its first capacity file as permission to submit. This preserves the production refusal while avoiding a race with the first CPU measurement.
+- **Build completion evidence:** the native build journey judges the completed job and downloaded artifact bytes, not whether a fast build still happens to be running when its first status response arrives.
 - **Source ownership:** the correction uses a new immutable release coordinate; 0.16.33 remains bound to its recorded source. There are no stored-schema or CLI contract changes.
 
 ## 0.16.33
