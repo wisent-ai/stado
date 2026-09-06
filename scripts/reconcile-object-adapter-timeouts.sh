@@ -11,7 +11,7 @@ before="$work/before.json"
 after="$work/after.json"
 
 # `stado registry push --if-generation` exits this when somebody wrote first.
-# See docs/examples/fleet/add-remove-host.sh for the canonical loop.
+# See examples/fleet/add-remove-host.sh for the canonical loop.
 registry_conflict_exit=75
 # Bounded re-read/re-apply rounds. An unconditional push erases whatever was
 # published between this script's read and its write — the overwrite that

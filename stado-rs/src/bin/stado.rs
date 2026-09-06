@@ -7,7 +7,7 @@
 //! classified as one a retry can clear. The classification, the human
 //! sentence and the structured log line all come from
 //! [`stado::cli::main_entry`]; this binary only installs the log writer and
-//! hands the code to the shell. See `docs/cli.md`.
+//! hands the code to the shell. See `stado.wisent.com/docs/cli`.
 
 use tracing_subscriber::EnvFilter;
 

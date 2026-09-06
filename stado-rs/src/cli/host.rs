@@ -1,6 +1,6 @@
 //! `stado host ...` — Rust implementations of the complete `host` group:
 //! health, recovery, user provisioning, and Weles recordings policy, plus
-//! the read-only diagnostics of `docs/missing-commands.md` items two
+//! the read-only diagnostics of `stado.wisent.com/docs/missing-commands` items two
 //! through six (`uptime`, `ping`, `disk`, `cleanup --dry-run`, `exec`),
 //! which have no Python original and live in `crate::deploy::host_*`.
 
@@ -613,7 +613,7 @@ pub async fn recover(
 }
 
 /// `stado host reboot TARGET` — request a graceful reboot through the
-/// approved channel (`docs/missing-commands.md` item one).
+/// approved channel (`stado.wisent.com/docs/missing-commands` item one).
 ///
 /// [`crate::deploy::host_reboot`] has been complete since July but was
 /// never reachable: `deploy/mod.rs` did not declare the module and no CLI
@@ -1411,7 +1411,7 @@ fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), 
 }
 
 // ---------------------------------------------------------------------------
-// docs/missing-commands.md items two through six
+// stado.wisent.com/docs/missing-commands items two through six
 //
 // Each of these is a thin shell over one `crate::deploy` module: resolve,
 // run through the shared ssh channel, then either print the report as JSON
@@ -1459,7 +1459,7 @@ fn cell(value: Option<&Value>) -> String {
 }
 
 /// `stado host uptime TARGET [--json]` — uptime, load averages and
-/// logged-in users (`docs/missing-commands.md` item two).
+/// logged-in users (`stado.wisent.com/docs/missing-commands` item two).
 pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_uptime::uptime_host(target, &runner)
@@ -1503,7 +1503,7 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
 }
 
 /// `stado host ping TARGET [--json]` — ssh reachability and beacon age in
-/// one verdict (`docs/missing-commands.md` item three).
+/// one verdict (`stado.wisent.com/docs/missing-commands` item three).
 ///
 /// The exit status follows the COMBINED verdict, so a box answering ssh
 /// with a five-day-old beacon fails this command. That is the whole point
@@ -1563,7 +1563,7 @@ fn beacon_age(section: Option<&Value>) -> String {
 }
 
 /// `stado host disk TARGET [--json]` — disk usage plus the registry
-/// cleanup policy and its recorded state (`docs/missing-commands.md`
+/// cleanup policy and its recorded state (`stado.wisent.com/docs/missing-commands`
 /// item four).
 pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
@@ -1852,7 +1852,7 @@ pub async fn object_relocate(
 }
 
 /// `stado host cleanup TARGET --dry-run [--json]` — preview what the
-/// registry cleanup would delete (`docs/missing-commands.md` item five).
+/// registry cleanup would delete (`stado.wisent.com/docs/missing-commands` item five).
 ///
 /// `--dry-run` is mandatory, not defaulted. This command only ever
 /// previews: the enforcing pass belongs to the host's own janitor on the
@@ -3042,7 +3042,7 @@ fn gib(blocks: i64) -> f64 {
 }
 
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
-/// command (`docs/missing-commands.md` item six).
+/// command (`stado.wisent.com/docs/missing-commands` item six).
 ///
 /// The failure keeps whatever
 /// [`crate::deploy::host_exec::ExecRefusal`] already knew about itself:

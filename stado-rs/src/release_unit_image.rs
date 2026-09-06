@@ -344,7 +344,7 @@ fn save_ledger(state_dir: &str, ledger: &RevisitLedger) -> Result<(), String> {
 /// **Top-level and unmodelled, deliberately.** [`crate::release_control`]'s
 /// structs all carry `#[serde(deny_unknown_fields)]`, so a document holding a
 /// key they do not model is refused OUTRIGHT by every build that predates it
-/// — not ignored. Instance 25 in `docs/checks-that-measure-nothing.md` is
+/// — not ignored. Instance 25 in `stado.wisent.com/docs/checks-that-measure-nothing` is
 /// what that costs: `readiness_path` went from forbidden to required with no
 /// version where both held, so on 2026-09-01 no single document satisfied the
 /// fleet and the mini's queue agent resolved no policy at all. Declaring this

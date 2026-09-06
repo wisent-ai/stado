@@ -4,7 +4,7 @@
 //! `validate`, `push` and `pull` port the `registry` group of
 //! `stado/cli.py`. `self`, `doctor`, `host add` and `beacon-age` have NO
 //! Python original: they close items fifteen through seventeen of
-//! `docs/missing-commands.md`, written after the 2026-07-24
+//! `stado.wisent.com/docs/missing-commands`, written after the 2026-07-24
 //! control-host incident, where the registry declared a host that
 //! nothing on the box was honouring and no command could say so.
 //!

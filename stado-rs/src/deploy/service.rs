@@ -5,7 +5,7 @@
 //! outage `com.wisent.weles-api` existed on the box and was wedged, but
 //! nothing in Stado declared it — so no command could list it, restart it,
 //! or even assert that it was supposed to be running.
-//! `docs/missing-commands.md` items seven through fourteen are the
+//! `stado.wisent.com/docs/missing-commands` items seven through fourteen are the
 //! resulting gap list; this module is their engine and `cli/service.rs` is
 //! their operator surface.
 //!

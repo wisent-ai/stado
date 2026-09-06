@@ -97,3 +97,7 @@ path = "tests/apple_challenge/main.rs"
 [[test]]
 name = "service_convergence"
 path = "tests/service_convergence/main.rs"
+
+[[test]]
+name = "documentation"
+path = "tests/documentation/main.rs"

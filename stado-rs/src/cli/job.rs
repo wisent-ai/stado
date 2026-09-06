@@ -1,7 +1,7 @@
 //! `stado job ...` — per-job rerun, priority and log controls.
 //!
 //! NO Python original: `stado/cli.py` has no `job` group at all. Items 18
-//! and 19 of `docs/missing-commands.md` are the gap this closes. Re-running
+//! and 19 of `stado.wisent.com/docs/missing-commands` are the gap this closes. Re-running
 //! a failed job meant retyping its command out of `stado status` and hoping
 //! the sizing flags came out the same, and following a running job meant
 //! calling `stado machine logs` in a shell loop while tracking the byte

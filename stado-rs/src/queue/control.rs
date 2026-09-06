@@ -3,7 +3,7 @@
 //!
 //! NO Python original: the Python CLI has no `queue` group and nothing in
 //! that tree reads a pause flag. This is item twenty of
-//! `docs/missing-commands.md` ("maintenance mode: stop/start dispatching
+//! `stado.wisent.com/docs/missing-commands` ("maintenance mode: stop/start dispatching
 //! without cancelling queued jobs"), and the prerequisite every storage
 //! migration already assumed existed. `deploy/migrate_to_stado.sh` refuses
 //! to execute unless the operator sets `CONFIRM_FLEET_DRAINED=yes` — an

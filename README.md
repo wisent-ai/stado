@@ -22,10 +22,10 @@ hardware. All accessible through one simple client.
 
 Give your AI the muscle it needs.
 
-[Quick start](#quick-start) · [Native builds](docs/builds.md) ·
+[Quick start](#quick-start) · [Native builds](https://stado.wisent.com/docs/builds) ·
 [CLI reference](https://stado.wisent.com/docs/cli) · [Architecture](https://stado.wisent.com/docs/architecture) ·
 [Operations](https://stado.wisent.com/docs/operations) ·
-[Checks that measure nothing](docs/checks-that-measure-nothing.md)
+[Checks that measure nothing](https://stado.wisent.com/docs/checks-that-measure-nothing)
 
 Current proof boundary: the 0.5 contract has a stable local-filesystem execution
 scope for macOS arm64 and Linux amd64 release candidates. Cloud storage and VM
@@ -217,7 +217,7 @@ in the release documentation.
   hostname's record is written only after its certificate exists; no
   credential value is read by the operator or placed in a command line; and a
   product that is not a declared consumer of a database cannot receive its
-  credential. The contract is `docs/web-hosting.md`.
+  credential. The contract is [Web hosting](https://stado.wisent.com/docs/web-hosting).
 
 ## How Stado works
 
@@ -381,14 +381,14 @@ Generated plaintext is hidden and discarded by default; **Show generated
 bearer** explicitly requests the one-time raw value and presents the existing
 sensitive copy control. Stored-item mode remains metadata-only. The sheet shows
 target, status, grant or stored-source metadata, and Stado's refusal details.
-See [Channels](docs/channels.md#bounded-vault-bearers).
+See [Channels](https://stado.wisent.com/docs/channels#bounded-vault-bearers).
 
 For a loaded launchd label or systemd unit that the registry does not declare,
 `stado service bootout <exact-unit> --host <target> --domain system|user`
 retires only that exact init-system identity. Linux bootout disables and stops
 the unit and verifies it inactive without deleting its unit file; omitting the
 domain preserves system-first precedence. See
-[Channels](docs/channels.md#retiring-an-undeclared-init-system-unit).
+[Channels](https://stado.wisent.com/docs/channels#retiring-an-undeclared-init-system-unit).
 
 ### Weles mobile egress
 
@@ -458,7 +458,7 @@ database credential is resolved for that unit's own consumer through
 `stado database resolve`.
 
 The contract, the zones it was designed against, and why the edge is a host
-rather than a tunnel: [`docs/web-hosting.md`](docs/web-hosting.md).
+rather than a tunnel: [Web hosting](https://stado.wisent.com/docs/web-hosting).
 
 ### Machine JSON
 

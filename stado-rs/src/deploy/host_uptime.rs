@@ -1,7 +1,7 @@
 //! `stado host uptime TARGET` — uptime, load averages and logged-in users
 //! of one registry-managed host.
 //!
-//! NO Python original: item two of `docs/missing-commands.md`. Shape and
+//! NO Python original: item two of `stado.wisent.com/docs/missing-commands`. Shape and
 //! rules come from [`crate::deploy::host_reboot`] via
 //! [`crate::deploy::host_channel`] — registry-authorized target, a FIXED
 //! remote program, the shared ssh option set, the [`Runner`] seam, and a

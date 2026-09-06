@@ -1,7 +1,7 @@
 //! `stado host cleanup TARGET --dry-run` — preview what the registry
 //! cleanup would delete on one host, deleting nothing.
 //!
-//! NO Python original: item five of `docs/missing-commands.md`. Shape and
+//! NO Python original: item five of `stado.wisent.com/docs/missing-commands`. Shape and
 //! rules come from [`crate::deploy::host_reboot`] via
 //! [`crate::deploy::host_channel`].
 //!

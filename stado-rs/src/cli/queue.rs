@@ -1,7 +1,7 @@
 //! `stado queue` — maintenance mode: pause, resume, status, drain.
 //!
 //! NO Python original: the Python CLI has no `queue` group. This is item
-//! twenty of `docs/missing-commands.md` ("maintenance mode: stop/start
+//! twenty of `stado.wisent.com/docs/missing-commands` ("maintenance mode: stop/start
 //! dispatching without cancelling queued jobs") and the operator surface
 //! over [`crate::queue::control`] — read that module for what a pause does
 //! and, just as importantly, what it deliberately does not do.

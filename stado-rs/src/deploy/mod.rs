@@ -14,7 +14,7 @@
 //! - [`host_users`] — `stado host user create`: account creation on
 //!   registry hosts over SSH; the password travels only on SSH stdin.
 //!
-//! The read-only `stado host ...` commands of `docs/missing-commands.md`
+//! The read-only `stado host ...` commands of `stado.wisent.com/docs/missing-commands`
 //! items two through six have NO Python original. They all ride one
 //! channel, [`host_channel`], which is the option set and report shape of
 //! [`host_reboot`] factored out:

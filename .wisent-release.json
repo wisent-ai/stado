@@ -36,6 +36,18 @@
             "-D",
             "warnings"
           ]
+        },
+        {
+          "name": "documentation",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "stado-rs/Cargo.toml",
+            "--locked",
+            "--test",
+            "documentation"
+          ]
         }
       ],
       "build": {
@@ -83,6 +95,18 @@
             "--",
             "-D",
             "warnings"
+          ]
+        },
+        {
+          "name": "documentation",
+          "argv": [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "stado-rs/Cargo.toml",
+            "--locked",
+            "--test",
+            "documentation"
           ]
         }
       ],

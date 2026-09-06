@@ -1,7 +1,7 @@
 //! `stado host ping TARGET` — one reachability verdict from two
 //! independent signals.
 //!
-//! NO Python original: item three of `docs/missing-commands.md`.
+//! NO Python original: item three of `stado.wisent.com/docs/missing-commands`.
 //!
 //! Why two signals and not one: on 2026-07-24 control-host answered
 //! ssh perfectly while its health beacon was five days old — the disk was

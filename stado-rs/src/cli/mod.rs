@@ -2825,7 +2825,7 @@ enum VastCommands {
 /// Exit codes: 0 on success, [`CLICK_ERROR_CODE`] on a runtime error, 2 on
 /// usage errors (clap parse failures exit 2 on their own) and for
 /// not-yet-implemented commands, and [`crate::failure::retry_exit_code`]
-/// when the failure is one a retry can clear. See `docs/cli.md`.
+/// when the failure is one a retry can clear. See `stado.wisent.com/docs/cli`.
 pub async fn main_entry() -> i32 {
     // Parse in two steps rather than through `Cli::parse()` — which is
     // exactly these two steps — so the matches tree is still in hand
