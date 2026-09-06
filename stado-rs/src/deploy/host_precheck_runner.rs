@@ -67,11 +67,33 @@ struct RunnerProfile {
     labels: &'static str,
 }
 
+/// The one runner a host carries.
+///
+/// It holds the union of every label the fleet's workflows ask for, so one
+/// registration answers all of them and a runner takes one job at a time:
+/// `stado-control-plane` (Stado's own deploy and publish jobs),
+/// `stado-release` (Brama and Wisent Backend release jobs), `stado-publisher`
+/// and `stado` (the desktop publisher), and `stado-precheck` (the Probierz and
+/// Kronika evidence gate, whose reusable workflow also defaults its Brama
+/// route file to this runner's root — which is why the slug stays
+/// `stado-precheck` and every consumer keeps working unchanged).
+///
+/// Five separate runners used to serve those five label sets on one machine,
+/// three of them under the same account with the same access, each installed
+/// when a repository needed CI. Nothing coordinated them: GitHub hands a job
+/// to whichever runner is idle, Stado's slot cap governs only its own queue,
+/// and on 2026-09-06 the machine's free space fell from 10.6 GiB to 4.9 GiB in
+/// twenty minutes until no .NET runner on it could start at all. One runner
+/// bounds that by construction.
+///
+/// The group is `Default` because a job can only reach a runner its
+/// repository's group allows, and one runner serving every repository has to
+/// be in the group every repository has.
 const PRECHECK: RunnerProfile = RunnerProfile {
-    kind: "precheck",
+    kind: "fleet",
     slug: "stado-precheck",
-    group: "stado-precheck",
-    labels: "stado-precheck",
+    group: "Default",
+    labels: "stado,stado-precheck,stado-release,stado-publisher,stado-control-plane",
 };
 
 const PUBLISHER: RunnerProfile = RunnerProfile {
@@ -1381,8 +1403,26 @@ async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
         .map_err(|error| DeployError(format!("GitHub runner token response failed: {error}")))?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+        // Which credential was used and what it must be allowed to do. A bare
+        // 403 sends the reader to GitHub's documentation; the fleet's own
+        // answer is one item in one vault, and every runner operation —
+        // registering, changing labels, removing — goes through this token.
+        let remedy = if status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::UNAUTHORIZED
+        {
+            format!(
+                ". Stado read this credential from Skarbiec item {:?} field \"value\"; that \
+                 identity is not allowed to manage {GITHUB_ORGANIZATION} runners. Store a \
+                 credential with organization self-hosted-runner write permission in that \
+                 item, or the runner's labels, group and registration cannot be changed from \
+                 here",
+                GITHUB_CREDENTIAL_ITEM
+            )
+        } else {
+            String::new()
+        };
         return Err(DeployError(format!(
-            "GitHub runner token request returned HTTP {}: {}",
+            "GitHub runner {kind} token request returned HTTP {}: {}{remedy}",
             status.as_u16(),
             detail.trim()
         )));
@@ -1847,7 +1887,24 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
         Platform::LinuxAmd64 => format!("/opt/wisent/{}-runner", profile.slug),
         Platform::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
     };
-    let probe = format!("test -f {}/.runner", super::shlex_quote(&runner_root));
+    // A runner already registered with DIFFERENT labels or a different group
+    // answers a different set of jobs than this profile declares, and labels
+    // are fixed at registration: `config.sh` reads them once. The installer
+    // used to skip a registered runner entirely, so changing the declaration
+    // changed nothing on the host and the jobs it was meant to take kept
+    // queueing. Stado therefore records what it registered, in
+    // `.stado/registered-runner`, and re-registers when that record and this
+    // profile disagree.
+    let registration = format!(
+        "printf '%s\\n%s\\n' {} {}",
+        super::shlex_quote(profile.labels),
+        super::shlex_quote(profile.group)
+    );
+    let probe = format!(
+        "test -f {root}/.runner && test -f {root}/.stado/registered-runner && \
+         {registration} | /usr/bin/diff -q - {root}/.stado/registered-runner >/dev/null",
+        root = super::shlex_quote(&runner_root)
+    );
     let already_registered = host_channel::run_script(&target, &probe, &production_runner())
         .await?
         .ok();
@@ -2186,6 +2243,10 @@ if [ ! -f "$runner_root/.runner" ]; then
     exit 1
   fi
   token=
+  # The same record the darwin installer keeps: what this registration
+  # answers for, so a later install sees a moved declaration.
+  root mkdir -p "$runner_root/.stado"
+  printf '%s\n%s\n' __RUNNER_LABELS__ "$runner_group" | root tee "$runner_root/.stado/registered-runner" >/dev/null
 fi
 
 root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
@@ -2428,6 +2489,11 @@ if [ "$runner_registered" -eq 0 ]; then
     exit 1
   fi
   token=
+  # What this registration answers for, so a later install can see that the
+  # declaration moved. Labels are fixed at `config.sh` time and GitHub's own
+  # runner list needs an organization-admin token to read, so the record lives
+  # beside the runner.
+  printf '%s\n%s\n' __RUNNER_LABELS__ "$runner_group" | root tee "$runner_root/.stado/registered-runner" >/dev/null
 elif [ "$runtime_repaired" -eq 1 ]; then
   restore_runner_apphosts
 fi
