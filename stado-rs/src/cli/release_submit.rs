@@ -1078,7 +1078,7 @@ file_sha256() {
   fi
   printf '%s' "$digest"
 }
-upload_output_object() {
+put_output_object() {
   scope="$1"
   base_uri="$2"
   leaf="$3"
@@ -1106,6 +1106,33 @@ upload_output_object() {
   fi
   /bin/rm -f -- "$proof" || return 1
   printf '%s\n' "[release-worker-bootstrap] durable_output scope=$scope leaf=$leaf sha256=$source_sha bytes=$source_bytes"
+}
+# One store timeout must not discard a build that succeeded.
+#
+# The object store is a loopback service on the always-on host, so every
+# builder reaches it across a tunnel or a relayed tailnet hop, and a single
+# `storage put` that does not answer in time used to fail the whole release:
+# on 2026-09-05 four coordinates were spent that way, each after
+# `worker_exit_code=0` — the artifact was built and only its evidence upload
+# timed out. Retry the exact same idempotent put; the store replays a byte
+# identical object rather than storing a second one, so a retry cannot
+# duplicate anything.
+upload_output_object() {
+  attempt=1
+  wait_seconds=5
+  while :; do
+    if put_output_object "$@"; then
+      return 0
+    fi
+    if [ "$attempt" -ge 4 ]; then
+      printf '%s\n' "[release-worker-bootstrap] durable_output scope=$1 leaf=$3 failed after $attempt attempts" >&2
+      return 1
+    fi
+    printf '%s\n' "[release-worker-bootstrap] durable_output scope=$1 leaf=$3 attempt $attempt did not settle; retrying in ${wait_seconds}s" >&2
+    /bin/sleep "$wait_seconds"
+    attempt=$((attempt + 1))
+    wait_seconds=$((wait_seconds * 2))
+  done
 }
 printf '%s\n' "[release-worker-bootstrap] workdir=$work tmpdir=$TMPDIR legacy_link=$old"
 "$HOME/.stado/bin/stado" release worker --request release-request.json &
