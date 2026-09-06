@@ -373,6 +373,36 @@ under the same product prefix. A public `releases/` stat proves neither boundary
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
 
+### A publishing client's product declaration
+
+A client publishing one product may set `WC_RELEASE_API_PUBLISHERS` to that
+product's entry. This client behavior requires Stado 0.16.35 or newer:
+
+```console
+WC_RELEASE_API_PUBLISHERS='{"wisent-backend":{"item":"wisent-backend-release-publisher","prefix":"wisent-backend/"}}' \
+  stado storage put stado://releases/wisent-backend/api/sha256/<digest>.tar.gz \
+  <archive> --if-absent --content-type application/gzip
+```
+
+By default the client reads the selected item's `token` field with its configured
+Skarbiec consumer and grant file. An isolated publisher that already holds that
+product's bearer may instead set `STADO_RELEASE_PUBLISHER_TOKEN_FILE` to an
+owner-only file containing the bearer alone, without a trailing newline. The
+server still verifies it against the selected product's publisher item.
+An unreadable, empty or malformed explicit file fails by name without falling
+back to another credential. `STADO_API_TOKEN` remains the generic object
+credential and is not substituted for a release publisher.
+
+Unrelated products need not appear in this client's environment, and an
+undeclared product still fails with `release_api.publishers declares no publisher
+for <key>`.
+
+Invalid JSON or a malformed entry instead reports `release_api.publishers is
+invalid:` followed by the actual configuration errors. Fix that declaration;
+repeating the upload does not repair it. The serving release API and `stado config
+validate` still require their complete active-publisher table. This client
+override does not change server authorization or reconcile the server's grants.
+
 ### The object API runs the managed binary, since 2026-09-04
 
 `com.wisent.always-on.stado-object-api` used to execute a private service

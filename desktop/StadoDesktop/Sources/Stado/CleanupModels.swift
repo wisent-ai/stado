@@ -82,19 +82,19 @@ struct CleanupReport: Codable, Sendable {
 }
 
 struct CleanupCleaners: Codable, Sendable {
-    let huggingFaceCache: CleanerReport
-    let welesRecordings: CleanerReport
+    private let reports: [String: CleanerReport]
 
-    enum CodingKeys: String, CodingKey {
-        case huggingFaceCache = "huggingface_cache"
-        case welesRecordings = "weles_recordings"
+    init(from decoder: Decoder) throws {
+        reports = try decoder.singleValueContainer().decode([String: CleanerReport].self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(reports)
     }
 
     var namedReports: [(String, CleanerReport)] {
-        [
-            ("Hugging Face cache", huggingFaceCache),
-            ("Weles recordings", welesRecordings),
-        ]
+        reports.sorted { $0.key < $1.key }
     }
 }
 
