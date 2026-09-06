@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.36
+## 0.16.38
 
 - **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
 - **Observed diagnostics:** `host gui-automation status --json` reports the actual helper preflight result and its refusal. Partial preparation receipts survive nonzero exits.
@@ -8,6 +8,18 @@
 - **Bounded host session:** each Apple readiness or preparation operation acquires its target key and selects a declared route once. Individual reads no longer repeat credential acquisition or probe an unavailable preferred route; the operation releases its key on completion, failure, or cancellation and never replays a failed mutation.
 - **Native Desktop:** Hosts reads Apple readiness without changing host settings and sends Apple preparation through the configured `POST /api/operator/run` endpoint instead of spawning a local CLI. The native operator endpoint is retained independently of the removed HTML dashboard, with local loopback access and authenticated remote operator permissions.
 - **Migration:** no registry or credential schema changes. Apple preparation remains separate from certificate issuance and does not start Apple authentication or notifications.
+
+## 0.16.37
+
+- **Native label evidence:** exact system-label inspection now uses the existing noninteractive privileged launchd reader. A refused or failed domain read retains its exit code and error instead of being reported as proof that the label is unloaded.
+
+## 0.16.36
+
+- **Primary authority:** a successful missing-object answer remains authoritative for releases as well as mutable objects. GET and stat no longer copy bytes from the backup or return a backup body after the primary refused a repair; ordinary failover remains limited to failed primary reads.
+- **Publication retention:** release-store cleanup requires a completed or reconciled pipeline run for the exact reserved source revision. Missing completion evidence, an unreadable source claim, and an untracked installer publication retain the version with separate diagnostic reasons. A failed run alone does not authorize deleting its output.
+- **Desktop cleanup diagnostics:** the Disk screen decodes every reported cleaner instead of dropping all but two names, and displays each cleaner's exact skipped reasons and counts.
+- **Immutable reservations:** reclaiming eligible release payloads retains both version and platform source-revision records, so cleanup cannot free a used version for a different commit.
+- **Migration:** no stored schemas change. Tag-only releases remain retained because their publisher does not supply the pipeline completion evidence required for deletion; the janitor reports that limitation instead of deleting an active upload.
 
 ## 0.16.35
 

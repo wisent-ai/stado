@@ -191,9 +191,10 @@ pub enum ServiceCommands {
     /// Ask the host init system what it holds under one named unit.
     ///
     /// This reader does not enumerate. The operator names the launchd label or
-    /// systemd unit, so it can inspect a loaded unit whose file is gone. Only
-    /// fixed process, path, restart and trigger fields are returned; service
-    /// environments are never read.
+    /// systemd unit, so it can inspect a loaded unit whose file is gone. Fixed
+    /// process, path, restart and trigger fields plus the five explicitly
+    /// non-secret storage-routing variables are returned; no other service
+    /// environment is read.
     #[command(name = "label-print")]
     LabelPrint {
         /// launchd label or systemd unit, as the host knows it.
@@ -2071,26 +2072,50 @@ async fn label_print(
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let scope = service::BootoutScope::parse(domain).map_err(click)?;
     let runner = production_runner();
-    let state = service_label_print::print_label(&target, label, scope, &runner)
+    let state = service_label_print::inspect_label(&target, label, scope, &runner)
         .await
         .map_err(click)?;
     if json {
-        return print_json(&state.to_json());
+        print_json(&state.to_json())?;
     }
     if let Some(system) = &state.unsupported {
-        println!("{}: label-print does not support {system}", state.host);
+        if !json {
+            println!("{}: label-print does not support {system}", state.host);
+        }
         return Ok(());
     }
     if !state.loaded() {
-        println!(
-            "{}: the init system holds no unit under {label} in the {} domain(s)",
-            state.host,
-            domain.unwrap_or("system and user")
-        );
+        if !state.read_failures.is_empty() {
+            let detail = state
+                .read_failures
+                .iter()
+                .map(|failure| {
+                    format!(
+                        "{} exited {}: {}",
+                        failure.domain, failure.exit_code, failure.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(CmdError::click(format!(
+                "{}: could not determine whether {label} is loaded: {detail}",
+                state.host
+            )));
+        }
+        if !json {
+            println!(
+                "{}: the init system holds no unit under {label} in the {} domain(s)",
+                state.host,
+                domain.unwrap_or("system and user")
+            );
+        }
         return Err(CmdError::click(format!(
             "{}: {label} is not loaded",
             state.host
         )));
+    }
+    if json {
+        return Ok(());
     }
     let mut rows = vec![
         vec![
@@ -2116,6 +2141,12 @@ async fn label_print(
         ],
         vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
     ];
+    for failure in &state.read_failures {
+        rows.push(vec![
+            format!("{} read failure", failure.domain),
+            format!("exit {}: {}", failure.exit_code, failure.detail),
+        ]);
+    }
     if state.event_read_status.is_some() {
         rows.extend([
             vec![
