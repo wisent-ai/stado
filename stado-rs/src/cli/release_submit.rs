@@ -244,6 +244,47 @@ async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
     }
 }
 
+/// Keep the first complete request for an attempt, including its builder.
+/// Capacity can change between publication and submission, or two coordinators
+/// can race. Only placement may differ; the source and recipe must still agree.
+async fn persist_worker_request(
+    store: &JobStorage,
+    path: &str,
+    mut expected: WorkerRequest,
+    saved: Option<(WorkerRequest, Vec<u8>)>,
+) -> Result<(WorkerRequest, Vec<u8>), CmdError> {
+    let (request, bytes) = match saved {
+        Some(saved) => saved,
+        None => {
+            let content = serde_json::to_string(&expected)?;
+            if store
+                .create_text_if_absent(path, &content)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?
+            {
+                return Ok((expected, content.into_bytes()));
+            }
+            let bytes = store
+                .read_bytes(path)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "worker request disappeared after concurrent publication: {path}"
+                    ))
+                })?;
+            (serde_json::from_slice::<WorkerRequest>(&bytes)?, bytes)
+        }
+    };
+    expected.builder.clone_from(&request.builder);
+    if request != expected {
+        return Err(CmdError::click(format!(
+            "immutable queue object differs: {path}"
+        )));
+    }
+    Ok((request, bytes))
+}
+
 fn deployment_receipt_identity(bytes: &[u8]) -> Result<Value, CmdError> {
     let mut receipt: Value = serde_json::from_slice(bytes)?;
     let object = receipt
@@ -794,13 +835,10 @@ async fn builder(
 
 /// Resolve the consumer id last published by one exact registry target.
 ///
-/// Delivery jobs are the recovery lane that installs a Stado version able to
-/// clear a target's current gate. Requiring the target's general capacity row
-/// to be fresh here deadlocks that lane: a long-running job or disk-pressure
-/// gate can age the row past the scheduler horizon while the agent still has
-/// enough identity to claim the exact pinned delivery. Builders still use
-/// [`builder`] and require fresh capacity without a policy or disk refusal;
-/// a busy builder leaves its build queued until the normal claim gate opens.
+/// Delivery jobs already name their target. Requiring fresh general capacity
+/// here would discard that placement when a long-running job or disk-pressure
+/// gate ages its publication. New queue plans still use [`builder`] and require
+/// fresh capacity without a policy or disk refusal.
 async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -830,7 +868,7 @@ async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
     }
     newest.map(|(consumer, _)| consumer).ok_or_else(|| {
         CmdError::click(format!(
-            "delivery target {target_name} has no retained capacity publication, so its consumer \
+            "recorded target {target_name} has no retained capacity publication, so its consumer \
              identity is unknown; see stado host gates {target_name}"
         ))
     })
@@ -1330,20 +1368,21 @@ async fn enqueue(
         inputs,
         secret_env: recipe.secret_env.clone(),
     };
-    let bytes = match saved_bytes {
-        Some(bytes) => {
-            if saved_request.as_ref() != Some(&request) {
-                return Err(CmdError::click(format!(
-                    "immutable queue object differs: {request_path}"
-                )));
-            }
-            bytes
-        }
-        None => {
-            let bytes = serde_json::to_vec(&request)?;
-            queue_immutable(&request_path, &bytes).await?;
-            bytes
-        }
+    let (request, bytes) = persist_worker_request(
+        store,
+        &request_path,
+        request,
+        saved_request.zip(saved_bytes),
+    )
+    .await?;
+    let consumer = if request.builder == builder_name {
+        consumer
+    } else {
+        // Another coordinator published the request first. Keep that placement
+        // and apply the normal claim gate before creating its queue plan.
+        builder(&recipe.runner_platform, Some(&request.builder))
+            .await?
+            .1
     };
     let sha = release_control::sha256_bytes(&bytes);
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
@@ -1375,7 +1414,7 @@ async fn enqueue(
         .ok_or_else(|| CmdError::click("durable release submission returned no job"))?;
     Ok(PlatformRun {
         platform: platform.into(),
-        builder: builder_name,
+        builder: request.builder,
         job_id: job.job_id.clone(),
         output_prefix: format!("status/{}/output/", job.job_id),
         state: PlatformRunState::Submitted,
