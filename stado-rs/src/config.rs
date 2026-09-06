@@ -1748,6 +1748,18 @@ impl ReleasePublisher {
 pub(crate) fn parse_release_publishers(
     value: Option<&Value>,
 ) -> Result<BTreeMap<String, ReleasePublisher>, Vec<String>> {
+    let publishers = parse_declared_release_publishers(value)?;
+    let problems = missing_release_publishers(&publishers);
+    if problems.is_empty() {
+        Ok(publishers)
+    } else {
+        Err(problems)
+    }
+}
+
+fn parse_declared_release_publishers(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, ReleasePublisher>, Vec<String>> {
     let Some(Value::Object(entries)) = value else {
         return Err(vec![
             "release_api.publishers must be a non-empty product-to-item mapping".to_string(),
@@ -1832,18 +1844,19 @@ pub(crate) fn parse_release_publishers(
             );
         }
     }
-    for &required in ACTIVE_RELEASE_PUBLISHERS {
-        if !publishers.contains_key(required) {
-            problems.push(format!(
-                "release_api.publishers is missing active publisher {required:?}"
-            ));
-        }
-    }
     if problems.is_empty() {
         Ok(publishers)
     } else {
         Err(problems)
     }
+}
+
+fn missing_release_publishers(publishers: &BTreeMap<String, ReleasePublisher>) -> Vec<String> {
+    ACTIVE_RELEASE_PUBLISHERS
+        .iter()
+        .filter(|&&required| !publishers.contains_key(required))
+        .map(|required| format!("release_api.publishers is missing active publisher {required:?}"))
+        .collect()
 }
 
 static RELEASE_API_PUBLISHERS: LazyLock<Result<BTreeMap<String, ReleasePublisher>, Vec<String>>> =
@@ -1862,7 +1875,12 @@ static RELEASE_API_PUBLISHERS: LazyLock<Result<BTreeMap<String, ReleasePublisher
             },
             None => crate::config_file::get("release_api.publishers"),
         };
-        parse_release_publishers(configured.as_ref())
+        parse_declared_release_publishers(configured.as_ref())
+    });
+static RELEASE_API_PUBLISHER_REQUIREMENTS: LazyLock<Vec<String>> =
+    LazyLock::new(|| match &*RELEASE_API_PUBLISHERS {
+        Ok(publishers) => missing_release_publishers(publishers),
+        Err(_) => Vec::new(),
     });
 static RELEASE_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
     cfg(
@@ -1937,14 +1955,17 @@ static RELEASE_SIGNING_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| 
 pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 /// Actions a registry-API client may be granted.
 ///
-/// `policy-read` and `cleanup-read` answer questions; `policy-write` rewrites
-/// one target's whitelisted policy fields, `cleanup-run` asks the local
-/// janitor for a pass, and `registry-import` additively adopts a complete
-/// registry-v2 document. They are separate because reading policy, rewriting
-/// policy, running cleanup, and importing declarations are distinct authority.
+/// `policy-read`, `cleanup-read`, and `converge-read` answer questions;
+/// `policy-write` rewrites one target's whitelisted policy fields,
+/// `cleanup-run` asks the local janitor for a pass, `registry-import` additively
+/// adopts a complete registry-v2 document, and `converge-apply` may deliver every
+/// declared binary on one canonical host. Reading does not authorize mutation;
+/// each independent operation requires its own grant.
 pub const REGISTRY_API_ACTIONS: &[&str] = &[
     "cleanup-read",
     "cleanup-run",
+    "converge-apply",
+    "converge-read",
     "policy-read",
     "policy-write",
     "registry-import",
@@ -3996,7 +4017,21 @@ pub fn object_skarbiec_token_file() -> &'static str {
 pub fn release_api_publishers(
 ) -> Result<&'static BTreeMap<String, ReleasePublisher>, &'static [String]> {
     match &*RELEASE_API_PUBLISHERS {
-        Ok(publishers) => Ok(publishers),
+        Ok(publishers) if RELEASE_API_PUBLISHER_REQUIREMENTS.is_empty() => Ok(publishers),
+        Ok(_) => Err(RELEASE_API_PUBLISHER_REQUIREMENTS.as_slice()),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+/// A publishing client needs only its declared products; the serving API still
+/// requires its complete active publisher table through `release_api_publishers`.
+pub fn release_client_publisher_for_key(
+    key: &str,
+) -> Result<Option<&'static ReleasePublisher>, &'static [String]> {
+    match &*RELEASE_API_PUBLISHERS {
+        Ok(publishers) => Ok(publishers
+            .values()
+            .find(|publisher| publisher.allows_key(key))),
         Err(problems) => Err(problems.as_slice()),
     }
 }

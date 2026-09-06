@@ -51,17 +51,13 @@
 //!   not a release: counting one as the rollback ladder leaves a host with
 //!   nothing to install and nothing to roll back to.
 //!
-//! Everything else under a product's release prefix is a version no host runs,
-//! nobody declares, no run names, and no operator can reach without
-//! republishing — and republishing is exactly what the pipeline does from
-//! source on request. A version directory is deleted whole, never one object
-//! of it: a release with half its files is worse than none, because
-//! `SHA256SUMS` would still name the missing ones and a delivery would fail
-//! after the download rather than before it. Every such deletion is logged at
-//! `warn`, one line per version, naming the product, version, bytes and the
-//! reasons it was not pinned: a whole release leaving a host under disk
-//! pressure is the kind of reclaim an operator has to be able to read after
-//! the fact, and this cleaner's counters said only how many.
+//! Absence from these pins is not permission to delete. Reclaim also requires
+//! a completed or reconciled pipeline run for the exact source revision held
+//! in the version reservation. Unknown and failed publications remain retained;
+//! installer-family publications are not covered by signed-pipeline evidence.
+//! The report names these refusals instead of treating a missing run as proof
+//! that a publisher stopped. Reclaim removes eligible payloads together while
+//! retaining the immutable version and platform source reservations.
 //!
 //! Two things this cleaner refuses on purpose. It never touches a product that
 //! has no state file and no run record on this host, because a store can hold
@@ -150,6 +146,12 @@ const DEFAULT_KEEP_NEWEST: usize = 3;
 struct ProductReleases {
     versions: BTreeMap<String, (PathBuf, i64)>,
     complete: BTreeMap<String, BTreeSet<&'static str>>,
+}
+
+#[derive(Default)]
+struct RunRetentionEvidence {
+    pinned: BTreeMap<String, BTreeSet<String>>,
+    finished: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
 }
 
 /// Version strings ordered as numbers, newest last; a version that is not
@@ -465,46 +467,40 @@ pub(crate) fn retention_decision<'a>(
         .collect()
 }
 
-/// The versions a pipeline run may still fetch, per product: every run that
-/// is not terminal, and every run younger than `min_age_seconds`.
+/// Publication evidence from every namespace on the local store.
 ///
-/// Release runs are stored as `<product>/<run-id>/run.json`. The bounded walk
-/// also accepts the older `<run-id>/run.json` layout, but never follows links.
-///
-/// `ecosystem` is the store's namespace root. The runs live under the store's
-/// product namespace, and that namespace is a storage binding this host may
-/// not carry — a host bound to a local backend resolves it to the empty
-/// string, which turned the runs path into `ecosystem//runs/…` and made every
-/// run invisible; a `publishing` run's version was then deleted in the probe
-/// that caught it. So every namespace directory is walked. A run this cleaner
-/// cannot see is a version it would delete, and seeing all of them is the
-/// safe direction.
-fn run_pinned_versions(
+/// Missing from the active-run set does not mean a publisher finished. The
+/// tag workflow publishes outside the queue: on 2026-09-06 the janitor removed
+/// Stado 0.16.29 repeatedly while that workflow was uploading it. Reclaim
+/// requires a completed run for the same source, not merely an absent pin.
+/// Unknown and failed publications remain owned by their publisher.
+fn run_retention_evidence(
     ecosystem: &Path,
     min_age_seconds: i64,
     now_epoch: i64,
-) -> BTreeMap<String, BTreeSet<String>> {
-    let mut pinned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+) -> Result<RunRetentionEvidence, JanitorError> {
+    let mut evidence = RunRetentionEvidence::default();
     let mut directories = Vec::new();
-    if let Ok(namespaces) = std::fs::read_dir(ecosystem) {
-        for namespace in namespaces.flatten() {
-            if namespace
-                .file_type()
-                .map(|kind| kind.is_dir())
-                .unwrap_or(false)
-            {
-                directories.push((namespace.path().join(RUNS_PREFIX), 0usize));
-            }
+    for namespace in std::fs::read_dir(ecosystem)? {
+        let namespace = namespace?;
+        if namespace.file_type()?.is_dir() {
+            directories.push((namespace.path().join(RUNS_PREFIX), 0usize));
         }
     }
     while let Some((directory, depth)) = directories.pop() {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(JanitorError::os(&format!(
+                    "list release runs {}: {error}",
+                    directory.display()
+                )));
+            }
         };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
+        for entry in entries {
+            let entry = entry?;
+            let kind = entry.file_type()?;
             if kind.is_dir() && depth < 2 {
                 directories.push((entry.path(), depth + 1));
                 continue;
@@ -513,35 +509,82 @@ fn run_pinned_versions(
                 continue;
             }
             let record = entry.path();
-            let Ok(text) = std::fs::read_to_string(&record) else {
-                continue;
-            };
-            let Ok(run) = serde_json::from_str::<serde_json::Value>(&text) else {
-                continue;
-            };
+            let text = std::fs::read_to_string(&record).map_err(|error| {
+                JanitorError::os(&format!("read release run {}: {error}", record.display()))
+            })?;
+            let run = serde_json::from_str::<Value>(&text).map_err(|error| {
+                JanitorError::os(&format!("parse release run {}: {error}", record.display()))
+            })?;
             let (Some(product), Some(version)) = (
-                run.get("product").and_then(serde_json::Value::as_str),
-                run.get("version").and_then(serde_json::Value::as_str),
+                run.get("product").and_then(Value::as_str),
+                run.get("version").and_then(Value::as_str),
             ) else {
                 continue;
             };
-            let state = run
-                .get("state")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
+            let state = run.get("state").and_then(Value::as_str).unwrap_or("");
             let terminal = matches!(state, "completed" | "failed" | "reconciled");
             let young = std::fs::metadata(&record)
                 .map(|meta| now_epoch - meta.mtime() < min_age_seconds)
                 .unwrap_or(true);
             if !terminal || young {
-                pinned
+                evidence
+                    .pinned
                     .entry(product.to_string())
                     .or_default()
                     .insert(version.to_string());
+            } else if matches!(state, "completed" | "reconciled") {
+                if let Some(source) = run.get("source_commit").and_then(Value::as_str) {
+                    evidence
+                        .finished
+                        .entry(product.to_string())
+                        .or_default()
+                        .entry(version.to_string())
+                        .or_default()
+                        .insert(source.to_string());
+                }
             }
         }
     }
-    pinned
+    Ok(evidence)
+}
+
+fn source_revision(
+    version_path: &Path,
+    product: &str,
+    version: &str,
+) -> Option<crate::release_control::VersionRevision> {
+    let bytes =
+        std::fs::read(version_path.join(crate::release_control::RELEASE_VERSION_REVISION_NAME))
+            .ok()?;
+    let claim: crate::release_control::VersionRevision = serde_json::from_slice(&bytes).ok()?;
+    claim.describes(product, version).then_some(claim)
+}
+
+/// Payloads may be reclaimed, but the source reservation must survive.
+fn remove_release_payloads(version_path: &Path) -> Result<(), JanitorError> {
+    for entry in std::fs::read_dir(version_path)? {
+        let entry = entry?;
+        if entry.file_name() == crate::release_control::RELEASE_VERSION_REVISION_NAME {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            for member in std::fs::read_dir(&path)? {
+                let member = member?;
+                if member.file_name() == crate::release_control::RELEASE_REVISION_NAME {
+                    continue;
+                }
+                if member.file_type()?.is_dir() {
+                    std::fs::remove_dir_all(member.path())?;
+                } else {
+                    std::fs::remove_file(member.path())?;
+                }
+            }
+        } else {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Reclaim release versions nothing on this host still has a use for.
@@ -593,7 +636,9 @@ pub fn scan_release_store(
             .unwrap_or_default();
         let host_pins = host_pinned_versions(&state_dir);
         let config_pins = config_pinned_versions(home);
-        let run_pins = run_pinned_versions(&ecosystem, configured.min_age_seconds, now_epoch);
+        let run_evidence =
+            run_retention_evidence(&ecosystem, configured.min_age_seconds, now_epoch)?;
+        let run_pins = &run_evidence.pinned;
         let home_device = std::fs::metadata(home)?.dev();
 
         // Inventory: every product directory, every version directory under it.
@@ -675,6 +720,29 @@ pub fn scan_release_store(
                     report.skip_release_store(reason, 1);
                     continue;
                 }
+                let Some(claim) = source_revision(path, product, version) else {
+                    report.skip_release_store("source_identity_unverified", 1);
+                    continue;
+                };
+                let finished = run_evidence
+                    .finished
+                    .get(product)
+                    .and_then(|versions| versions.get(version))
+                    .is_some_and(|sources| sources.contains(&claim.source_revision));
+                if !finished {
+                    report.skip_release_store("publication_completion_unverified", 1);
+                    continue;
+                }
+                // A signed pipeline run does not account for a separate tag
+                // publisher at the same version.
+                if inventory
+                    .complete
+                    .get(version)
+                    .is_some_and(|families| families.contains(family_key(ReleaseFamily::Installer)))
+                {
+                    report.skip_release_store("installer_publication_untracked", 1);
+                    continue;
+                }
                 report.release_store.eligible_items += 1;
                 report.release_store.expected_bytes += bytes;
                 if policy.mode != "enforce" {
@@ -702,7 +770,7 @@ pub fn scan_release_store(
                         ));
                     }
                     let before = free_bytes(home)?;
-                    std::fs::remove_dir_all(path)?;
+                    remove_release_payloads(path)?;
                     Ok(free_bytes(home)? - before)
                 })();
                 match delete_attempt {

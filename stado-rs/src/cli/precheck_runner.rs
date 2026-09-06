@@ -19,6 +19,7 @@ async fn render(
         (false, "install") => crate::deploy::host_precheck_runner::install(target).await,
         (false, "status") => crate::deploy::host_precheck_runner::status(target).await,
         (false, "remove") => crate::deploy::host_precheck_runner::remove(target).await,
+        (false, "restart") => crate::deploy::host_precheck_runner::restart(target).await,
         (true, "install") => {
             crate::deploy::host_precheck_runner::install_publisher(target, repositories).await
         }
@@ -32,7 +33,7 @@ async fn render(
             "{}",
             crate::deploy::host_recovery::to_sorted_pretty(&report)
         );
-        return Ok(());
+        return route_outcome(&report).map_err(|error| error.machine_readable(true));
     }
     println!(
         "{}: {} runner {} on {} ({})",
@@ -50,7 +51,30 @@ async fn render(
     if !stderr.is_empty() {
         eprint!("{stderr}");
     }
-    Ok(())
+    route_outcome(&report)
+}
+
+/// A runner whose published Brama route disagrees with the fleet's
+/// declaration fails the command — after the report, never instead of it.
+///
+/// Every Kronika documentation gate on that runner answers `fetch failed`
+/// while the two disagree, and that surfaced as a red gate in the product
+/// repository rather than as anything an operator could read here.
+fn route_outcome(report: &Value) -> Result<(), CmdError> {
+    let Some(route) = report.get("brama_route") else {
+        return Ok(());
+    };
+    if route.get("matches").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{}: {}",
+        cell(report.get("target")),
+        route
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or("the runner's Brama route does not match the fleet declaration")
+    )))
 }
 
 /// Ensure one repository can schedule on the selected-repository runner group.
@@ -108,6 +132,12 @@ pub async fn model_review_add(
         );
     }
     Ok(())
+}
+
+/// Restart the isolated pre-check runner on TARGET and wait until it is
+/// listening for jobs again.
+pub async fn restart(target: &str, json: bool) -> Result<(), CmdError> {
+    render(target, "restart", false, &[], json).await
 }
 
 /// Install or reconcile the isolated GitHub pre-check runner on TARGET.

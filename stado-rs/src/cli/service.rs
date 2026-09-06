@@ -191,9 +191,10 @@ pub enum ServiceCommands {
     /// Ask the host init system what it holds under one named unit.
     ///
     /// This reader does not enumerate. The operator names the launchd label or
-    /// systemd unit, so it can inspect a loaded unit whose file is gone. Only
-    /// fixed process, path, restart and trigger fields are returned; service
-    /// environments are never read.
+    /// systemd unit, so it can inspect a loaded unit whose file is gone. Fixed
+    /// process, path, restart and trigger fields plus the five explicitly
+    /// non-secret storage-routing variables are returned; no other service
+    /// environment is read.
     #[command(name = "label-print")]
     LabelPrint {
         /// launchd label or systemd unit, as the host knows it.
@@ -862,6 +863,11 @@ pub enum ServiceCommands {
     /// must already be inactive. One conditional registry write then removes
     /// every legacy restart identity while preserving the logical route,
     /// placement dependency, probes, and release policy.
+    ///
+    /// Repeating an incomplete handoff rechecks the same release, rollout
+    /// generation and exact legacy files before committing against the current
+    /// registry. The prior commit remains in the receipt's recovery history.
+    /// A completed receipt cannot be reapplied against a mismatching registry.
     HandoffReleaseControl {
         /// Logical service in the service directory and placement profile.
         service: String,
@@ -2071,26 +2077,50 @@ async fn label_print(
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let scope = service::BootoutScope::parse(domain).map_err(click)?;
     let runner = production_runner();
-    let state = service_label_print::print_label(&target, label, scope, &runner)
+    let state = service_label_print::inspect_label(&target, label, scope, &runner)
         .await
         .map_err(click)?;
     if json {
-        return print_json(&state.to_json());
+        print_json(&state.to_json())?;
     }
     if let Some(system) = &state.unsupported {
-        println!("{}: label-print does not support {system}", state.host);
+        if !json {
+            println!("{}: label-print does not support {system}", state.host);
+        }
         return Ok(());
     }
     if !state.loaded() {
-        println!(
-            "{}: the init system holds no unit under {label} in the {} domain(s)",
-            state.host,
-            domain.unwrap_or("system and user")
-        );
+        if !state.read_failures.is_empty() {
+            let detail = state
+                .read_failures
+                .iter()
+                .map(|failure| {
+                    format!(
+                        "{} exited {}: {}",
+                        failure.domain, failure.exit_code, failure.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(CmdError::click(format!(
+                "{}: could not determine whether {label} is loaded: {detail}",
+                state.host
+            )));
+        }
+        if !json {
+            println!(
+                "{}: the init system holds no unit under {label} in the {} domain(s)",
+                state.host,
+                domain.unwrap_or("system and user")
+            );
+        }
         return Err(CmdError::click(format!(
             "{}: {label} is not loaded",
             state.host
         )));
+    }
+    if json {
+        return Ok(());
     }
     let mut rows = vec![
         vec![
@@ -2116,6 +2146,12 @@ async fn label_print(
         ],
         vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
     ];
+    for failure in &state.read_failures {
+        rows.push(vec![
+            format!("{} read failure", failure.domain),
+            format!("exit {}: {}", failure.exit_code, failure.detail),
+        ]);
+    }
     if state.event_read_status.is_some() {
         rows.extend([
             vec![
@@ -2462,14 +2498,24 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
         "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{}",
         std::env::var("PATH").unwrap_or_default()
     );
-    let output = tokio::process::Command::new(&skarbiec)
-        .args(["get", item, "--field", "password"])
-        .env("SKARBIEC_VAULT_FILE", &vault)
-        .env("PATH", path)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        tokio::process::Command::new(&skarbiec)
+            .args(["get", item, "--field", "password"])
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "{} reading {item}#password exceeded 90 seconds",
+            skarbiec.display()
+        )
+    })?
+    .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -3192,6 +3238,7 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
         .filter(|(logical, entry)| {
             logical.as_str() == name
                 || entry.get("managed_service").and_then(Value::as_str) == Some(name)
+                || placement_declares_unit(document, entry, logical, name)
         })
         .map(|(logical, _)| logical.clone())
         .collect::<Vec<_>>();
@@ -3209,25 +3256,55 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
     }
 }
 
+/// Whether a placement-backed route's profile installs `unit` for this service.
+///
+/// A placement-backed route MUST leave `managed_service` absent - the schema
+/// refuses it, because the unit is declared once per host inside the profile.
+/// Reading only the absent field made every such service unreachable from a
+/// unit name: on 2026-09-05 `service release com.wisent.always-on.brama` moved
+/// `current` to the new digest and then failed with "carries no route", so the
+/// host ran one release while the directory still described another.
+fn placement_declares_unit(document: &Value, entry: &Value, logical: &str, unit: &str) -> bool {
+    let Some(profile_name) = entry.get("placement_profile").and_then(Value::as_str) else {
+        return false;
+    };
+    document
+        .get("placement_profiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| profile.get("name").and_then(Value::as_str) == Some(profile_name))
+        .filter_map(|profile| profile.get("hosts").and_then(Value::as_object))
+        .flat_map(|hosts| hosts.values())
+        .filter_map(|host| host.get("units").and_then(Value::as_object))
+        .filter_map(|units| units.get(logical))
+        .filter_map(|declared| declared.get("unit").and_then(Value::as_str))
+        .any(|declared| declared == unit)
+}
+
 /// Whether pinning `artifact`/`sha256` on this route would change anything.
+///
+/// A route that declares no deployable source has nothing to pin: its version
+/// is delivered by the release plane (`release_control`) and the directory
+/// carries only its address. That is not a failure of the release that just
+/// landed, and treating it as one aborted the command after `current` had
+/// already moved.
 fn source_pin_moves(
     document: &Value,
     logical: &str,
     artifact: &str,
     sha256: &str,
 ) -> Result<bool, CmdError> {
-    let source = document
+    let Some(source) = document
         .get("service_directory")
         .and_then(|directory| directory.get("services"))
         .and_then(|services| services.get(logical))
         .and_then(|entry| entry.get("declaration"))
         .and_then(|declaration| declaration.get("source"))
         .and_then(Value::as_object)
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "service directory route {logical:?} has no declaration source"
-            ))
-        })?;
+    else {
+        return Ok(false);
+    };
     Ok(
         source.get("artifact").and_then(Value::as_str) != Some(artifact)
             || source.get("sha256").and_then(Value::as_str) != Some(sha256),
@@ -6140,6 +6217,7 @@ async fn handoff_release_control(
             && receipt["profile"] == profile_name
             && receipt["product"] == product
             && receipt["release"]["version"] == desired.version
+            && receipt["release"]["rollout_generation"] == desired.rollout_generation
             && receipt["release"]["artifact_sha256"] == desired_artifact.artifact_sha256
             && receipt["release"]["manifest_sha256"] == desired_artifact.manifest_sha256;
         if !same_intent {
@@ -6177,13 +6255,16 @@ async fn handoff_release_control(
             )
             .await;
         }
-        if receipt["status"] != "prepared" {
+        if receipt["status"] != "prepared" && receipt["status"] != "registry_committed" {
             return Err(CmdError::click(format!(
                 "handoff receipt {} says {:?}, but the registry does not match its intended handoff",
                 receipt_path.display(),
                 receipt["status"]
             )));
         }
+        // An incomplete commit can disappear after authority recovery. Reuse
+        // every live-release, legacy-identity, lease and CAS check below rather
+        // than trusting the old generation or resetting its receipt by hand.
     }
     for (template_host, template) in &profile.hosts {
         let unit = template.units.get(service_name).ok_or_else(|| {
@@ -6376,9 +6457,28 @@ async fn handoff_release_control(
         crate::targets::validate_registry(&document)
             .map_err(|error| CmdError::click(error.to_string()))?;
 
-        let refreshing_prepared_receipt = prior_receipt.is_some();
         let mut report = if let Some(receipt) = prior_receipt.as_ref() {
             let mut receipt = receipt.clone();
+            if receipt["status"] == "registry_committed" {
+                let recovery = json!({
+                    "recorded_generation": receipt["generation"],
+                    "recorded_expected_generation": receipt["expected_generation"],
+                    "observed_registry_generation": expected_generation,
+                    "revalidated_at": now(),
+                });
+                if receipt["registry_recovery_history"].is_null() {
+                    receipt["registry_recovery_history"] = json!([]);
+                }
+                receipt["registry_recovery_history"]
+                    .as_array_mut()
+                    .ok_or_else(|| {
+                        CmdError::click(format!(
+                            "handoff receipt {} has invalid registry recovery history",
+                            receipt_path.display()
+                        ))
+                    })?
+                    .push(recovery);
+            }
             receipt["expected_generation"] = json!(expected_generation);
             receipt["generation"] = Value::Null;
             receipt["status"] = json!("prepared");
@@ -6426,7 +6526,7 @@ async fn handoff_release_control(
                 },
             })
         };
-        persist_handoff_receipt(&receipt_path, &report, refreshing_prepared_receipt)?;
+        persist_handoff_receipt(&receipt_path, &report, prior_receipt.is_some())?;
         let generation = registry::push_document_if(&document, &expected_generation).await?;
         report["status"] = json!("registry_committed");
         report["generation"] = json!(generation);
@@ -8307,81 +8407,11 @@ printf '%s
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::readiness_probe_script;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::process::Command;
     use std::time::Duration;
-
-    /// Write a real gzip-compressed tar holding the named paths, so the member
-    /// reader is exercised against an archive rather than a list someone typed.
-    fn archive_fixture(directory: &std::path::Path, members: &[&str]) -> String {
-        let path = directory.join("bundle.tar.gz");
-        let file = std::fs::File::create(&path).expect("create fixture");
-        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
-            file,
-            flate2::Compression::fast(),
-        ));
-        for member in members {
-            let body = b"binary";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o755);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, member, &body[..])
-                .expect("append member");
-        }
-        builder
-            .into_inner()
-            .expect("finish tar")
-            .finish()
-            .expect("finish gzip");
-        path.to_string_lossy().to_string()
-    }
-
-    #[test]
-    fn archive_members_reads_the_paths_a_bundle_carries() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let path = archive_fixture(directory.path(), &["bin/stado", "./darwin-arm/stado"]);
-        let members = archive_members(&path).expect("list members");
-        assert_eq!(members, vec!["bin/stado", "darwin-arm/stado"]);
-    }
-    /// The exact 2026-09-04 outage: the object API unit runs
-    /// `current/darwin-arm/stado` and every published stado archive holds
-    /// `bin/stado`. The refusal must name both halves.
-    #[test]
-    fn an_archive_without_the_unit_program_is_refused_naming_both() {
-        let members = vec!["bin/stado".to_string()];
-        let refusal = refuse_archive_without_program(
-            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
-            &members,
-        )
-        .expect_err("an archive without the program must be refused");
-        assert!(refusal.contains("current/darwin-arm/stado"), "{refusal}");
-        assert!(refusal.contains("bin/stado"), "{refusal}");
-    }
-    #[test]
-    fn an_archive_carrying_the_unit_program_is_accepted() {
-        let members = vec!["darwin-arm/stado".to_string(), "darwin-arm/lib".to_string()];
-        refuse_archive_without_program(
-            "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
-            &members,
-        )
-        .expect("the program is in the archive");
-    }
-
-    /// A unit pinned to a version directory has no `current` segment. That is a
-    /// different fault and refusing every archive over it would be wrong.
-    #[test]
-    fn a_unit_not_running_through_current_is_not_judged_here() {
-        let members = vec!["bin/stado".to_string()];
-        refuse_archive_without_program(
-            "/Users/charles/.stado/services/x/sha256-abc/darwin-arm/stado",
-            &members,
-        )
-        .expect("no current segment, nothing to check");
-    }
 
     /// Serve one fixed JSON body on 200 to every request that arrives, on a
     /// loopback port the kernel picks, until the handle is dropped. The probe

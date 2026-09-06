@@ -41,7 +41,7 @@ const CUA_DRIVER_RUNTIME_LABEL: &str = "com.wisent.probierz-cua-driver";
 const LEGACY_CUA_DRIVER_RUNTIME_LABEL: &str =
     "com.wisent.compute.service.com.wisent.probierz-cua-driver";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct GuiAutomationReport {
     pub target: String,
     pub ssh_target: String,
@@ -123,16 +123,45 @@ async fn run(
     }
 }
 
+async fn invoke_sudo(
+    target: &ComputeTarget,
+    words: &[&str],
+    password: Option<&str>,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let prefix: &[&str] = if password.is_some() {
+        &["/usr/bin/sudo", "-S", "-p", ""]
+    } else {
+        &["/usr/bin/sudo", "-n"]
+    };
+    let mut command = Vec::with_capacity(prefix.len() + words.len());
+    command.extend_from_slice(prefix);
+    command.extend_from_slice(words);
+    if let Some(password) = password {
+        host_channel::run_program_with_stdin(target, &command, &format!("{password}\n"), runner)
+            .await
+    } else {
+        host_channel::run_program(target, &command, runner).await
+    }
+}
+
 async fn run_sudo(
     target: &ComputeTarget,
     words: &[&str],
     what: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let mut command = Vec::with_capacity(words.len() + 2);
-    command.extend(["/usr/bin/sudo", "-n"]);
-    command.extend(words.iter().copied());
-    run(target, &command, what, runner).await
+    let output = invoke_sudo(target, words, password, runner).await?;
+    if output.ok() {
+        Ok(output)
+    } else {
+        Err(DeployError(format!(
+            "{}: {what} failed: {}",
+            target.name,
+            output.detail().trim()
+        )))
+    }
 }
 
 async fn gui_user_id(
@@ -165,38 +194,33 @@ async fn invoke_in_gui_session(
     user: &str,
     uid: &str,
     words: &[&str],
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let mut command = Vec::with_capacity(words.len() + 10);
-    command.extend(
-        [
-            "/usr/bin/sudo",
-            "-n",
-            "/bin/launchctl",
-            "asuser",
-            uid,
-            "/usr/bin/sudo",
-            "-n",
-            "-u",
-            user,
-            "--",
-        ]
-        .into_iter()
-        .map(str::to_string),
-    );
-    command.extend(words.iter().map(|word| (*word).to_string()));
-    let command: Vec<&str> = command.iter().map(String::as_str).collect();
-    host_channel::run_program(target, &command, runner).await
+    let mut command = Vec::with_capacity(words.len() + 8);
+    command.extend([
+        "/bin/launchctl",
+        "asuser",
+        uid,
+        "/usr/bin/sudo",
+        "-n",
+        "-u",
+        user,
+        "--",
+    ]);
+    command.extend_from_slice(words);
+    invoke_sudo(target, &command, password, runner).await
 }
 
 async fn invoke_as_gui_user(
     target: &ComputeTarget,
     user: &str,
     words: &[&str],
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
     let uid = gui_user_id(target, user, runner).await?;
-    invoke_in_gui_session(target, user, &uid, words, runner).await
+    invoke_in_gui_session(target, user, &uid, words, password, runner).await
 }
 
 async fn run_in_gui_session(
@@ -205,9 +229,10 @@ async fn run_in_gui_session(
     uid: &str,
     words: &[&str],
     what: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let output = invoke_in_gui_session(target, user, uid, words, runner).await?;
+    let output = invoke_in_gui_session(target, user, uid, words, password, runner).await?;
     if output.ok() {
         Ok(output)
     } else {
@@ -224,10 +249,11 @@ async fn run_as_gui_user(
     user: &str,
     words: &[&str],
     what: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
     let uid = gui_user_id(target, user, runner).await?;
-    run_in_gui_session(target, user, &uid, words, what, runner).await
+    run_in_gui_session(target, user, &uid, words, what, password, runner).await
 }
 
 async fn optional(
@@ -242,12 +268,11 @@ async fn optional(
 async fn optional_sudo(
     target: &ComputeTarget,
     words: &[&str],
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<Option<String>, DeployError> {
-    let mut command = Vec::with_capacity(words.len() + 2);
-    command.extend(["/usr/bin/sudo", "-n"]);
-    command.extend(words.iter().copied());
-    optional(target, &command, runner).await
+    let output = invoke_sudo(target, words, password, runner).await?;
+    Ok(output.ok().then(|| output.stdout.trim().to_string()))
 }
 
 fn designated_requirement(output: &CommandOutput) -> Result<String, DeployError> {
@@ -413,9 +438,10 @@ async fn session_ready_for(
     target: &ComputeTarget,
     expected_user: &str,
     readiness_key: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<bool, DeployError> {
-    let report = status(target, runner).await;
+    let report = status(target, password, runner).await;
     if let Some(error) = report.error {
         return Err(DeployError(error));
     }
@@ -434,18 +460,27 @@ async fn session_ready_for(
 pub async fn automated_session_ready_for(
     target: &ComputeTarget,
     expected_user: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<bool, DeployError> {
-    session_ready_for(target, expected_user, "gui-ready", runner).await
+    session_ready_for(target, expected_user, "gui-ready", password, runner).await
 }
 
 /// Whether the signed helper can read this exact user's Apple challenge.
 pub async fn apple_challenge_session_ready_for(
     target: &ComputeTarget,
     expected_user: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<bool, DeployError> {
-    session_ready_for(target, expected_user, "apple-challenge-ready", runner).await
+    session_ready_for(
+        target,
+        expected_user,
+        "apple-challenge-ready",
+        password,
+        runner,
+    )
+    .await
 }
 
 /// Exercise the exact signed AX client in the exact Aqua session without
@@ -453,19 +488,33 @@ pub async fn apple_challenge_session_ready_for(
 pub(crate) async fn preflight_apple_challenge(
     target: &ComputeTarget,
     expected_user: &str,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<AppleChallengeSession, DeployError> {
     safe_identity(expected_user, "GUI user")?;
-    if !apple_challenge_session_ready_for(target, expected_user, runner).await? {
+    require_declared_session(target, expected_user)?;
+    let helper = helper_identity(target, apple_challenge_helper_path(), runner)
+        .await?
+        .ok_or_else(|| DeployError("Apple challenge helper is not installed".to_string()))?;
+    if helper.version != APPLE_CHALLENGE_HELPER_VERSION {
         return Err(DeployError(format!(
-            "{} does not have a ready Apple challenge session for {expected_user}",
-            target.name
+            "Apple challenge helper is version {}, expected {}",
+            helper.version, APPLE_CHALLENGE_HELPER_VERSION
         )));
     }
-    let user = login_user(target, runner).await?;
+    let user = run(
+        target,
+        &["/usr/bin/stat", "-f", "%Su", "/dev/console"],
+        "read the Apple challenge console user",
+        runner,
+    )
+    .await?
+    .stdout
+    .trim()
+    .to_string();
     if user != expected_user {
         return Err(DeployError(format!(
-            "{} is ready for GUI user {user}, not {expected_user}",
+            "{} has console user {user}, not {expected_user}",
             target.name
         )));
     }
@@ -475,6 +524,7 @@ pub(crate) async fn preflight_apple_challenge(
         &user,
         &uid,
         &[apple_challenge_helper_path(), "--preflight"],
+        password,
         runner,
     )
     .await?;
@@ -516,6 +566,7 @@ pub async fn capture_apple_challenge(
     expected_user: &str,
     capture_id: &str,
     wait_seconds: u64,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<String, DeployError> {
     safe_identity(expected_user, "GUI user")?;
@@ -525,7 +576,7 @@ pub async fn capture_apple_challenge(
             "Apple challenge wait must be between 1 and 90 seconds".to_string(),
         ));
     }
-    let session = preflight_apple_challenge(target, expected_user, runner).await?;
+    let session = preflight_apple_challenge(target, expected_user, password, runner).await?;
     let user = session.user;
     let uid = session.uid;
 
@@ -537,6 +588,7 @@ pub async fn capture_apple_challenge(
         &uid,
         &["/bin/mkdir", "-p", &work],
         "create Apple challenge work directory",
+        password,
         runner,
     )
     .await?;
@@ -546,6 +598,7 @@ pub async fn capture_apple_challenge(
         &uid,
         &["/bin/chmod", "700", &work],
         "protect Apple challenge work directory",
+        password,
         runner,
     )
     .await?;
@@ -555,6 +608,7 @@ pub async fn capture_apple_challenge(
         &uid,
         &["/bin/rm", "-f", &output_file],
         "remove stale Apple challenge file",
+        password,
         runner,
     )
     .await?;
@@ -573,6 +627,7 @@ pub async fn capture_apple_challenge(
             "--wait-seconds",
             &wait,
         ],
+        password,
         runner,
     )
     .await?;
@@ -583,6 +638,7 @@ pub async fn capture_apple_challenge(
             &uid,
             &["/bin/rm", "-f", &output_file],
             "remove failed Apple challenge file",
+            password,
             runner,
         )
         .await;
@@ -593,14 +649,22 @@ pub async fn capture_apple_challenge(
         )));
     }
 
-    let mut captured =
-        invoke_in_gui_session(target, &user, &uid, &["/bin/cat", &output_file], runner).await?;
+    let mut captured = invoke_in_gui_session(
+        target,
+        &user,
+        &uid,
+        &["/bin/cat", &output_file],
+        password,
+        runner,
+    )
+    .await?;
     let cleanup = run_in_gui_session(
         target,
         &user,
         &uid,
         &["/bin/rm", "-f", &output_file],
         "remove consumed Apple challenge file",
+        password,
         runner,
     )
     .await;
@@ -693,6 +757,7 @@ async fn remove_if_present(
             target,
             &["/bin/rm", "-rf", path],
             "remove stale CuaDriver path",
+            None,
             runner,
         )
         .await?;
@@ -711,6 +776,7 @@ async fn remove_if_present(
 async fn reconcile_apple_challenge_helper(
     target: &ComputeTarget,
     items: &mut Vec<(String, String)>,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<HelperIdentity, DeployError> {
     require_target(target)?;
@@ -787,6 +853,7 @@ async fn reconcile_apple_challenge_helper(
         target,
         &["/bin/mkdir", "-p", "/usr/local/libexec"],
         "create the system helper directory",
+        password,
         runner,
     )
     .await?;
@@ -804,6 +871,7 @@ async fn reconcile_apple_challenge_helper(
             path,
         ],
         "install Apple challenge helper",
+        password,
         runner,
     )
     .await?;
@@ -890,6 +958,7 @@ async fn rollback_app(
         target,
         &["/bin/rm", "-rf", CUA_DRIVER_APP],
         "remove failed CuaDriver install",
+        None,
         runner,
     )
     .await;
@@ -904,6 +973,7 @@ async fn rollback_app(
             target,
             &["/bin/mv", backup, CUA_DRIVER_APP],
             "restore prior CuaDriver app",
+            None,
             runner,
         )
         .await?;
@@ -1058,6 +1128,7 @@ async fn reconcile_app(
             target,
             &["/bin/mv", CUA_DRIVER_APP, &backup],
             "back up prior CuaDriver app",
+            None,
             runner,
         )
         .await?;
@@ -1066,6 +1137,7 @@ async fn reconcile_app(
         target,
         &["/usr/bin/ditto", &stage_app, CUA_DRIVER_APP],
         "install CuaDriver app",
+        None,
         runner,
     )
     .await
@@ -1187,6 +1259,7 @@ async fn reconcile_autologin(
         target,
         &["/usr/sbin/chown", "root:wheel", staged],
         "set staged autologin credential owner",
+        None,
         runner,
     )
     .await?;
@@ -1194,6 +1267,7 @@ async fn reconcile_autologin(
         target,
         &["/bin/chmod", "600", staged],
         "set staged autologin credential mode",
+        None,
         runner,
     )
     .await?;
@@ -1201,6 +1275,7 @@ async fn reconcile_autologin(
         target,
         &["/bin/test", "-s", staged],
         "verify the staged autologin credential",
+        None,
         runner,
     )
     .await?;
@@ -1208,6 +1283,7 @@ async fn reconcile_autologin(
         target,
         &["/bin/mv", "-f", staged, "/etc/kcpassword"],
         "install the autologin credential",
+        None,
         runner,
     )
     .await?;
@@ -1222,6 +1298,7 @@ async fn reconcile_autologin(
             &user,
         ],
         "configure the persistent GUI login user",
+        None,
         runner,
     )
     .await?;
@@ -1234,6 +1311,7 @@ async fn reconcile_autologin(
             "autoLoginUser",
         ],
         "verify the persistent GUI login user",
+        None,
         runner,
     )
     .await?
@@ -1251,18 +1329,25 @@ async fn reconcile_autologin(
 async fn grant_accessibility_inner(
     target: &ComputeTarget,
     items: &mut Vec<(String, String)>,
+    apple_only: bool,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<(), DeployError> {
     require_target(target)?;
-    let identity = app_identity(target, CUA_DRIVER_APP, runner)
-        .await?
-        .ok_or_else(|| DeployError("CuaDriver.app is not installed".to_string()))?;
-    if identity.bundle != CUA_DRIVER_BUNDLE_ID {
-        return Err(DeployError(format!(
-            "CuaDriver.app has bundle id {}, expected {}",
-            identity.bundle, CUA_DRIVER_BUNDLE_ID
-        )));
-    }
+    let identity = if apple_only {
+        None
+    } else {
+        let identity = app_identity(target, CUA_DRIVER_APP, runner)
+            .await?
+            .ok_or_else(|| DeployError("CuaDriver.app is not installed".to_string()))?;
+        if identity.bundle != CUA_DRIVER_BUNDLE_ID {
+            return Err(DeployError(format!(
+                "CuaDriver.app has bundle id {}, expected {}",
+                identity.bundle, CUA_DRIVER_BUNDLE_ID
+            )));
+        }
+        Some(identity)
+    };
     let helper = helper_identity(target, apple_challenge_helper_path(), runner)
         .await?
         .ok_or_else(|| DeployError("Apple challenge helper is not installed".to_string()))?;
@@ -1280,6 +1365,7 @@ async fn grant_accessibility_inner(
         target,
         &["/bin/test", "-f", &database],
         "locate the GUI user's TCC database",
+        password,
         runner,
     )
     .await?;
@@ -1291,6 +1377,7 @@ async fn grant_accessibility_inner(
             "SELECT group_concat(name, ',') FROM pragma_table_info('access');",
         ],
         "read TCC schema",
+        password,
         runner,
     )
     .await?
@@ -1316,14 +1403,20 @@ async fn grant_accessibility_inner(
     }
 
     let command_home = host_channel::remote_home(target, runner).await?;
-    let cua_requirement = code_requirement_hex(
-        target,
-        &command_home,
-        "cua-driver",
-        &identity.requirement,
-        runner,
-    )
-    .await?;
+    let cua_requirement = if let Some(identity) = &identity {
+        Some(
+            code_requirement_hex(
+                target,
+                &command_home,
+                "cua-driver",
+                &identity.requirement,
+                runner,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let helper_requirement = code_requirement_hex(
         target,
         &command_home,
@@ -1340,6 +1433,7 @@ async fn grant_accessibility_inner(
         &user,
         &["/bin/mkdir", "-p", &backup_dir],
         "create TCC backup directory",
+        password,
         runner,
     )
     .await?;
@@ -1355,6 +1449,7 @@ async fn grant_accessibility_inner(
             target,
             &["/usr/bin/sqlite3", &database, &backup_command],
             "back up the TCC database",
+            password,
             runner,
         )
         .await?;
@@ -1362,6 +1457,7 @@ async fn grant_accessibility_inner(
             target,
             &["/usr/sbin/chown", &format!("{user}:staff"), &backup],
             "set TCC backup owner",
+            password,
             runner,
         )
         .await?;
@@ -1369,6 +1465,7 @@ async fn grant_accessibility_inner(
             target,
             &["/bin/chmod", "600", &backup],
             "set TCC backup mode",
+            password,
             runner,
         )
         .await?;
@@ -1386,52 +1483,82 @@ async fn grant_accessibility_inner(
              X'{requirement}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now'));"
         )
     };
+    let (clients, inserts, expected_count) =
+        if let (Some(identity), Some(requirement)) = (&identity, &cua_requirement) {
+            (
+                format!(
+                    "((client = '{}' AND client_type = 0) \
+                     OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
+                     OR (client = '{}' AND client_type = 1))",
+                    identity.bundle,
+                    apple_challenge_helper_path(),
+                ),
+                format!(
+                    "{} {} {}",
+                    insert(&identity.bundle, 0, requirement),
+                    insert(CUA_DRIVER_EXECUTABLE, 1, requirement),
+                    insert(apple_challenge_helper_path(), 1, &helper_requirement),
+                ),
+                "3",
+            )
+        } else {
+            (
+                format!(
+                    "(client = '{}' AND client_type = 1)",
+                    apple_challenge_helper_path(),
+                ),
+                insert(apple_challenge_helper_path(), 1, &helper_requirement),
+                "1",
+            )
+        };
     let sql = format!(
         "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
-         AND ((client = '{}' AND client_type = 0) \
-         OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
-         OR (client = '{}' AND client_type = 1)); {} {} {} COMMIT;",
-        identity.bundle,
-        apple_challenge_helper_path(),
-        insert(&identity.bundle, 0, &cua_requirement),
-        insert(CUA_DRIVER_EXECUTABLE, 1, &cua_requirement),
-        insert(apple_challenge_helper_path(), 1, &helper_requirement),
+         AND {clients}; {inserts} COMMIT;",
     );
     run_sudo(
         target,
         &["/usr/bin/sqlite3", &database, &sql],
         "grant GUI automation Accessibility",
+        password,
         runner,
     )
     .await?;
     let verify_sql = format!(
         "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
-         AND auth_value = 2 AND ((client = '{}' AND client_type = 0) \
-         OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
-         OR (client = '{}' AND client_type = 1));",
-        identity.bundle,
-        apple_challenge_helper_path(),
+         AND auth_value = 2 AND {clients};",
     );
     let granted = run_sudo(
         target,
         &["/usr/bin/sqlite3", &database, &verify_sql],
         "verify GUI automation Accessibility",
+        password,
         runner,
     )
     .await?
     .stdout;
-    if granted.trim() != "3" {
+    if granted.trim() != expected_count {
         return Err(DeployError(
-            "the CuaDriver and Apple challenge Accessibility grants were not read back".to_string(),
+            if apple_only {
+                "the Apple challenge Accessibility grant was not read back"
+            } else {
+                "the CuaDriver and Apple challenge Accessibility grants were not read back"
+            }
+            .to_string(),
         ));
     }
-    items.push(("accessibility".to_string(), "granted".to_string()));
+    if let Some(identity) = identity {
+        items.push(("accessibility-record".to_string(), "granted".to_string()));
+        items.push(("accessibility-client".to_string(), identity.bundle));
+    }
     items.push((
         "apple-challenge-accessibility".to_string(),
         "granted".to_string(),
     ));
+    if apple_only {
+        preflight_apple_challenge(target, &user, password, runner).await?;
+        items.push(("apple-challenge-ready".to_string(), "yes".to_string()));
+    }
     items.push(("accessibility-user".to_string(), user));
-    items.push(("accessibility-client".to_string(), identity.bundle));
     items.push(("accessibility-backup".to_string(), backup));
     Ok(())
 }
@@ -1475,6 +1602,7 @@ async fn reconcile_runtime(
         &user,
         &["/bin/mkdir", "-p", &launch_agents, &caches, &logs],
         "create CuaDriver runtime directories",
+        None,
         runner,
     )
     .await?;
@@ -1483,6 +1611,7 @@ async fn reconcile_runtime(
         &user,
         &["/bin/rm", "-f", &staged],
         "remove stale CuaDriver LaunchAgent staging file",
+        None,
         runner,
     )
     .await?;
@@ -1491,6 +1620,7 @@ async fn reconcile_runtime(
         &user,
         &["/usr/bin/plutil", "-create", "xml1", &staged],
         "create CuaDriver LaunchAgent",
+        None,
         runner,
     )
     .await?;
@@ -1511,6 +1641,7 @@ async fn reconcile_runtime(
             &user,
             &["/usr/bin/plutil", "-insert", key, kind, value, &staged],
             "write CuaDriver LaunchAgent",
+            None,
             runner,
         )
         .await?;
@@ -1527,6 +1658,7 @@ async fn reconcile_runtime(
             &staged,
         ],
         "write CuaDriver LaunchAgent",
+        None,
         runner,
     )
     .await?;
@@ -1535,6 +1667,7 @@ async fn reconcile_runtime(
         &user,
         &["/usr/bin/plutil", "-lint", &staged],
         "validate CuaDriver LaunchAgent",
+        None,
         runner,
     )
     .await?;
@@ -1544,6 +1677,7 @@ async fn reconcile_runtime(
         target,
         &user,
         &["/usr/bin/cmp", "-s", &staged, &plist],
+        None,
         runner,
     )
     .await?
@@ -1552,19 +1686,22 @@ async fn reconcile_runtime(
         target,
         &user,
         &["/bin/launchctl", "print", &qualified],
+        None,
         runner,
     )
     .await?
     .ok();
-    let socket_ready = invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], runner)
-        .await?
-        .ok();
+    let socket_ready =
+        invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], None, runner)
+            .await?
+            .ok();
     if definition_matches && runtime_loaded && socket_ready {
         run_as_gui_user(
             target,
             &user,
             &["/bin/rm", "-f", &staged],
             "remove matched CuaDriver LaunchAgent staging file",
+            None,
             runner,
         )
         .await?;
@@ -1579,6 +1716,7 @@ async fn reconcile_runtime(
             target,
             &user,
             &["/bin/launchctl", "bootout", &qualified],
+            None,
             runner,
         )
         .await?;
@@ -1588,6 +1726,7 @@ async fn reconcile_runtime(
         &user,
         &["/bin/rm", "-f", &socket],
         "remove stale CuaDriver socket",
+        None,
         runner,
     )
     .await?;
@@ -1596,6 +1735,7 @@ async fn reconcile_runtime(
         &user,
         &["/bin/mv", "-f", &staged, &plist],
         "install CuaDriver LaunchAgent",
+        None,
         runner,
     )
     .await?;
@@ -1605,6 +1745,7 @@ async fn reconcile_runtime(
         &user,
         &["/bin/launchctl", "bootstrap", &domain, &plist],
         "bootstrap CuaDriver LaunchAgent",
+        None,
         runner,
     )
     .await?;
@@ -1614,13 +1755,14 @@ async fn reconcile_runtime(
         &user,
         &["/bin/launchctl", "kickstart", "-k", &qualified],
         "start CuaDriver LaunchAgent",
+        None,
         runner,
     )
     .await?;
 
     let mut socket_ready = false;
     for _ in 0..20 {
-        if invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], runner)
+        if invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], None, runner)
             .await?
             .ok()
         {
@@ -1642,6 +1784,7 @@ async fn reconcile_runtime(
 async fn status_inner(
     target: &ComputeTarget,
     items: &mut Vec<(String, String)>,
+    password: Option<&str>,
     runner: &Runner,
 ) -> Result<(), DeployError> {
     require_target(target)?;
@@ -1653,15 +1796,21 @@ async fn status_inner(
             "/Library/Preferences/com.apple.loginwindow",
             "autoLoginUser",
         ],
+        password,
         runner,
     )
     .await?
     .filter(|value| !value.is_empty())
     .unwrap_or_else(|| "none".to_string());
     items.push(("autologin".to_string(), autologin));
-    let kcpassword = optional_sudo(target, &["/bin/test", "-f", "/etc/kcpassword"], runner)
-        .await?
-        .is_some();
+    let kcpassword = optional_sudo(
+        target,
+        &["/bin/test", "-f", "/etc/kcpassword"],
+        password,
+        runner,
+    )
+    .await?
+    .is_some();
     items.push((
         "kcpassword".to_string(),
         if kcpassword { "present" } else { "absent" }.to_string(),
@@ -1674,6 +1823,7 @@ async fn status_inner(
             REMOTE_MANAGEMENT_PREFS,
             "ARD_AllLocalUsers",
         ],
+        password,
         runner,
     )
     .await?
@@ -1688,6 +1838,7 @@ async fn status_inner(
             REMOTE_MANAGEMENT_PREFS,
             "VNCLegacyConnectionsEnabled",
         ],
+        password,
         runner,
     )
     .await?
@@ -1732,9 +1883,15 @@ async fn status_inner(
              OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1));",
             identity.bundle
         );
-        let value = optional_sudo(target, &["/usr/bin/sqlite3", &database, &query], runner)
-            .await?
-            .unwrap_or_default();
+        let value = run_sudo(
+            target,
+            &["/usr/bin/sqlite3", &database, &query],
+            "read CuaDriver Accessibility",
+            password,
+            runner,
+        )
+        .await?
+        .stdout;
         match value.trim() {
             "2" => "granted".to_string(),
             "0" | "1" | "" => "not-set".to_string(),
@@ -1743,7 +1900,7 @@ async fn status_inner(
     } else {
         "app-missing".to_string()
     };
-    items.push(("accessibility".to_string(), accessibility.clone()));
+    items.push(("accessibility-record".to_string(), accessibility));
 
     let challenge_accessibility = if helper.is_some() {
         let query = format!(
@@ -1751,9 +1908,15 @@ async fn status_inner(
              AND auth_value = 2 AND client = '{}' AND client_type = 1;",
             apple_challenge_helper_path()
         );
-        let value = optional_sudo(target, &["/usr/bin/sqlite3", &database, &query], runner)
-            .await?
-            .unwrap_or_default();
+        let value = run_sudo(
+            target,
+            &["/usr/bin/sqlite3", &database, &query],
+            "read Apple challenge Accessibility",
+            password,
+            runner,
+        )
+        .await?
+        .stdout;
         match value.trim() {
             "1" => "granted".to_string(),
             "0" | "" => "not-set".to_string(),
@@ -1774,6 +1937,7 @@ async fn status_inner(
         target,
         &user,
         &["/bin/launchctl", "print", &qualified],
+        password,
         runner,
     )
     .await?
@@ -1784,13 +1948,77 @@ async fn status_inner(
         "absent"
     };
     let socket = format!("/Users/{user}/Library/Caches/cua-driver/probierz.sock");
-    let socket_ready = invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], runner)
-        .await?
-        .ok();
+    let socket_ready = invoke_as_gui_user(
+        target,
+        &user,
+        &["/bin/test", "-S", &socket],
+        password,
+        runner,
+    )
+    .await?
+    .ok();
     items.push(("cua-driver-runtime".to_string(), runtime.to_string()));
     items.push((
         "cua-driver-socket".to_string(),
         if socket_ready { "ready" } else { "absent" }.to_string(),
+    ));
+
+    let permission = if socket_ready {
+        match invoke_as_gui_user(
+            target,
+            &user,
+            &[
+                CUA_DRIVER_EXECUTABLE,
+                "call",
+                "check_permissions",
+                r#"{"prompt":false}"#,
+                "--socket",
+                &socket,
+            ],
+            password,
+            runner,
+        )
+        .await
+        {
+            Ok(output) if output.ok() => {
+                serde_json::from_str::<serde_json::Value>(output.stdout.trim())
+                    .map_err(|error| {
+                        format!("CuaDriver check_permissions returned invalid JSON: {error}")
+                    })
+                    .and_then(|value| {
+                        value
+                            .get("accessibility")
+                            .and_then(serde_json::Value::as_bool)
+                            .ok_or_else(|| {
+                                format!(
+                                "CuaDriver check_permissions returned no accessibility boolean: {}",
+                                output.stdout.trim()
+                            )
+                            })
+                    })
+            }
+            Ok(output) => Err(format!(
+                "CuaDriver check_permissions failed: {}",
+                output.detail().trim()
+            )),
+            Err(error) => Err(format!(
+                "CuaDriver check_permissions could not run: {error}"
+            )),
+        }
+    } else {
+        Err(format!("CuaDriver socket is absent: {socket}"))
+    };
+    let observed_accessibility = match permission {
+        Ok(true) => "granted",
+        Ok(false) => "denied",
+        Err(detail) => {
+            items.push(("accessibility-error".to_string(), detail));
+            "unobserved"
+        }
+    };
+    items.push((
+        "accessibility".to_string(),
+        observed_accessibility.to_string(),
     ));
 
     let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
@@ -1807,19 +2035,30 @@ async fn status_inner(
     ));
     let gui_ready = console_ready
         && declared_session
-        && accessibility == "granted"
+        && observed_accessibility == "granted"
         && runtime == "running"
         && socket_ready;
     items.push((
         "gui-ready".to_string(),
         if gui_ready { "yes" } else { "no" }.to_string(),
     ));
-    let challenge_ready = console_ready
+    let challenge_ready = if console_ready
         && declared_session
         && helper
             .as_ref()
             .is_some_and(|value| value.version == APPLE_CHALLENGE_HELPER_VERSION)
-        && challenge_accessibility == "granted";
+        && challenge_accessibility == "granted"
+    {
+        match preflight_apple_challenge(target, &user, password, runner).await {
+            Ok(_) => true,
+            Err(error) => {
+                items.push(("apple-challenge-preflight-error".to_string(), error.0));
+                false
+            }
+        }
+    } else {
+        false
+    };
     items.push((
         "apple-challenge-ready".to_string(),
         if challenge_ready { "yes" } else { "no" }.to_string(),
@@ -1847,6 +2086,7 @@ async fn disable_inner(
             "/Library/Preferences/com.apple.loginwindow",
             "autoLoginUser",
         ],
+        None,
         runner,
     )
     .await?
@@ -1861,6 +2101,7 @@ async fn disable_inner(
                 "autoLoginUser",
             ],
             "clear autologin",
+            None,
             runner,
         )
         .await;
@@ -1872,6 +2113,7 @@ async fn disable_inner(
         target,
         &["/bin/test", "-f", "/etc/kcpassword"],
         "read kcpassword state",
+        None,
         runner,
     )
     .await
@@ -1881,6 +2123,7 @@ async fn disable_inner(
             target,
             &["/bin/rm", "-f", "/etc/kcpassword"],
             "remove kcpassword",
+            None,
             runner,
         )
         .await?;
@@ -1893,6 +2136,7 @@ async fn disable_inner(
         target,
         &[KICKSTART, "-deactivate", "-configure", "-access", "-off"],
         "deactivate Remote Management",
+        None,
         runner,
     )
     .await;
@@ -1907,6 +2151,7 @@ async fn disable_inner(
             "no",
         ],
         "disable legacy VNC",
+        None,
         runner,
     )
     .await;
@@ -1919,6 +2164,7 @@ async fn disable_inner(
             target,
             &["/usr/bin/defaults", "delete", REMOTE_MANAGEMENT_PREFS, key],
             "clear Remote Management preference",
+            None,
             runner,
         )
         .await;
@@ -1944,6 +2190,7 @@ async fn disable_inner(
         target,
         &["/usr/bin/sqlite3", &database, &sql],
         "revoke GUI automation Accessibility",
+        None,
         runner,
     )
     .await?;
@@ -1958,6 +2205,7 @@ async fn disable_inner(
             target,
             &user,
             &["/bin/launchctl", "bootout", &qualified],
+            None,
             runner,
         )
         .await?;
@@ -1975,6 +2223,7 @@ async fn disable_inner(
             &user,
             &["/bin/rm", "-rf", &path],
             "remove GUI automation user state",
+            None,
             runner,
         )
         .await?;
@@ -1997,9 +2246,22 @@ async fn disable_inner(
     Ok(())
 }
 
-pub async fn status(target: &ComputeTarget, runner: &Runner) -> GuiAutomationReport {
+pub async fn status(
+    target: &ComputeTarget,
+    password: Option<&str>,
+    runner: &Runner,
+) -> GuiAutomationReport {
     let mut items = Vec::new();
-    let result = status_inner(target, &mut items, runner).await;
+    let result = async {
+        require_target(target)?;
+        host_channel::with_session(
+            target,
+            runner,
+            status_inner(target, &mut items, password, runner),
+        )
+        .await
+    }
+    .await;
     report(target, items, result)
 }
 
@@ -2017,24 +2279,36 @@ pub async fn enable(
         require_declared_session(target, &user)?;
         items.push(("automated-session".to_string(), user));
         reconcile_app(target, &mut items, runner).await?;
-        reconcile_apple_challenge_helper(target, &mut items, runner).await?;
+        reconcile_apple_challenge_helper(target, &mut items, Some(password), runner).await?;
         reconcile_autologin(target, password, &mut items, runner).await?;
-        grant_accessibility_inner(target, &mut items, runner).await?;
+        grant_accessibility_inner(target, &mut items, false, Some(password), runner).await?;
         reconcile_runtime(target, &mut items, runner).await
     }
     .await;
     report(target, items, result)
 }
 
-pub async fn grant_accessibility(target: &ComputeTarget, runner: &Runner) -> GuiAutomationReport {
+pub async fn grant_accessibility(
+    target: &ComputeTarget,
+    apple_only: bool,
+    password: Option<&str>,
+    runner: &Runner,
+) -> GuiAutomationReport {
     let mut items = Vec::new();
     let result = async {
-        let user = login_user(target, runner).await?;
-        require_declared_session(target, &user)?;
-        items.push(("automated-session".to_string(), user));
-        reconcile_apple_challenge_helper(target, &mut items, runner).await?;
-        grant_accessibility_inner(target, &mut items, runner).await?;
-        reconcile_runtime(target, &mut items, runner).await
+        require_target(target)?;
+        host_channel::with_session(target, runner, async {
+            let user = login_user(target, runner).await?;
+            require_declared_session(target, &user)?;
+            items.push(("automated-session".to_string(), user));
+            reconcile_apple_challenge_helper(target, &mut items, password, runner).await?;
+            grant_accessibility_inner(target, &mut items, apple_only, password, runner).await?;
+            if !apple_only {
+                reconcile_runtime(target, &mut items, runner).await?;
+            }
+            Ok(())
+        })
+        .await
     }
     .await;
     report(target, items, result)

@@ -81,6 +81,7 @@ struct DiskView: View {
     @ViewBuilder
     private func reportBody(_ report: CleanupReport) -> some View {
         let presentation = report.outcomePresentation
+        let cleaners = report.cleaners.namedReports
 
         if presentation.severity == .critical || presentation.severity == .warning {
             WisentAlertPanel(
@@ -132,7 +133,7 @@ struct DiskView: View {
                         ConsoleHeaderCell("Deleted", width: 84, trailing: true),
                         ConsoleHeaderCell("Freed", width: 96, trailing: true),
                     ])
-                    ForEach(report.cleaners.namedReports, id: \.0) { item in
+                    ForEach(cleaners, id: \.0) { item in
                         let (name, cleaner) = item
                         ConsoleTableRow {
                             ConsoleCell(text: name, width: 200, strong: true)
@@ -140,6 +141,31 @@ struct DiskView: View {
                             ConsoleCell(text: cleaner.eligibleItems.formatted(.number), width: 84, trailing: true, digits: true)
                             ConsoleCell(text: cleaner.deletedItems.formatted(.number), width: 84, trailing: true, digits: true)
                             ConsoleCell(text: DisplayFormat.bytes(cleaner.actualFreeDeltaBytes), width: 96, trailing: true, digits: true)
+                        }
+                    }
+                }
+            }
+        }
+
+        ForEach(cleaners, id: \.0) { name, cleaner in
+            if !cleaner.skipped.isEmpty {
+                WisentSectionBox(
+                    title: "Skipped: \(name)",
+                    detail: "Exact reasons and counts returned by this cleaner."
+                ) {
+                    WisentPanel {
+                        VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                            ForEach(cleaner.skipped.sorted { $0.key < $1.key }, id: \.key) { reason in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(reason.key)
+                                        .font(WisentTypeScale.identifier())
+                                        .textSelection(.enabled)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer()
+                                    Text(reason.value.formatted(.number))
+                                        .monospacedDigit()
+                                }
+                            }
                         }
                     }
                 }

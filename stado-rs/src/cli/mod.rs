@@ -448,8 +448,8 @@ enum Commands {
 
     /// Run the Stado API listener for the wisent-compute queue.
     ///
-    /// Serves the authenticated object, release, machine, service and
-    /// host-health routes plus the three enrollment routes over loopback
+    /// Serves native operator actions and the authenticated object, release,
+    /// machine, service, host-health and enrollment routes over loopback
     /// HTTP. It serves no HTML page; the operator workspace is Stado
     /// Desktop.
     ///
@@ -1252,6 +1252,18 @@ enum HostPrecheckRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Restart the runner in place and wait until it reports listening for
+    /// jobs.
+    ///
+    /// For a listener whose session to GitHub's broker was cut: the process
+    /// and the launchd state stay healthy, every job for its labels queues
+    /// forever, and `install` leaves a running service alone.
+    Restart {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove the runner, service definition and network boundary from TARGET.
     Remove {
         target: String,
@@ -1819,6 +1831,9 @@ enum HostCommands {
         /// Print only a newly generated bearer, for piping into a secret store.
         #[arg(long, conflicts_with = "token_item")]
         raw_token: bool,
+        /// Keep the bearer in TARGET's ~/.stado/NAME; create if absent, reuse if present.
+        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
+        token_file_name: Option<String>,
         /// Emit nonsecret bearer metadata as JSON.
         #[arg(long)]
         json: bool,
@@ -2673,14 +2688,28 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC, CuaDriver, and the signed
     /// Apple challenge helper for the registry-bound GUI user.
-    Status { target: String },
+    Status {
+        target: String,
+        /// Return the complete observed host state as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Configure the persistent GUI login, CuaDriver, the Apple challenge
     /// helper, runtime, and Accessibility grants.
     Enable { target: String },
     /// Reconcile the signed Apple challenge helper and grant it and the
     /// installed CuaDriver Accessibility for the registry-bound GUI user.
     #[command(name = "grant-accessibility")]
-    GrantAccessibility { target: String },
+    GrantAccessibility {
+        target: String,
+        /// Prepare only the Apple challenge helper; leave CuaDriver, its
+        /// Accessibility grants, and its runtime unchanged.
+        #[arg(long)]
+        apple_only: bool,
+        /// Return the complete preparation report, including partial work on failure.
+        #[arg(long)]
+        json: bool,
+    },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
     Disable {
@@ -3208,15 +3237,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
-                host::gui_automation_status(&target).await
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
+                host::gui_automation_status(&target, json).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
                 host::gui_automation_enable(&target).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
                 target,
-            }) => host::gui_automation_grant_accessibility(&target).await,
+                apple_only,
+                json,
+            }) => host::gui_automation_grant_accessibility(&target, apple_only, json).await,
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }
@@ -3281,6 +3312,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 }
                 HostPrecheckRunnerCommands::Status { target, json } => {
                     precheck_runner::status(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Restart { target, json } => {
+                    precheck_runner::restart(&target, json).await
                 }
                 HostPrecheckRunnerCommands::Remove { target, json } => {
                     precheck_runner::remove(&target, json).await
@@ -3442,6 +3476,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 token_item,
                 token_field,
                 raw_token,
+                token_file_name,
                 json,
             } => {
                 host::vault_token_mint(
@@ -3454,6 +3489,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     token_item.as_deref(),
                     token_field.as_deref().unwrap_or("token"),
                     raw_token,
+                    token_file_name.as_deref(),
                     json,
                 )
                 .await

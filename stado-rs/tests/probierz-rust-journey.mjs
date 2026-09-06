@@ -280,6 +280,8 @@ export async function runRecordedRustJourney({
   productionMutations,
   contracts,
   executionBudgetMs = 10 * 60 * 1000,
+  release = false,
+  testFilter = null,
 }) {
   const artifacts = process.env.PROBIERZ_ARTIFACTS;
   const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;
@@ -306,6 +308,7 @@ export async function runRecordedRustJourney({
     const args = [
       'test', '--locked', '--no-run', '--message-format=json',
       ...targets.flatMap((target) => ['--test', target]),
+      ...(release ? ['--release'] : []),
     ];
     const result = await runProcess('cargo', args, {
       cwd: crate,
@@ -378,7 +381,8 @@ export async function runRecordedRustJourney({
         failures.push(`${target} was not executed`);
         continue;
       }
-      const result = await runProcess(testExecutable.snapshot.file, testArgs, {
+      const selectedTestArgs = testFilter ? [...testArgs, '--exact', testFilter] : testArgs;
+      const result = await runProcess(testExecutable.snapshot.file, selectedTestArgs, {
         cwd: crate,
         env: {
           ...process.env,
@@ -447,7 +451,7 @@ export async function runRecordedRustJourney({
       execution: {
         budgetMs: executionBudgetMs,
         durationMs: executionDurationMs,
-        args: testArgs,
+        args: testFilter ? [...testArgs, '--exact', testFilter] : testArgs,
         processes: executions,
       },
     },

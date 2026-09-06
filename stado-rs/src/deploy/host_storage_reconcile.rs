@@ -1208,34 +1208,6 @@ PY"#,
     Ok(())
 }
 
-fn qualified_copy_required(preflight: &Value) -> Result<bool, DeployError> {
-    let backup = preflight
-        .get("backup_qualified")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("preflight omitted the backup qualified inventory".to_string())
-        })?;
-    let primary = preflight
-        .get("primary_qualified")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            DeployError("preflight omitted the primary qualified inventory".to_string())
-        })?;
-    let primary_by_path = primary
-        .iter()
-        .filter_map(|item| {
-            item.get("path")
-                .and_then(Value::as_str)
-                .map(|path| (path, item))
-        })
-        .collect::<BTreeMap<_, _>>();
-    Ok(backup.iter().any(|item| {
-        item.get("path")
-            .and_then(Value::as_str)
-            .and_then(|path| primary_by_path.get(path).copied())
-            != Some(item)
-    }))
-}
 fn physical_file_identity<'a>(
     preflight: &'a Value,
     inventory: &str,
@@ -1337,14 +1309,21 @@ async fn correlate_served_store(
     port: u16,
     preflight: &Value,
     primary_after_commit: bool,
+    conflict_winner: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
+    if !matches!(conflict_winner, "primary" | "backup") {
+        return Err(DeployError(
+            "served-store correlation conflict winner is invalid".to_string(),
+        ));
+    }
     let payload = serde_json::to_vec(&json!({
         "primary": preflight.get("primary_qualified"),
         "backup": preflight.get("backup_qualified"),
         "primary_physical": preflight.get("primary_physical"),
         "backup_physical": preflight.get("backup_physical"),
         "primary_after_commit": primary_after_commit,
+        "conflict_winner": conflict_winner,
     }))
     .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
@@ -1377,7 +1356,11 @@ primary_before = identities('primary')
 backup = identities('backup')
 primary = dict(primary_before)
 if payload.get('primary_after_commit'):
-    primary.update(backup)
+    if payload.get('conflict_winner') == 'primary':
+        primary = dict(backup)
+        primary.update(primary_before)
+    else:
+        primary.update(backup)
 served = {{}}
 for key in keys:
     uri = 'stado://probierz/' + key
@@ -1694,6 +1677,17 @@ async fn capture_fenced_preflight(
         .iter()
         .find(|writer| writer.role == "object-api")
         .ok_or_else(|| DeployError("fence omitted its object API".to_string()))?;
+    let roots = fence.roots.as_ref().unwrap();
+    let prior_root = if roots.prior_primary == roots.primary {
+        "A"
+    } else {
+        "B"
+    };
+    let conflict_winner = if prior_root == "A" {
+        "primary"
+    } else {
+        "backup"
+    };
     let correlation = correlate_served_store(
         target,
         writer
@@ -1701,6 +1695,7 @@ async fn capture_fenced_preflight(
             .ok_or_else(|| DeployError("object API port is absent".to_string()))?,
         &preflight,
         false,
+        conflict_winner,
         runner,
     )
     .await?;
@@ -1708,18 +1703,6 @@ async fn capture_fenced_preflight(
         .get("object_authority")
         .and_then(Value::as_str)
         .ok_or_else(|| DeployError("fenced API proof omitted its authority".to_string()))?;
-    let roots = fence.roots.as_ref().unwrap();
-    if qualified_copy_required(&preflight)? && roots.prior_primary != roots.backup {
-        return Err(DeployError(
-            "object API's constructed authority is A and B differs; refusing a B-winning copy"
-                .to_string(),
-        ));
-    }
-    let prior_root = if roots.prior_primary == roots.primary {
-        "A"
-    } else {
-        "B"
-    };
     if !matches!(authority, "identical") && authority != prior_root {
         return Err(DeployError(
             "fenced API bytes disagree with its constructed storage root".to_string(),
@@ -1756,6 +1739,36 @@ async fn capture_fenced_preflight(
         true,
     )?);
     write_fence(target, transaction, fence, runner).await
+}
+
+async fn print_settled_label(
+    target: &crate::targets::ComputeTarget,
+    label: &str,
+    runner: &Runner,
+) -> Result<super::service_label_print::LabelState, DeployError> {
+    let mut state =
+        super::service_label_print::print_label(target, label, service::BootoutScope::Any, runner)
+            .await?;
+    for _ in 0..2 {
+        let complete = state.pid.is_none()
+            || (state.process_started_at.is_some()
+                && state.process_executable.is_some()
+                && state.process_device.is_some()
+                && state.process_inode.is_some()
+                && state.process_sha256.is_some());
+        if complete {
+            return Ok(state);
+        }
+        sleep(Duration::from_secs(1)).await;
+        state = super::service_label_print::print_label(
+            target,
+            label,
+            service::BootoutScope::Any,
+            runner,
+        )
+        .await?;
+    }
+    Ok(state)
 }
 
 async fn prepare_lifecycle_fence(
@@ -1825,13 +1838,9 @@ async fn prepare_lifecycle_fence(
                     }));
                     continue;
                 }
-                let state = super::service_label_print::print_label(
-                    &candidate.target,
-                    candidate.declared.unit_id(),
-                    service::BootoutScope::Any,
-                    runner,
-                )
-                .await?;
+                let state =
+                    print_settled_label(&candidate.target, candidate.declared.unit_id(), runner)
+                        .await?;
                 let command = state.runs().unwrap_or(&candidate.observed_command);
                 let mut role = service_role(candidate.declared.unit_id(), command).to_string();
                 if role == "other" {
@@ -2825,6 +2834,28 @@ async fn activate_lifecycle_fence(
     let roots = fence.roots.clone().ok_or_else(|| {
         DeployError("lifecycle fence omitted its observed storage roots".to_string())
     })?;
+    let route_conflict_winner = if roots.prior_primary == roots.primary {
+        "primary"
+    } else {
+        "backup"
+    };
+    let conflict_winner = if rollback {
+        route_conflict_winner.to_string()
+    } else {
+        let receipt = read_transaction_receipt(transaction)?;
+        let pinned = receipt
+            .get("conflict_winner")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                DeployError("checkpoint receipt omitted its conflict winner".to_string())
+            })?;
+        if pinned != route_conflict_winner {
+            return Err(DeployError(
+                "checkpoint conflict winner differs from the captured storage route".to_string(),
+            ));
+        }
+        pinned.to_string()
+    };
     let final_status = if rollback { "rolled_back" } else { "activated" };
     let admissible = if rollback {
         matches!(
@@ -3057,7 +3088,15 @@ async fn activate_lifecycle_fence(
                 )));
             }
             let mut correlation = if let Some(preflight) = preflight.as_ref() {
-                correlate_served_store(storage_target, port, preflight, !rollback, runner).await?
+                correlate_served_store(
+                    storage_target,
+                    port,
+                    preflight,
+                    !rollback,
+                    &conflict_winner,
+                    runner,
+                )
+                .await?
             } else {
                 json!({
                     "endpoint": format!("http://127.0.0.1:{port}"),
@@ -3251,6 +3290,18 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
             "checkpoint evidence belongs to another reconciliation".to_string(),
         ));
     }
+    let conflict_winner = checkpoint
+        .get("conflict_winner")
+        .and_then(Value::as_str)
+        .filter(|winner| matches!(*winner, "primary" | "backup"))
+        .ok_or_else(|| {
+            DeployError("checkpoint evidence omitted its conflict winner".to_string())
+        })?;
+    if receipt.get("conflict_winner").and_then(Value::as_str) != Some(conflict_winner) {
+        return Err(DeployError(
+            "checkpoint receipt and evidence disagree on the conflict winner".to_string(),
+        ));
+    }
     let backup_paths = checkpoint
         .get("backup_objects")
         .and_then(Value::as_array)
@@ -3258,16 +3309,21 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let primary_only = checkpoint
+    let primary_paths = checkpoint
         .get("primary_objects")
         .and_then(Value::as_array)
         .ok_or_else(|| DeployError("checkpoint evidence omitted primary objects".to_string()))?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
-        .filter(|path| !backup_paths.contains(path))
-        .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
+    let newly_authoritative = if conflict_winner == "primary" {
+        backup_paths.difference(&primary_paths)
+    } else {
+        primary_paths.difference(&backup_paths)
+    }
+    .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
+    .map(str::to_string)
+    .collect::<Vec<_>>();
     let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
     if receipt
         .get("effective_lifecycle_checkpoint")
@@ -3286,7 +3342,7 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         std::sync::Arc::new(backend),
         "immutable-local-snapshot",
     );
-    crate::monitor::reap::classify_reconciliation_snapshot(&store, &primary_only)
+    crate::monitor::reap::classify_reconciliation_snapshot(&store, &newly_authoritative)
         .await
         .map_err(|error| DeployError(format!("typed lifecycle snapshot refused: {error}")))
 }
@@ -4221,7 +4277,40 @@ def exact_option(values, name):
     return found[0]
 
 
+def native_object_arguments(service):
+    if system == "Darwin":
+        path = service.get("path")
+        if not isinstance(path, str) or not path:
+            raise SystemExit("captured object API has no native unit path")
+        path = os.path.expanduser(path.replace("$HOME", home))
+        with open(path, "rb") as handle:
+            unit = plistlib.load(handle)
+        values = unit.get("ProgramArguments")
+        if not isinstance(values, list) or not values:
+            raise SystemExit("captured object API unit has no ProgramArguments")
+        return values[1:]
+    unit = service.get("unit") or service.get("label")
+    result = checked(["/bin/systemctl", "show", unit, "--property=ExecStart", "--value"])
+    commands = re.findall(r"argv\[\] = (.*?); (?:ignore_errors|flags)=", result.stdout)
+    if len(commands) != 1:
+        raise SystemExit("captured object API has no single observed ExecStart")
+    return shlex.split(commands[0])[1:]
+
+
 def captured_release_api(target):
+    fence = read_json(os.path.join(work, "lifecycle-fence.json"))
+    if fence is not None:
+        if (not isinstance(fence, dict)
+                or fence.get("schema") != "@FENCE_SCHEMA@"
+                or fence.get("transaction") != tx):
+            raise SystemExit("captured lifecycle fence has the wrong transaction identity")
+        staged_runtime = fence.get("staged_runtime")
+        if staged_runtime is not None:
+            request = staged_runtime.get("request", {})
+            origin = request.get("release_api")
+            if not isinstance(origin, str) or not origin:
+                raise SystemExit("captured staged runtime has no release origin")
+            return origin
     services = target.get("services")
     if not isinstance(services, list):
         raise SystemExit("captured target declares no service inventory")
@@ -4233,6 +4322,8 @@ def captured_release_api(target):
     if len(object_apis) != 1:
         raise SystemExit("captured target must declare exactly one canonical object API")
     values = object_apis[0].get("args")
+    if values is None or values == []:
+        values = native_object_arguments(object_apis[0])
     if (not isinstance(values, list)
             or not all(isinstance(value, str) for value in values)
             or not values
@@ -4253,9 +4344,6 @@ def captured_release_api(target):
     else:
         raise SystemExit("captured object API release origin is not loopback")
     return "http://" + host + ":" + str(port)
-
-
-release_api = captured_release_api(captured_target)
 
 
 def checked(argv, accepted=(0,)):
@@ -4305,8 +4393,11 @@ def manager_state():
         pid_match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", result.stdout)
         state_match = re.search(r"(?m)^\s*state = (.+?)\s*$", result.stdout)
         pid = int(pid_match.group(1)) if pid_match else None
+        completed = re.search(r"(?m)^\s*last exit code = -?[0-9]+\s*$", result.stdout)
+        runs = re.search(r"(?m)^\s*runs = ([1-9][0-9]*)\s*$", result.stdout)
         state = state_match.group(1).strip() if state_match else None
-        terminal = (state or "").lower() in ("exited", "not running")
+        terminal = ((state or "").lower() in ("exited", "not running")
+                    or (pid is None and completed is not None and runs is not None))
         return {"manager": "launchd", "service": label, "domain": "system",
                 "loaded": True, "active": pid is not None,
                 "starting": pid is None and not terminal, "pid": pid, "state": state}
@@ -4355,17 +4446,20 @@ def manager_bound_owner(state):
 def launch_observation(state):
     intent = read_json(intent_path)
     if not isinstance(intent, dict) or intent.get("transaction") != tx:
-        intent = {
-            "schema": "stado.storage-root-launch.v1",
-            "transaction": tx,
-            "target": captured_target.get("name"),
-            "target_config": captured_target,
-            "action": requested_action,
-            "status": "manager_starting",
-        }
+        raise SystemExit("active native worker has no recorded launch intent")
     intent["native_manager"] = state
     intent.pop("worker_arguments", None)
     return intent
+
+
+def acknowledge_owner(observation):
+    action = observation.get("action")
+    forward = ("run", "resume")
+    if action != requested_action and not (action in forward and requested_action in forward):
+        raise SystemExit("native reconciliation is already executing "
+                         + str(action) + "; cannot accept " + requested_action)
+    print("STADO_RECONCILE_OWNER\t" + json.dumps(
+        observation, sort_keys=True, separators=(",", ":")))
 
 
 launch_lock_path = os.path.join(
@@ -4379,8 +4473,7 @@ state = manager_state()
 if state["active"] or state["starting"]:
     owner = manager_bound_owner(state)
     observation = owner if owner is not None else launch_observation(state)
-    print("STADO_RECONCILE_OWNER\t" + json.dumps(
-        observation, sort_keys=True, separators=(",", ":")))
+    acknowledge_owner(observation)
     raise SystemExit(0)
 
 operation_lock_path = os.path.normpath(os.path.join(
@@ -4393,8 +4486,7 @@ except BlockingIOError:
     if state["active"] or state["starting"]:
         owner = manager_bound_owner(state)
         observation = owner if owner is not None else launch_observation(state)
-        print("STADO_RECONCILE_OWNER\t" + json.dumps(
-            observation, sort_keys=True, separators=(",", ":")))
+        acknowledge_owner(observation)
         raise SystemExit(0)
     raise SystemExit("native reconciliation lock is held without a manager-bound owner")
 
@@ -4407,11 +4499,11 @@ if state["active"] or state["starting"]:
     os.close(operation_lock)
     owner = manager_bound_owner(state)
     observation = owner if owner is not None else launch_observation(state)
-    print("STADO_RECONCILE_OWNER\t" + json.dumps(
-        observation, sort_keys=True, separators=(",", ":")))
+    acknowledge_owner(observation)
     raise SystemExit(0)
 
 lock_info = os.fstat(operation_lock)
+release_api = captured_release_api(captured_target)
 intent = {
     "schema": "stado.storage-root-launch.v1",
     "transaction": tx,
@@ -4532,6 +4624,7 @@ PY"##
         .replace("@STAGED@", &shlex_quote(staged_tool))
         .replace("@TOOL@", &shlex_quote(canonical_tool))
         .replace("@SHA@", &shlex_quote(tool_sha256))
+        .replace("@FENCE_SCHEMA@", FENCE_SCHEMA)
         .replace("@TX@", &shlex_quote(transaction)))
 }
 

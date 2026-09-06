@@ -694,9 +694,14 @@ pub async fn build_caches(
 }
 fn print_report(
     report: &crate::deploy::host_gui_automation::GuiAutomationReport,
+    json: bool,
 ) -> Result<(), CmdError> {
-    for (item, state) in &report.items {
-        println!("{}\t{item}\t{state}", report.target);
+    if json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+    } else {
+        for (item, state) in &report.items {
+            println!("{}\t{item}\t{state}", report.target);
+        }
     }
     match &report.error {
         Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())),
@@ -707,11 +712,13 @@ fn print_report(
 
 /// `stado host gui-automation status TARGET` — report autologin, remote
 /// management, VNC, automation artifacts and the console owner.
-pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
+pub async fn gui_automation_status(target: &str, json: bool) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
-    print_report(&report)
+    let report =
+        crate::deploy::host_gui_automation::status(&resolved, password.as_deref(), &runner).await;
+    print_report(&report, json)
 }
 
 /// `stado host gui-automation enable TARGET` — configure persistent GUI login,
@@ -728,16 +735,27 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
         })?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
-/// `stado host gui-automation grant-accessibility TARGET` — grant the
-/// installed, signed CuaDriver app Accessibility for the host's GUI user.
-pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
+/// `stado host gui-automation grant-accessibility TARGET [--apple-only]` —
+/// prepare the Apple helper, optionally leaving CuaDriver and its runtime untouched.
+pub async fn gui_automation_grant_accessibility(
+    target: &str,
+    apple_only: bool,
+    json: bool,
+) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
-    print_report(&report)
+    let report = crate::deploy::host_gui_automation::grant_accessibility(
+        &resolved,
+        apple_only,
+        password.as_deref(),
+        &runner,
+    )
+    .await;
+    print_report(&report, json)
 }
 
 /// `stado host gui-automation disable TARGET [--bundle ID]` — revert the
@@ -746,7 +764,7 @@ pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), Cm
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
-    print_report(&report)
+    print_report(&report, false)
 }
 
 /// Read one line with terminal echo disabled (Python
@@ -7211,7 +7229,7 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
-    remote_skarbiec_json_at(target, arguments, None, None).await
+    remote_skarbiec_json_at(target, arguments, None, None, None).await
 }
 
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
@@ -7236,6 +7254,7 @@ async fn remote_skarbiec_json_at(
     arguments: &[String],
     vault_relative: Option<&str>,
     token_source: Option<(&str, &str)>,
+    token_file_name: Option<&str>,
 ) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
         .first()
@@ -7279,6 +7298,55 @@ async fn remote_skarbiec_json_at(
     };
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let tool_path = skarbiec_tool_path(&home);
+    let token_file = if let Some(name) = token_file_name {
+        release_component("token file name", name)?;
+        let path = format!("{home}/.stado/{name}");
+        let script = format!(
+            r#"set -euo pipefail
+umask 077
+directory={directory}
+destination={destination}
+/bin/mkdir -p "$directory"
+if [ -L "$destination" ]; then
+  printf '%s\n' 'token file must not be a symlink' >&2
+  exit 1
+fi
+if [ -e "$destination" ]; then
+  if [ ! -f "$destination" ] || [ ! -s "$destination" ]; then
+    printf '%s\n' 'token file must be a nonempty regular file' >&2
+    exit 1
+  fi
+else
+  pending="$destination.pending.$$"
+  trap 'rm -f "$pending"' EXIT
+  /usr/bin/openssl rand -hex 32 > "$pending"
+  /bin/chmod 600 "$pending"
+  if ! /bin/ln "$pending" "$destination"; then
+    printf '%s\n' 'token file was created concurrently; retry using the persisted file' >&2
+    exit 1
+  fi
+fi
+"#,
+            directory = crate::deploy::shlex_quote(&format!("{home}/.stado")),
+            destination = crate::deploy::shlex_quote(&path),
+        );
+        let prepared = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !prepared.ok() {
+            return Err(CmdError::click(format!(
+                "{}: preparing token file {path} failed: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(
+                    &prepared,
+                    "remote token file creation failed"
+                )
+            )));
+        }
+        Some(path)
+    } else {
+        None
+    };
     let mut invocation = vec![
         "/usr/bin/env",
         tool_path.as_str(),
@@ -7298,22 +7366,32 @@ async fn remote_skarbiec_json_at(
     } else {
         invocation.push(skarbiec.as_str());
         invocation.extend(arguments.iter().map(String::as_str));
+        if let Some(path) = &token_file {
+            invocation.extend(["--token-file", path.as_str()]);
+        }
         crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
     }
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
+        let retained = token_file
+            .as_ref()
+            .map(|path| format!("; bearer remains at {path} for a retry"))
+            .unwrap_or_default();
         return Err(CmdError::click(format!(
-            "{}: Skarbiec {command} failed: {}",
+            "{}: Skarbiec {command} failed: {}{retained}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote command failed")
         )));
     }
-    let report = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+    let mut report: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
             "{}: Skarbiec {command} returned unreadable JSON: {error}",
             resolved.name
         ))
     })?;
+    if let Some(path) = token_file {
+        report["token_file"] = Value::String(path);
+    }
     Ok((resolved, report))
 }
 
@@ -7376,7 +7454,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     let list = vec![String::from("list")];
     let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
     let (_, mirror_report) =
-        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None).await?;
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None, None).await?;
     let live = mirror_items(&live_report)?;
     let mirror = mirror_items(&mirror_report)?;
 
@@ -7529,7 +7607,8 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
 /// Mint a bounded bearer, or register an existing owner-vault field on TARGET.
 ///
 /// Existing-bearer bytes stay on the target and never enter argv or the report.
-/// `raw_token` only exposes a newly generated bearer for a direct secret-store pipe.
+/// `raw_token` exposes only a newly generated bearer for a secret-store pipe;
+/// `token_file_name` instead persists and reuses it on the target.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -7541,6 +7620,7 @@ pub async fn vault_token_mint(
     token_item: Option<&str>,
     token_field: &str,
     raw_token: bool,
+    token_file_name: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
@@ -7558,6 +7638,19 @@ pub async fn vault_token_mint(
         return Err(CmdError::usage(
             "--raw-token and --json cannot be used together",
         ));
+    }
+    if let Some(name) = token_file_name {
+        release_component("token file name", name)?;
+        if token_item.is_some() {
+            return Err(CmdError::usage(
+                "--token-item and --token-file-name cannot be used together",
+            ));
+        }
+        if raw_token {
+            return Err(CmdError::usage(
+                "--raw-token and --token-file-name cannot be used together",
+            ));
+        }
     }
     if capabilities.is_empty()
         || !capabilities
@@ -7583,8 +7676,8 @@ pub async fn vault_token_mint(
     }
     let token_source = token_item.map(|item| (item, token_field));
     let (resolved, mut report) =
-        remote_skarbiec_json_at(target, &arguments, None, token_source).await?;
-    if token_source.is_none() {
+        remote_skarbiec_json_at(target, &arguments, None, token_source, token_file_name).await?;
+    if token_source.is_none() && token_file_name.is_none() {
         let token = report
             .get("token")
             .and_then(Value::as_str)
@@ -7623,6 +7716,9 @@ pub async fn vault_token_mint(
             "{}: token {operation} for {consumer} with audience {audience}",
             resolved.name
         );
+        if let Some(path) = report.get("token_file").and_then(Value::as_str) {
+            println!("Bearer file: {path}");
+        }
     }
     Ok(())
 }

@@ -19,7 +19,8 @@ enum DashboardEndpointPreference {
     static let configuredKeyPath = ["storage", "stado", "url"]
 
     static var localURL: String {
-        fleetURLFromConfig() ?? fallbackURL
+        ProcessInfo.processInfo.environment["STADO_REGISTRY_API_URL"]
+            ?? fleetURLFromConfig() ?? fallbackURL
     }
 
     /// `~/.config/stado/config.json` -> `storage.stado.url`, the canonical
@@ -422,6 +423,7 @@ struct HostVaultBearerRequest: Equatable, Sendable {
     let replaceCapabilities: Bool
     let tokenItem: String?
     let tokenField: String
+    let tokenFileName: String?
     let showGeneratedBearer: Bool
 }
 
@@ -456,6 +458,9 @@ final class HostVaultBearerStore: ObservableObject {
         }
         if let tokenItem = request.tokenItem {
             arguments += ["--token-item", tokenItem, "--token-field", request.tokenField]
+        }
+        if let tokenFileName = request.tokenFileName {
+            arguments += ["--token-file-name", tokenFileName]
         }
         arguments.append(request.showGeneratedBearer ? "--raw-token" : "--json")
         return arguments
@@ -524,6 +529,10 @@ final class HostVaultBearerStore: ObservableObject {
             return receipt.status == "token_registered"
                 && receipt.tokenSource?.item == tokenItem
                 && receipt.tokenSource?.field == request.tokenField
+        }
+        if let tokenFileName = request.tokenFileName {
+            return receipt.status == "token_minted"
+                && receipt.skarbiec.tokenFile?.hasSuffix("/.stado/\(tokenFileName)") == true
         }
         return receipt.status == "token_minted"
     }
@@ -697,8 +706,8 @@ final class HostRetireFileStore: ObservableObject {
 }
 
 /// Every registry-managed service with the state its host's latest health
-/// beacon reports, plus the one write an operator is allowed from here:
-/// restarting a user-domain unit.
+/// beacon reports. Existing restart, deploy, remove and read operations retain
+/// their CLI paths; convergence apply alone uses the authenticated product API.
 ///
 /// The read is one fleet-wide `service list --json` — beacon-only, so it
 /// stays answerable while a host is wedged — followed by one `service status
@@ -716,16 +725,30 @@ final class FleetServicesStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
-    /// The last complete apply document and the exact argv that produced it.
+    /// The last complete API apply document and its equivalent CLI argv.
     /// Ordinary service refreshes never clear mutation evidence.
     @Published private(set) var convergenceReceipt: ServiceConvergeReceipt?
 
     private let cli: StadoCLI
+    private let client: OperationsClient
     private var refreshGeneration = 0
     private var lastHosts: [String] = []
+    private var convergenceAddressString = DashboardEndpointPreference.localURL
+    private var convergenceRequestGeneration = 0
+    private var activeConvergenceGeneration: Int?
+    private var mutationBelongsToConvergence = false
 
-    init(cli: StadoCLI = StadoCLI()) {
+    init(cli: StadoCLI = StadoCLI(), client: OperationsClient = OperationsClient()) {
         self.cli = cli
+        self.client = client
+    }
+
+
+    func configureEndpoint(_ endpoint: String?) {
+        let normalized = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard normalized != convergenceAddressString else { return }
+        convergenceAddressString = normalized
+        invalidateConvergenceSource()
     }
 
     /// Failed units first, then by host and unit: the rows that need a
@@ -815,34 +838,60 @@ final class FleetServicesStore: ObservableObject {
     }
 
     /// Deliver the selected binary to the host's declaration through the
-    /// product converge command. Its decoded document is retained before the
-    /// normal refresh, including when the CLI exits non-zero after printing a
-    /// complete refusal or partial-apply report.
+    /// authenticated product API. The product's decoded report and exit code
+    /// are retained together before the normal read-only refresh, including a
+    /// nonzero convergence gate result.
     func converge(host: String, binary: String?) async {
         guard !mutation.isWorking else { return }
         let arguments = Self.convergeApplyArguments(host: host, binary: binary)
         convergenceReceipt = nil
+        mutationBelongsToConvergence = true
+        guard let address = try? OperationsDashboardAddress(convergenceAddressString) else {
+            mutation = .failed("No Stado endpoint is configured, so convergence was not requested.")
+            return
+        }
+
+        convergenceRequestGeneration &+= 1
+        let generation = convergenceRequestGeneration
+        let client = self.client
+        // Cancelling a request does not cancel delivery on the host. Keep
+        // awaiting its result even when the view or selected endpoint changes.
+        let request = Task {
+            try await client.serviceConvergence(
+                target: host,
+                binary: binary,
+                apply: true,
+                at: address
+            )
+        }
+        activeConvergenceGeneration = generation
         mutation = .working("Converging \(binary.map { "\($0) on " } ?? "")\(host)")
+        defer {
+            if activeConvergenceGeneration == generation {
+                activeConvergenceGeneration = nil
+                if convergenceRequestGeneration != generation, mutationBelongsToConvergence {
+                    mutation = .idle
+                    mutationBelongsToConvergence = false
+                }
+            }
+        }
+
         do {
-            let result = try await cli.jsonResult(
-                ServiceConvergeReport.self,
+            let (response, document) = try await request.value
+            guard convergenceRequestGeneration == generation else { return }
+            convergenceReceipt = try ServiceConvergeReceipt(
                 arguments: arguments,
-                // The product command owns bounded host stages, including a
-                // 30-minute archive stage. Desktop must not stop it sooner.
-                timeoutSeconds: nil
+                exitCode: response.exitCode,
+                document: document
             )
-            convergenceReceipt = ServiceConvergeReceipt(
-                arguments: arguments,
-                exitCode: result.exitCode,
-                report: result.value
-            )
-            mutation = result.exitCode == 0
-                ? .succeeded("Converged \(binary.map { "\($0) on " } ?? "")\(result.value.target).")
+            mutation = response.exitCode == 0
+                ? .succeeded("Converged \(binary.map { "\($0) on " } ?? "")\(response.report.target).")
                 : .failed(
-                    "Convergence on \(result.value.target) exited \(result.exitCode). "
-                        + "The complete CLI receipt remains below."
+                    "Convergence on \(response.report.target) exited \(response.exitCode). "
+                        + "The complete API receipt remains below."
                 )
         } catch {
+            guard convergenceRequestGeneration == generation else { return }
             mutation = .failed(Self.message(for: error))
         }
         await refresh(hosts: lastHosts)
@@ -854,6 +903,7 @@ final class FleetServicesStore: ObservableObject {
     /// refusal to carry verbatim.
     func deploy(_ entry: FleetServiceEntry) async {
         guard !mutation.isWorking else { return }
+        mutationBelongsToConvergence = false
         mutation = .working("Deploying \(entry.name) on \(entry.host)")
         do {
             let report = try await cli.json(
@@ -879,6 +929,7 @@ final class FleetServicesStore: ObservableObject {
     /// off the payload's postcondition, in the same words the CLI prints.
     func restart(_ entry: FleetServiceEntry) async {
         guard !mutation.isWorking else { return }
+        mutationBelongsToConvergence = false
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         mutation = .working("Restarting \(unit) on \(entry.host)")
         do {
@@ -907,6 +958,7 @@ final class FleetServicesStore: ObservableObject {
     /// correctly are one command that cannot go wrong.
     func removeService(_ entry: FleetServiceEntry) async {
         guard !mutation.isWorking else { return }
+        mutationBelongsToConvergence = false
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         mutation = .working("Removing \(unit) on \(entry.host)")
         do {
@@ -945,11 +997,22 @@ final class FleetServicesStore: ObservableObject {
     }
 
     func clearMutation() {
+        guard !mutation.isWorking else { return }
         mutation = .idle
+        mutationBelongsToConvergence = false
     }
 
     func clearConvergenceReceipt() {
         convergenceReceipt = nil
+    }
+
+    private func invalidateConvergenceSource() {
+        convergenceRequestGeneration &+= 1
+        convergenceReceipt = nil
+        if activeConvergenceGeneration == nil, mutationBelongsToConvergence {
+            mutation = .idle
+            mutationBelongsToConvergence = false
+        }
     }
 
     private enum ListReading: Sendable {
@@ -1030,21 +1093,10 @@ final class HostInventoryStore: ObservableObject {
 
     private let client: OperationsClient
     private var addressString = DashboardEndpointPreference.localURL
-    private var authorizationToken: String?
     private var requestGeneration = 0
 
     init(client: OperationsClient = OperationsClient()) {
         self.client = client
-    }
-
-    func configureAuthorization(token: String?) {
-        let next = token?.isEmpty == false ? token : nil
-        guard next != authorizationToken else { return }
-        requestGeneration &+= 1
-        authorizationToken = next
-        cargoByHost = [:]
-        failures = [:]
-        readingHosts = []
     }
 
     func configureEndpoint(_ endpoint: String?) {
@@ -1085,8 +1137,7 @@ final class HostInventoryStore: ObservableObject {
         do {
             let report = try await client.fetchHostInventory(
                 target: host,
-                from: address,
-                authorizationToken: authorizationToken
+                from: address
             )
             guard requestGeneration == generation, !Task.isCancelled else { return }
             guard report.target == host else {
@@ -1564,10 +1615,31 @@ final class ServiceTruthStore: ObservableObject {
     @Published private(set) var lastUpdated: Date?
 
     private let cli: StadoCLI
+    private let client: OperationsClient
+    private var addressString = DashboardEndpointPreference.localURL
     private var refreshGeneration = 0
 
-    init(cli: StadoCLI = StadoCLI()) {
+    init(cli: StadoCLI = StadoCLI(), client: OperationsClient = OperationsClient()) {
         self.cli = cli
+        self.client = client
+    }
+
+
+    func configureEndpoint(_ endpoint: String?) {
+        let next = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard next != addressString else { return }
+        addressString = next
+        invalidateSource()
+    }
+
+    private func invalidateSource() {
+        refreshGeneration &+= 1
+        isRefreshing = false
+        reports = []
+        failures = [:]
+        unownedProcesses = []
+        unownedProblem = nil
+        lastUpdated = nil
     }
 
     /// Declared units, with the host carried on the row and the units serving
@@ -1598,9 +1670,6 @@ final class ServiceTruthStore: ObservableObject {
         failures[host]
     }
 
-    nonisolated static func convergeArguments(host: String) -> [String] {
-        ["service", "converge", host, "--json"]
-    }
 
     nonisolated static func unownedArguments() -> [String] {
         ["service", "list", "--unowned", "--json"]
@@ -1608,6 +1677,12 @@ final class ServiceTruthStore: ObservableObject {
 
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
+        guard let address = try? OperationsDashboardAddress(addressString) else {
+            failures = Dictionary(uniqueKeysWithValues: hosts.map {
+                ($0, "No Stado endpoint is configured, so convergence was not requested.")
+            })
+            return
+        }
         refreshGeneration += 1
         let generation = refreshGeneration
         isRefreshing = true
@@ -1617,7 +1692,9 @@ final class ServiceTruthStore: ObservableObject {
             }
         }
 
-        let readings = await Self.read(hosts: hosts, using: cli)
+        let readings = await Self.read(
+            hosts: hosts, using: cli, client: client, address: address
+        )
         guard generation == refreshGeneration else { return }
         reports = readings.reports.sorted { $0.target < $1.target }
         failures = readings.failures
@@ -1642,17 +1719,18 @@ final class ServiceTruthStore: ObservableObject {
         case unownedFailed(String)
     }
 
-    private nonisolated static func read(hosts: [String], using cli: StadoCLI) async -> Readings {
+    private nonisolated static func read(
+        hosts: [String], using cli: StadoCLI, client: OperationsClient,
+        address: OperationsDashboardAddress
+    ) async -> Readings {
         await withTaskGroup(of: Reading.self) { group in
             for host in hosts {
                 group.addTask {
                     do {
-                        return .converged(
-                            try await cli.json(
-                                ServiceConvergeReport.self,
-                                arguments: convergeArguments(host: host)
-                            )
+                        let result = try await client.serviceConvergence(
+                            target: host, binary: nil, apply: false, at: address
                         )
+                        return .converged(result.response.report)
                     } catch {
                         return .convergeFailed(host: host, problem: message(for: error))
                     }
@@ -2038,3 +2116,16 @@ final class ReleaseEvidenceStore: ObservableObject {
         return error.localizedDescription
     }
 }
+
+struct AppleChallengePreparationReceipt: Decodable, Sendable {
+    let target: String
+    let sshTarget: String
+    let items: [[String]]
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case target, items, error
+        case sshTarget = "ssh_target"
+    }
+}
+
