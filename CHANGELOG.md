@@ -1,8 +1,15 @@
 # Changelog
 
-## 0.16.35
+## 0.16.36
 
 - **Native label evidence:** exact system-label inspection now uses the existing noninteractive privileged launchd reader. A refused or failed domain read retains its exit code and error instead of being reported as proof that the label is unloaded.
+
+## 0.16.35
+
+- **Scoped release publishers:** publishing clients accept the valid product entries they actually use instead of requiring every server-side publisher. The release server and configuration validation retain the complete active-publisher requirement; undeclared products still have no write credential.
+- **Publisher diagnostics:** malformed entries and invalid JSON are reported with their actual configuration errors instead of being reduced to “declares no publisher.” By default, authentication reads the selected publisher's token from Skarbiec.
+- **Isolated publisher credentials:** `STADO_RELEASE_PUBLISHER_TOKEN_FILE` accepts an explicitly supplied product bearer without requiring an isolated CI account to read the owner's vault. The product declaration and server-side credential check remain required; an unreadable or malformed file is refused without trying another credential.
+- **Compatibility:** existing complete publisher tables and stored schemas are unchanged. A client with a scoped table requires this release; older clients require the full table.
 
 ## 0.16.34
 
