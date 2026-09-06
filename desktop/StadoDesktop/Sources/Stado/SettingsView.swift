@@ -7,6 +7,8 @@ struct SettingsView: View {
     @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var journey: StadoFirstUseJourney
     @State private var walkthrough: WisentMutationOutcome = .idle
+    @State private var registryCredential = RegistryAPICredential.load()
+    @State private var credentialSettings: WisentMutationOutcome = .idle
 
     var body: some View {
         Form {
@@ -27,9 +29,32 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Registry API access") {
+                TextField("Credential endpoint", text: $registryCredential.endpoint)
+                    .disabled(RegistryAPICredential.isEnvironmentConfigured)
+                TextField("Token file", text: $registryCredential.tokenFile)
+                    .disabled(RegistryAPICredential.isEnvironmentConfigured)
+                Text("The token belongs to one Stado endpoint and is checked against its Skarbiec client grant. A Wisent sign-in is not required.")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
+                if RegistryAPICredential.isEnvironmentConfigured {
+                    Text("STADO_REGISTRY_API_URL or STADO_REGISTRY_API_TOKEN_FILE overrides these saved settings.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                }
+                WisentActionButton(
+                    action: WisentAction(
+                        "Save API access",
+                        kind: .primary,
+                        isEnabled: !RegistryAPICredential.isEnvironmentConfigured
+                    ) { saveRegistryCredential() }
+                )
+                WisentMutationBar(outcome: credentialSettings) { credentialSettings = .idle }
+            }
+
             Section("Configuration ownership") {
                 Label(
-                    "The local CLI dashboard is used by default. Remote deployment endpoints and team access are managed by the Wisent deployment registry; credentials remain in their native keychains and CLIs.",
+                    "The configured Stado source is used by default. Remote deployment membership is managed by the Wisent deployment registry; registry API access uses the source-bound token file above.",
                     systemImage: "lock.shield"
                 )
                 .font(WisentTypeScale.caption())
@@ -66,6 +91,16 @@ struct SettingsView: View {
         if operationsStore.snapshot?.ready == true { return "Connected" }
         if operationsStore.errorMessage != nil { return "Unavailable" }
         return operationsStore.isRefreshing ? "Connecting" : "Configured"
+    }
+
+    private func saveRegistryCredential() {
+        do {
+            try registryCredential.save()
+            registryCredential = RegistryAPICredential.load()
+            credentialSettings = .succeeded("Saved the registry API credential location.")
+        } catch {
+            credentialSettings = .failed(error.localizedDescription)
+        }
     }
 
     private func showWalkthroughAgain() {

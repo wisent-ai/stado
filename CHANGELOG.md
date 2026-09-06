@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.33
+
+- **Authenticated convergence:** the typed GET and POST `/api/service/converge` routes share the CLI's implementation and return the complete report with its product exit code. Independent `converge-read` and `converge-apply` registry client actions prevent read permission from authorizing delivery.
+- **Desktop receipts and credentials:** Services uses the typed API instead of launching the CLI, retains every JSON field after failed delivery and refresh, and does not cancel host work when its selected source changes. Settings binds the registry client token file to one endpoint; registry policy, inventory, cleanup and convergence no longer send a Wisent account token to that API.
+- **Verifier provisioning:** `host vault-token-mint --token-file-name NAME` creates a target-local owner-only bearer file and reuses it on subsequent calls. The grant is minted by the host's own Skarbiec, the bearer never enters command arguments, and a failed mint retains the file for a retry.
+- **Observed GUI readiness:** `host gui-automation status` distinguishes stored Accessibility entries from the serving driver's prompt-free permission response. A denied, missing or unreadable response cannot report `gui-ready: yes`; transport and parsing failures retain their operation and cause.
+- **Run retention:** a completed transition with a linked but missing run manifest retains its terminal result, source and transition record and reports the missing manifest. A stale reaper still respects an intentionally removed manifest without recreating it.
+- **Recovery ownership:** the resident worker verifies its acquired lock descriptor on macOS and preserves that lock during confined noninteractive privileged snapshot reads. Resume reuses a staged release's recorded origin, supports path-only object API declarations, distinguishes a completed PID-less launchd unit from a starting worker, and refuses conflicting actions against an active owner.
+- **Native unit state:** autostart read-back accepts both boolean overrides and native `enabled`/`disabled` names. Cached launchd definitions are joined by native PID ownership rather than matching old arguments against a newly written plist.
+- **Migration and rollback:** no stored schemas change. Registry clients and their dedicated verifier grant must be configured explicitly. When rolling back to a server without convergence actions, remove those actions from its client mapping; otherwise that older server correctly refuses the unknown configuration. This release includes the 0.16.32 changes below; that coordinate remains bound to its original request-recovery source.
+- **Platforms:** the API and native delivery apply to `darwin-arm64` and `linux-amd64`; Stado Desktop is the macOS surface.
+
 ## 0.16.32
 
 - **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.
@@ -48,8 +60,7 @@
 
 - **Reconciliation retries:** before fencing writers, `host storage-root-reconcile` reads the current canonical Stado version instead of reusing the version in an older captured target. An existing fence keeps its staged version pinned; an unavailable registry is an error, not permission to use cached declarations.
 - **Live transaction status:** owner reports retain `recorded_status` and include the native manager's current observation. A previously executing owner is reported as interrupted when its process is gone, or unobserved when the manager cannot be read.
-- **Native autostart state:** launchd inspection and mutation read-back accept both boolean overrides and the native `enabled`/`disabled` state names. Reconciliation can preserve and restore the observed boot state without treating a valid macOS answer as a refusal.
-- **Authority transaction scripts:** embedded Python used by storage-root reconciliation now preserves its authored block indentation, braces, and escapes, so a resumed native transaction can execute the listener, unit snapshot, served-store correlation, and unit restoration stages instead of failing during Python parsing. Restored unit modes retain their captured POSIX bits rather than reinterpreting decimal digits as octal.
+
 - **Release qualification:** includes the formatter-required layout of the dashboard's object authorization calls and carries the proxy, storage, and archive changes below. The 0.16.24 publication stopped at `fmt`; its coordinate remains bound to `405fd806c9ac3884c24c73778813c6743e4e4e3e` rather than being overwritten with different source.
 
 ## 0.16.24

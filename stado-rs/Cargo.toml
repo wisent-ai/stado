@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.16.32"
+version = "0.16.33"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -89,3 +89,7 @@ path = "src/bin/stado_migrate/main.rs"
 [[test]]
 name = "channel"
 path = "tests/channel/main.rs"
+
+[[test]]
+name = "service_convergence"
+path = "tests/service_convergence/main.rs"

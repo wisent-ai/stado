@@ -187,20 +187,30 @@ fn coordinator_preserves_settled_history_and_refuses_missing_unretired_history()
             .path();
         let mut transition: Value =
             serde_json::from_slice(&fs::read(&transition_path).unwrap()).unwrap();
-        // Recreate the older writer's completed record, without changing the
-        // real cancellation result or its exact transition identity.
+        let transition_id = transition["transition_id"].as_str().unwrap().to_string();
+        let queue_path = journey.storage.join("queue").join(format!("{job_id}.json"));
+        let mut source: Value = serde_json::from_slice(&fs::read(&queue_path).unwrap()).unwrap();
+        assert_eq!(
+            source["state"],
+            format!("transition-cleaned:{transition_id}"),
+            "the real cancellation must leave its exact retired source sentinel"
+        );
+
+        // Older completed records had already removed their source. Recreate
+        // that state, then put back the exact fence only for the interrupted
+        // retirement case.
+        fs::remove_file(&queue_path).unwrap();
         transition["state"] = Value::from("completed");
-        fs::write(&transition_path, serde_json::to_vec(&transition).unwrap()).unwrap();
-        if !source_retired {
-            let queue_path = journey.storage.join("queue").join(format!("{job_id}.json"));
-            let mut source: Value =
-                serde_json::from_slice(&fs::read(&queue_path).unwrap()).unwrap();
-            source["state"] = Value::from(format!(
-                "transitioning:{}",
-                transition["transition_id"].as_str().unwrap()
-            ));
-            fs::write(queue_path, serde_json::to_vec(&source).unwrap()).unwrap();
-        }
+        let completed_transition = serde_json::to_vec(&transition).unwrap();
+        fs::write(&transition_path, &completed_transition).unwrap();
+        let unretired_source = if source_retired {
+            None
+        } else {
+            source["state"] = Value::from(format!("transitioning:{transition_id}"));
+            let bytes = serde_json::to_vec(&source).unwrap();
+            fs::write(&queue_path, &bytes).unwrap();
+            Some(bytes)
+        };
         fs::remove_file(journey.run_path()).unwrap();
 
         let output = journey.invoke(&["coordinator", "--once"]);
@@ -215,5 +225,22 @@ fn coordinator_preserves_settled_history_and_refuses_missing_unretired_history()
             !journey.run_path().exists(),
             "recovery must not invent run history"
         );
+        if let Some(unretired_source) = unretired_source {
+            assert_eq!(
+                fs::read(&queue_path).unwrap(),
+                unretired_source,
+                "failed retention must leave the exact source fence for recovery"
+            );
+            assert_eq!(
+                fs::read(&transition_path).unwrap(),
+                completed_transition,
+                "failed retention must not retire the completed transition"
+            );
+        } else {
+            assert!(
+                !queue_path.exists(),
+                "retired recovery must not recreate the removed source"
+            );
+        }
     }
 }
