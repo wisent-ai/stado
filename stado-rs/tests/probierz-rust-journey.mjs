@@ -332,6 +332,9 @@ export async function runRecordedRustJourney({
   try {
     const identity = await sourceIdentity('after-compilation');
     source.checkpoints.push(identity);
+    if (!identity.clean || identity.revision !== source.checkpoints[0]?.revision) {
+      failures.push('source checkout changed during compilation; refusing test execution');
+    }
   } catch (error) {
     failures.push(error.message);
   }
