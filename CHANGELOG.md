@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.37
+
+- **Native label evidence:** exact system-label inspection now uses the existing noninteractive privileged launchd reader. A refused or failed domain read retains its exit code and error instead of being reported as proof that the label is unloaded.
+
 ## 0.16.36
 
 - **Primary authority:** a successful missing-object answer remains authoritative for releases as well as mutable objects. GET and stat no longer copy bytes from the backup or return a backup body after the primary refused a repair; ordinary failover remains limited to failed primary reads.
