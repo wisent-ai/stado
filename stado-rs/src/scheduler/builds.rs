@@ -574,55 +574,26 @@ struct RunOutcome {
     run: BuildRun,
 }
 
-/// The terminal prefix `job_id` has landed in, or `None` while it is still
-/// queued or running — or has been swept out of the queue entirely. The
-/// caller distinguishes "still in flight" from "vanished" with
-/// [`stuck_reason`]: absence alone is not a verdict.
-async fn terminal_prefix(store: &JobStorage, job_id: &str) -> Result<Option<&'static str>, String> {
-    for prefix in TERMINAL_PREFIXES {
-        let found = store
-            .read_job(prefix, job_id)
-            .await
-            .map_err(|exc| format!("reading {prefix}/{job_id}: {exc}"))?;
-        if found.is_some() {
-            return Ok(Some(prefix));
-        }
-    }
-    Ok(None)
-}
-
-/// The supervision verdict for a run whose job sits in no terminal prefix:
+/// The supervision verdict for a run that has not reached a terminal state:
 /// the one-sentence reason the run must be failed now, or `None` while it
-/// is still inside its budgets.
+/// remains inside its budgets.
 ///
-/// Three budgets, three sentences, because they send the operator to three
-/// different places: a job still queued past [`QUEUE_CLAIM_THRESHOLD_SECONDS`]
-/// says no worker took the work; a claimed job past [`BUILD_CEILING_SECONDS`]
-/// says the build — or the worker running it — is wedged; a job record gone
-/// from every prefix says the record was lost with no outcome ever reported.
-/// Build jobs carry no `runs/` manifest, so the by-run reaper never sweeps
-/// their records: absence here is disappearance, not housekeeping.
-async fn stuck_reason(store: &JobStorage, run: &BuildRun, log: &dyn Fn(&str)) -> Option<String> {
+/// The shared job-state reader has already resolved physical lifecycle
+/// records against retained run history, so a missing state here means neither
+/// authority has an outcome. Queue and running ages use the resolved job
+/// directly rather than reading those records a second time.
+fn stuck_reason(
+    run: &BuildRun,
+    state: Option<(&'static str, crate::models::Job)>,
+) -> Option<String> {
     let recorded_at = DateTime::parse_from_rfc3339(&run.at)
         .ok()?
         .with_timezone(&Utc);
     let age = (Utc::now() - recorded_at).num_seconds().max(0);
-    match store.read_job("queue", &run.job_id).await {
-        Ok(Some(_)) => {
-            return (age > QUEUE_CLAIM_THRESHOLD_SECONDS)
-                .then(|| "no worker claimed the job within 10m".to_string());
-        }
-        Ok(None) => {}
-        Err(exc) => {
-            log(&format!(
-                "build job {}: reading queue record: {exc}",
-                run.job_id
-            ));
-            return None;
-        }
-    }
-    match store.read_job("running", &run.job_id).await {
-        Ok(Some(job)) => {
+    match state {
+        Some(("queue", _)) => (age > QUEUE_CLAIM_THRESHOLD_SECONDS)
+            .then(|| "no worker claimed the job within 10m".to_string()),
+        Some(("running", job)) => {
             let running_age = job
                 .started_at
                 .as_deref()
@@ -633,19 +604,12 @@ async fn stuck_reason(store: &JobStorage, run: &BuildRun, log: &dyn Fn(&str)) ->
                         .max(0)
                 })
                 .unwrap_or(age);
-            return (running_age > BUILD_CEILING_SECONDS)
-                .then(|| "job exceeded the 60m build ceiling".to_string());
+            (running_age > BUILD_CEILING_SECONDS)
+                .then(|| "job exceeded the 60m build ceiling".to_string())
         }
-        Ok(None) => {}
-        Err(exc) => {
-            log(&format!(
-                "build job {}: reading running record: {exc}",
-                run.job_id
-            ));
-            return None;
-        }
+        Some(_) => None,
+        None => Some("job record disappeared; the worker never reported".to_string()),
     }
-    Some("job record disappeared; the worker never reported".to_string())
 }
 
 /// The version a finished build recorded for the commit it built: the first
@@ -771,15 +735,16 @@ async fn declare_on_platform(
 }
 
 /// One completion pass: every recorded run still marked `running` whose job
-/// has reached a terminal prefix becomes a recorded outcome — succeeded or
-/// failed, the version the build wrote down, the artifacts it uploaded — and,
-/// for an `auto_declare` recipe with a version, a managed-version
-/// declaration on that platform's hosts. A run whose job has NOT reached a
-/// terminal prefix is supervised instead of waited on forever
-/// ([`stuck_reason`]): queued past the claim threshold, running past the
-/// build ceiling, or vanished from the queue altogether all become `failed`
-/// with the diagnosis in the run's `reason`, because a `running` that means
-/// "nobody knows" is how a dead fleet reads as a busy one.
+/// has a live or retained terminal state becomes a recorded outcome —
+/// succeeded or failed, the worker's terminal timestamp and reason, the
+/// version the build wrote down, the artifacts it uploaded — and, for an
+/// `auto_declare` recipe with a version, a managed-version declaration on that
+/// platform's hosts. A run whose job has NOT reached a terminal state is
+/// supervised instead of waited on forever ([`stuck_reason`]): queued past the
+/// claim threshold, running past the build ceiling, or absent from both
+/// lifecycle storage and durable run history all become `failed` with the
+/// diagnosis in the run's `reason`, because a `running` that means "nobody
+/// knows" is how a dead fleet reads as a busy one.
 ///
 /// Declaration happens BEFORE the registry write on purpose. `declared` must
 /// mean "`managed_versions` says so", and a declaration is idempotent (one
@@ -819,19 +784,28 @@ async fn reconcile_build_runs(registry: &Registry, declare_allowed: bool, log: &
     };
     let mut outcomes: Vec<RunOutcome> = Vec::new();
     for (recipe, platform, run) in pending {
-        let prefix = match terminal_prefix(&store, &run.job_id).await {
-            Ok(prefix) => prefix,
+        let state = match store.read_job_state(&run.job_id).await {
+            Ok(state) => state,
             Err(exc) => {
-                log(&format!("build {}: {exc}", recipe.name));
+                log(&format!(
+                    "build {}: reading job state for {}: {exc}",
+                    recipe.name, run.job_id
+                ));
                 continue;
             }
         };
-        let updated = match prefix {
-            Some(prefix) => {
+        let updated = match state {
+            Some((prefix, job)) if TERMINAL_PREFIXES.contains(&prefix) => {
                 let succeeded = prefix == "completed" || prefix == "uploaded";
+                let at = if prefix == "failed" {
+                    job.failed_at.or(job.completed_at)
+                } else {
+                    job.completed_at.or(job.failed_at)
+                }
+                .unwrap_or_else(|| isoformat_utc(Utc::now()));
                 let mut updated = BuildRun {
                     status: if succeeded { "succeeded" } else { "failed" }.to_string(),
-                    at: isoformat_utc(chrono::Utc::now()),
+                    at,
                     job_id: run.job_id.clone(),
                     artifact_uris: if succeeded {
                         uploaded_artifacts(&store, &run.job_id, log).await
@@ -844,7 +818,7 @@ async fn reconcile_build_runs(registry: &Registry, declare_allowed: bool, log: &
                         None
                     },
                     declared: false,
-                    reason: None,
+                    reason: if succeeded { None } else { job.error },
                 };
                 log(&format!(
                     "build {}: {platform} job {} {} ({prefix}), version {}",
@@ -879,8 +853,8 @@ async fn reconcile_build_runs(registry: &Registry, declare_allowed: bool, log: &
                 }
                 updated
             }
-            None => {
-                let Some(reason) = stuck_reason(&store, run, log).await else {
+            state => {
+                let Some(reason) = stuck_reason(run, state) else {
                     continue;
                 };
                 log(&format!(
@@ -889,7 +863,7 @@ async fn reconcile_build_runs(registry: &Registry, declare_allowed: bool, log: &
                 ));
                 BuildRun {
                     status: "failed".to_string(),
-                    at: isoformat_utc(chrono::Utc::now()),
+                    at: isoformat_utc(Utc::now()),
                     job_id: run.job_id.clone(),
                     artifact_uris: Vec::new(),
                     version: None,

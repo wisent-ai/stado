@@ -1560,6 +1560,168 @@ impl JobStorage {
         Ok(Some(job))
     }
 
+    async fn retained_transition_job_state(
+        &self,
+        job_id: &str,
+        transition: &JobTransition,
+    ) -> Result<Option<(&'static str, Job)>, StorageError> {
+        let Some(prefix) = crate::queue::runs::TERMINAL_PREFIXES
+            .iter()
+            .copied()
+            .find(|prefix| *prefix == transition.to_prefix.as_str())
+        else {
+            return Ok(None);
+        };
+        if transition.destination_job.job_id != job_id
+            || transition.destination_job.state != prefix_state(prefix)
+        {
+            return Err(StorageError::Other(format!(
+                "terminal transition {} does not describe {prefix}/{job_id}",
+                transition.transition_id
+            )));
+        }
+
+        let destination = &transition.destination_job;
+        let run_id = destination.run_id.as_str();
+        let request_digest = destination.submission_request_digest.as_str();
+        let index = destination.submission_command_index;
+        if run_id.is_empty() && request_digest.is_empty() && index.is_none() {
+            return Ok(None);
+        }
+        let Some(index) = index else {
+            return Err(StorageError::Other(format!(
+                "terminal transition {} has incomplete durable run identity",
+                transition.transition_id
+            )));
+        };
+        if run_id.is_empty() || request_digest.is_empty() {
+            return Err(StorageError::Other(format!(
+                "terminal transition {} has incomplete durable run identity",
+                transition.transition_id
+            )));
+        }
+
+        let manifest_path = format!("{}/{run_id}.json", crate::queue::runs::RUN_PREFIX);
+        let manifest = crate::queue::runs::read_run(self, run_id)
+            .await?
+            .ok_or_else(|| StorageError::NotFound(manifest_path))?;
+        let manifest = serde_json::Value::Object(manifest);
+        crate::queue::submit::validate_stored_run_manifest(&manifest, run_id)
+            .map_err(|error| StorageError::Other(error.to_string()))?;
+        let entry = manifest
+            .get("entries")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|entries| entries.get(index))
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "durable run manifest {run_id} has no entry {index} for {job_id}"
+                ))
+            })?;
+        if entry.get("job_id").and_then(serde_json::Value::as_str) != Some(job_id) {
+            return Err(StorageError::Other(format!(
+                "durable run manifest {run_id} maps entry {index} to a different job"
+            )));
+        }
+        let planned =
+            Job::deserialize(entry.get("planned_job").ok_or_else(|| {
+                StorageError::Other("durable run entry has no planned job".into())
+            })?)?;
+        if !crate::queue::runs::terminal_job_matches_entry(destination, &planned, run_id, index) {
+            return Err(StorageError::Other(format!(
+                "terminal transition {} does not match durable run {run_id} entry {index}",
+                transition.transition_id
+            )));
+        }
+
+        let outcome = entry
+            .get("outcome")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "durable run manifest {run_id} has no retained outcome for {job_id}"
+                ))
+            })?;
+        if outcome.get("prefix").and_then(serde_json::Value::as_str) != Some(prefix) {
+            return Err(StorageError::Other(format!(
+                "durable run manifest {run_id} outcome for {job_id} disagrees with its terminal transition"
+            )));
+        }
+        let retained = Job::deserialize(outcome.get("job").ok_or_else(|| {
+            StorageError::Other(format!(
+                "durable run manifest {run_id} has no retained job for {job_id}"
+            ))
+        })?)?;
+        Ok(Some((prefix, retained)))
+    }
+
+    /// Resolve a consumer-facing job state from a physical lifecycle record or
+    /// its validated retained run outcome.
+    ///
+    /// Terminal lifecycle records win over stale queue/running projections.
+    /// Once those transient records have been reaped, the job's terminal
+    /// transition identifies the exact run entry holding its durable outcome;
+    /// this never scans run history and never treats the transition snapshot
+    /// itself as the outcome. [`Self::read_job`] remains the physical-object
+    /// reader used by lifecycle recovery and cleanup.
+    pub async fn read_job_state(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<(&'static str, Job)>, StorageError> {
+        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+            if let Some(job) = self.read_job(prefix, job_id).await? {
+                if job.job_id != job_id || job.state != prefix_state(prefix) {
+                    return Err(StorageError::Other(format!(
+                        "{prefix}/{job_id}.json does not contain the named lifecycle state"
+                    )));
+                }
+                return Ok(Some((prefix, job)));
+            }
+        }
+
+        let transition = self.read_job_transition(job_id).await?;
+        if let Some((transition, _)) = transition.as_ref() {
+            if transition.state == "completed" || transition.state == TRANSITION_RETIRED_STATE {
+                if let Some(retained) = self
+                    .retained_transition_job_state(job_id, transition)
+                    .await?
+                {
+                    return Ok(Some(retained));
+                }
+            }
+        }
+
+        for prefix in ["running", "queue"] {
+            if let Some(job) = self.read_job(prefix, job_id).await? {
+                if job.job_id != job_id || job.state != prefix_state(prefix) {
+                    return Err(StorageError::Other(format!(
+                        "{prefix}/{job_id}.json does not contain the named lifecycle state"
+                    )));
+                }
+                return Ok(Some((prefix, job)));
+            }
+        }
+
+        // A move can begin after the first journal read and fence its source
+        // after the live-state probes. Re-read only on the absent path so that
+        // consumers defer an in-progress transition instead of declaring the
+        // job lost.
+        let Some((latest, _)) = self.read_job_transition(job_id).await? else {
+            return Ok(None);
+        };
+        if latest.state == "completed" || latest.state == TRANSITION_RETIRED_STATE {
+            if let Some(retained) = self.retained_transition_job_state(job_id, &latest).await? {
+                return Ok(Some(retained));
+            }
+        }
+        if latest.state != "aborted" && latest.state != TRANSITION_RETIRED_STATE {
+            return Err(StorageError::StorageConflict(format!(
+                "durable transition {} for {job_id} is not settled",
+                latest.transition_id
+            )));
+        }
+        Ok(None)
+    }
+
     async fn rewrite_queued_job<F>(
         &self,
         job_id: &str,

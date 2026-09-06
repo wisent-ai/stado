@@ -84,7 +84,10 @@ impl Journey {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        let mut command = Command::new(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+        );
         command
             .env_clear()
             .env("HOME", self.home.path())
@@ -214,7 +217,7 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
         String::from_utf8_lossy(&malformed.stderr).contains("--repo must be an https:// clone URL")
     );
 
-    let added = journey.invoke_ok(&[
+    journey.invoke_ok(&[
         "builds",
         "add",
         "--name",
@@ -233,8 +236,7 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
         "1",
         "--json",
     ]);
-    let added: Value = serde_json::from_slice(&added.stdout).unwrap();
-    assert_eq!(added["enabled"], false);
+    assert_eq!(journey.status()["recipe"]["enabled"], false);
 
     let duplicate = journey.invoke(&[
         "builds",
@@ -262,6 +264,7 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     let submitted = journey.status();
     let run = &submitted["recipe"]["runs"][platform];
     let job_id = run["job_id"].as_str().unwrap();
+    journey.invoke_ok(&["builds", "disable", RECIPE]);
 
     journey.wait_for_terminal_job(job_id);
     journey.invoke_ok(&["coordinator", "--once"]);
@@ -269,12 +272,22 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     let run = &completed["recipe"]["runs"][platform];
     assert_eq!(run["status"], "succeeded", "{completed}");
     assert_eq!(completed["job_states"][platform], "completed");
-    assert_eq!(run["declared"], false);
 
     let destination = journey.home.path().join("results");
     journey.invoke_ok(&["results", job_id, destination.to_str().unwrap()]);
     assert_eq!(
         fs::read_to_string(destination.join("build-output.txt")).unwrap(),
+        "built by stado\n"
+    );
+    journey.invoke_ok(&["coordinator", "--once"]);
+    assert_eq!(
+        journey.status()["recipe"]["runs"][platform]["status"],
+        "succeeded"
+    );
+    let replay_destination = journey.home.path().join("results-after-cleanup");
+    journey.invoke_ok(&["results", job_id, replay_destination.to_str().unwrap()]);
+    assert_eq!(
+        fs::read_to_string(replay_destination.join("build-output.txt")).unwrap(),
         "built by stado\n"
     );
     println!(

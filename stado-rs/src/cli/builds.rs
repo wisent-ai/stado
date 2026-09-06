@@ -36,7 +36,6 @@ use serde_json::{json, Map, Value};
 
 use crate::deploy::products;
 use crate::models::isoformat_utc;
-use crate::queue::runs::ALL_PREFIXES;
 use crate::queue::submit::{default_store, stable_run_id, submit_batch, SubmitOptions};
 use crate::targets::{
     fleet_namespace_mismatch, platform_job_os_arch, read_build_recipes, BuildRecipe, BuildRun,
@@ -986,13 +985,10 @@ async fn status(name: &str, json: bool) -> Result<(), CmdError> {
     if !recipe.runs.is_empty() {
         let store = default_store(crate::config::bucket()).await?;
         for (platform, run) in &recipe.runs {
-            let mut found = None;
-            for state in ALL_PREFIXES {
-                if store.read_job(state, &run.job_id).await?.is_some() {
-                    found = Some(state);
-                    break;
-                }
-            }
+            let found = store
+                .read_job_state(&run.job_id)
+                .await?
+                .map(|(state, _)| state);
             job_states.insert(platform.clone(), found);
         }
     }

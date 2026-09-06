@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.38
+
+- **Build result retention:** completed native builds remain readable after the coordinator retires their queue records. Build reconciliation and `builds status` resolve the recorded terminal outcome instead of reporting a completed job as missing.
+- **Artifact ownership:** terminal cleanup removes transient lifecycle and status metadata, not the canonical output files or command logs served by `stado results`. Retained outputs do not cause completed cleanup to repeat.
+- **Native qualification:** the selected Rust journeys share recorded compilation and execution, one build profile, exact test selection, and retained CLI/test executables. A compilation timeout records its real cause separately from test execution instead of reporting an unknown test exit.
+- **Migration:** no registry or run schemas change, and cleanup does not recreate deliberately removed run history.
+- **Source ownership:** 0.16.37 remains bound to its existing source reservation; these corrections use a new release coordinate.
+
 ## 0.16.36
 
 - **Primary authority:** a successful missing-object answer remains authoritative for releases as well as mutable objects. GET and stat no longer copy bytes from the backup or return a backup body after the primary refused a repair; ordinary failover remains limited to failed primary reads.

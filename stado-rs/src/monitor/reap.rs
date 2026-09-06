@@ -1,4 +1,4 @@
-//! By-run reaper: removes per-job cruft once a run is fully terminal.
+//! By-run reaper: retires transient per-job state once a run is fully terminal.
 //!
 //! Port of `stado/monitor/reap/run_reaper.py`.
 //!
@@ -9,11 +9,13 @@
 //!
 //! Retention and cleanup are two separate durable facts, because a crash sits
 //! between them. [`REAPED_AT`] says the outcomes are retained; only
-//! [`CLEANUP_COMPLETED_AT`] says every lifecycle blob and status entry is
-//! gone. A manifest carrying the first without the second is a legal state —
-//! the run-manifest schema admits both keys — and it re-enters a
-//! deletion-only pass that retains nothing again, rewrites no `reaped_at`,
-//! and tolerates blobs that are already deleted.
+//! [`CLEANUP_COMPLETED_AT`] says every lifecycle blob and transient status
+//! entry is gone. Canonical result artifacts and command logs under
+//! `status/<job_id>/output/` remain owned by the retained result. A manifest
+//! carrying the first marker without the second is a legal state — the
+//! run-manifest schema admits both keys — and it re-enters a deletion-only pass
+//! that retains nothing again, rewrites no `reaped_at`, and tolerates transient
+//! blobs that are already deleted.
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -697,13 +699,22 @@ fn py_truthy(v: &Value) -> bool {
     }
 }
 
-/// Delete every blob under status/<job_id>/. One failing delete does not
-/// abandon the rest: the whole directory has to go before cleanup can be
-/// recorded, so the pass deletes what it can and reports the first failure for
-/// the next pass to resume.
-async fn delete_status_dir(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
+/// Delete transient metadata under `status/<job_id>/`, preserving the
+/// canonical results subtree at `status/<job_id>/output/`. One failing delete
+/// does not abandon the rest: every transient entry has to go before cleanup
+/// can be recorded, so the pass deletes what it can and reports the first
+/// failure for the next pass to resume.
+async fn delete_transient_status_metadata(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<(), StorageError> {
+    let status_prefix = format!("status/{job_id}/");
+    let output_prefix = format!("{status_prefix}output/");
     let mut failure = None;
-    for path in store.list_paths(&format!("status/{job_id}/"), 0).await? {
+    for path in store.list_paths(&status_prefix, 0).await? {
+        if path.starts_with(&output_prefix) {
+            continue;
+        }
         if let Err(error) = store.delete_blob(&path).await {
             failure = failure.or(Some(error));
         }
@@ -716,8 +727,9 @@ async fn delete_status_dir(store: &JobStorage, job_id: &str) -> Result<(), Stora
 
 /// Manifest key: the outcomes of every entry are durably retained.
 const REAPED_AT: &str = "reaped_at";
-/// Manifest key: every lifecycle blob and status entry of a retained run has
-/// been deleted. Written only after that deletion succeeded in full.
+/// Manifest key: every lifecycle blob and transient status entry of a retained
+/// run has been deleted. Canonical `status/<job_id>/output/` results remain.
+/// Written only after that transient cleanup succeeded in full.
 const CLEANUP_COMPLETED_AT: &str = "cleanup_completed_at";
 
 /// Job ids of a manifest's durable entries.
@@ -770,10 +782,14 @@ fn has_complete_retained_outcomes(manifest: &Value) -> bool {
         })
 }
 
-/// Build one lifecycle-residue index per tick. Exact lifecycle/status paths
-/// encode the job id; priority and transition companions state it in their
-/// JSON body, so they are read once here rather than searched once per run.
-async fn cleanup_residue_job_ids(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
+/// Build one transient-cleanup residue index per tick. Exact lifecycle and
+/// non-output status paths encode the job id; priority and transition
+/// companions state it in their JSON body, so they are read once here rather
+/// than searched once per run. Canonical `status/<job_id>/output/` results are
+/// retained ownership, not cleanup residue.
+async fn transient_cleanup_residue_job_ids(
+    store: &JobStorage,
+) -> Result<HashSet<String>, StorageError> {
     let mut job_ids = HashSet::new();
     for prefix in ALL_PREFIXES {
         let start = format!("{prefix}/");
@@ -788,13 +804,16 @@ async fn cleanup_residue_job_ids(store: &JobStorage) -> Result<HashSet<String>, 
         }
     }
     for path in store.list_paths("status/", 0).await? {
-        if let Some(job_id) = path
-            .strip_prefix("status/")
-            .and_then(|tail| tail.split('/').next())
-            .filter(|job_id| !job_id.is_empty())
-        {
-            job_ids.insert(job_id.to_string());
+        let Some(tail) = path.strip_prefix("status/") else {
+            continue;
+        };
+        let Some((job_id, relative)) = tail.split_once('/') else {
+            continue;
+        };
+        if job_id.is_empty() || relative.starts_with("output/") {
+            continue;
         }
+        job_ids.insert(job_id.to_string());
     }
     for prefix in ["queue_priority/", "job-transitions/"] {
         for path in store.list_paths(prefix, 0).await? {
@@ -828,18 +847,23 @@ async fn cleanup_residue_job_ids(store: &JobStorage) -> Result<HashSet<String>, 
     Ok(job_ids)
 }
 
-fn retained_run_has_residue(residue_job_ids: &HashSet<String>, job_ids: &[String]) -> bool {
+fn retained_run_has_transient_residue(
+    residue_job_ids: &HashSet<String>,
+    job_ids: &[String],
+) -> bool {
     job_ids
         .iter()
         .any(|job_id| residue_job_ids.contains(job_id))
 }
 
-/// Delete every lifecycle blob and status entry of a retained run, then record
-/// that the cleanup finished. Idempotent: a blob another pass already removed
-/// is simply absent, and the completion marker is written only once every
-/// deletion of this pass succeeded, so an interrupted sweep is resumed rather
-/// than abandoned. Returns how many blobs this pass deleted.
-async fn sweep_retained_run(
+/// Retire every lifecycle blob and transient status entry of a retained run,
+/// preserving its canonical `status/<job_id>/output/` results, then record
+/// that transient cleanup finished. Idempotent: a blob another pass already
+/// removed is simply absent, and the completion marker is written only once
+/// every deletion of this pass succeeded, so an interrupted retirement is
+/// resumed rather than abandoned. Returns how many lifecycle blobs this pass
+/// deleted.
+async fn retire_retained_run_transients(
     store: &JobStorage,
     run_id: &str,
     job_ids: &[String],
@@ -853,7 +877,7 @@ async fn sweep_retained_run(
         .map_err(|error| StorageError::Other(error.to_string()))?;
     if !has_complete_retained_outcomes(&retained_manifest) {
         return Err(StorageError::Other(format!(
-            "run {run_id} cannot be swept without complete retained terminal outcomes"
+            "run {run_id} cannot retire transient state without complete retained terminal outcomes"
         )));
     }
     let mut deleted = 0;
@@ -875,7 +899,7 @@ async fn sweep_retained_run(
             }
         }
         store.repair_priority_markers(job_id, None).await?;
-        delete_status_dir(store, job_id).await?;
+        delete_transient_status_metadata(store, job_id).await?;
     }
     for _ in 0..16 {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
@@ -922,7 +946,7 @@ pub async fn reap_terminal_runs(
 ) -> Result<ReapSummary, StorageError> {
     let mut summary = ReapSummary::default();
     let mut touched = 0;
-    let cleanup_residue = cleanup_residue_job_ids(store).await?;
+    let cleanup_residue = transient_cleanup_residue_job_ids(store).await?;
     for run_id in list_runs(store).await? {
         let path = format!("{RUN_PREFIX}/{run_id}.json");
         let Some(initial) = store.read_text_versioned(&path).await? else {
@@ -951,10 +975,11 @@ pub async fn reap_terminal_runs(
                 continue;
             }
             let job_ids = manifest_job_ids(&initial_manifest, &run_id)?;
-            if !retained_run_has_residue(&cleanup_residue, &job_ids) {
+            if !retained_run_has_transient_residue(&cleanup_residue, &job_ids) {
                 continue;
             }
-            summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
+            summary.deleted_jobs +=
+                retire_retained_run_transients(store, &run_id, &job_ids).await?;
             touched += 1;
             if limit > 0 && touched >= limit {
                 break;
@@ -969,12 +994,13 @@ pub async fn reap_terminal_runs(
                 });
                 continue;
             }
-            // Retained, but the deletion pass that follows retention did not
-            // finish. Resume exactly that: no outcome is retained again and
-            // `reaped_at` is not rewritten, so this run is not counted as a
-            // second reap.
+            // Retained, but the transient cleanup that follows retention did
+            // not finish. Resume exactly that: no outcome is retained again,
+            // `reaped_at` is not rewritten, and canonical outputs remain, so
+            // this run is not counted as a second reap.
             let job_ids = manifest_job_ids(&initial_manifest, &run_id)?;
-            summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
+            summary.deleted_jobs +=
+                retire_retained_run_transients(store, &run_id, &job_ids).await?;
             touched += 1;
             if limit > 0 && touched >= limit {
                 break;
@@ -1084,7 +1110,7 @@ pub async fn reap_terminal_runs(
         crate::queue::submit::validate_stored_run_manifest(&retained, &run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
 
-        summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
+        summary.deleted_jobs += retire_retained_run_transients(store, &run_id, &job_ids).await?;
         summary.reaped_runs += 1;
         touched += 1;
         if limit > 0 && touched >= limit {

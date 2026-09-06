@@ -8,10 +8,9 @@ import { fileURLToPath } from 'node:url';
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repository = resolve(crate, '..');
 const compilationBudgetMs = 70 * 60 * 1000;
-const executionBudgetMs = 10 * 60 * 1000;
+const defaultExecutionBudgetMs = 10 * 60 * 1000;
 const killGraceMs = 2 * 1000;
 const processOutputEncoding = 'utf8';
-const testArgs = ['--ignored', '--nocapture', '--test-threads=1'];
 const profileEnvironment = {
   CARGO_PROFILE_TEST_DEBUG: '0',
   CARGO_INCREMENTAL: '0',
@@ -280,7 +279,9 @@ export async function runRecordedRustJourney({
   tests,
   productionMutations,
   contracts,
+  executionBudgetMs = defaultExecutionBudgetMs,
 }) {
+  const testArgs = ['--ignored', '--nocapture', '--test-threads=1', '--exact', ...tests];
   const artifacts = process.env.PROBIERZ_ARTIFACTS;
   const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;
   if (!artifacts) throw new Error('PROBIERZ_ARTIFACTS is required');
