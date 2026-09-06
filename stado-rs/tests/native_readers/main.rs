@@ -89,10 +89,18 @@ impl Fixture {
 
         let root_binary = delivered.join("stado");
         let private_binary = private.join("stado");
-        fs::copy(env!("CARGO_BIN_EXE_stado"), &root_binary)
-            .expect("copy built Stado into the delivered root");
-        fs::copy(env!("CARGO_BIN_EXE_stado"), &private_binary)
-            .expect("copy built Stado into the private root");
+        fs::copy(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+            &root_binary,
+        )
+        .expect("copy built Stado into the delivered root");
+        fs::copy(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+            &private_binary,
+        )
+        .expect("copy built Stado into the private root");
 
         let archive = root.path().join("stado-readers.tar.gz");
         write_stado_archive(&archive, &root_binary, "stado");
@@ -231,7 +239,10 @@ impl Fixture {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        let mut command = Command::new(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+        );
         command
             .args(args)
             .env_clear()

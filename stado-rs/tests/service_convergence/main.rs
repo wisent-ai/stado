@@ -100,7 +100,12 @@ impl DashboardFixture {
 
         let stado = home.join(".stado/bin/stado");
         let skarbiec = home.join(".stado/bin/skarbiec");
-        fs::copy(env!("CARGO_BIN_EXE_stado"), &stado).expect("copy built Stado binary");
+        fs::copy(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+            &stado,
+        )
+        .expect("copy built Stado binary");
         fs::copy(real_skarbiec_binary(), &skarbiec).expect("copy real Skarbiec binary");
         for binary in [&stado, &skarbiec] {
             fs::set_permissions(binary, fs::Permissions::from_mode(0o700))
@@ -208,7 +213,10 @@ impl DashboardFixture {
             File::create(root.path().join("dashboard.stdout.log")).expect("dashboard stdout log");
         let stderr =
             File::create(root.path().join("dashboard.stderr.log")).expect("dashboard stderr log");
-        let mut dashboard_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        let mut dashboard_command = Command::new(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+        );
         dashboard_command
             .args([
                 "dashboard",
@@ -369,33 +377,35 @@ fn mint_verifier(
     capabilities: &str,
     token_file_name: &str,
 ) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stado"))
-        .args([
-            "host",
-            "vault-token-mint",
-            HOST,
-            "stado-registry-api-verifier",
-            "--capabilities",
-            capabilities,
-            "--audience",
-            "skarbiec",
-            "--token-file-name",
-            token_file_name,
-            "--json",
-        ])
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", PATH_ENV)
-        .env("TMPDIR", home.join("tmp"))
-        .env("STADO_CONFIG", config)
-        .env("WC_STORAGE_BACKEND", "local")
-        .env("WC_LOCAL_STORAGE_PATH", storage)
-        .env("WC_STADO_STORAGE_NAMESPACE", "service-convergence")
-        .env("SKARBIEC_VAULT_FILE", vault_file)
-        .env("GNUPGHOME", gnupg_home)
-        .stdin(Stdio::null())
-        .output()
-        .expect("built Stado verifier provisioning command runs")
+    Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    )
+    .args([
+        "host",
+        "vault-token-mint",
+        HOST,
+        "stado-registry-api-verifier",
+        "--capabilities",
+        capabilities,
+        "--audience",
+        "skarbiec",
+        "--token-file-name",
+        token_file_name,
+        "--json",
+    ])
+    .env_clear()
+    .env("HOME", home)
+    .env("PATH", PATH_ENV)
+    .env("TMPDIR", home.join("tmp"))
+    .env("STADO_CONFIG", config)
+    .env("WC_STORAGE_BACKEND", "local")
+    .env("WC_LOCAL_STORAGE_PATH", storage)
+    .env("WC_STADO_STORAGE_NAMESPACE", "service-convergence")
+    .env("SKARBIEC_VAULT_FILE", vault_file)
+    .env("GNUPGHOME", gnupg_home)
+    .stdin(Stdio::null())
+    .output()
+    .expect("built Stado verifier provisioning command runs")
 }
 
 fn binary_version(binary: &Path, home: &Path) -> String {
@@ -906,7 +916,8 @@ fn service_convergence_cua_fixture() {
         "home": fixture.home,
         "storage": fixture.storage,
         "config": fixture.config,
-        "binary": env!("CARGO_BIN_EXE_stado"),
+        "binary": PathBuf::from(std::env::var_os("STADO_TEST_BINARY")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into())),
         "target": HOST,
         "token_file": token_file
     });

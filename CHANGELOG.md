@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.39
+
+- **Build result retention:** completed native builds remain readable after the coordinator retires their queue records. Build reconciliation and `builds status` resolve the recorded terminal outcome instead of reporting a completed job as missing.
+- **Artifact ownership:** terminal cleanup removes transient lifecycle and status metadata, not the canonical output files or command logs served by `stado results`. Retained outputs do not cause completed cleanup to repeat.
+- **Native qualification:** the selected Rust journeys share recorded compilation and execution, one build profile, exact test selection, and retained CLI/test executables. A compilation timeout records its real cause separately from test execution instead of reporting an unknown test exit.
+- **Migration:** no registry or run schemas change, and cleanup does not recreate deliberately removed run history.
+- **Source ownership:** 0.16.37 remains bound to its existing source reservation; these corrections use a new release coordinate.
+
 ## 0.16.38
 
 - **Apple preparation:** `host gui-automation grant-accessibility --apple-only` reads the registered host password for noninteractive sudo, prepares only the signed Apple helper, and proves Accessibility through that helper in the declared Aqua session. CuaDriver, autologin and remote management remain unchanged.
@@ -30,6 +38,10 @@
 
 ## 0.16.34
 
+- **Release and build qualification:** real release and native build journeys wait for the worker's observed `accepting_jobs` state instead of treating its first capacity file as permission to submit. This preserves the production refusal while avoiding a race with the first CPU measurement.
+- **Build completion evidence:** the native build journey judges the completed job and downloaded artifact bytes, not whether a fast build still happens to be running when its first status response arrives.
+- **Release qualification origin:** CI reads the canonical public Mini release endpoint also used by publication, rather than the retired temporary MacBook bootstrap origin.
+- **Source ownership:** the correction uses a new immutable release coordinate; 0.16.33 remains bound to its recorded source. There are no stored-schema or CLI contract changes.
 - **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured, and still refuse a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple. The object API's checkpointed current route now pins one conflict winner through the data union, effective lifecycle snapshot, direction-dependent newly-authoritative lifecycle classification, post-commit correlation, receipt, and rollback. An A-serving route preserves A conflicts and imports only B-only objects; a B-serving route preserves the original B-winning union. Pre-commit rollback exactly and resumably restores A's physical checkpoint, including transaction-created imports and directories.
 
 ## 0.16.33
