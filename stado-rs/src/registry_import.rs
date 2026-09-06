@@ -7,10 +7,10 @@
 //! reports every source record as unchanged or imports only records that are
 //! still absent.
 
-use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 
 use crate::queue::StorageError;
 use crate::targets::{self, RegistryStore};
@@ -113,7 +113,8 @@ impl MergeSummary {
         self.imported_sections.dedup();
         self.unchanged_sections.sort();
         self.unchanged_sections.dedup();
-        self.conflicts.sort_by(|left, right| left.path.cmp(&right.path));
+        self.conflicts
+            .sort_by(|left, right| left.path.cmp(&right.path));
         RegistryImportReceipt {
             schema: RECEIPT_SCHEMA.to_string(),
             state: state.to_string(),
@@ -185,12 +186,10 @@ fn source_rejection(bytes: &[u8], reason: String) -> RegistryImportReceipt {
 
 /// Decode and validate the complete source without reading or mutating the
 /// canonical destination. Rejections therefore cannot leave a partial import.
-fn decode_source(bytes: &[u8]) -> Result<Value, RegistryImportReceipt> {
-    let document: Value = serde_json::from_slice(bytes).map_err(|error| {
-        source_rejection(bytes, format!("source is not valid JSON: {error}"))
-    })?;
-    validate_document(&document)
-        .map_err(|error| source_rejection(bytes, format!("source registry is invalid: {error}")))?;
+fn decode_source(bytes: &[u8]) -> Result<Value, String> {
+    let document: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("source is not valid JSON: {error}"))?;
+    validate_document(&document).map_err(|error| format!("source registry is invalid: {error}"))?;
     Ok(document)
 }
 
@@ -355,7 +354,9 @@ fn all_source_imported(source: &Value) -> Result<MergeSummary, String> {
                 .cloned(),
         );
         if root.contains_key("schema_version") {
-            summary.unchanged_sections.push("schema_version".to_string());
+            summary
+                .unchanged_sections
+                .push("schema_version".to_string());
         }
     }
     Ok(summary)
@@ -383,7 +384,7 @@ async fn verify_write(
 pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, RegistryImportError> {
     let source = match decode_source(bytes) {
         Ok(source) => source,
-        Err(receipt) => return Ok(receipt),
+        Err(reason) => return Ok(source_rejection(bytes, reason)),
     };
     let source_sha256 = format!("{:x}", Sha256::digest(bytes));
     let store = RegistryStore::open().await?;
@@ -392,9 +393,14 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
     for _ in 0..MAX_COMMIT_ROUNDS {
         let current = store.read_versioned().await?;
         let Some(current) = current else {
-            let payload = format!("{}\n", serde_json::to_string_pretty(&source).map_err(|error| {
-                RegistryImportError::Storage(format!("cannot serialize source registry: {error}"))
-            })?);
+            let payload = format!(
+                "{}\n",
+                serde_json::to_string_pretty(&source).map_err(|error| {
+                    RegistryImportError::Storage(format!(
+                        "cannot serialize source registry: {error}"
+                    ))
+                })?
+            );
             if !store.create_if_absent(&payload).await? {
                 continue;
             }
@@ -457,9 +463,12 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
             ));
         }
 
-        let payload = format!("{}\n", serde_json::to_string_pretty(&candidate).map_err(|error| {
-            RegistryImportError::Storage(format!("cannot serialize merged registry: {error}"))
-        })?);
+        let payload = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&candidate).map_err(|error| {
+                RegistryImportError::Storage(format!("cannot serialize merged registry: {error}"))
+            })?
+        );
         match store.compare_and_swap(&current.version, &payload).await {
             Ok(generation) => {
                 verify_write(&store, &generation, &payload).await?;

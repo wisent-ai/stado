@@ -270,7 +270,6 @@ impl From<crate::providers::ProviderError> for CmdError {
     }
 }
 
-
 #[derive(Parser)]
 #[command(
     // Not bare `version`: that prints CARGO_PKG_VERSION alone, and one

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.31
+
+- **Release qualification:** format the integrated registry-import source and use equivalent option predicates required by Clippy. The decoder returns only a rejection reason; the caller constructs the unchanged refusal receipt without carrying a large error through successful decoding. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
+
 ## 0.16.30
 
 - **Interrupted release requests:** resumption retains the saved platform builder, exact request bytes, staged input archives, and recorded queue consumer. An existing queue plan can be recovered without selecting a live builder or creating a replacement attempt. A request whose source, manifest, or inputs differ is refused rather than overwritten.
