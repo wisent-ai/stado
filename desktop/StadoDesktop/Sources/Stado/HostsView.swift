@@ -41,8 +41,9 @@ private struct HostConnectionPathsTarget: Identifiable {
 /// The selected registry target whose durable storage transaction is shown.
 private struct StorageReconciliationTarget: Identifiable {
     let host: String
+    let address: OperationsDashboardAddress
 
-    var id: String { host }
+    var id: String { "\(address.displayString)|\(host)" }
 }
 
 struct HostsView: View {
@@ -188,7 +189,11 @@ struct HostsView: View {
             )
         }
         .sheet(item: $reconciliationTarget) { target in
-            StorageReconciliationSheet(host: target.host, store: reconciliationStore)
+            StorageReconciliationSheet(
+                host: target.host,
+                address: target.address,
+                store: reconciliationStore
+            )
         }
     }
 
@@ -537,10 +542,12 @@ struct HostsView: View {
                         "Reconcile storage roots…",
                         symbol: "externaldrive",
                         kind: .secondary,
-                        isEnabled: !reconciliationStore.isRunning
+                        isEnabled: !reconciliationStore.isRunning && fleetStore.isConfigured
                     ) {
                         let target = host.targetName ?? host.displayName
-                        reconciliationTarget = StorageReconciliationTarget(host: target)
+                        if let address = fleetStore.address {
+                            reconciliationTarget = StorageReconciliationTarget(host: target, address: address)
+                        }
                     }
                 )
             }

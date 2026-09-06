@@ -39,9 +39,9 @@ enum StorageReconciliationPhase: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Any JSON value returned by the real CLI. The reconciliation schema is a
-/// durable evidence document and grows as new proofs are recorded, so Desktop
-/// retains every field instead of decoding a lossy UI-shaped subset.
+/// Any JSON value returned by the product API. The reconciliation schema grows
+/// as new proofs are recorded, so Desktop retains every field rather than
+/// decoding a lossy UI-shaped subset.
 indirect enum StorageReconciliationJSON: Codable, Sendable {
     case object([String: StorageReconciliationJSON])
     case array([StorageReconciliationJSON])
@@ -174,18 +174,30 @@ private struct JSONKey: CodingKey {
     }
 }
 
+private struct StorageReconciliationResponse: Decodable {
+    let report: StorageReconciliationJSON
+    let exitCode: Int32
+    let refusal: String?
+
+    enum CodingKeys: String, CodingKey {
+        case report, refusal
+        case exitCode = "exit_code"
+    }
+}
+
 struct StorageReconciliationInvocation: Identifiable, Sendable {
     let id: UUID
     let host: String
+    let address: OperationsDashboardAddress
     let transaction: String
     let phase: StorageReconciliationPhase
     let command: String
     let startedAt: Date
     let completedAt: Date
+    let httpStatus: Int?
     let exitCode: Int32?
     let receipt: StorageReconciliationJSON?
-    let stdout: Data
-    let stderr: Data
+    let responseBody: Data
     let refusal: String?
 }
 
@@ -196,13 +208,13 @@ final class StorageReconciliationStore: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var activeCommand: String?
 
-    private let cli: StadoCLI
+    private let client: OperationsClient
     private let defaults: UserDefaults
     private let retainedTransactionsKey = "stado.storage-root-reconcile.transactions"
     private var retainedTransactions: [String: String]
 
-    init(cli: StadoCLI = StadoCLI(), defaults: UserDefaults = .standard) {
-        self.cli = cli
+    init(client: OperationsClient = OperationsClient(), defaults: UserDefaults = .standard) {
+        self.client = client
         self.defaults = defaults
         retainedTransactions = defaults.dictionary(forKey: retainedTransactionsKey) as? [String: String] ?? [:]
     }
@@ -253,92 +265,94 @@ final class StorageReconciliationStore: ObservableObject {
         return nil
     }
 
-    func invoke(_ phase: StorageReconciliationPhase, host: String, transaction: String) async {
+    func invoke(
+        _ phase: StorageReconciliationPhase,
+        host: String,
+        transaction: String,
+        at address: OperationsDashboardAddress
+    ) async {
         guard !isRunning, Self.transactionProblem(transaction) == nil, !host.isEmpty else { return }
         retainTransaction(host: host, transaction: transaction)
-        let invokedHost = host
-        let invokedTransaction = transaction
-        let arguments = Self.arguments(
-            host: invokedHost,
-            transaction: invokedTransaction,
-            phase: phase
-        )
+        let arguments = Self.arguments(host: host, transaction: transaction, phase: phase)
         let command = StadoCLI.commandLine(arguments)
         let startedAt = Date()
         isRunning = true
-        activeCommand = command
+        activeCommand = "\(address.displayString) — \(command)"
         defer {
             isRunning = false
             activeCommand = nil
         }
+        var httpStatus: Int?
+        var exitCode: Int32?
+        var receipt: StorageReconciliationJSON?
+        var responseBody = Data()
+        var refusal: String?
         do {
-            let result = try await cli.jsonResult(
-                StorageReconciliationJSON.self,
-                arguments: arguments,
-                timeoutSeconds: phase == .status ? 120 : nil
+            let response = try await client.storageReconciliation(
+                target: host,
+                transaction: transaction,
+                phase: phase,
+                at: address
             )
-            invocations.insert(
-                StorageReconciliationInvocation(
-                    id: UUID(),
-                    host: invokedHost,
-                    transaction: invokedTransaction,
-                    phase: phase,
-                    command: command,
-                    startedAt: startedAt,
-                    completedAt: Date(),
-                    exitCode: result.exitCode,
-                    receipt: result.value,
-                    stdout: result.stdout,
-                    stderr: result.stderr,
-                    refusal: result.refusal
-                ),
-                at: 0
-            )
-        } catch {
-            let exitCode: Int32?
-            let stdout: Data
-            let stderr: Data
-            switch error {
-            case let StadoCLIError.failed(code, _):
-                exitCode = code
-                stdout = Data()
-                stderr = Data()
-            case let StadoCLIError.response(code, responseOutput, responseErrors, _):
-                exitCode = code
-                stdout = responseOutput
-                stderr = responseErrors
-            default:
-                exitCode = nil
-                stdout = Data()
-                stderr = Data()
+            httpStatus = response.status
+            responseBody = response.document
+            if response.status == 200 {
+                do {
+                    let result = try JSONDecoder().decode(
+                        StorageReconciliationResponse.self,
+                        from: response.document
+                    )
+                    exitCode = result.exitCode
+                    receipt = result.report
+                    refusal = result.refusal
+                } catch {
+                    refusal = "The storage reconciliation API response could not be decoded: \(error)"
+                }
+            } else {
+                let failure = try? JSONDecoder().decode(
+                    StorageReconciliationJSON.self,
+                    from: response.document
+                )
+                refusal = failure?["error"]?.stringValue
+                    ?? "The Stado dashboard returned HTTP \(response.status)."
             }
-            invocations.insert(
-                StorageReconciliationInvocation(
-                    id: UUID(),
-                    host: invokedHost,
-                    transaction: invokedTransaction,
-                    phase: phase,
-                    command: command,
-                    startedAt: startedAt,
-                    completedAt: Date(),
-                    exitCode: exitCode,
-                    receipt: nil,
-                    stdout: stdout,
-                    stderr: stderr,
-                    refusal: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-                ),
-                at: 0
-            )
+        } catch {
+            refusal = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
         }
+        invocations.insert(
+            StorageReconciliationInvocation(
+                id: UUID(),
+                host: host,
+                address: address,
+                transaction: transaction,
+                phase: phase,
+                command: command,
+                startedAt: startedAt,
+                completedAt: Date(),
+                httpStatus: httpStatus,
+                exitCode: exitCode,
+                receipt: receipt,
+                responseBody: responseBody,
+                refusal: refusal
+            ),
+            at: 0
+        )
     }
 
-    func invocations(host: String, transaction: String) -> [StorageReconciliationInvocation] {
-        invocations.filter { $0.host == host && $0.transaction == transaction }
+    func invocations(
+        host: String,
+        transaction: String,
+        at address: OperationsDashboardAddress
+    ) -> [StorageReconciliationInvocation] {
+        invocations.filter {
+            $0.host == host && $0.transaction == transaction && $0.address == address
+        }
     }
 }
 
 struct StorageReconciliationSheet: View {
     let host: String
+    let address: OperationsDashboardAddress
     @ObservedObject var store: StorageReconciliationStore
 
     @Environment(\.dismiss) private var dismiss
@@ -358,7 +372,7 @@ struct StorageReconciliationSheet: View {
     }
 
     private var invocations: [StorageReconciliationInvocation] {
-        store.invocations(host: host, transaction: selectedTransaction)
+        store.invocations(host: host, transaction: selectedTransaction, at: address)
     }
 
     private var latestReceipt: StorageReconciliationJSON? {
@@ -413,10 +427,11 @@ struct StorageReconciliationSheet: View {
             Text("Reconcile storage roots on \(host)")
                 .font(WisentTypography.heading(17))
                 .foregroundStyle(WisentDesign.ink)
-            Text("Operate one durable A/B storage transaction through Stado's native host command. Opening this sheet and changing fields run nothing; status is read only, and every write is reviewed before it starts.")
+            Text("Operate one durable A/B storage transaction through the configured Stado API. Opening this sheet and changing fields run nothing; status is read only, and every write is reviewed before it starts.")
                 .font(WisentTypeScale.body())
                 .foregroundStyle(WisentDesign.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            WisentField(label: "Dashboard", value: address.displayString)
         }
     }
 
@@ -447,6 +462,9 @@ struct StorageReconciliationSheet: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(store.isRunning)
+                Text("Equivalent CLI command")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
                 Text(verbatim: command)
                     .font(WisentTypeScale.identifierSmall())
                     .foregroundStyle(WisentDesign.muted)
@@ -577,8 +595,8 @@ struct StorageReconciliationSheet: View {
 
     private var history: some View {
         WisentSectionBox(
-            title: "Retained command evidence",
-            detail: "Every attempt keeps its exact command, process verdict, full JSON answer, and refusal text. A later failure never replaces an earlier receipt.",
+            title: "Retained product evidence",
+            detail: "Every attempt keeps its reviewed source and command, HTTP status, product verdict, complete API response, and refusal. A later failure never replaces an earlier receipt.",
             trailing: invocations.isEmpty ? "Not run" : "\(invocations.count.formatted(.number)) attempt(s)"
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
@@ -610,18 +628,20 @@ struct StorageReconciliationSheet: View {
                 .font(WisentTypeScale.identifierSmall())
                 .foregroundStyle(WisentDesign.ink)
                 .textSelection(.enabled)
+            WisentField(label: "Dashboard", value: invocation.address.displayString)
             WisentField(
-                label: "Process exit",
+                label: "HTTP status",
+                value: invocation.httpStatus.map { String($0) } ?? "Unavailable"
+            )
+            WisentField(
+                label: "Product exit",
                 value: invocation.exitCode.map { String($0) } ?? "Unavailable"
             )
             if let refusal = invocation.refusal {
                 WisentErrorBanner(title: "Stado refused or interrupted this command", detail: refusal)
             }
-            if !invocation.stdout.isEmpty {
-                processOutput("Raw stdout", invocation.stdout)
-            }
-            if !invocation.stderr.isEmpty {
-                processOutput("Raw stderr", invocation.stderr)
+            if !invocation.responseBody.isEmpty {
+                processOutput("Raw API response", invocation.responseBody)
             }
             if let receipt = invocation.receipt {
                 Text("Decoded complete JSON")
@@ -672,7 +692,7 @@ struct StorageReconciliationSheet: View {
                     if phase.isReadOnly {
                         let transaction = selectedTransaction
                         let requested = phase
-                        Task { await store.invoke(requested, host: host, transaction: transaction) }
+                        Task { await store.invoke(requested, host: host, transaction: transaction, at: address) }
                     } else {
                         pendingPhase = phase
                     }
@@ -693,20 +713,21 @@ struct StorageReconciliationSheet: View {
             title: "\(requested.title) storage transaction \(transaction)?",
             lines: [
                 requested.explanation,
-                "Stado owns every filesystem, process, queue, locking, and evidence decision. Desktop passes only this reviewed argv and retains the answer.",
+                "Stado owns every filesystem, process, queue, locking, and evidence decision. Desktop sends the reviewed host, transaction and phase to this API and retains its answer.",
                 "An accepted response is not completion. This window will not automatically issue status, resume, rollback, or finalize afterwards.",
             ],
             listing: [
+                "dashboard: \(address.displayString)",
                 "host: \(host)",
                 "transaction: \(transaction)",
                 "phase: \(requested.rawValue)",
             ],
-            footnote: "Runs \(StadoCLI.commandLine(arguments)).",
+            footnote: "Equivalent CLI: \(StadoCLI.commandLine(arguments)).",
             actions: [
                 WisentAction("Back to transaction", kind: .secondary) { pendingPhase = nil },
                 WisentAction(requested.title, symbol: "externaldrive", kind: .destructive) {
                     pendingPhase = nil
-                    Task { await store.invoke(requested, host: host, transaction: transaction) }
+                    Task { await store.invoke(requested, host: host, transaction: transaction, at: address) }
                 },
             ]
         )

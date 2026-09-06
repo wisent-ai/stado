@@ -1961,6 +1961,8 @@ pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 /// adopts a complete registry-v2 document, and `converge-apply` may deliver every
 /// declared binary on one canonical host. Reading does not authorize mutation;
 /// each independent operation requires its own grant.
+/// Storage reconciliation separately grants status reads and explicit transaction
+/// actions; neither policy writes nor software delivery authorize a data handoff.
 pub const REGISTRY_API_ACTIONS: &[&str] = &[
     "cleanup-read",
     "cleanup-run",
@@ -1969,6 +1971,8 @@ pub const REGISTRY_API_ACTIONS: &[&str] = &[
     "policy-read",
     "policy-write",
     "registry-import",
+    "storage-reconcile-apply",
+    "storage-reconcile-read",
 ];
 
 /// One client authorized against the registry-policy boundary.
