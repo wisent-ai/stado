@@ -1238,9 +1238,16 @@ enum RegistryHostPathCommands {
 
 #[derive(Subcommand)]
 enum HostPrecheckRunnerCommands {
-    /// Install or reconcile the isolated pre-check runner on TARGET.
+    /// Install or reconcile the host's runner on TARGET.
     Install {
         target: String,
+        /// Register against this repository instead of the organization.
+        /// Organization-wide registration needs the organization's
+        /// self-hosted-runner permission on the fleet's GitHub credential; a
+        /// repository name needs only admin on that one repository, which is
+        /// what the fleet's own credential has.
+        #[arg(long)]
+        repository: Option<String>,
         /// Emit the lifecycle report as JSON.
         #[arg(long)]
         json: bool,
@@ -1267,6 +1274,11 @@ enum HostPrecheckRunnerCommands {
     /// Remove the runner, service definition and network boundary from TARGET.
     Remove {
         target: String,
+        /// The repository this runner was registered against, when it was not
+        /// registered organization-wide. A repository-scoped runner cannot be
+        /// removed through the organization endpoint.
+        #[arg(long)]
+        repository: Option<String>,
         /// Emit the lifecycle report as JSON.
         #[arg(long)]
         json: bool,
@@ -3307,18 +3319,22 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::reclaim(&target, apply, reason.as_deref(), json).await,
             HostCommands::PrecheckRunner(command) => match command {
-                HostPrecheckRunnerCommands::Install { target, json } => {
-                    precheck_runner::install(&target, json).await
-                }
+                HostPrecheckRunnerCommands::Install {
+                    target,
+                    repository,
+                    json,
+                } => precheck_runner::install(&target, repository.as_deref(), json).await,
                 HostPrecheckRunnerCommands::Status { target, json } => {
                     precheck_runner::status(&target, json).await
                 }
                 HostPrecheckRunnerCommands::Restart { target, json } => {
                     precheck_runner::restart(&target, json).await
                 }
-                HostPrecheckRunnerCommands::Remove { target, json } => {
-                    precheck_runner::remove(&target, json).await
-                }
+                HostPrecheckRunnerCommands::Remove {
+                    target,
+                    repository,
+                    json,
+                } => precheck_runner::remove(&target, repository.as_deref(), json).await,
                 HostPrecheckRunnerCommands::RepositoryAdd {
                     repository,
                     runner_group,

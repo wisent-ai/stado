@@ -149,6 +149,18 @@ pub const LOCAL_APFS_SNAPSHOTS_STAGE: &str = "local_apfs_snapshots";
 /// The stage name for queue job trees left in the OS scratch directory by an
 /// agent that predates the persistent `$HOME/.stado/work/jobs` root.
 pub const LEGACY_TMP_WORKDIRS_STAGE: &str = "legacy_tmp_workdirs";
+/// The stage name for the `_work` trees of the host's GitHub runners.
+///
+/// A runner's own `ACTIONS_RUNNER_HOOK_JOB_COMPLETED` hook clears `_work`
+/// after each job it finishes; nothing clears it after a job that never
+/// finished, and nothing clears the runners a repository installed and stopped
+/// using. On 2026-09-06 `charless-mac-mini` sat at 0.9 GiB free with five
+/// runner roots on it, every reclaim stage reported zero items, and no .NET
+/// listener on the host could start — so the machine could neither run CI nor
+/// be repaired through CI. Every stage before this one looks inside a home or
+/// a Stado-owned tree; the runner roots are root-owned and outside both, which
+/// is exactly why they were invisible.
+pub const RUNNER_WORK_TREES_STAGE: &str = "runner_work_trees";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -656,6 +668,33 @@ else
   IFS=$saved_ifs
 fi
 printf 'STADO_RECLAIM_STAGE\tlocal_apfs_snapshots\t%s\t%s\n' "$before" "$(free_kb)"
+
+before=$(free_kb)
+# The `_work` trees of the host's GitHub runners. A runner clears its own
+# after each job it FINISHES; a cancelled job, a killed listener and a runner
+# whose repository stopped using it all leave theirs behind, and they are the
+# largest thing on a CI host. Only `_work` is touched: it holds checkouts and
+# build output the next job recreates. `_`-prefixed children are the runner's
+# own bookkeeping (`_temp`, `_tool`, `_actions`) and stay.
+#
+# A job in flight owns the tree it is building in, so a live `Runner.Worker`
+# anywhere on the host stops this stage rather than racing it. The listener
+# process itself is not a job and does not block.
+if /bin/ps -Ao comm= 2>/dev/null | /usr/bin/grep -q -x 'Runner.Worker'; then
+  printf 'STADO_RECLAIM_UNAVAILABLE\trunner_work_trees\t%s\n' 'a runner job is in flight on this host'
+else
+  for runner_root in /Users/Shared/*-runner /opt/wisent/*-runner; do
+    [ -d "$runner_root/_work" ] || continue
+    for entry in "$runner_root"/_work/*; do
+      [ -e "$entry" ] || continue
+      case "$(basename "$entry")" in
+        _*) continue ;;
+      esac
+      reclaim "$entry" runner_work_trees
+    done
+  done
+fi
+printf 'STADO_RECLAIM_STAGE\trunner_work_trees\t%s\t%s\n' "$before" "$(free_kb)"
 
 printf 'STADO_RECLAIM_FREE\tafter\t%s\n' "$(free_kb)"
 "#;

@@ -175,6 +175,7 @@ fn linux_installer(
     brama_port: u16,
     restart_registered: bool,
     profile: RunnerProfile,
+    scope: &RunnerScope,
 ) -> String {
     let runner_name = format!("{}-{}", profile.slug, target.name);
     replace(
@@ -184,16 +185,14 @@ fn linux_installer(
             ("__SHA256__", LINUX_SHA256.to_string()),
             ("__TOKEN__", super::shlex_quote(registration_token)),
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
-            ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
+            ("__RUNNER_GROUP__", super::shlex_quote(scope.group(profile))),
             ("__RUNNER_LABELS__", profile.labels.to_string()),
             (
                 "__RESTART_REGISTERED__",
                 u8::from(restart_registered).to_string(),
             ),
-            (
-                "__ORGANIZATION_URL__",
-                format!("https://github.com/{GITHUB_ORGANIZATION}"),
-            ),
+            ("__REGISTRATION_URL__", scope.registration_url()),
+            ("__RUNNER_SCOPE__", super::shlex_quote(&scope.label())),
             ("__BLOCKED_IPV4__", shell_list(BLOCKED_IPV4_NETWORKS)),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
             (
@@ -213,6 +212,7 @@ fn macos_installer(
     brama_port: u16,
     restart_registered: bool,
     profile: RunnerProfile,
+    scope: &RunnerScope,
 ) -> String {
     let runner_name = format!("{}-{}", profile.slug, target.name);
     replace(
@@ -226,16 +226,14 @@ fn macos_installer(
             ("__SHA256__", MACOS_SHA256.to_string()),
             ("__TOKEN__", super::shlex_quote(registration_token)),
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
-            ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
+            ("__RUNNER_GROUP__", super::shlex_quote(scope.group(profile))),
             ("__RUNNER_LABELS__", profile.labels.to_string()),
             (
                 "__RESTART_REGISTERED__",
                 u8::from(restart_registered).to_string(),
             ),
-            (
-                "__ORGANIZATION_URL__",
-                format!("https://github.com/{GITHUB_ORGANIZATION}"),
-            ),
+            ("__REGISTRATION_URL__", scope.registration_url()),
+            ("__RUNNER_SCOPE__", super::shlex_quote(&scope.label())),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
             (
                 "__KRONIKA_AGENT_ID__",
@@ -1383,12 +1381,68 @@ pub async fn bootstrap_developer_id(
     }))
 }
 
-async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
+/// Where a runner registers. GitHub answers a registration token at two
+/// addresses and they are not interchangeable: the organization endpoint needs
+/// the organization's self-hosted-runner permission, and the repository
+/// endpoint needs admin on that one repository. On 2026-08-10 and again on
+/// 2026-09-06 the fleet's credential was refused at the first and accepted at
+/// the second — proven, not assumed — and five separate diagnoses read that
+/// 403 as "runners cannot be managed from here". They can; the door is
+/// different, and a runner registered to a repository serves that repository
+/// only. Which door was used is part of the answer, so it is recorded on the
+/// host and reported by `status`.
+#[derive(Debug, Clone)]
+pub enum RunnerScope {
+    Organization,
+    Repository(String),
+}
+
+impl RunnerScope {
+    /// The URL `config.sh` registers against.
+    fn registration_url(&self) -> String {
+        match self {
+            Self::Organization => format!("https://github.com/{GITHUB_ORGANIZATION}"),
+            Self::Repository(repository) => {
+                format!("https://github.com/{GITHUB_ORGANIZATION}/{repository}")
+            }
+        }
+    }
+
+    /// Runner groups exist only at organization level, so a repository-scoped
+    /// runner declares none rather than an invented one.
+    fn group(&self, profile: RunnerProfile) -> &str {
+        match self {
+            Self::Organization => profile.group,
+            Self::Repository(_) => "",
+        }
+    }
+
+    fn token_endpoint(&self, kind: &str) -> String {
+        match self {
+            Self::Organization => format!(
+                "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runners/{kind}-token"
+            ),
+            Self::Repository(repository) => format!(
+                "https://api.github.com/repos/{GITHUB_ORGANIZATION}/{repository}/actions/runners/{kind}-token"
+            ),
+        }
+    }
+
+    /// What `status` prints and what the host records.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Organization => format!("organization:{GITHUB_ORGANIZATION}"),
+            Self::Repository(repository) => {
+                format!("repository:{GITHUB_ORGANIZATION}/{repository}")
+            }
+        }
+    }
+}
+
+async fn github_runner_token(scope: &RunnerScope, kind: &str) -> Result<String, DeployError> {
     let credential = github_credential().await?;
-    let endpoint =
-        format!("https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runners/{kind}-token");
     let response = reqwest::Client::new()
-        .post(endpoint)
+        .post(scope.token_endpoint(kind))
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header(reqwest::header::USER_AGENT, "wisent-stado-precheck-runner")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -1403,26 +1457,33 @@ async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
         .map_err(|error| DeployError(format!("GitHub runner token response failed: {error}")))?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-        // Which credential was used and what it must be allowed to do. A bare
-        // 403 sends the reader to GitHub's documentation; the fleet's own
-        // answer is one item in one vault, and every runner operation —
-        // registering, changing labels, removing — goes through this token.
+        // Which credential was used, what it must be allowed to do, and the
+        // other door. A bare 403 sends the reader to GitHub's documentation
+        // and has cost this fleet five separate re-diagnoses.
         let remedy = if status == reqwest::StatusCode::FORBIDDEN
             || status == reqwest::StatusCode::UNAUTHORIZED
         {
-            format!(
-                ". Stado read this credential from Skarbiec item {:?} field \"value\"; that \
-                 identity is not allowed to manage {GITHUB_ORGANIZATION} runners. Store a \
-                 credential with organization self-hosted-runner write permission in that \
-                 item, or the runner's labels, group and registration cannot be changed from \
-                 here",
-                GITHUB_CREDENTIAL_ITEM
-            )
+            match scope {
+                RunnerScope::Organization => format!(
+                    ". Stado read this credential from Skarbiec item {GITHUB_CREDENTIAL_ITEM:?} \
+                     field \"value\"; that identity may not manage {GITHUB_ORGANIZATION} runners, \
+                     which is what an organization-wide runner needs. Either store a credential \
+                     with the organization's self-hosted-runner write permission in that item, or \
+                     register this host against one repository with --repository <NAME>, which \
+                     the same credential is allowed to do"
+                ),
+                RunnerScope::Repository(repository) => format!(
+                    ". Stado read this credential from Skarbiec item {GITHUB_CREDENTIAL_ITEM:?} \
+                     field \"value\"; that identity is not an administrator of \
+                     {GITHUB_ORGANIZATION}/{repository}, so it cannot register a runner there"
+                ),
+            }
         } else {
             String::new()
         };
         return Err(DeployError(format!(
-            "GitHub runner {kind} token request returned HTTP {}: {}{remedy}",
+            "GitHub runner {kind} token request for {} returned HTTP {}: {}{remedy}",
+            scope.label(),
             status.as_u16(),
             detail.trim()
         )));
@@ -1643,12 +1704,26 @@ fn report(
         "runner_kind": profile.kind,
         "runner_group": profile.group,
         "runner_labels": profile.labels,
+        // Read from the host's own registration record where there is one, so
+        // the answer is what the runner did, not what this declaration wants.
+        "runner_scope": registered_scope(&output.stdout)
+            .unwrap_or_else(|| RunnerScope::Organization.label()),
         "action": action,
         "status": if output.ok() { "completed" } else { "failed" },
         "exit_code": output.code,
         "stdout": output.stdout,
         "stderr": output.stderr,
     })
+}
+
+/// The third line of `.stado/registered-runner`, which every status script
+/// prints: `organization:<org>` or `repository:<org>/<name>`.
+fn registered_scope(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("organization:") || line.starts_with("repository:"))
+        .map(str::to_string)
 }
 
 /// The consumer identity the runner presents to Brama. It is the same name the
@@ -1874,7 +1949,11 @@ async fn brama_identity_host(target: &ComputeTarget) -> Result<ComputeTarget, De
     host_channel::resolve_target(&registry, &service.active_host).cloned()
 }
 
-async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
+async fn install_profile(
+    target_name: &str,
+    profile: RunnerProfile,
+    scope: &RunnerScope,
+) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
@@ -1887,18 +1966,19 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
         Platform::LinuxAmd64 => format!("/opt/wisent/{}-runner", profile.slug),
         Platform::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
     };
-    // A runner already registered with DIFFERENT labels or a different group
-    // answers a different set of jobs than this profile declares, and labels
-    // are fixed at registration: `config.sh` reads them once. The installer
-    // used to skip a registered runner entirely, so changing the declaration
-    // changed nothing on the host and the jobs it was meant to take kept
-    // queueing. Stado therefore records what it registered, in
-    // `.stado/registered-runner`, and re-registers when that record and this
-    // profile disagree.
+    // A runner already registered with DIFFERENT labels, a different group or
+    // against a different scope answers a different set of jobs than this
+    // profile declares, and all three are fixed at registration: `config.sh`
+    // reads them once. The installer used to skip a registered runner
+    // entirely, so changing the declaration changed nothing on the host and
+    // the jobs it was meant to take kept queueing. Stado therefore records
+    // what it registered, in `.stado/registered-runner`, and re-registers
+    // when that record and this declaration disagree.
     let registration = format!(
-        "printf '%s\\n%s\\n' {} {}",
+        "printf '%s\\n%s\\n%s\\n' {} {} {}",
         super::shlex_quote(profile.labels),
-        super::shlex_quote(profile.group)
+        super::shlex_quote(scope.group(profile)),
+        super::shlex_quote(&scope.label())
     );
     let probe = format!(
         "test -f {root}/.runner && test -f {root}/.stado/registered-runner && \
@@ -1911,7 +1991,7 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
     let token = if already_registered {
         String::new()
     } else {
-        github_runner_token("registration").await?
+        github_runner_token(scope, "registration").await?
     };
     let runner_name = format!("{}-{}", profile.slug, target.name);
     let restart_registered = already_registered
@@ -1925,6 +2005,7 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
             brama_port,
             restart_registered,
             profile,
+            scope,
         ),
         Platform::DarwinArm64 => macos_installer(
             &target,
@@ -1933,6 +2014,7 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
             brama_port,
             restart_registered,
             profile,
+            scope,
         ),
     };
     let output = host_channel::run_script_with_timeout(
@@ -2055,10 +2137,14 @@ async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, D
     }))
 }
 
-async fn remove_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
+async fn remove_profile(
+    target_name: &str,
+    profile: RunnerProfile,
+    scope: &RunnerScope,
+) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
-    let token = github_runner_token("remove").await?;
+    let token = github_runner_token(scope, "remove").await?;
     let script = replace(
         &profile_template(
             match platform {
@@ -2118,16 +2204,29 @@ pub async fn restart(target_name: &str) -> Result<Value, DeployError> {
     Ok(value)
 }
 
-pub async fn install(target_name: &str) -> Result<Value, DeployError> {
-    install_profile(target_name, PRECHECK).await
+/// Install the host's one runner. `repository` registers it against that
+/// repository instead of the organization: the same runner, the same labels,
+/// the other door — which is the one the fleet's own credential is allowed to
+/// open.
+pub async fn install(target_name: &str, repository: Option<&str>) -> Result<Value, DeployError> {
+    install_profile(target_name, PRECHECK, &scope_for(repository)).await
 }
 
 pub async fn status(target_name: &str) -> Result<Value, DeployError> {
     status_profile(target_name, PRECHECK).await
 }
 
-pub async fn remove(target_name: &str) -> Result<Value, DeployError> {
-    remove_profile(target_name, PRECHECK).await
+pub async fn remove(target_name: &str, repository: Option<&str>) -> Result<Value, DeployError> {
+    remove_profile(target_name, PRECHECK, &scope_for(repository)).await
+}
+
+/// A removal or registration addresses one scope, and a runner registered
+/// against a repository cannot be removed through the organization endpoint.
+fn scope_for(repository: Option<&str>) -> RunnerScope {
+    match repository {
+        Some(repository) => RunnerScope::Repository(repository.to_string()),
+        None => RunnerScope::Organization,
+    }
 }
 
 pub async fn install_publisher(
@@ -2137,7 +2236,7 @@ pub async fn install_publisher(
     for repository in repositories {
         bootstrap_publisher_repository(repository).await?;
     }
-    install_profile(target_name, PUBLISHER).await
+    install_profile(target_name, PUBLISHER, &RunnerScope::Organization).await
 }
 
 pub async fn reconcile_publisher_repository(repository: &str) -> Result<Value, DeployError> {
@@ -2149,7 +2248,7 @@ pub async fn status_publisher(target_name: &str) -> Result<Value, DeployError> {
 }
 
 pub async fn remove_publisher(target_name: &str) -> Result<Value, DeployError> {
-    remove_profile(target_name, PUBLISHER).await
+    remove_profile(target_name, PUBLISHER, &RunnerScope::Organization).await
 }
 
 const DEVELOPER_ID_PREPARE: &str = r#"set -euo pipefail
@@ -2234,7 +2333,7 @@ if [ ! -f "$runner_root/.runner" ]; then
   token_file="$runner_root/.registration-token"
   if ! (cd "$runner_root" && root /usr/sbin/runuser --user "$runner_user" -- /usr/bin/env \
     HOME="$runner_root" PATH=/usr/local/bin:/usr/bin:/bin TOKEN_FILE="$token_file" \
-    /bin/bash -c 'read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__ORGANIZATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; exec ./config.sh --unattended --replace --disableupdate' \
+    /bin/bash -c 'read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__REGISTRATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; [ -n "$2" ] && export ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2"; exec ./config.sh --unattended --replace --disableupdate' \
     bash "$runner_name" "$runner_group"); then
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
@@ -2244,9 +2343,10 @@ if [ ! -f "$runner_root/.runner" ]; then
   fi
   token=
   # The same record the darwin installer keeps: what this registration
-  # answers for, so a later install sees a moved declaration.
+  # answers for and which door it went through, so a later install sees a
+  # moved declaration and `status` can say the scope without asking GitHub.
   root mkdir -p "$runner_root/.stado"
-  printf '%s\n%s\n' __RUNNER_LABELS__ "$runner_group" | root tee "$runner_root/.stado/registered-runner" >/dev/null
+  printf '%s\n%s\n%s\n' __RUNNER_LABELS__ "$runner_group" __RUNNER_SCOPE__ | root tee "$runner_root/.stado/registered-runner" >/dev/null
 fi
 
 root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
@@ -2480,7 +2580,7 @@ if [ "$runner_registered" -eq 0 ]; then
   chmod 600 "$token_file"
   if ! (cd "$runner_root" && /usr/bin/env \
     HOME="$runner_root" TMPDIR="$runner_root/.tmp" DOTNET_BUNDLE_EXTRACT_BASE_DIR="$runner_root/.dotnet" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin TOKEN_FILE="$token_file" \
-    /bin/bash -c 'cd "$HOME"; read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__ORGANIZATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; exec ./config.sh --unattended --replace --disableupdate' \
+    /bin/bash -c 'cd "$HOME"; read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__REGISTRATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; [ -n "$2" ] && export ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2"; exec ./config.sh --unattended --replace --disableupdate' \
     bash "$runner_name" "$runner_group"); then
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
@@ -2489,11 +2589,12 @@ if [ "$runner_registered" -eq 0 ]; then
     exit 1
   fi
   token=
-  # What this registration answers for, so a later install can see that the
-  # declaration moved. Labels are fixed at `config.sh` time and GitHub's own
-  # runner list needs an organization-admin token to read, so the record lives
-  # beside the runner.
-  printf '%s\n%s\n' __RUNNER_LABELS__ "$runner_group" | root tee "$runner_root/.stado/registered-runner" >/dev/null
+  # What this registration answers for and which door it went through, so a
+  # later install can see that the declaration moved and `status` can name the
+  # scope. Labels are fixed at `config.sh` time and GitHub's own runner list
+  # needs an organization-admin token to read, so the record lives beside the
+  # runner.
+  printf '%s\n%s\n%s\n' __RUNNER_LABELS__ "$runner_group" __RUNNER_SCOPE__ | root tee "$runner_root/.stado/registered-runner" >/dev/null
 elif [ "$runtime_repaired" -eq 1 ]; then
   restore_runner_apphosts
 fi
@@ -2631,7 +2732,11 @@ brama_route=$(root cat /opt/wisent/stado-precheck-runner/routes/brama.url)
 [ -n "$brama_route" ]
 secret_meta=$(root stat -c '%U %G %a' /opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret)
 [ "$secret_meta" = "stado-precheck stado-precheck 600" ]
-printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\n' "$agent_id" "$brama_route" "$secret_meta"
+# Which door this runner registered through. GitHub's own runner list needs an
+# organization-admin token, so the scope is read from the record the installer
+# wrote beside the runner.
+scope=$(root sed -n '3p' /opt/wisent/stado-precheck-runner/.stado/registered-runner 2>/dev/null || true)
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "${scope:-organization:wisent-ai}"
 "#;
 
 /// Each check states its own refusal, because the caller reports the last
@@ -2735,7 +2840,8 @@ fi
 # same distinction.
 listeners=$(/bin/ps -Ao user=,comm= |
   /usr/bin/awk '$2 ~ /Runner\.Listener$/ { printf "%s %s; ", $1, $2 }')
-printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}"
+scope=$(root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true)
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}" "${scope:-organization:wisent-ai}"
 "#;
 
 /// Restart the runner in place and wait until it says it is listening again.
