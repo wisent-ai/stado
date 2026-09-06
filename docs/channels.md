@@ -21,6 +21,37 @@ Use `stado host exec <target> <allowlisted-command>` for read-only diagnostics. 
 
 Set `RUST_LOG=stado::deploy::host_channel=trace` when the same operation needs OpenSSH's own transport diagnosis. Stado adds `-vvv` to the shared SSH invocation only while that existing tracing target is enabled; normal argv is unchanged, and the debug stream remains verbatim in the operation's existing stderr and status receipt.
 
+### Bounded vault bearers
+
+Select a declared host in Stado Desktop and open **Fleet › Hosts › selected host
+› Bounded vault bearer** to run the same host operation without switching to a
+terminal. The form names the consumer, comma-separated exact
+`action:item[#field]` capabilities, audience, and lifetime in seconds. **Replace
+an existing capability set** maps to `--replace-capabilities`; leave it off to
+make a different existing grant a refusal rather than an implicit widening or
+replacement.
+
+**Mint a new bearer** asks the target's live Skarbiec vault to create the
+bounded bearer and store its hash. By default the sheet requests non-secret
+metadata, so the generated plaintext is discarded. Turn on **Show generated
+bearer** before review to opt into the CLI's one-time raw output; after success
+Desktop shows the value in its existing sensitive copy block and clears its
+displayed copy when the sheet closes.
+
+**Register a stored bearer** instead adds an existing owner-vault item and
+field; the field defaults to `token`. Only that item/field coordinate crosses
+the host channel. The existing field value does not enter the process argument
+vector or ordinary output, and the operation does not rotate it. Raw output is
+available only for newly generated bearers.
+
+Metadata success shows the selected target, the command's `token_minted` or
+`token_registered` status, consumer, audience, expiry, workload-binding state,
+exact capabilities, and the stored source coordinate when one was used. The
+explicit raw mode shows the generated bearer together with its target and
+requested grant fields instead. Host-channel, vault, item, field, audience,
+capability, expiry, and existing-capability conflicts are shown using Stado's
+actual refusal detail rather than a generic command-failed message.
+
 An unmanaged executable is retired with `stado host retire-file <target> <absolute-path> --product <product>`. Add `--dry-run` for an exact-path preflight: it reports a transaction token, exact planned destination, byte count, mode, and SHA-256 without creating a directory or moving the source. A reviewed apply carries that receipt back with `--transaction`, `--expected-sha256`, `--expected-size`, and `--expected-mode`; all four must be supplied together, and Stado refuses before destination creation when the current source differs or the transaction token is invalid. Stado Desktop always uses this receipt-bound form. User executables must be owner-owned regular non-symlink direct children of `$HOME/.stado/bin`, `$HOME/.local/bin`, or `$HOME/.cargo/bin`; they move atomically into the product backup tree. One exact root-owned `/Library/LaunchDaemons/*.plist` is also accepted under the target's approved sudo grant and moves atomically to a non-loadable sibling. Retire a legacy plist and its convenience binary as two separate reviewed operations.
 
 ### Retiring an undeclared init-system unit
@@ -394,6 +425,27 @@ stado service grant-sync <service> \
 `stado host vault-item-put <target> <item> --type <kind>` stores one canonical item, reading the payload from stdin so no credential field enters a local or remote argument vector. `stado host vault-item-show <target> <item>` is its read: kind, schema, revision, tags, `updated_at`, and per field the name, byte length and SHA-256, narrowed with `--field <name>`. The decryption and the hashing both happen on the host, so comparing a digest against a local copy's answers "does the host hold what this declaration references" without either side sending the value.
 
 The read exists because its absence hid a whole migration's work in the wrong place. `skarbiec set-json` on a workstation writes that workstation's vault; the fleet reads the target's own live vault, and nothing pointed at the difference — `retag-vault-item` reports state, revision and tags but nothing about a payload, `stado credentials get` reads the local store, and `skarbiec get` is not a host-exec command. Seven environment bundles and twenty credential fields went into a laptop vault nothing on the fleet reads, and the only symptom was Brama answering `401` to a bearer it had never been told about.
+
+### Which vault a machine resolves
+
+A machine can hold several vault files, and exactly one of them answers its credential operations. `secrets.skarbiec.vault_file` declares which: `stado config set secrets.skarbiec.vault_file <path>` for the machine you are on, `stado host config-set <target> secrets.skarbiec.vault_file <path>` for a managed host. `SKARBIEC_VAULT_FILE` still overrides it for one process, which is how a build is exercised before it is installed.
+
+With nothing declared the machine discovers one, searching the paths Skarbiec's own `vaults` command searches, in its order: `~/.local/share/skarbiec/skarbiec.vault.json`, `~/.stado/skarbiec.vault.json`, `~/skarbiec.vault.json`. That is an answer only while one candidate is present, or while the candidates carry different owners.
+
+`stado credentials vault [--json]` reports the resolution for the machine it runs on, and `stado host vaults <target>` reports it for a managed host, marking the resolved vault with `*`. Stado Desktop shows the same on the Hosts screen as "Credential vault this host resolves". The states:
+
+| State | Meaning |
+|---|---|
+| `declared` | `secrets.skarbiec.vault_file` names a vault this machine holds |
+| `discovered` | one candidate, and no declaration was needed |
+| `ambiguous` | several candidates claim one owner: every owner write and authoritative read here is refused |
+| `declared-absent` | the declaration names a file this machine does not hold |
+| `none` | no candidate at all, so this machine cannot write credential items |
+| `unreadable` | that host's installed release has no such field, so its resolution cannot be read from here |
+
+Nothing is ever merged and no vault is ever created to resolve this: which items belong where is the operator's decision, and a second vault created quietly is the defect rather than the recovery.
+
+On 2026-09-05 `lukasz-macbook` held `~/.local/share/skarbiec/skarbiec.vault.json` with 660 items and `~/.stado/skarbiec.vault.json` with 626, both claiming owner `skarbiec-owner-charless-mini-20260804`, because the `skarbiec` CLI defaults to the first and Stado used to name the second. Twenty-two of the fleet's twenty-four declared release publishers were in both, two in only one. Every owner write on that machine was refused, so `stado host reconcile-release-verifier` could not extend the release verifier's grant, and `stado doctor --deployment-preflight` failed `object-auth` with seven publisher items missing — the fleet's release publication boundary, closed by a question nothing in the product asked out loud.
 
 ## Failure ownership
 

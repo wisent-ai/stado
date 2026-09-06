@@ -69,6 +69,23 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Report which vault this machine's credential operations resolve to,
+    /// and why.
+    ///
+    /// Every write and every authoritative read here goes through one file,
+    /// and until this command existed nothing said which — the answer lived
+    /// in a discovery rule and one environment variable, and it surfaced only
+    /// as a refusal from whatever command hit it. On 2026-09-05 that was
+    /// `stado host reconcile-release-verifier`, after two vaults on this
+    /// machine had been claiming one owner for long enough to close the
+    /// fleet's release publication boundary.
+    ///
+    /// Exits non-zero when nothing resolves, so a script can gate on it.
+    Vault {
+        /// Emit the state, the resolved path and the candidates as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List nonsecret item metadata from one owner-controlled vault file.
     ///
     /// With `--host` the vault is the one THAT host holds, read through the
@@ -146,6 +163,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
+        SecretsCommands::Vault { json } => vault_authority(json),
         SecretsCommands::InspectVault {
             vault,
             host,
@@ -328,6 +346,79 @@ fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
 /// one: a second vault created quietly is the defect, not the recovery.
 fn owner_vault() -> Result<std::path::PathBuf, CmdError> {
     crate::credential_store::owner::vault().map_err(|error| CmdError::click(error.to_string()))
+}
+
+/// `stado credentials vault [--json]` — the resolution itself, reported.
+///
+/// The same rule the fleet sweep applies to another host's report is applied
+/// here to this machine's own candidates, so the two cannot answer
+/// differently: `stado host vaults <target>` and this command state one
+/// verdict in one vocabulary.
+fn vault_authority(json_output: bool) -> Result<(), CmdError> {
+    let candidates = crate::credential_store::owner::candidates_present()
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let declared = crate::config::skarbiec_vault_file();
+    let verdict = crate::credential_store::owner::authority(Some(declared), &candidates);
+    let state = verdict
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    // The resolver is asked as well as described: a report that computed the
+    // state itself and never called `vault()` could agree with nothing.
+    let resolved = crate::credential_store::owner::vault();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "state": state,
+                "path": resolved.as_ref().ok().map(|path| path.display().to_string()),
+                "detail": verdict.get("detail"),
+                "declared": if declared.trim().is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::from(declared)
+                },
+                "candidates": candidates,
+                "refusal": resolved.as_ref().err().map(ToString::to_string),
+            }))?
+        );
+    } else {
+        println!("state: {state}");
+        match &resolved {
+            Ok(path) => println!("vault: {}", path.display()),
+            Err(error) => println!("vault: none — {error}"),
+        }
+        if !declared.trim().is_empty() {
+            println!("declared: {declared}");
+        }
+        for candidate in &candidates {
+            println!(
+                "  {:>5} items  owner {}  {}",
+                candidate
+                    .get("items")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default(),
+                candidate
+                    .get("owner")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("?"),
+                candidate
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+            );
+        }
+    }
+    match resolved {
+        Ok(_) => Ok(()),
+        // With `--json` the document already carries `state` and `refusal`,
+        // and a second JSON error printed after it makes the answer
+        // unparseable — one report per invocation, and the exit status is the
+        // part a script gates on.
+        Err(_) if json_output => Err(CmdError::silent(1)),
+        Err(error) => Err(CmdError::click(error.to_string())),
+    }
 }
 
 const SKARBIEC_LAUNCHER_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec-keychain-launcher"];
