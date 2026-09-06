@@ -96,8 +96,16 @@ pub enum InferenceCommands {
         json: bool,
     },
     /// Send one minimal authenticated OpenAI-compatible completion.
+    ///
+    /// Without `--from` the call is made on the deployment's own host, which
+    /// proves the model answers and nothing about who can reach it. `--from`
+    /// sends the same completion from another registry host, so "the model is
+    /// up" and "the consumer can reach it" stop being one answer.
     Verify {
         name: String,
+        /// Registry host the completion is sent from; default is the deployment's host.
+        #[arg(long)]
+        from: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -175,6 +183,18 @@ pub enum RouteCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Retire one alias from the route table. Refused unless `--expected`
+    /// names the destination it currently has; the gateway stops serving the
+    /// alias in the same commit, so remove it only after every consumer has
+    /// stopped asking for it.
+    Remove {
+        alias: String,
+        /// Required compare-and-swap precondition: the alias's current destination.
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
@@ -212,7 +232,9 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
         InferenceCommands::Status { name, json } => read::status(&name, json).await,
         InferenceCommands::Logs { name, lines, json } => read::logs(&name, lines, json).await,
         InferenceCommands::Doctor { name, json } => read::doctor(&name, json).await,
-        InferenceCommands::Verify { name, json } => read::verify(&name, json).await,
+        InferenceCommands::Verify { name, from, json } => {
+            read::verify(&name, from.as_deref(), json).await
+        }
         InferenceCommands::PlanLogs {
             plan_id,
             lines,
@@ -229,6 +251,14 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => routes::set(&alias, &to, &expected, gateway.as_deref(), &fallback, json).await,
+        InferenceCommands::Route {
+            command:
+                RouteCommands::Remove {
+                    alias,
+                    expected,
+                    json,
+                },
+        } => routes::remove(&alias, &expected, json).await,
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {
             host,
