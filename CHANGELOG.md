@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.34
+
+- **Scoped release publishers:** publishing clients accept the valid product entries they actually use instead of requiring every server-side publisher. The release server and configuration validation retain the complete active-publisher requirement; undeclared products still have no write credential.
+- **Publisher diagnostics:** malformed entries and invalid JSON are reported with their actual configuration errors instead of being reduced to “declares no publisher.” Authentication still reads the selected publisher's token from Skarbiec.
+- **Compatibility:** existing complete publisher tables and stored schemas are unchanged. A client with a scoped table requires this release; older clients require the full table.
+
 ## 0.16.33
 
 - **Authenticated convergence:** the typed GET and POST `/api/service/converge` routes share the CLI's implementation and return the complete report with its product exit code. Independent `converge-read` and `converge-apply` registry client actions prevent read permission from authorizing delivery.

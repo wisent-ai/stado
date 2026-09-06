@@ -1887,11 +1887,18 @@ impl RemoteObjectApi {
             }
             return Ok(None);
         };
-        let publisher = crate::config::release_publisher_for_key(&policy_key).ok_or_else(|| {
-            CmdError::click(format!(
-                "release_api.publishers declares no publisher for {policy_key}"
-            ))
-        })?;
+        let publisher = crate::config::release_client_publisher_for_key(&policy_key)
+            .map_err(|problems| {
+                CmdError::click(format!(
+                    "release_api.publishers is invalid: {}",
+                    problems.join("; ")
+                ))
+            })?
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "release_api.publishers declares no publisher for {policy_key}"
+                ))
+            })?;
         // Read with the publisher command's configured consumer, whose grant
         // is settled here. The server has a separate release verifier; using
         // that identity in the client would ignore the grant just acquired.
@@ -2130,8 +2137,11 @@ impl RemoteObjectApi {
                 .and_then(|object| {
                     crate::object_store::release_policy_key(object.namespace(), object.key())
                 })
-                .and_then(|key| crate::config::release_publisher_for_key(&key))
-            {
+                .and_then(|key| {
+                    crate::config::release_client_publisher_for_key(&key)
+                        .ok()
+                        .flatten()
+                }) {
                 Some(publisher) => format!("publisher item {}", publisher.item()),
                 None if bearer.is_some() => "a resolved release credential".to_string(),
                 None => "the coordinator storage token".to_string(),
@@ -2463,7 +2473,11 @@ impl RemoteObjectApi {
                 .and_then(|object| {
                     crate::object_store::release_policy_key(object.namespace(), object.key())
                 })
-                .and_then(|key| crate::config::release_publisher_for_key(&key))
+                .and_then(|key| {
+                    crate::config::release_client_publisher_for_key(&key)
+                        .ok()
+                        .flatten()
+                })
                 .map(|publisher| format!("publisher item {}", publisher.item()))
                 .unwrap_or_else(|| {
                     if bearer.is_some() {
