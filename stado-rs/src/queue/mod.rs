@@ -146,7 +146,8 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
+    /// Preserve the HTTP cause chain when callers display or persist this error.
+    #[error("{}", crate::cli::http_failure(.0))]
     Http(#[from] reqwest::Error),
     #[error("{0}")]
     Other(String),
