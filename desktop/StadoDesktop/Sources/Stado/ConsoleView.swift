@@ -90,6 +90,7 @@ struct ConsoleView: View {
             isPresented: Binding(
                 get: {
                     auth.identity != nil
+                        && router.destination != .credentialInspection
                         && !deploymentStore.isLoading
                         && (
                             showsDeploymentSetup
@@ -327,7 +328,7 @@ struct ConsoleView: View {
             // platform rows answer which half broke.
             let failed = buildsStore.recipes.count(where: \.hasFailedRun)
             return failed > 0 ? (failed, .danger) : nil
-        case .registry, .deployments, .fleets, .products, .databases, .cloudflare:
+        case .registry, .deployments, .fleets, .products, .databases, .credentialInspection, .cloudflare:
             return nil
         }
     }
@@ -336,7 +337,7 @@ struct ConsoleView: View {
 
     @ViewBuilder
     private var content: some View {
-        if store.isConfigured {
+        if store.isConfigured || router.destination == .credentialInspection {
             switch router.destination {
             case .posture:
                 PostureView(
@@ -380,6 +381,8 @@ struct ConsoleView: View {
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .databases:
                 DatabasesView(store: databasesStore, scope: scopeName)
+            case .credentialInspection:
+                CredentialInspectionView()
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
             case .builds:
