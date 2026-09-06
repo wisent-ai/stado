@@ -334,18 +334,56 @@ struct AppliedPass {
     undeliverable: Vec<Undeliverable>,
     refused: Vec<Refused>,
 }
+/// One completed convergence operation.
+///
+/// The report is the exact object printed by `stado service converge --json`;
+/// the exit code is decided alongside it from the same final rows and apply
+/// receipts. A caller that receives this value therefore never has to scrape
+/// process output or reproduce the command's gate.
+pub struct ServiceConvergeResult {
+    /// The CLI gate's exact process exit code for this completed operation.
+    pub exit_code: i32,
+    target: String,
+    applied: Option<AppliedPass>,
+    rows: Vec<Row>,
+}
 
+impl ServiceConvergeResult {
+    fn new(target: String, applied: Option<AppliedPass>, rows: Vec<Row>) -> Self {
+        let exit_code = match applied.as_ref() {
+            Some(pass) => apply_exit_code(&rows, pass),
+            None => report_exit_code(&rows),
+        };
+        Self {
+            exit_code,
+            target,
+            applied,
+            rows,
+        }
+    }
+
+    /// The complete report shared by the CLI JSON and HTTP interfaces.
+    pub fn report_json(&self) -> Value {
+        report_json(&self.target, self.applied.as_ref(), &self.rows)
+    }
+}
 fn click(error: DeployError) -> CmdError {
     CmdError::click(error.to_string())
 }
 
-/// `stado service converge TARGET [BINARY] [--apply]`.
-pub async fn converge(
+/// Execute one report or apply operation and retain its complete structured
+/// result.
+///
+/// Failures returned from here happen before a report exists: target
+/// resolution and declaration validation both finish before the host is
+/// contacted. Once observation begins, channel and delivery failures are
+/// findings in the report, and the result carries the command's real non-zero
+/// gate rather than turning that completed operation into a transport error.
+pub async fn converge_result(
     target: &str,
     binary: Option<&str>,
     apply: bool,
-    json_output: bool,
-) -> Result<(), CmdError> {
+) -> Result<ServiceConvergeResult, CmdError> {
     let resolved = host_channel::canonical_target(target)
         .await
         .map_err(click)?;
@@ -356,8 +394,7 @@ pub async fn converge(
     let mut rows = verdict_rows(&declared, &reported);
     attach_processes(&resolved, &mut rows, &runner).await;
     if !apply {
-        emit(&resolved.name, None, &rows, json_output)?;
-        return report_gate(&rows);
+        return Ok(ServiceConvergeResult::new(resolved.name, None, rows));
     }
 
     let mut pass = apply_releases(&resolved.name, &rows, &runner).await;
@@ -378,7 +415,11 @@ pub async fn converge(
                 .and_then(|entries| entries.get("stado"))
                 .is_some_and(|entry| entry.attestation == ATTEST_MATCH)
     });
-    if stado_root_in_sync {
+    let root_delivery_failed = pass
+        .releases
+        .iter()
+        .any(|release| release.binary == "stado" && release.status == FAILED);
+    if stado_root_in_sync && !root_delivery_failed {
         converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
     }
     // Asked again after the delivery for the same reason the versions are: a
@@ -386,8 +427,27 @@ pub async fn converge(
     // the artefact that was just installed is exactly the claim `--apply` is
     // being asked to prove.
     attach_processes(&resolved, &mut rows, &runner).await;
-    emit(&resolved.name, Some(&pass), &rows, json_output)?;
-    apply_gate(&rows, &pass)
+    Ok(ServiceConvergeResult::new(resolved.name, Some(pass), rows))
+}
+
+/// `stado service converge TARGET [BINARY] [--apply]`.
+pub async fn converge(
+    target: &str,
+    binary: Option<&str>,
+    apply: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let result = converge_result(target, binary, apply).await?;
+    emit(&result, json_output)?;
+    match result.applied.as_ref() {
+        Some(pass) => apply_gate_diagnostics(&result.rows, pass, result.exit_code),
+        None => report_gate_diagnostics(&result.rows, result.exit_code),
+    }
+    if result.exit_code == i32::default() {
+        Ok(())
+    } else {
+        Err(CmdError::silent(result.exit_code))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1415,13 +1475,6 @@ async fn converge_native_readers(
     else {
         return;
     };
-    // A Stado release row means host release already attempted the root
-    // lifecycle in this pass. Do not kick those owners a second time; the row
-    // retains any root failure while private delivery still gets its one turn.
-    let skip_global = pass
-        .releases
-        .iter()
-        .any(|release| release.binary == "stado");
     let (reader_target, request, self_store) = match host_release::resolve_release_request(
         &target.name,
         "stado",
@@ -1459,12 +1512,11 @@ async fn converge_native_readers(
         "set -euo pipefail\n\
          archive=\"$HOME/.stado/releases/stado/{}/{}/{}\"\n\
          \"$HOME/.stado/bin/stado\" release converge-local-readers \
-         --name stado --archive \"$archive\" --sha256 {}{}\n",
+         --name stado --archive \"$archive\" --sha256 {}\n",
         request.version,
         request.platform,
         host_release::READER_ARCHIVE_NAME,
         crate::deploy::shlex_quote(&request.sha256),
-        if skip_global { " --skip-global" } else { "" },
     );
     let outcome = host_channel::run_script(&reader_target, &script, runner).await;
     let (status, detail) = match outcome {
@@ -1555,35 +1607,30 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
 // Reporting
 // ---------------------------------------------------------------------------
 
-/// The report on stdout, and whatever `--apply` could not do on stderr.
-///
-/// `applied` is `None` in report mode, which is also what puts `"applied":
-/// false` in the JSON: one value carries "was this a converge or a look", so
-/// the two modes cannot disagree about which one produced the document.
-fn emit(
-    target: &str,
-    applied: Option<&AppliedPass>,
-    rows: &[Row],
-    json_output: bool,
-) -> Result<(), CmdError> {
+fn report_json(target: &str, applied: Option<&AppliedPass>, rows: &[Row]) -> Value {
     let empty = AppliedPass::default();
     let pass = applied.unwrap_or(&empty);
+    json!({
+        "target": target,
+        "applied": applied.is_some(),
+        "releases": pass.releases.iter().map(Released::to_json).collect::<Vec<Value>>(),
+        "undeliverable": pass
+            .undeliverable
+            .iter()
+            .map(Undeliverable::to_json)
+            .collect::<Vec<Value>>(),
+        "refused": pass.refused.iter().map(Refused::to_json).collect::<Vec<Value>>(),
+        "binaries": rows.iter().map(Row::to_json).collect::<Vec<Value>>(),
+    })
+}
+
+/// The report on stdout, and whatever `--apply` could not do on stderr.
+fn emit(result: &ServiceConvergeResult, json_output: bool) -> Result<(), CmdError> {
+    let empty = AppliedPass::default();
+    let pass = result.applied.as_ref().unwrap_or(&empty);
+    let rows = result.rows.as_slice();
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "applied": applied.is_some(),
-                "releases": pass.releases.iter().map(Released::to_json).collect::<Vec<Value>>(),
-                "undeliverable": pass
-                    .undeliverable
-                    .iter()
-                    .map(Undeliverable::to_json)
-                    .collect::<Vec<Value>>(),
-                "refused": pass.refused.iter().map(Refused::to_json).collect::<Vec<Value>>(),
-                "binaries": rows.iter().map(Row::to_json).collect::<Vec<Value>>(),
-            }))?
-        );
+        println!("{}", serde_json::to_string_pretty(&result.report_json())?);
         return Ok(());
     }
     println!(
@@ -1659,7 +1706,17 @@ fn emit(
 /// drift the command exists to catch stops being noticed again. Every such
 /// row is named on stderr instead, because the one thing an unmeasured
 /// product must never be is quiet.
-fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
+fn report_exit_code(rows: &[Row]) -> i32 {
+    if rows.iter().any(|row| {
+        row.verdict == HOST_BEHIND || row.verdict == HOST_AHEAD || row.verdict == UNATTESTED
+    }) {
+        CLICK_ERROR_CODE
+    } else {
+        i32::default()
+    }
+}
+
+fn report_gate_diagnostics(rows: &[Row], exit_code: i32) {
     for row in rows.iter().filter(|row| row.verdict == UNKNOWN) {
         eprintln!(
             "{}: declared {} and no installed version could be read — unmeasured, \
@@ -1667,12 +1724,12 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
             row.binary, row.declared, row.detail
         );
     }
+    if exit_code == i32::default() {
+        return;
+    }
     let behind = rows.iter().filter(|row| row.verdict == HOST_BEHIND).count();
     let ahead = rows.iter().filter(|row| row.verdict == HOST_AHEAD).count();
     let unattested = rows.iter().filter(|row| row.verdict == UNATTESTED).count();
-    if behind + ahead + unattested == 0 {
-        return Ok(());
-    }
     // Named first and loudest: a version the fleet cannot attest outranks a
     // version it can attest and disagrees with.
     if unattested != 0 {
@@ -1698,7 +1755,6 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
              these hosts"
         );
     }
-    Err(CmdError::silent(CLICK_ERROR_CODE))
 }
 
 /// Apply mode: anything short of `in-sync` is a failed apply.
@@ -1708,20 +1764,28 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
 /// the host again. `unknown` counts as failure here and does not in report
 /// mode, and that is the intended difference: before an apply it means nobody
 /// looked, after one it means the convergence cannot be shown to have happened.
-fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
+fn apply_exit_code(rows: &[Row], pass: &AppliedPass) -> i32 {
+    if rows.iter().all(|row| row.verdict == IN_SYNC)
+        && pass.releases.iter().all(|entry| entry.status != FAILED)
+        && pass.undeliverable.is_empty()
+        && pass.refused.is_empty()
+    {
+        i32::default()
+    } else {
+        CLICK_ERROR_CODE
+    }
+}
+
+fn apply_gate_diagnostics(rows: &[Row], pass: &AppliedPass, exit_code: i32) {
+    if exit_code == i32::default() {
+        return;
+    }
     let unresolved: Vec<&Row> = rows.iter().filter(|row| row.verdict != IN_SYNC).collect();
     let failed = pass
         .releases
         .iter()
         .filter(|entry| entry.status == FAILED)
         .count();
-    if unresolved.is_empty()
-        && failed == 0
-        && pass.undeliverable.is_empty()
-        && pass.refused.is_empty()
-    {
-        return Ok(());
-    }
     for row in &unresolved {
         eprintln!(
             "{}: declared {} != installed {}",
@@ -1791,5 +1855,4 @@ fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
         "{} binary/binaries are not at their declared version after {effort}",
         unresolved.len()
     );
-    Err(CmdError::silent(CLICK_ERROR_CODE))
 }

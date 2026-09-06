@@ -1055,7 +1055,8 @@ pub(crate) async fn revisit_once(
     };
     let mut ledger = load_ledger(&scope.state_dir, target_name)?;
     let observations =
-        service::observe_unit_image_scan(target, Some(target_name), chrono::Utc::now().timestamp());
+        service::observe_unit_image_scan(target, Some(target_name), chrono::Utc::now().timestamp())
+            .await;
     let plan = revisit_plan(&observations, &owned, &ledger);
     let Some(pick) = plan.pick else {
         // Nothing to restart and nothing an operator has to act on: every

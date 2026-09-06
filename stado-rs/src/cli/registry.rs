@@ -2320,6 +2320,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
             crate::release_unit_image::annotations(&document, &target.name, local_host.as_deref());
         for image in
             service::units_running_replaced_images(target, local_host.as_deref(), now.timestamp())
+                .await
         {
             // The row that told an operator to restart the unit by hand is
             // the row that has to say the release agent already tried and

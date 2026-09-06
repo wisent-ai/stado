@@ -17,6 +17,7 @@
 //! POST /api/machine/cancel?job_id=... - durably cancel a machine job
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
+//! GET/POST /api/service/converge?target=...[&binary=...] - report or apply host convergence
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
 //! POST /api/registry/import - additive canonical registry adoption
 //! POST /api/integration/enterprise/<action> - authenticated fleet projection
@@ -103,14 +104,13 @@ enum Boundary {
     RateLimitVerifier,
     RateLimitState,
     Integration,
-    /// The registry-policy and cleanup routes the desktop app calls.
+    /// The operator-owned registry and host-control routes the desktop app
+    /// calls.
     ///
-    /// Added on 2026-09-02, when all four of those routes answered 404 and
-    /// the Swift client that calls them had been written against them for
-    /// some time. Its verifier is ready even when nothing is declared: an
-    /// undeclared boundary refuses every request with `401`, which is what
-    /// "nobody has been granted this" means, and reporting it as unavailable
-    /// would send an operator looking for a broken vault.
+    /// Its verifier is ready even when nothing is declared: an undeclared
+    /// boundary refuses every request with `401`, which is what "nobody has
+    /// been granted this" means, and reporting it as unavailable would send an
+    /// operator looking for a broken vault.
     Registry,
 }
 
@@ -147,6 +147,8 @@ impl Boundary {
     /// - `Service` — `/api/service/status`, `/api/service/restart`.
     /// - `RateLimitVerifier` and `RateLimitState` — `/api/rate-limit/consume`.
     /// - `Integration` — the integration route group.
+    /// - `Registry` — the registry-policy, cleanup, host inventory, and
+    ///   full-host service convergence routes.
     ///
     /// A boundary that answers this question with "nothing" must not be
     /// reported: an operator reading `/healthz` has to be able to conclude
@@ -160,7 +162,8 @@ impl Boundary {
             Boundary::RateLimitVerifier | Boundary::RateLimitState => "/api/rate-limit/consume",
             Boundary::Integration => "the integration routes",
             Boundary::Registry => {
-                "/api/registry.json, /api/registry/policy, /api/registry/import, /api/cleanup.json, /api/cleanup/run"
+                "/api/registry.json, /api/registry/policy, /api/registry/import, \
+                 /api/cleanup.json, /api/cleanup/run, /api/host/inventory, /api/service/converge"
             }
         }
     }
@@ -510,6 +513,12 @@ fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> BoundaryPlan {
             BoundaryPlan::gated(&[Boundary::Machine])
         }
         "/api/service/restart" | "/api/service/status" => BoundaryPlan::gated(&[Boundary::Service]),
+        "/api/host/inventory"
+        | "/api/service/converge"
+        | "/api/registry.json"
+        | "/api/registry/policy"
+        | "/api/cleanup.json"
+        | "/api/cleanup/run" => BoundaryPlan::gated(&[Boundary::Registry]),
         path if path.starts_with("/api/integration/") => {
             BoundaryPlan::gated(&[Boundary::Integration])
         }
@@ -576,6 +585,7 @@ const REOPENING_PROBES: &[(&str, Option<(&str, &str)>)] = &[
     ("/api/machine/status", None),
     ("/api/service/status", None),
     ("/api/integration/anything", None),
+    ("/api/service/converge", None),
 ];
 
 /// Which boundaries no request can reopen.
@@ -1512,14 +1522,22 @@ impl Dashboard {
                     "machine authorization unavailable",
                 )));
             }
-            if path_no_query == "/api/host/inventory" {
+            if matches!(
+                path_no_query,
+                "/api/host/inventory" | "/api/service/converge"
+            ) {
                 if !self.boundaries_available(&[Boundary::Registry]).await {
                     return send_json(
                         http_status("503"),
                         &json!({"error": "registry authorization unavailable"}),
                     );
                 }
-                if let Err(response) = registry_policy::authorized(request, "policy-read").await {
+                let action = if path_no_query == "/api/service/converge" {
+                    "converge-read"
+                } else {
+                    "policy-read"
+                };
+                if let Err(response) = registry_policy::authorized(request, action).await {
                     return response;
                 }
             }
@@ -1558,6 +1576,9 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
+        if path == "/api/service/converge" {
+            return Ok(self.service_converge(request, query, false).await);
+        }
         if path == "/api/host/inventory" {
             let target = match host_inventory_target(query) {
                 Ok(target) => target,
@@ -1948,6 +1969,32 @@ impl Dashboard {
             return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }
         machine_result_response(self.machine_facade().cancel_job(job_id).await)
+    }
+
+    async fn service_converge(&self, request: &Request, query: &str, apply: bool) -> Response {
+        if request.header("transfer-encoding").is_some()
+            || request.content_length != usize::default()
+            || !request.body.is_empty()
+        {
+            return invalid_service_request("service converge does not accept a request body");
+        }
+        let (target, binary) = match service_converge_query(query) {
+            Ok(scope) => scope,
+            Err(response) => return response,
+        };
+        match crate::cli::service_converge::converge_result(&target, binary.as_deref(), apply).await
+        {
+            Ok(result) => send_json(
+                http_status("200"),
+                &json!({"exit_code": result.exit_code, "report": result.report_json()}),
+            ),
+            Err(error) => service_failure(
+                http_status("503"),
+                "SERVICE_CONVERGE_FAILED",
+                error.to_string(),
+                true,
+            ),
+        }
     }
 
     async fn get_service_status(&self, request: &Request, query: &str) -> Response {
@@ -2626,12 +2673,15 @@ impl Dashboard {
         if path == "/api/rate-limit/consume" {
             return self.post_rate_limit_consume(request).await;
         }
-        // Registry imports, policy writes, and janitor runs are gated on their
-        // own actions. A deployment that grants policy editing does not thereby
-        // grant adoption of an arbitrary registry document.
+        // Registry adoption, policy writes, cleanup and convergence each require
+        // their own operator action. Convergence can replace every declared
+        // binary on a host; a read or one service's deployer grant is insufficient.
         if matches!(
             path,
-            "/api/registry/import" | "/api/registry/policy" | "/api/cleanup/run"
+            "/api/registry/import"
+                | "/api/registry/policy"
+                | "/api/cleanup/run"
+                | "/api/service/converge"
         ) {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
@@ -2642,6 +2692,7 @@ impl Dashboard {
             let action = match path {
                 "/api/registry/import" => "registry-import",
                 "/api/registry/policy" => "policy-write",
+                "/api/service/converge" => "converge-apply",
                 _ => "cleanup-run",
             };
             if let Err(response) = registry_policy::authorized(request, action).await {
@@ -2650,6 +2701,7 @@ impl Dashboard {
             return match path {
                 "/api/registry/import" => registry_policy::import_registry(request).await,
                 "/api/registry/policy" => registry_policy::set_policy(request).await,
+                "/api/service/converge" => self.service_converge(request, query, true).await,
                 _ => registry_policy::run_cleanup().await,
             };
         }
@@ -3460,6 +3512,45 @@ fn host_inventory_target(query: &str) -> Result<String, Response> {
     Ok(values[0].1.clone())
 }
 
+/// Exactly one canonical target and, optionally, one managed binary. Unknown,
+/// duplicate, empty, malformed, and lossy query components are refused before
+/// target resolution can open a host channel.
+fn service_converge_query(query: &str) -> Result<(String, Option<String>), Response> {
+    let invalid = || {
+        invalid_service_request(
+            "query must contain exactly one non-empty target and at most one non-empty binary",
+        )
+    };
+    if query.is_empty() || query.starts_with('&') || query.ends_with('&') {
+        return Err(invalid());
+    }
+    let mut target = None;
+    let mut binary = None;
+    for pair in query.split('&') {
+        let Some((encoded_key, encoded_value)) = pair.split_once('=') else {
+            return Err(invalid());
+        };
+        if encoded_key.is_empty() || encoded_value.is_empty() || encoded_value.contains('=') {
+            return Err(invalid());
+        }
+        let Some(key) = strict_url_decode(encoded_key) else {
+            return Err(invalid());
+        };
+        let Some(value) = strict_url_decode(encoded_value) else {
+            return Err(invalid());
+        };
+        if value.is_empty() || value.trim() != value {
+            return Err(invalid());
+        }
+        match key.as_str() {
+            "target" if target.is_none() => target = Some(value),
+            "binary" if binary.is_none() => binary = Some(value),
+            _ => return Err(invalid()),
+        }
+    }
+    target.map(|target| (target, binary)).ok_or_else(invalid)
+}
+
 fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Response> {
     let values = parse_qs(query);
     let uri = query_value(&values, "uri").unwrap_or_default();
@@ -3563,6 +3654,32 @@ fn object_compose_response(status: u16, payload: Value) -> Response {
 
 fn object_compose_error(status: u16, message: impl Into<String>) -> Response {
     object_compose_response(status, json!({"error": message.into()}))
+}
+
+fn strict_url_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                let hex = |byte: u8| (byte as char).to_digit(16);
+                let high = bytes.get(index + 1).and_then(|byte| hex(*byte))?;
+                let low = bytes.get(index + 2).and_then(|byte| hex(*byte))?;
+                out.push((high * 16 + low) as u8);
+                index += 3;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 fn url_decode(input: &str) -> String {

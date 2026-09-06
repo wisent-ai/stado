@@ -4247,7 +4247,40 @@ def exact_option(values, name):
     return found[0]
 
 
+def native_object_arguments(service):
+    if system == "Darwin":
+        path = service.get("path")
+        if not isinstance(path, str) or not path:
+            raise SystemExit("captured object API has no native unit path")
+        path = os.path.expanduser(path.replace("$HOME", home))
+        with open(path, "rb") as handle:
+            unit = plistlib.load(handle)
+        values = unit.get("ProgramArguments")
+        if not isinstance(values, list) or not values:
+            raise SystemExit("captured object API unit has no ProgramArguments")
+        return values[1:]
+    unit = service.get("unit") or service.get("label")
+    result = checked(["/bin/systemctl", "show", unit, "--property=ExecStart", "--value"])
+    commands = re.findall(r"argv\[\] = (.*?); (?:ignore_errors|flags)=", result.stdout)
+    if len(commands) != 1:
+        raise SystemExit("captured object API has no single observed ExecStart")
+    return shlex.split(commands[0])[1:]
+
+
 def captured_release_api(target):
+    fence = read_json(os.path.join(work, "lifecycle-fence.json"))
+    if fence is not None:
+        if (not isinstance(fence, dict)
+                or fence.get("schema") != "@FENCE_SCHEMA@"
+                or fence.get("transaction") != tx):
+            raise SystemExit("captured lifecycle fence has the wrong transaction identity")
+        staged_runtime = fence.get("staged_runtime")
+        if staged_runtime is not None:
+            request = staged_runtime.get("request", {})
+            origin = request.get("release_api")
+            if not isinstance(origin, str) or not origin:
+                raise SystemExit("captured staged runtime has no release origin")
+            return origin
     services = target.get("services")
     if not isinstance(services, list):
         raise SystemExit("captured target declares no service inventory")
@@ -4259,6 +4292,8 @@ def captured_release_api(target):
     if len(object_apis) != 1:
         raise SystemExit("captured target must declare exactly one canonical object API")
     values = object_apis[0].get("args")
+    if values is None or values == []:
+        values = native_object_arguments(object_apis[0])
     if (not isinstance(values, list)
             or not all(isinstance(value, str) for value in values)
             or not values
@@ -4279,9 +4314,6 @@ def captured_release_api(target):
     else:
         raise SystemExit("captured object API release origin is not loopback")
     return "http://" + host + ":" + str(port)
-
-
-release_api = captured_release_api(captured_target)
 
 
 def checked(argv, accepted=(0,)):
@@ -4331,8 +4363,11 @@ def manager_state():
         pid_match = re.search(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", result.stdout)
         state_match = re.search(r"(?m)^\s*state = (.+?)\s*$", result.stdout)
         pid = int(pid_match.group(1)) if pid_match else None
+        completed = re.search(r"(?m)^\s*last exit code = -?[0-9]+\s*$", result.stdout)
+        runs = re.search(r"(?m)^\s*runs = ([1-9][0-9]*)\s*$", result.stdout)
         state = state_match.group(1).strip() if state_match else None
-        terminal = (state or "").lower() in ("exited", "not running")
+        terminal = ((state or "").lower() in ("exited", "not running")
+                    or (pid is None and completed is not None and runs is not None))
         return {"manager": "launchd", "service": label, "domain": "system",
                 "loaded": True, "active": pid is not None,
                 "starting": pid is None and not terminal, "pid": pid, "state": state}
@@ -4381,17 +4416,20 @@ def manager_bound_owner(state):
 def launch_observation(state):
     intent = read_json(intent_path)
     if not isinstance(intent, dict) or intent.get("transaction") != tx:
-        intent = {
-            "schema": "stado.storage-root-launch.v1",
-            "transaction": tx,
-            "target": captured_target.get("name"),
-            "target_config": captured_target,
-            "action": requested_action,
-            "status": "manager_starting",
-        }
+        raise SystemExit("active native worker has no recorded launch intent")
     intent["native_manager"] = state
     intent.pop("worker_arguments", None)
     return intent
+
+
+def acknowledge_owner(observation):
+    action = observation.get("action")
+    forward = ("run", "resume")
+    if action != requested_action and not (action in forward and requested_action in forward):
+        raise SystemExit("native reconciliation is already executing "
+                         + str(action) + "; cannot accept " + requested_action)
+    print("STADO_RECONCILE_OWNER\t" + json.dumps(
+        observation, sort_keys=True, separators=(",", ":")))
 
 
 launch_lock_path = os.path.join(
@@ -4405,8 +4443,7 @@ state = manager_state()
 if state["active"] or state["starting"]:
     owner = manager_bound_owner(state)
     observation = owner if owner is not None else launch_observation(state)
-    print("STADO_RECONCILE_OWNER\t" + json.dumps(
-        observation, sort_keys=True, separators=(",", ":")))
+    acknowledge_owner(observation)
     raise SystemExit(0)
 
 operation_lock_path = os.path.normpath(os.path.join(
@@ -4419,8 +4456,7 @@ except BlockingIOError:
     if state["active"] or state["starting"]:
         owner = manager_bound_owner(state)
         observation = owner if owner is not None else launch_observation(state)
-        print("STADO_RECONCILE_OWNER\t" + json.dumps(
-            observation, sort_keys=True, separators=(",", ":")))
+        acknowledge_owner(observation)
         raise SystemExit(0)
     raise SystemExit("native reconciliation lock is held without a manager-bound owner")
 
@@ -4433,11 +4469,11 @@ if state["active"] or state["starting"]:
     os.close(operation_lock)
     owner = manager_bound_owner(state)
     observation = owner if owner is not None else launch_observation(state)
-    print("STADO_RECONCILE_OWNER\t" + json.dumps(
-        observation, sort_keys=True, separators=(",", ":")))
+    acknowledge_owner(observation)
     raise SystemExit(0)
 
 lock_info = os.fstat(operation_lock)
+release_api = captured_release_api(captured_target)
 intent = {
     "schema": "stado.storage-root-launch.v1",
     "transaction": tx,
@@ -4558,6 +4594,7 @@ PY"##
         .replace("@STAGED@", &shlex_quote(staged_tool))
         .replace("@TOOL@", &shlex_quote(canonical_tool))
         .replace("@SHA@", &shlex_quote(tool_sha256))
+        .replace("@FENCE_SCHEMA@", FENCE_SCHEMA)
         .replace("@TX@", &shlex_quote(transaction)))
 }
 
